@@ -567,21 +567,24 @@ export class ModelUnsupportedError extends Error {
  * That "registered, documented, inert" outcome is the failure `--model-id` shipped
  * with once already. A flag that cannot take effect must say so.
  *
- * `harnessNames` is the set of names the caller could resolve, so the message can
- * name the alternatives rather than just refusing.
+ * `acceptingNames` is the set of harness names that DO accept a model, so the
+ * message can name the alternatives rather than just refusing. The caller supplies
+ * it because only the caller knows the custom harnesses: resolving them here via
+ * `getBuiltinHarness` silently dropped every model-capable CUSTOM harness from the
+ * message, telling a user their only options were built-ins when their own config
+ * offered another.
  */
 export function assertHarnessAcceptsModel(
   harnessName: string,
   provider: HarnessProvider,
-  harnessNames: readonly string[] = Object.keys(BUILTIN_HARNESSES),
+  acceptingNames: readonly string[] = Object.keys(BUILTIN_HARNESSES).filter(
+    (n) => getBuiltinHarness(n)?.buildScriptModelArg !== undefined,
+  ),
   flag = '--model',
 ): void {
   if (provider.buildScriptModelArg && provider.buildModelArgs) return;
 
-  const accepting = harnessNames.filter((n) => {
-    const p = getBuiltinHarness(n);
-    return p?.buildScriptModelArg !== undefined;
-  });
+  const accepting = acceptingNames;
 
   throw new ModelUnsupportedError(
     harnessName,

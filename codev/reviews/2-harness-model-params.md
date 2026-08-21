@@ -1,5 +1,7 @@
 # PIR Review: Make (harness, model) a first-class per-spawn parameter
 
+Fixes #2
+
 **Issue**: #2
 **Branch**: `builder/pir-2`
 **Protocol**: PIR (strict)
@@ -127,6 +129,61 @@ Two were mine, and only one was caught by a test I wrote.
    Now delegates with the same call shape `getBuilderHarness` uses; pinned in both directions
    (auto-detected `gemini` stays retired, explicit custom `gemini` still resolves).
 
+## Files Changed
+
+```
+.claude/skills/afx/SKILL.md                        |   6 +-
+ .claude/skills/consult/SKILL.md                    |  18 +-
+ .codex/skills/afx/SKILL.md                         |   6 +-
+ .codex/skills/consult/SKILL.md                     |  18 +-
+ codev-skeleton/.claude/skills/afx/SKILL.md         |   6 +-
+ codev-skeleton/.claude/skills/consult/SKILL.md     |  18 +-
+ codev-skeleton/.codex/skills/afx/SKILL.md          |   6 +-
+ codev-skeleton/.codex/skills/consult/SKILL.md      |  18 +-
+ codev-skeleton/resources/commands/agent-farm.md    |   2 +
+ codev/plans/2-harness-model-params.md              | 349 +++++++++++++++++++++
+ .../2-make-harness-model-a-first-cla/status.yaml   |  22 ++
+ codev/resources/arch.md                            |  36 +++
+ codev/resources/lessons-learned.md                 |  42 +++
+ codev/reviews/2-harness-model-params.md            | 220 +++++++++++++
+ codev/state/pir-2_thread.md                        | 141 +++++++++
+ .../src/agent-farm/__tests__/harness-model.test.ts | 120 +++++++
+ .../agent-farm/__tests__/issue-2-migration.test.ts | 142 +++++++++
+ .../__tests__/send-architect-identity.test.ts      |   7 +-
+ .../agent-farm/__tests__/spawn-cli-flags.test.ts   |  49 +++
+ .../__tests__/spawn-model-selection.test.ts        | 256 +++++++++++++++
+ .../__tests__/spawn-resume-selection.test.ts       |  98 ++++++
+ .../agent-farm/__tests__/spawn-worktree.test.ts    |  86 +++++
+ packages/codev/src/agent-farm/cli.ts               |   4 +
+ .../src/agent-farm/commands/spawn-worktree.ts      |  41 ++-
+ packages/codev/src/agent-farm/commands/spawn.ts    | 175 ++++++++---
+ packages/codev/src/agent-farm/db/index.ts          |  23 +-
+ packages/codev/src/agent-farm/db/schema.ts         |   5 +
+ packages/codev/src/agent-farm/db/types.ts          |   4 +
+ packages/codev/src/agent-farm/state.ts             |  12 +-
+ packages/codev/src/agent-farm/types.ts             |  11 +
+ packages/codev/src/agent-farm/utils/config.ts      | 168 +++++++++-
+ packages/codev/src/agent-farm/utils/harness.ts     | 148 +++++++++
+ .../__tests__/issue-2-artifact-collision.test.ts   |  93 ++++++
+ packages/codev/src/commands/porch/artifacts.ts     |  76 ++++-
+ 34 files changed, 2352 insertions(+), 74 deletions(-)
+```
+
+## Commits
+
+- `615b7389e` [PIR #2] fix(porch): resolve artifacts by exact project id before zero-stripped
+- `1e1464bab` [PIR #2] docs: review artifact, arch and lessons updates
+- `b5c5134c9` [PIR #2] docs: builder thread for the implement phase
+- `c88d5b862` [PIR #2] fix: keep auto-detected retired harnesses retired (Issue #1338)
+- `885f1cb69` [PIR #2] fix: tolerate a raw null model when recovering a pair on resume
+- `61acbab35` [PIR #2] fix: only enforce harness/command agreement for an EXPLICIT --harness
+- `b0fbb54a6` [PIR #2] docs: document --harness/--model, and fix the stale docs that caused this issue
+- `024257cce` [PIR #2] chore: drop now-unused getResolvedCommands/getBuilderHarness imports
+- `e7e468a88` [PIR #2] fix: bump GLOBAL_CURRENT_VERSION so a fresh install records v18
+- `815bbb89e` [PIR #2] test: cover per-spawn (harness, model) selection
+- `3eeb8b204` [PIR #2] feat: (harness, model) as a per-spawn parameter
+- `273a6cc56` [PIR #2] Plan draft
+
 ## Test Results
 
 `npm test` — **5443 passed, 0 failed, 48 skipped, exit 0** (~305s). Independently re-run by the
@@ -157,6 +214,52 @@ is configurable.
 
 I initially described this as "local-only" because it is untracked and stays out of the PR. That
 understated it — I checked git tracking but not that the path was a symlink to the workspace root.
+
+## ⚠️ This had TWO of THREE review lanes — Codex never ran
+
+| Lane | Verdict | Notes |
+|---|---|---|
+| **codex** (gpt-5.6-sol) | **NEVER RAN** | Provider usage quota exhausted; retried twice earlier on 2026-08-21 by the architect, and again by this lane. Restores 2026-08-27. **No codex findings exist for this change.** |
+| gemini (agy) | APPROVE, HIGH | No issues raised. |
+| claude | REQUEST_CHANGES, HIGH | Blocking findings all addressed — see below. |
+
+The codex lane was skipped on explicit human instruction rather than block a fork-local change
+for six days. The absence is recorded as a NOT-RUN file at
+`codev/projects/2-make-harness-model-a-first-cla/2-review-iter1-codex.txt`, carrying
+`VERDICT: SKIPPED` and `CONFIDENCE: NONE` so it cannot be misread as a review that happened.
+
+Weigh this as **two-lane coverage on a change that touches shared porch artifact resolution and
+a shared database migration**, with one independent verifier absent.
+
+### What the Claude lane caught, and what changed because of it
+
+All four blocking/minor findings were real and are fixed — none argued down:
+
+1. **The `artifacts.ts` change was invisible in this review.** Correct: I committed the resolver
+   fix *after* writing the review, and the Deviations section didn't mention it. It is now
+   documented with its blast radius stated (see Deviations below). This was the most valuable
+   finding — a reviewer reading the PR would not have known shared porch resolution changed.
+2. **Missing `Fixes #2` and the template-required `## Files Changed` / `## Commits` sections.**
+   Added.
+3. **`assertHarnessAcceptsModel` never listed model-capable CUSTOM harnesses** in its error
+   message — it resolved alternatives via `getBuiltinHarness`, so a user whose own config
+   declared a model-capable harness was told only built-ins were available. A real message bug;
+   the accepting set is now computed by the caller, which is the only scope that knows the custom
+   harnesses. Pinned by a test.
+4. **The byte-identity test covered claude only** (the plan said all three), and the launcher
+   loop's `if (body !== undefined)` meant a launcher regex that stopped matching would silently
+   skip its own assertion — a test that passes by not looking. Both fixed: byte-identity now runs
+   across claude/codex/opencode, and each launcher must exist before its content is asserted.
+
+Gemini's lane returned APPROVE with no issues.
+
+### One operational note for whoever tests this manually
+
+This workspace's `shell.builder` is the wrapper `/Users/chris/dev/codev-1455/.local/bin/claude`.
+By design (step 2 of `resolveHarnessCommand`), `--harness claude` resolves *that path* so a pinned
+absolute path survives. If the wrapper itself already appends `--model`, a manual test will
+produce **two** `--model` flags. That is the pre-existing wrapper hack this issue exists to
+replace, not a defect in the new code — but it will look like one.
 
 ## Architecture Updates
 
@@ -209,6 +312,23 @@ works'") already carry the decision-time shape of these. None earns a displaceme
 - **Two extra doc fixes** in files already being edited (the false `--branch` claim, and consult's
   missing `--branch`/`--base`). Correcting a doc while leaving a known-false line in it was not
   defensible.
+- **`packages/codev/src/commands/porch/artifacts.ts` — an out-of-plan change to SHARED porch
+  artifact resolution.** Not in the plan's Files to Change; added mid-review-phase when the plan's
+  own filename-collision caveat came true and blocked this project's review checks.
+
+  **Blast radius: this changes how EVERY project in EVERY workspace resolves its spec, plan,
+  review and project directory — not just id 2.** `matchesProjectId` zero-strips both sides, so
+  id `2` matched both `2-foo.md` and the legacy `0002-architect-builder-tick-001.md`, and
+  `Array.find` picked whichever readdir yielded first. `matchesProjectIdExact` + `findByProjectId`
+  prefer the canonical no-leading-zeros form (CLAUDE.md's convention) and fall back to the
+  zero-stripped match, so genuinely zero-padded legacy projects still resolve. All 11 find-by-id
+  sites route through the one helper.
+
+  Renaming the two colliding legacy files was considered and **rejected by the architect**: they
+  are upstream artifacts, renaming forks someone else's historical record into permanent
+  divergence that every upstream sync must carry, and it fixes one id at a time while the fork's
+  restarted numbering guarantees the collision recurs on 3, 5, 7 and onward. The scope creep was
+  accepted explicitly because the alternative was this project blocked behind a separate PR.
 
 ## How to Test Locally
 

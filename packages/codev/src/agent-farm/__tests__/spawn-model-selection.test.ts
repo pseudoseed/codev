@@ -128,6 +128,30 @@ describe('per-spawn (harness, model) selection (Issue #2)', () => {
         .toThrow(/no model selector/);
     });
 
+    it('names model-capable CUSTOM harnesses among the alternatives', () => {
+      // The error message resolved its alternatives via getBuiltinHarness, so a
+      // custom harness that DOES declare a model selector was never listed — telling
+      // the user their only options were built-ins while their own config offered one.
+      writeConfig({
+        shell: { builder: 'claude' },
+        harness: {
+          nomodel: { roleArgs: [], roleScriptFragment: '', command: 'nomodel' },
+          withmodel: {
+            roleArgs: [], roleScriptFragment: '', command: 'withmodel',
+            modelArgs: ['--m', '${MODEL}'], modelScriptFragment: '--m ${MODEL}',
+          },
+        },
+      });
+
+      const err = (() => {
+        try { resolveBuilderSelection({ harness: 'nomodel', model: 'x' }, ws); return null; }
+        catch (e) { return e as Error; }
+      })();
+
+      expect(err!.message).toContain('withmodel');
+      expect(err!.message).not.toMatch(/\bnomodel\b(?!")/);
+    });
+
     it('rejects an unknown harness', () => {
       writeConfig({ shell: { builder: 'claude' } });
       expect(() => resolveBuilderSelection({ harness: 'nope' }, ws)).toThrow(/Unknown harness/);

@@ -410,8 +410,19 @@ export function resolveBuilderSelection(
     // loudly with no fallback. Same rule, same validator, as spec 1286's
     // `--model-id`.
     validateModelId(opts.model, '--model');
-    const selectable = [...Object.keys(BUILTIN_HARNESSES), ...Object.keys(customHarnesses ?? {})];
-    assertHarnessAcceptsModel(harnessName, provider, selectable);
+    // Names that actually ACCEPT a model — built-ins with the hook, plus custom
+    // harnesses declaring modelScriptFragment. Computed here because only this
+    // scope knows the custom harnesses; resolving them inside the assert dropped
+    // every model-capable custom harness from its error message.
+    const accepting = [
+      ...Object.keys(BUILTIN_HARNESSES).filter(
+        (n) => getBuiltinHarness(n)?.buildScriptModelArg !== undefined,
+      ),
+      ...Object.entries(customHarnesses ?? {})
+        .filter(([, cfg]) => cfg?.modelScriptFragment !== undefined)
+        .map(([n]) => n),
+    ];
+    assertHarnessAcceptsModel(harnessName, provider, accepting);
     modelId = opts.model;
     modelScriptFragment = provider.buildScriptModelArg!(modelId);
   }
