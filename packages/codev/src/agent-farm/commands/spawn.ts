@@ -970,11 +970,13 @@ function assertBuilderHarnessHasGateProfile(selection: AgentSelection): void {
  * you deliberately move a builder onto a different pair. A row with neither value
  * (spawned before this existed, or spawned with no flags) keeps today's behaviour.
  *
+ * Exported for testing, matching `discoverResumeSession` above.
+ *
  * The recovered pair is re-validated, not trusted: the stored harness may since
  * have been retired, or lost its model selector. Failing loudly on relaunch beats
  * resurrecting a builder onto an agent that no longer resolves.
  */
-function selectionForResume(
+export function selectionForResume(
   options: SpawnOptions,
   config: Config,
   builderId: string,
@@ -986,8 +988,12 @@ function selectionForResume(
   const stored = getBuilder(builderId, config.workspaceRoot);
   if (!stored || (!stored.harness && !stored.model)) return selection;
 
+  // Coerce to undefined explicitly. `resolveBuilderSelection` treats "a model was
+  // requested" as `!== undefined`, so a null slipping through (the raw column value
+  // for a builder spawned with a harness but no model) would be validated as a
+  // model id and throw on resume.
   const recovered = resolveBuilderSelection(
-    { harness: stored.harness, model: stored.model },
+    { harness: stored.harness ?? undefined, model: stored.model ?? undefined },
     config.workspaceRoot,
   );
   assertHarnessCommandAgrees(recovered);
