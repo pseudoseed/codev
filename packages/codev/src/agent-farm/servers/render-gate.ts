@@ -558,6 +558,15 @@ export function classifyBuffer(
   // indefinitely. Every row boundary on such a screen is untrustworthy: the app's own rows
   // no longer line up with the mirror's. Checked across the box, its rule, and the rule's
   // continuation, so an overflowing rule is caught too.
+  //
+  // The rule row is deliberately included even though a SHORT box can survive narrowing
+  // intact (an empty composer has nothing long enough to wrap, so only the full-width rule
+  // spills). That frame is still proof the app painted wider than the mirror, and the
+  // moment the user types a line long enough to wrap, the region breaks. So the cost is
+  // accepted knowingly: while the mirror's geometry is wrong, an idle-LOOKING opencode
+  // composer holds its mail rather than being trusted. A hold is visible (mailbox-delivery
+  // `recordStreak` escalates a sustained one) and self-heals on the next correct repaint;
+  // trusting a misread composer is not visible and does not heal.
   if (profile.bottomAnchor) {
     for (let row = regionFrom; row <= region.footerFrom && row < rows; row++) {
       if (buf.getLine(top + row)?.isWrapped) {
