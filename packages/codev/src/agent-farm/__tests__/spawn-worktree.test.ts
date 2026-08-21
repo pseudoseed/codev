@@ -484,6 +484,52 @@ describe('spawn-worktree', () => {
   });
 
   // =========================================================================
+  // startBuilderSession — how the initial prompt reaches the CLI (Issue #4)
+  // =========================================================================
+
+  describe('startBuilderSession initial-prompt argument (Issue #4)', () => {
+    function findScript(): string | undefined {
+      const writeCalls = vi.mocked(writeFileSync).mock.calls;
+      const scriptCall = writeCalls.find(
+        call => typeof call[0] === 'string' && call[0].endsWith('.builder-start.sh'),
+      );
+      return scriptCall ? (scriptCall[1] as string) : undefined;
+    }
+
+    it('opencode gets --prompt, never a bare positional (the launch-exits-immediately bug)', async () => {
+      // `opencode [project]` reads its positional as a directory to start in, so the
+      // generic form produced `opencode "$(cat …)"` → "Failed to change directory to
+      // <cwd>/<the whole prompt>" → immediate exit. Verified against opencode 1.18.18.
+      getBuilderHarnessMock.mockReturnValueOnce(OPENCODE_HARNESS);
+      await startBuilderSession(
+        { workspaceRoot: '/tmp/ws' } as any,
+        'pir-4-oc', '/tmp/worktree', 'opencode',
+        'PROMPT', 'ROLE', 'codev',
+      );
+
+      const script = findScript();
+      expect(script).toBeDefined();
+      expect(script).toContain(`--prompt "$(cat '/tmp/worktree/.builder-prompt.txt')"`);
+      // The positional form must be gone: the command may not be followed directly by
+      // the prompt expression.
+      expect(script).not.toMatch(/opencode\s+"\$\(cat/);
+    });
+
+    it('claude keeps the bare positional — the generated script is unchanged', async () => {
+      getBuilderHarnessMock.mockReturnValueOnce(CLAUDE_HARNESS);
+      await startBuilderSession(
+        { workspaceRoot: '/tmp/ws' } as any,
+        'pir-4-cl', '/tmp/worktree', 'claude',
+        'PROMPT', 'ROLE', 'codev',
+      );
+
+      const script = findScript()!;
+      expect(script).toContain(`"$(cat '/tmp/worktree/.builder-prompt.txt')"`);
+      expect(script).not.toContain('--prompt "$(cat');
+    });
+  });
+
+  // =========================================================================
   // Collision Detection (unit-level)
   // =========================================================================
 

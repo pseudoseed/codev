@@ -45,6 +45,25 @@ export interface HarnessProvider {
   };
 
   /**
+   * For bash script generation: how this agent's CLI takes the builder's INITIAL
+   * PROMPT. Returns the fragment appended after the command and role injection.
+   *
+   * Omitted means the claude/codex convention — the prompt as a bare positional
+   * argument — which is what every call site did unconditionally before Issue #4,
+   * so an omitting harness generates a byte-identical script.
+   *
+   * opencode needs this because its positional slot is `[project]` ("path to start
+   * opencode in"), not a message: passing the prompt there made it try to `cd` into
+   * the prompt text, fail, and exit immediately — a builder that launched and never
+   * ran. It takes the initial message via `--prompt` instead.
+   *
+   * `promptFileReadExpr` is the already-quoted shell expression that reads the prompt
+   * file back (e.g. `"$(cat '/…/.builder-prompt.txt')"`), so implementations position
+   * it rather than re-quoting it.
+   */
+  buildScriptPromptArg?(promptFileReadExpr: string): string;
+
+  /**
    * Whether this harness can clear its conversation context in-session, without
    * restarting the process (Spec 1273 — `afx refresh`).
    *
@@ -209,6 +228,13 @@ export const OPENCODE_HARNESS: HarnessProvider = {
     );
   },
   buildScriptRoleInjection: () => ({ fragment: '', env: {} }),
+  // Issue #4: `opencode [project]` treats its positional as a directory to start in,
+  // so the generic positional prompt made the TUI exit at once ("Failed to change
+  // directory to <cwd>/<the entire prompt text>"). `--prompt` seeds the initial message
+  // into a TUI that stays running, which `opencode run` — the other candidate, and what
+  // the docs previously recommended — does not: that form answers once and exits, so the
+  // builder would die after a single turn. Verified against opencode 1.18.18.
+  buildScriptPromptArg: (promptFileReadExpr) => `--prompt ${promptFileReadExpr}`,
   getWorktreeFiles: () => ([{
     relativePath: 'opencode.json',
     content: JSON.stringify({ instructions: ['.builder-role.md'] }, null, 2) + '\n',

@@ -18,6 +18,7 @@ import { resolve, basename } from 'node:path';
 import { existsSync, writeFileSync, readdirSync } from 'node:fs';
 import type { SpawnOptions, BuilderType, Config } from '../types.js';
 import { getConfig, ensureDirectories, getResolvedCommands, getBuilderHarness, assertBuilderHarnessNotRetired } from '../utils/index.js';
+import { hasGateProfile } from '../servers/gate-profiles.js';
 import type { HarnessProvider } from '../utils/harness.js';
 import { logger, fatal } from '../utils/logger.js';
 import { run } from '../utils/shell.js';
@@ -882,6 +883,38 @@ async function spawnPir(options: SpawnOptions, config: Config): Promise<void> {
 // =============================================================================
 
 /**
+ * Abort the spawn when the configured builder command has no render-gate profile
+ * (Issue #4, acceptance criterion 4).
+ *
+ * `afx send` is mailbox-first: it delivers only onto a screen the render gate has
+ * classified as an empty prompt, and classification needs a per-app profile measured
+ * from real captured frames. A harness without one holds every message forever with
+ * reason `no-profile`. That failure is invisible at spawn time — the builder starts,
+ * the terminal renders, the row appears — and only shows up when someone tries to talk
+ * to it, so it is caught here instead, before any worktree, terminal or db state exists.
+ *
+ * Checked against the resolved builder COMMAND (not the harness name), because the gate
+ * identifies apps that way too — one source of truth, so this can never pass something
+ * the gate would later refuse. Applies to custom harnesses as well: an unmeasured custom
+ * agent is exactly the case that produces an unmessageable builder. There is no bypass
+ * flag, matching the fail-closed precedent `assertBuilderHarnessNotRetired` set — the
+ * fix is to measure a profile, not to skip the check.
+ */
+function assertBuilderHarnessHasGateProfile(workspaceRoot?: string): void {
+  const builderCmd = getResolvedCommands(workspaceRoot).builder;
+  if (hasGateProfile(builderCmd)) return;
+  fatal(
+    `Builder harness "${builderCmd}" has no render-gate profile.\n\n` +
+    '  `afx send` delivers a message only onto a prompt the render gate has proven\n' +
+    '  empty, and that needs a profile measured from real captured frames of the\n' +
+    '  agent\'s TUI. Without one, every message to this builder would be held\n' +
+    '  forever with reason "no-profile" — a builder you can spawn but never message.\n\n' +
+    '  Builder harnesses with a measured profile: claude, codex, opencode.\n\n' +
+    '  Aborting before any worktree, terminal or builder state is created.'
+  );
+}
+
+/**
  * Spawn a new builder
  */
 export async function spawn(options: SpawnOptions): Promise<void> {
@@ -932,6 +965,13 @@ export async function spawn(options: SpawnOptions): Promise<void> {
   // unknown-harness name still surfaces at its existing resolution call site, so
   // behavior is unchanged for every supported harness and every mode.
   assertBuilderHarnessNotRetired(config.workspaceRoot);
+
+  // Issue #4: and fail closed on a builder harness the render gate cannot classify,
+  // at the same point and for the same reason. Without a profile, `afx send` holds
+  // every message forever with reason `no-profile`, so the spawn would otherwise
+  // succeed into a builder that runs, looks healthy, and can never be messaged —
+  // a silent failure discovered only when someone tries to talk to it.
+  assertBuilderHarnessHasGateProfile(config.workspaceRoot);
 
   const handlers: Record<BuilderType, () => Promise<void>> = {
     spec: () => spawnSpec(options, config),

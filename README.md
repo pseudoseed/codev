@@ -375,13 +375,13 @@ Agent Farm supports multiple AI coding agents as shells. Configure in `.codev/co
 {
   "shell": {
     "architect": "claude --dangerously-skip-permissions",
-    "builder": "opencode run"
+    "builder": "opencode"
   }
 }
 ```
 
 OpenCode supports 75+ LLM providers (OpenAI, Anthropic, Google, Ollama, etc.). When using OpenCode as a builder:
-- Include `run` in the command (plain `opencode` launches the TUI, which hangs in a PTY session)
+- Use plain `opencode`, not `opencode run`. The harness seeds the builder's initial task via `--prompt`, which starts the TUI with the message already in flight and leaves it running. `opencode run` answers once and exits, so the builder would stop after a single turn.
 - Configure tool permissions for unattended execution in `~/.config/opencode/opencode.json` or your project's `opencode.json`:
   ```json
   { "permission": { "edit": "allow", "bash": "allow" } }

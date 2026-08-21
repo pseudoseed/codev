@@ -96,6 +96,37 @@ describe('harness', () => {
       const parsed = JSON.parse(files[0].content);
       expect(parsed).toEqual({ instructions: ['.builder-role.md'] });
     });
+
+    it('buildScriptPromptArg passes the prompt via --prompt, never as a positional (Issue #4)', () => {
+      // `opencode [project]` reads its positional as a directory to start in, so the
+      // generic positional form made the TUI fail to chdir into the prompt text and
+      // exit immediately — a builder that launched and never ran.
+      const readExpr = `"$(cat '/wt/.builder-prompt.txt')"`;
+      expect(OPENCODE_HARNESS.buildScriptPromptArg!(readExpr))
+        .toBe(`--prompt "$(cat '/wt/.builder-prompt.txt')"`);
+    });
+
+    it('leaves the caller\'s quoting of the prompt-file expression untouched', () => {
+      const quoted = `"$(cat '/wt with '\\''quote'\\''/.builder-prompt.txt')"`;
+      expect(OPENCODE_HARNESS.buildScriptPromptArg!(quoted)).toBe(`--prompt ${quoted}`);
+    });
+  });
+
+  describe('buildScriptPromptArg — default positional convention (Issue #4)', () => {
+    it('claude and codex omit it, so their generated scripts are unchanged', () => {
+      // Absence is the contract: the caller falls back to the bare positional every
+      // harness used before this hook existed.
+      expect(CLAUDE_HARNESS.buildScriptPromptArg).toBeUndefined();
+      expect(CODEX_HARNESS.buildScriptPromptArg).toBeUndefined();
+    });
+
+    it('a custom harness omits it too (custom configs declare role injection only)', () => {
+      const provider = buildCustomHarnessProvider({
+        roleArgs: ['--role', '${ROLE_FILE}'],
+        roleScriptFragment: "--role '${ROLE_FILE}'",
+      });
+      expect(provider.buildScriptPromptArg).toBeUndefined();
+    });
   });
 
   describe('getWorktreeFiles', () => {
