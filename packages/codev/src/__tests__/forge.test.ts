@@ -320,7 +320,7 @@ describe('executeForgeCommandSync', () => {
 // =============================================================================
 
 describe('getKnownConcepts', () => {
-  it('returns all 18 known concept names', () => {
+  it('returns all 22 known concept names', () => {
     const concepts = getKnownConcepts();
     expect(concepts).toContain('issue-view');
     expect(concepts).toContain('pr-list');
@@ -340,7 +340,11 @@ describe('getKnownConcepts', () => {
     expect(concepts).toContain('pr-diff');
     expect(concepts).toContain('auth-status');
     expect(concepts).toContain('repo-archive');
-    expect(concepts.length).toBe(18);
+    expect(concepts).toContain('ci-runs');
+    expect(concepts).toContain('ci-run-view');
+    expect(concepts).toContain('ci-failures');
+    expect(concepts).toContain('ci-run-log');
+    expect(concepts.length).toBe(22);
   });
 });
 
@@ -574,9 +578,9 @@ describe('graceful degradation when command not found', () => {
 // =============================================================================
 
 describe('resolveAllConcepts', () => {
-  it('returns all 18 concepts with default source when no config', () => {
+  it('returns all 22 concepts with default source when no config', () => {
     const resolutions = resolveAllConcepts();
-    expect(resolutions).toHaveLength(18);
+    expect(resolutions).toHaveLength(22);
     expect(resolutions.every(r => r.source === 'default')).toBe(true);
     expect(resolutions.every(r => r.executable !== null)).toBe(true);
   });
