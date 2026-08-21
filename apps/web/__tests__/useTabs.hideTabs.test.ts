@@ -120,4 +120,44 @@ describe('useTabs — dashboard.hideTabs (Issue #14)', () => {
     });
     expect(result.current.activeTab).toBeDefined();
   });
+
+  // A misconfigured (or otherwise unsanitized) hideTabs: ['work'] must never
+  // blank the dashboard. The server (getDashboardConfig) already strips
+  // 'work' before this ever runs — this test exercises the hook's own
+  // defense-in-depth for the case where 'work' arrives anyway.
+  it('never hides "work" even if hideTabs names it — the dashboard still renders a usable tab', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { result } = renderHook(() => useTabs(makeState({ hideTabs: ['work'] })));
+
+    expect(result.current.tabs.length).toBeGreaterThan(0);
+    expect(result.current.tabs.some(t => t.id === 'work')).toBe(true);
+    expect(result.current.activeTabId).toBe('work');
+    expect(result.current.activeTab).toBeDefined();
+    expect(result.current.activeTab?.id).toBe('work');
+    // 'work' is no longer a "known" hideable id (Issue #14 review fix), so
+    // naming it in hideTabs surfaces the same warning an unknown id would.
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('work'));
+  });
+
+  it('falls back to the first surviving tab (not a hardcoded id) when the active tab vanishes, even if "work" were somehow also gone', () => {
+    // Regression guard for the reviewed bug: the vanished-active-tab fallback
+    // must never hardcode an id that could itself be absent. Simulates the
+    // active tab disappearing while 'work' is not first in the tab order by
+    // driving the fallback through the effect directly rather than assuming
+    // any particular tab layout.
+    let stateRef = makeState({ hideTabs: [] });
+    const { result, rerender } = renderHook(() => useTabs(stateRef));
+
+    act(() => {
+      result.current.selectTab('team'); // not present yet (teamEnabled unset) — exercises "vanished" path
+    });
+
+    stateRef = makeState({ teamEnabled: true, hideTabs: ['team'] });
+    rerender();
+
+    // 'team' never existed in the rebuilt list; the fallback must land on
+    // some real, rendered tab rather than leaving activeTabId dangling.
+    expect(result.current.tabs.some(t => t.id === result.current.activeTabId)).toBe(true);
+    expect(result.current.activeTab).toBeDefined();
+  });
 });

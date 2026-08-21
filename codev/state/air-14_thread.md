@@ -86,3 +86,44 @@ than silently working around it.
 ### LOC
 
 ~212 lines changed across 9 files (8 modified + 1 new test file) — within AIR's ~300 LOC budget.
+
+## PR review round 1 (architect)
+
+Caught a real bug: `hideTabs: ["work"]` blanked the dashboard. `KNOWN_HIDEABLE_TAB_IDS`
+included `work` (so config could "validly" hide it), and the vanished-active-tab fallback
+hardcoded `setActiveTabId('work')` — with `work` itself filtered out of `tabs`, `activeTabId`
+pointed at a tab that no longer existed.
+
+Fixed both halves as two independent guards, per the architect's framing that they're separate
+failures:
+1. **Server won't offer the setting.** `getDashboardConfig` (`agent-farm/utils/config.ts`) now
+   strips `work` out of a configured `hideTabs` list before it ever reaches `DashboardState`,
+   warning once via `logger.warn`. `work` also dropped from the client's
+   `KNOWN_HIDEABLE_TAB_IDS`, so if it ever arrives anyway it's reported as an "unknown" id.
+2. **Client fallback no longer hardcodes an id config could remove.** The vanished-active-tab
+   fallback (for the hideTabs-triggered case) now sets `activeTabId` to `tabs[0]?.id` — the
+   first tab that actually survived the rebuild — instead of the literal string `'work'`.
+3. Added defense-in-depth belt-and-suspenders on top of both: `buildTabs`'s filter now
+   explicitly exempts `t.id === 'work'` regardless of what `hideTabs` contains, so even a
+   state object built by hand (bypassing the server) can't blank the dashboard through this
+   hook. Went a bit further than the two explicit asks here since the architect's framing
+   ("it is the home tab... config should not offer a setting that bricks the view") read as
+   wanting a hard guarantee, not just a config-level nudge — flagging this in case that's
+   overreach on my part.
+
+New tests: `useTabs.hideTabs.test.ts` — `hideTabs: ['work']` still renders Work with real
+content and warns; a vanished-tab-with-no-match-ever case resolves to some real rendered tab
+rather than a dangling id. `config.test.ts` — `getDashboardConfig` strips `work` and warns.
+Also re-verified live in the browser (mocked `/api/state` sending `hideTabs: ['work']`
+directly, bypassing the server-side strip) — Work tab and its content render normally.
+
+### update.test.ts false alarm
+
+Flagged `packages/codev/src/__tests__/update.test.ts` as a pre-existing unrelated failure
+(17/27 failing) earlier. Architect couldn't reproduce on either the main checkout or this
+worktree. Re-ran it 4x fresh from `packages/codev` — 27/27 clean every time, cannot reproduce.
+Likely cause: my original run came right after I let a full-package `pnpm vitest run` hit the
+Bash tool's 5-minute timeout and get SIGTERM'd mid-suite, on a machine `ps aux` shows is heavily
+shared (99 node processes at the time, including a vitest run I didn't start, from another
+session's checkout). Best guess is resource contention or a killed-run side effect, not a real
+product bug — flagged as unconfirmed/likely-noise to the architect rather than left ambiguous.

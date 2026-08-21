@@ -288,4 +288,15 @@ describe('getDashboardConfig (Issue #14)', () => {
     const result = getDashboardConfig('/fake/workspace');
     expect(result).toEqual({ hideTabs: [] });
   });
+
+  it('strips "work" out of a configured hideTabs list and warns (review fix: config cannot brick the dashboard)', () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    configMock.dashboard = { hideTabs: ['work', 'analytics'] };
+
+    const result = getDashboardConfig('/fake/workspace');
+
+    expect(result).toEqual({ hideTabs: ['analytics'] });
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('work'));
+    warnSpy.mockRestore();
+  });
 });
