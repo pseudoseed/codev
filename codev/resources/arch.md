@@ -588,6 +588,42 @@ When cleaning up a builder (`afx cleanup -p 0003`):
 6. **Update state**: Remove builder from database
 7. **Prune worktrees**: `git worktree prune`
 
+#### Per-Spawn Agent Selection: `(harness, model)` (Issue #2)
+
+Before this, the agent a builder ran was a **path string in workspace config**
+(`.codev/config.json` `shell.builder`). Pinning a model meant editing a wrapper script, which
+applied to every agent in the workspace and was invisible to `afx`, `porch` and `consult`.
+
+`afx spawn` now takes `--harness <name>` and `--model <id>`, resolved by
+`resolveBuilderSelection` (`agent-farm/utils/config.ts`) into an `AgentSelection`
+(`harnessName`, `command`, `provider`, `modelId`, `modelScriptFragment`, `explicit`).
+
+- **Model → argv** via two optional `HarnessProvider` methods, `buildModelArgs` /
+  `buildScriptModelArg`, in the same dual argv/script form as role injection. Their **absence is
+  meaningful**: it declares "this harness has no model selector", and `assertHarnessAcceptsModel`
+  raises rather than dropping the flag.
+- **One fold point.** The model is folded into `baseCmd` once inside `startBuilderSession`, so it
+  reaches the fresh, session-pinned and crash-resume launch forms alike — and Tower's relaunch,
+  which re-runs the written `.builder-start.sh`, keeps it for free.
+- **Command resolution for an explicit `--harness`**: `harness.<name>.command` → the configured
+  builder command when it already *is* that harness (so a pinned absolute path survives) → the
+  bare binary name.
+- **Two pre-flights, above the mode dispatch, no bypass.** `assertBuilderHarnessHasGateProfile`
+  judges *this selection's* command (not the workspace default), and
+  `assertHarnessCommandAgrees` refuses an **explicit** harness whose command is a different
+  binary — the render gate identifies agents by command basename, so a mismatch would split the
+  spawn-time check from the live gate.
+- **Inferred ≠ explicit.** Only an explicit `--harness` is asserted against the command. An
+  inferred name may differ (an unrecognized command has always fallen back to Claude), and the
+  inferred branch delegates to `resolveHarness` with `getBuilderHarness`'s exact call shape so
+  auto-detected retirement is not shadowed by a same-named custom harness (Issue #1338).
+- **Persisted** on the builder row (`builders.harness` / `builders.model`, migration v18, both
+  nullable) so `--resume` relaunches on the same pair instead of silently reverting to config.
+  `NULL` means "not recorded" and falls back to config resolution.
+
+Note the `consult` side is unchanged and already had this: `-m` selects the **lane**, `--model-id`
+the provider model (spec 1286).
+
 ### Tower Single Daemon Architecture (Spec 0090, decomposed in Spec 0105)
 
 As of v2.0.0 (Spec 0090 Phase 4), Agent Farm uses a **Tower Single Daemon** architecture. The Tower server manages all projects directly - there are no separate dashboard-server processes per project. As of Spec 0105, the monolithic `tower-server.ts` was decomposed into focused modules (see "Server Architecture" below for the full module table).
