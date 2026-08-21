@@ -430,6 +430,13 @@ describe.skipIf(!hasJq())('#13 — ci-failures returns a bounded extract with it
     expect(r.json!.ok).toBe(false);
   });
 
+  it('translates the shared canceled into gh cancelled', () => {
+    stubGh([]);
+    run(githubDir, 'ci-runs.sh', { CODEV_CI_STATUS: 'canceled' });
+    const calls = fileLines(path.join(tmp, 'gh.log'));
+    expect(calls.some((c) => c.includes('--status cancelled'))).toBe(true);
+  });
+
   it('fetches the per-job log endpoint, never --log-failed', () => {
     stubGh(ONE_FAILING_JOB, writeFixtureTo('github-vitest-failure'));
     run(githubDir, 'ci-failures.sh', { CODEV_CI_RUN_ID: '32515040122' });
@@ -830,6 +837,18 @@ describe.skipIf(!hasJq())('#13 — Forgejo, as it actually behaves', () => {
     const r = run(giteaDir, 'ci-run-log.sh', teaEnv({ CODEV_CI_RUN_ID: '6554924', CODEV_CI_LOG_GREP: '--- FAIL', CODEV_CI_LOG_CONTEXT: '0' }));
     expect(r.json!.matches).toBe(1);
     expect(r.json!.lines[0]).toContain('--- FAIL: TestReadPointerFromBuffer');
+  });
+
+  it('sends status=cancelled, because Forgejo rejects the spelling its own CLI documents', () => {
+    // `tea actions runs list --help` says `canceled`; the API answers that with
+    // {"message":"unknown status: canceled"} and answers `cancelled` with 2240
+    // runs. Both measured. This is the kind of difference that becomes an empty
+    // list nobody questions.
+    stubTea([['repos/o/r/actions/runs?*', forgejoRuns([])]]);
+    run(giteaDir, 'ci-runs.sh', teaEnv({ CODEV_CI_STATUS: 'canceled' }));
+    const calls = fileLines(path.join(tmp, 'tea.log'));
+    expect(calls.some((c) => c.includes('status=cancelled'))).toBe(true);
+    expect(calls.some((c) => c.includes('status=canceled'))).toBe(false);
   });
 
   it('rejects a status outside the shared vocabulary instead of passing it to the forge', () => {

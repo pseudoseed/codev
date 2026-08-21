@@ -99,12 +99,17 @@ ci_check_status() {
   exit 2
 }
 
-# Translate the shared vocabulary into what a provider CLI expects.
-# GitHub spells it "cancelled"; Forgejo spells it "canceled". Everything else is
-# shared, which is why the vocabulary is worth having.
+# Translate the shared vocabulary into what a provider expects on the wire.
+#
+# The vocabulary spells it `canceled` because that is what `tea actions runs
+# list --help` documents. Both forges want `cancelled`: GitHub has always spelt
+# it that way, and Forgejo — despite its own CLI help — answers
+# `status=canceled` with `{"message":"unknown status: canceled"}` while
+# `status=cancelled` returns 2240 runs. Measured, because the two spellings are
+# exactly the kind of difference that turns into an empty list nobody questions.
 ci_status_for() {
   _provider="$1"; _status="$2"
-  if [ "$_provider" = "github" ] && [ "$_status" = "canceled" ]; then
+  if [ "$_status" = "canceled" ]; then
     printf 'cancelled'
   else
     printf '%s' "$_status"
