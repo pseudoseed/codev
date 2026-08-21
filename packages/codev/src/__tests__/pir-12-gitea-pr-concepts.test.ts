@@ -141,9 +141,17 @@ describe('#12 — the gitea preset offers pr-search and pr-diff', () => {
     },
   );
 
-  it.each(['pr-search', 'pr-diff'])('doctor resolves the gitea %s executable as tea', (concept) => {
-    const resolution = resolveAllConcepts({ provider: 'gitea' }).find((r) => r.concept === concept);
-    expect(resolution?.executable).toBe('tea');
+  it('doctor resolves EVERY enabled gitea concept to tea', () => {
+    // Not just the new ones. `extractExecutable` reads a script's first
+    // substantive line, which answered "echo" for issue-view and "case" for
+    // pr-list — so `codev doctor` on a Forgejo repo told the user to install
+    // `echo`, and a genuinely missing `tea` went unreported. That is the #1455
+    // defect class, and the remedy is the `# forge-executable:` declaration.
+    // Asserted across the whole preset so a new script cannot reintroduce it.
+    const wrong = resolveAllConcepts({ provider: 'gitea' })
+      .filter((r) => r.source !== 'disabled' && r.executable !== 'tea')
+      .map((r) => `${r.concept} -> ${r.executable}`);
+    expect(wrong).toEqual([]);
   });
 });
 
