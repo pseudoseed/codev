@@ -712,7 +712,9 @@ export function Terminal({ wsPath, onFileOpen, persistent, toolbarExtra, onPerma
 
     // Refresh button. Two modes depending on socket state:
     // - Live socket → re-fit to the container and SIGWINCH so the running
-    //   program redraws at the correct width. Preserves all scroll history.
+    //   program redraws at the correct width. Preserves scrollback (the
+    //   buffer contents) — scroll POSITION is preserved too, via safeFit(),
+    //   the same viewportY save/restore every other resize path uses.
     // - Dropped / given-up socket → a true reconnect from a fresh backoff
     //   budget (#961). Without this, a web terminal that exhausted its 6
     //   retries could only recover via a full page reload (the recovery
@@ -720,9 +722,7 @@ export function Terminal({ wsPath, onFileOpen, persistent, toolbarExtra, onPerma
     reconnectRef.current = () => {
       const ws = wsRef.current;
       if (ws?.readyState === WebSocket.OPEN) {
-        if (fitRef.current) {
-          fitRef.current.fit();
-        }
+        scrollCtrl.safeFit();
         sendControl(ws, 'resize', { cols: term.cols, rows: term.rows });
         return;
       }

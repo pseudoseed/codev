@@ -141,6 +141,16 @@ describe('TerminalControls (Issue #382)', () => {
     const { container } = render(<Terminal wsPath="/ws/terminal/test" />);
     const refreshBtn = container.querySelector('button[aria-label="Refresh terminal"]')!;
 
+    // The refresh button now routes through scrollCtrl.safeFit() (real,
+    // unmocked module), which skips entirely when the container reports
+    // zero dimensions — jsdom's default getBoundingClientRect(). Give it a
+    // real size so the fit isn't skipped, matching every other resize path.
+    const terminalContainer = container.querySelector('.terminal-container')!;
+    vi.spyOn(terminalContainer, 'getBoundingClientRect').mockReturnValue({
+      width: 800, height: 600, top: 0, left: 0, right: 800, bottom: 600,
+      x: 0, y: 0, toJSON: () => ({}),
+    } as DOMRect);
+
     // Clear mocks from component mount
     mockFitFn.mockClear();
     mockWsSend.mockClear();

@@ -9,7 +9,7 @@
  * tracks scroll state externally in JS variables immune to DOM state changes.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, fireEvent } from '@testing-library/react';
 
 // Capture mock instances
 let mockTermInstance: {
@@ -465,5 +465,62 @@ describe('Terminal fit() scroll position preservation (Issue #423, #560)', () =>
     // The original eraseInDisplay should NOT have been called with params[0]=3
     const case3Calls = eraseInDisplayCalls.filter(c => c.params[0] === 3);
     expect(case3Calls.length).toBe(0);
+  });
+
+  it('refresh button restores scroll position via safeFit(), like every other resize path', () => {
+    // Regression test: the refresh button's live-socket branch used to call
+    // fitRef.current.fit() directly, bypassing scrollController.safeFit()
+    // entirely — the one resize trigger in the file that didn't restore
+    // viewport position. Every other trigger (ResizeObserver, initial load,
+    // visibility change) goes through safeFit(). This asserts the refresh
+    // button now does too.
+    const { container } = render(<Terminal wsPath="/ws/terminal/test" />);
+    mockContainerRect();
+    transitionToInteractive();
+
+    // User has scrolled up, away from the bottom.
+    simulateScroll(500, 200);
+
+    mockTermInstance.scrollToBottom.mockClear();
+    mockTermInstance.scrollToLine.mockClear();
+    mockFitInstance.fit.mockClear();
+    mockWsInstance.send.mockClear();
+
+    const refreshBtn = container.querySelector('button[aria-label="Refresh terminal"]')!;
+    fireEvent.pointerDown(refreshBtn);
+
+    // safeFit()'s viewportY save/restore ran: fit() happened, and the
+    // scrolled-up position was restored via scrollToLine — not lost, and
+    // not incorrectly snapped to the bottom.
+    expect(mockFitInstance.fit).toHaveBeenCalled();
+    expect(mockTermInstance.scrollToLine).toHaveBeenCalledWith(200);
+    expect(mockTermInstance.scrollToBottom).not.toHaveBeenCalled();
+
+    // The SIGWINCH resize control frame is still sent after the fit.
+    const resizeCall = mockWsInstance.send.mock.calls.find((call: [ArrayBuffer]) => {
+      const bytes = new Uint8Array(call[0]);
+      return bytes[0] === 0x00; // FRAME_CONTROL
+    });
+    expect(resizeCall).toBeDefined();
+  });
+
+  it('refresh button restores at-bottom state via safeFit() when the user was at the bottom', () => {
+    const { container } = render(<Terminal wsPath="/ws/terminal/test" />);
+    mockContainerRect();
+    transitionToInteractive();
+
+    // User is at the bottom.
+    simulateScroll(500, 500);
+
+    mockTermInstance.scrollToBottom.mockClear();
+    mockTermInstance.scrollToLine.mockClear();
+    mockFitInstance.fit.mockClear();
+
+    const refreshBtn = container.querySelector('button[aria-label="Refresh terminal"]')!;
+    fireEvent.pointerDown(refreshBtn);
+
+    expect(mockFitInstance.fit).toHaveBeenCalled();
+    expect(mockTermInstance.scrollToBottom).toHaveBeenCalled();
+    expect(mockTermInstance.scrollToLine).not.toHaveBeenCalled();
   });
 });
