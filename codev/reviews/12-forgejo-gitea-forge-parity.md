@@ -23,7 +23,8 @@ The reported bug was a hang. It was not one — it was a ~17-minute loop, and fi
 - `packages/codev/src/lib/team-github.ts` (+19 / -0) — names the provider instead of "returned no data"
 - `packages/codev/src/commands/porch/checks.ts` (+17 / -0) — `null` from `pr-exists` is "could not answer", not "no PR"
 - `packages/codev/src/agent-farm/commands/spawn-worktree.ts` (+12 / -0) — the collision query says `is:open`
-- `packages/codev/src/__tests__/pir-12-gitea-pr-concepts.test.ts` (+628 / -0) — new
+- `packages/codev/src/__tests__/pir-12-gitea-pr-concepts.test.ts` (+~670 / -0) — new
+- `packages/codev/src/commands/porch/__tests__/pir-12-pr-exists-null-vs-false.test.ts` (+77 / -0) — new
 - `packages/codev/src/__tests__/bugfix-1137-gitea-tea-api.test.ts` (+110 / -0) — fixtures follow the endpoints
 - `packages/codev/src/agent-farm/__tests__/spawn-worktree.test.ts` (+18 / -0)
 - `.claude/skills/forge/SKILL.md`, `.codex/skills/forge/SKILL.md` (+50 each) — kept byte-identical
@@ -87,7 +88,7 @@ That emptiness is the point. A short list and a truncated list are indistinguish
 ## Test Results
 
 - `npm run build`: ✓ pass
-- `npm test`: 5492 passed, 3 failed — all three pre-existing and unrelated (see **Flaky Tests**). 58 tests are new (40 in `pir-12-gitea-pr-concepts.test.ts`, plus the reworked `bugfix-1137` cases and one behavioural spawn assertion).
+- `npm test`: 5498 passed, 2 failed — both pre-existing and unrelated (see **Flaky Tests**). 45 tests are new across two files (`pir-12-gitea-pr-concepts.test.ts`, `pir-12-pr-exists-null-vs-false.test.ts`), plus one behavioural spawn assertion and the reworked `bugfix-1137` cases.
 - **Live verification** against `git.pseudoseed.com/pseudoseed/entriq` with all three overrides deleted, driven through the real dispatcher (config load → preset → env → script → JSON parse), not by invoking scripts by hand:
 
   | Call | Time | Result |
@@ -106,6 +107,33 @@ That emptiness is the point. A short list and a truncated list are indistinguish
   | `team-activity`, `on-it-timestamps` | — | still resolve as `disabled` |
 
   entriq's config was then **restored** and diff-verified byte-identical to both the pre-test copy and the architect's 11:20 backup. It runs the globally installed codev 3.3.1, whose preset still disables `pr-search`/`pr-diff`, so its overrides remain load-bearing until this ships. Delete them after this merges and entriq updates.
+
+## ⚠️ This had TWO of THREE review lanes — Codex never ran
+
+**Read this before trusting the review depth.**
+
+| Lane | Verdict | Notes |
+|---|---|---|
+| **codex** (gpt-5.6-sol) | **NEVER RAN** | Provider usage quota exhausted. Two attempts on 2026-08-21, 19:06:05Z and 19:06:35Z, each refused in ~6 s before any model work began. Quota restores 2026-08-27. **No codex findings exist for this change.** |
+| gemini (agy) | APPROVE, HIGH | No issues raised. |
+| claude (opus-5) | APPROVE, HIGH | Four non-blocking findings, all real, all fixed — see below. |
+
+Verbatim provider message, both attempts:
+
+> You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 27th, 2026 4:01 PM.
+
+The codex lane was skipped on explicit architect instruction rather than hold a fork-local change for six days. The absence is recorded as a NOT-RUN file at `codev/projects/12-forgejo-gitea-forge-parity-imp/12-review-iter1-codex.txt` carrying `VERDICT: SKIPPED` and `CONFIDENCE: NONE`, so it cannot be misread as a review that happened — but that path is gitignored (`.gitignore:65`), which is why the coverage is stated here too. The same quota blocked codex on #2, #4 and #11 earlier the same day.
+
+**Weigh this specifically.** The absent lane is the one that most often catches shell-quoting and POSIX-portability defects, and this diff is five POSIX `sh` scripts, a hand-rolled process watchdog, and a pile of jq. That is close to the worst pairing of *which* lane is missing against *what* the change is made of. Two of the three bugs found during implementation were exactly that class, and both were caught by tests rather than by reading.
+
+### What the Claude lane found, and what changed because of it
+
+All four findings were reproduced before being fixed; none were argued down.
+
+1. **Two `gitea_api_error` checks were unreachable** (`pr-diff.sh` name-only, `recently-merged.sh`). Gitea answers a 404 with a JSON *object*, which reached `tea_api_paged`'s `jq -s 'add'` first — and an object cannot be added to an array, so the walk died on `jq: error … array ([]) and object ({...}) cannot be added` before the script's own classification ran. Reproduced against live Forgejo exactly as reported. The exit status was non-zero either way, so no wrong answer was ever returned; what was lost was the sentence naming the missing PR. `tea_api_paged` now classifies before accumulating and returns a distinct status 4 with the body on stdout, so the caller's message finally fires. Both paths now tested — the full-diff 404 was covered and the name-only one was not, which is why only one of them was broken.
+2. **The plan's Test Plan called for a byte-identity test over the two `SKILL.md` twins and it was never written.** The files were identical; nothing stopped them drifting. Now pinned.
+3. **`checks.ts`'s null-vs-false change had no test.** It is a real behaviour change — `null` from the concept means "could not answer", not "no PR exists" — and it mattered concretely, since before this PR the gitea script blew the 30 s ceiling on every run, making `null` the *normal* outcome on that provider. Three tests added in a separate file, because mocking the forge layer is something `checks.test.ts` deliberately avoids.
+4. **`gitea_timeout` nits, both fixed.** The marker file's path was derived from the output file's (`"$_tf.fired"`), which `mktemp` does not reserve — a predictable name in a world-writable tmpdir that anyone could pre-create to force every call to report a timeout. Both files now live in a private `mktemp -d`. And the watchdog claimed the timeout unconditionally, so a command finishing in the same instant the deadline passed was reported as timed out, discarding a good answer; it now checks `kill -0` first. That narrows the window rather than closing it — a lock would be needed for that — and a false timeout is a retryable error rather than a wrong answer.
 
 ## Architecture Updates
 
@@ -157,8 +185,10 @@ It earns the hot slot because the same principle has now been arrived at indepen
 
 ## Flaky Tests
 
-None skipped or annotated. Three pre-existing failures were left untouched:
+None skipped or annotated. Two pre-existing failures were left untouched (which of them fires varies per run — they are contention-sensitive, and a third from the same file appeared in an earlier run):
 
 - `packages/codev/src/__tests__/spec-1280-measurement-instrument.test.ts` — `emits byte-identical output twice at the same commit`, `reports the same total under a C locale as under UTF-8`, and `PHASE_ITERS is a linear comparison constant`. Each invokes `scripts/measure-prompt-surface.sh` twice against a 60 s budget, and that script takes ~31 s per invocation on this machine. Proven pre-existing by running the same test against the **unmodified main checkout**, where it fails identically at 77 s; the architect independently reproduced it there past 300 s. The script costs the same against either root (31.3 s vs 33.0 s), so this is machine speed, not diff content.
+
+`packages/codev/src/terminal/__tests__/session-manager.test.ts` also drops one timing-sensitive stderr-tail case under full-suite load; the file passes 91/91 in isolation, and a *different* case from it failed on an earlier run, which is the signature of contention rather than a defect.
 
 This is further evidence for #8 — porch's check timeout is a hardcoded 300 s with no override key, and entriq's config records the same class of problem at 460 s quiet / 859 s contended.

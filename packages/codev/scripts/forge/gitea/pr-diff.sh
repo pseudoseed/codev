@@ -46,11 +46,15 @@ if [ "$CODEV_DIFF_NAME_ONLY" = "1" ]; then
   case $rc in
     0) ;;
     3) fail "the changed-file list for PR #${CODEV_PR_NUMBER} was truncated; a partial file list would understate the review scope" ;;
+    # 4 = the body was not a list, i.e. an error object. It is on stdout, so it
+    # can finally be classified into a message that names the PR.
+    4)
+      case "$(gitea_api_error "$FILES")" in
+        notfound) fail "PR #${CODEV_PR_NUMBER} not found in ${REPO}" ;;
+        *)        fail "Gitea could not list files for PR #${CODEV_PR_NUMBER}: ${FILES}" ;;
+      esac
+      ;;
     *) exit 1 ;;
-  esac
-  case "$(gitea_api_error "$FILES")" in
-    notfound) fail "PR #${CODEV_PR_NUMBER} not found in ${REPO}" ;;
-    error)    fail "Gitea could not list files for PR #${CODEV_PR_NUMBER}: ${FILES}" ;;
   esac
   printf '%s' "$FILES" | jq -r '.[] | .filename // empty'
   exit 0

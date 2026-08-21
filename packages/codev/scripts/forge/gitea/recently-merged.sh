@@ -97,11 +97,15 @@ INDEX="$(tea_api_paged "repos/${REPO}/issues" "type=pulls&state=closed&since=${C
 case $rc in
   0) ;;
   3) echo "recently-merged: the closed-pull index for '${REPO}' since ${CUTOFF} was truncated; narrow CODEV_SINCE_DATE rather than trusting a partial list" >&2; exit 3 ;;
+  # 4 = the body was not a list, i.e. an error object, now on stdout to classify.
+  4)
+    case "$(gitea_api_error "$INDEX")" in
+      notfound) echo "recently-merged: repository '${REPO}' has no readable pull index" >&2 ;;
+      *)        echo "recently-merged: Gitea could not list closed pulls for '${REPO}': ${INDEX}" >&2 ;;
+    esac
+    exit 1
+    ;;
   *) exit 1 ;;
-esac
-case "$(gitea_api_error "$INDEX")" in
-  notfound) echo "recently-merged: repository '${REPO}' has no readable pull index" >&2; exit 1 ;;
-  error)    echo "recently-merged: Gitea could not list closed pulls for '${REPO}': ${INDEX}" >&2; exit 1 ;;
 esac
 
 BASE_RECORDS="$(printf '%s' "$INDEX" | jq --arg cutoff "$CUTOFF" '

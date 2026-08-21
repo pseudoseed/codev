@@ -36,6 +36,7 @@ PULLS="$(tea_api_paged "repos/${REPO}/pulls" "state=open")"
 case $? in
   0) ;;
   3) echo "pr-list: the open-PR list was truncated; refusing to report a partial list as complete" >&2; exit 3 ;;
+  4) echo "pr-list: Gitea did not return a list of pulls for '${REPO}': ${PULLS}" >&2; exit 1 ;;
   *) exit 1 ;;
 esac
 printf '%s' "$PULLS" \

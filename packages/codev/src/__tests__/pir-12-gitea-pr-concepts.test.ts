@@ -38,6 +38,7 @@ import * as path from 'node:path';
 import { getForgeCommand, resolveAllConcepts } from '../lib/forge.js';
 
 const codevPkgRoot = path.resolve(import.meta.dirname, '..', '..');
+const repoRoot = path.resolve(codevPkgRoot, '..', '..');
 const forgeScripts = path.join(codevPkgRoot, 'scripts', 'forge');
 const gitea = path.join(forgeScripts, 'gitea');
 
@@ -475,6 +476,25 @@ describe('#12 — gitea concept scripts against a fake tea', () => {
       expect(stderr).toMatch(/not found/);
     });
 
+    it.skipIf(!hasJq())('name-only names the PR on a 404 instead of leaking a jq error', () => {
+      // The full-diff 404 path was tested and the name-only one was not, so this
+      // was broken: the error body reached `tea_api_paged`, whose `jq -s 'add'`
+      // cannot add an object to an array, and the walk died on
+      // `jq: error … array ([]) and object ({...}) cannot be added` before the
+      // script's own classification could run. Non-zero either way, so never a
+      // wrong answer — but the operator lost the sentence naming the PR.
+      // Raised by the claude review lane and reproduced against live Forgejo.
+      routes([REPO_ROUTE]);
+      const { status, stdout, stderr } = run('pr-diff.sh', {
+        CODEV_PR_NUMBER: '999999',
+        CODEV_DIFF_NAME_ONLY: '1',
+      });
+      expect(status).not.toBe(0);
+      expect(stdout.trim()).toBe('');
+      expect(stderr).toMatch(/PR #999999 not found/);
+      expect(stderr).not.toMatch(/cannot be added/);
+    });
+
     it('requires CODEV_PR_NUMBER', () => {
       routes([REPO_ROUTE]);
       const { status, stderr } = run('pr-diff.sh', {});
@@ -584,6 +604,16 @@ describe('#12 — gitea concept scripts against a fake tea', () => {
       expect(endpoints().some((e) => e.includes('since='))).toBe(true);
     });
 
+    it.skipIf(!hasJq())('names the repository on an error body instead of leaking a jq error', () => {
+      routes([REPO_ROUTE]);   // no issues route -> the fake tea answers 404
+      const { status, stderr } = run('recently-merged.sh', {
+        CODEV_SINCE_DATE: '2026-08-20T00:00:00Z',
+      });
+      expect(status).toBe(1);
+      expect(stderr).toMatch(/no readable pull index/);
+      expect(stderr).not.toMatch(/cannot be added/);
+    });
+
     it('rejects an unparseable CODEV_SINCE_DATE instead of silently widening', () => {
       routes([REPO_ROUTE]);
       const { status, stderr } = run('recently-merged.sh', { CODEV_SINCE_DATE: 'last tuesday' });
@@ -614,6 +644,15 @@ describe('#12 — the scripts pin their own commands, not their comments', () =>
     expect(code.some((l) => /tea_api_paged "repos\/\$\{REPO\}\/issues"/.test(l))).toBe(true);
     expect(code.some((l) => /tea_api_paged "repos\/\$\{REPO\}\/pulls"/.test(l))).toBe(false);
     expect(code.some((l) => l.includes('state=closed') && l.includes('type=pulls'))).toBe(true);
+  });
+
+  it('the two forge SKILL.md twins are byte-identical', () => {
+    // CLAUDE.md's standing rule, and the plan's Test Plan asked for this pin.
+    // The files WERE identical; nothing stopped them drifting. Raised by the
+    // claude review lane as a plan item that shipped unimplemented.
+    const claude = fs.readFileSync(path.join(repoRoot, '.claude/skills/forge/SKILL.md'));
+    const codex = fs.readFileSync(path.join(repoRoot, '.codex/skills/forge/SKILL.md'));
+    expect(codex.equals(claude), '.claude and .codex forge skills have drifted').toBe(true);
   });
 
   it('afx spawn asks pr-search for OPEN PRs explicitly, not by relying on a default', () => {

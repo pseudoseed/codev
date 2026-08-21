@@ -55,10 +55,21 @@ GITEA_MAX_PAGES=100
 # page) or an empty/blank response, bounded by GITEA_MAX_PAGES.
 #
 # EXIT STATUS: 0 = the whole list was fetched, 3 = it STOPPED EARLY and what is
-# on stdout is a PREFIX, 1 = the request failed. Callers must distinguish 3 from
-# 0: a short list and a truncated list look identical once printed, and reading
-# a truncated one as complete is how "recently merged" quietly renders an empty
-# panel. Truncation also always says so on stderr.
+# on stdout is a PREFIX, 4 = the response WAS NOT A LIST (an error body — stdout
+# carries it verbatim for the caller to classify with gitea_api_error), 1 = the
+# request failed. Callers must distinguish 3 from 0: a short list and a truncated
+# list look identical once printed, and reading a truncated one as complete is
+# how "recently merged" quietly renders an empty panel. Truncation also always
+# says so on stderr.
+#
+# Status 4 exists because callers cannot classify an error body they never see.
+# Gitea answers a 404 with a JSON OBJECT, and this function used to feed that
+# straight into `jq -s 'add'`, which cannot add an object to an array — so the
+# walk died on a raw `jq: error (at <stdin>:1): array ([]) and object ({...})
+# cannot be added` and the caller's own gitea_api_error check, sitting after the
+# call, was unreachable. The exit status was still non-zero, so no wrong answer
+# was ever returned; what was lost was the message saying which PR was missing.
+# Found by the claude review lane on PIR #12 and reproduced before fixing.
 tea_api_paged() {
   _path="$1"
   _query="$2"
@@ -80,6 +91,13 @@ tea_api_paged() {
     _resp="$(gitea_api "$_url")" || return 1
     # Blank body or an empty array → no more pages.
     [ -n "$_resp" ] || break
+    # Classify BEFORE accumulating. Anything that is not a JSON array cannot be
+    # a page of results, and must reach the caller intact rather than as a jq
+    # diagnostic about adding an object to an array.
+    if ! printf '%s' "$_resp" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      printf '%s' "$_resp"
+      return 4
+    fi
     _count="$(printf '%s' "$_resp" | jq 'length')" || return 1
     _acc="$(printf '%s\n%s' "$_acc" "$_resp" | jq -s 'add')" || return 1
     _items=$((_items + _count))
@@ -145,17 +163,30 @@ esac
 gitea_timeout() {
   _limit="$1"
   shift
-  _tf=$(mktemp) || return 1
-  _fired="${_tf}.fired"
+  # Both files live in a private mktemp DIRECTORY. The marker's path used to be
+  # derived from the output file's ("$_tf.fired"), which mktemp does not reserve
+  # — a predictable name in a world-writable tmpdir that anyone could pre-create
+  # to make every call report a timeout.
+  _dir=$(mktemp -d) || return 1
+  _tf="${_dir}/out"
+  _fired="${_dir}/fired"
   "$@" >"$_tf" &
   _cmd_pid=$!
   ( sleep "$_limit"
-    : > "$_fired"
-    pkill -TERM -P "$_cmd_pid" 2>/dev/null
-    kill -TERM "$_cmd_pid" 2>/dev/null
-    sleep 2
-    pkill -KILL -P "$_cmd_pid" 2>/dev/null
-    kill -KILL "$_cmd_pid" 2>/dev/null
+    # Claim the timeout only if there is still something to kill. Writing the
+    # marker unconditionally misreports a command that finished in the same
+    # instant the deadline passed — it succeeded, and saying otherwise discards
+    # a good answer. `kill -0` narrows that window to the gap between this test
+    # and the signal; it cannot be closed entirely without a lock, and a
+    # false timeout is a retryable error rather than a wrong answer.
+    if kill -0 "$_cmd_pid" 2>/dev/null; then
+      : > "$_fired"
+      pkill -TERM -P "$_cmd_pid" 2>/dev/null
+      kill -TERM "$_cmd_pid" 2>/dev/null
+      sleep 2
+      pkill -KILL -P "$_cmd_pid" 2>/dev/null
+      kill -KILL "$_cmd_pid" 2>/dev/null
+    fi
   ) >/dev/null 2>&1 &
   _wd_pid=$!
   # `|| _rc=$?` rather than `wait; _rc=$?`: the concept scripts run under
@@ -174,13 +205,13 @@ gitea_timeout() {
   # unreadable repository instead of a timeout. Found by the test that pins this
   # function; the marker file cannot be wrong the same way.
   if [ -f "$_fired" ]; then
-    rm -f "$_tf" "$_fired"
+    rm -rf "$_dir"
     return 124
   fi
   # A half-written response is worse than no response, so output is emitted only
   # on the non-timeout path.
   cat "$_tf"
-  rm -f "$_tf" "$_fired"
+  rm -rf "$_dir"
   return "$_rc"
 }
 
