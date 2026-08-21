@@ -1,7 +1,7 @@
 id: '4'
 title: make-opencode-a-working-builde
 protocol: pir
-phase: review
+phase: verified
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -21,7 +21,7 @@ iteration: 1
 build_complete: true
 history: []
 started_at: '2026-08-21T06:23:59.188Z'
-updated_at: '2026-08-21T15:15:13.732Z'
+updated_at: '2026-08-21T15:15:19.391Z'
 pr_history:
   - phase: review
     pr_number: 7
