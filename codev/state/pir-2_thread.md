@@ -97,3 +97,45 @@ script, and the persisted row were all verified against the real `afx` binary in
 - generated `.builder-start.sh` carries `claude --model 'sonnet'` in every launcher **including**
   `codev_launch_resume`
 - builder row persisted `harness=claude, model=sonnet`
+
+### Three more defects found after the first green run
+
+1. **Regression I introduced, caught by the existing Issue #4 suite.**
+   `assertHarnessCommandAgrees` fired on *inferred* harness names, not just explicit ones. An
+   unrecognized builder command has always fallen back to the claude harness, and the gate-profile
+   tests depend on `my-custom-agent` reaching the gate-profile check — so my assertion rejected
+   three long-standing valid configs. Only an explicit `--harness` is a promise; `AgentSelection`
+   now carries `explicit`.
+
+2. **Null model on resume.** Found while writing the resume test. `resolveBuilderSelection` treats
+   "a model was requested" as `!== undefined`, so a raw `null` (the column value for a builder
+   spawned with a harness but no model) would be validated as a model id and throw on resume.
+
+3. **Auto-detected retirement could be shadowed — found by re-reading my own code, not by a test.**
+   For an inferred harness I was deriving the name via `detectHarnessFromCommand` and handing it to
+   `resolveHarness` as an *explicit* name. Those take different branches: the explicit path consults
+   custom harnesses, the auto-detect path deliberately does not (Issue #1338). So `shell.builder:
+   "gemini --yolo"` plus a custom `gemini` harness would have resolved that custom provider and
+   launched a retired CLI, where `getBuilderHarness` throws. Now delegates with the same call shape
+   `getBuilderHarness` uses. Pinned in both directions.
+
+Two of the three were mine, and only one was caught by a test I wrote. The other two came from the
+existing suite and from re-reading the diff — which is the argument for doing both.
+
+### Test-suite note — I was wrong about a hang
+
+I spent a while convinced the full suite was wedged: no output, and `ps` showing 0% CPU. Both
+signals were misleading. `ps` `%CPU` is a **lifetime average**, so a long-running process reads
+near zero; and with `singleFork: true` plus no TTY, vitest emits nothing until the whole run
+finishes. I killed every run before it could finish and read that as a hang.
+
+It is not a hang. `src/__tests__` simply takes **276 seconds** — 59 files, 1152 tests, all passing.
+Full-suite total is roughly 5-6 minutes: agent-farm 3270 (25s), porch+consult 658 (8s), terminal
+356 (28s), src 1152 (276s).
+
+Confirmed: a single `npm test` run gives **5443 passed | 48 skipped, exit 0, 305s**.
+
+Lesson worth keeping, and I misread the same signal twice. Under a buffered single-fork runner,
+neither "no output" nor "0% CPU" is evidence of a hang. Worse, low CPU is what a HEALTHY run of
+this suite looks like — these tests shell out to git/gh constantly, so vitest reported 485s of
+test time while burning almost no CPU. The only reliable move was to let it finish.
