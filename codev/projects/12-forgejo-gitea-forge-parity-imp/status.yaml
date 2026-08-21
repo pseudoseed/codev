@@ -1,7 +1,7 @@
 id: '12'
 title: forgejo-gitea-forge-parity-imp
 protocol: pir
-phase: plan
+phase: implement
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -17,4 +17,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-21T17:29:24.650Z'
-updated_at: '2026-08-21T17:42:47.033Z'
+updated_at: '2026-08-21T17:44:57.342Z'
