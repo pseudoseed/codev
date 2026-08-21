@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Command } from 'commander';
 import { doctor } from './commands/doctor.js';
+import { runForgeConcept } from './commands/forge.js';
 import { init } from './commands/init.js';
 import { adopt } from './commands/adopt.js';
 import { update } from './commands/update.js';
@@ -55,6 +56,24 @@ program
     try {
       const exitCode = await doctor();
       process.exit(exitCode);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+  });
+
+// Forge command
+//
+// Deliberately thin. Its whole reason for existing is that naming a concept
+// script by path bypasses resolution — the config lookup, the provider preset
+// and any per-repo override — so a project that overrides a concept would have
+// its override silently ignored. See commands/forge.ts.
+program
+  .command('forge <concept>')
+  .description('Run one forge concept through the configured provider (CODEV_* env is passed through)')
+  .action(async (concept: string) => {
+    try {
+      process.exit(await runForgeConcept(concept));
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       process.exit(1);

@@ -36,6 +36,26 @@ function resolveScriptPath(provider: string, concept: string): string {
 /** Default maxBuffer for forge commands (10MB). Prevents truncation for large diffs. */
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
 
+/**
+ * Default wall-clock ceiling for a forge command (30s), unchanged since before
+ * the scripts had watchdogs of their own.
+ *
+ * **It is SHORTER than the script watchdog, not longer** (CODEV_FORGE_TIMEOUT,
+ * default 60s in scripts/forge/_timeout.sh), and the ordering matters: whichever
+ * ceiling fires first decides what the caller learns. This one can only report
+ * that something died; the inner one reports WHICH endpoint stopped answering
+ * and how long it was given. With the defaults as they stand, a stalled forge
+ * hits this 30s kill first and the named message never gets to fire.
+ *
+ * That inversion predates the CI concepts — #12 gave the gitea scripts a 60s
+ * watchdog under this same 30s ceiling — and correcting it globally would change
+ * the timeout behaviour of every concept and every caller, so it is not done
+ * here. What IS done: any caller that needs the named envelope passes
+ * `timeoutMs` above the script watchdog. `codev forge` does exactly that (see
+ * commands/forge.ts), which is why its timeout path reports a timeout by name.
+ */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -55,6 +75,8 @@ export interface ForgeCommandOptions {
   raw?: boolean;
   /** Maximum stdout buffer size in bytes. Defaults to 10MB. */
   maxBuffer?: number;
+  /** Wall-clock ceiling in ms. Defaults to 30s. */
+  timeoutMs?: number;
 }
 
 // =============================================================================
@@ -66,6 +88,12 @@ const KNOWN_CONCEPTS = [
   'recently-closed', 'recently-merged', 'user-identity', 'team-activity',
   'on-it-timestamps', 'pr-create', 'pr-merge', 'pr-search', 'pr-view', 'pr-diff',
   'auth-status', 'repo-archive',
+  // CI concepts (#13), tiered so the cheap question stays cheap: ci-runs and
+  // ci-run-view answer "did it pass" and "which job" without touching a log,
+  // ci-failures fetches exactly one job's log and returns a bounded extract,
+  // and ci-run-log is the deliberate raw-window escape hatch. Only the last two
+  // ever read log bytes.
+  'ci-runs', 'ci-run-view', 'ci-failures', 'ci-run-log',
 ] as const;
 
 // =============================================================================
@@ -125,7 +153,16 @@ function getProviderPresets(): Record<string, Record<string, string | null>> {
   if (_providerPresets) return _providerPresets;
   _providerPresets = {
     github: getDefaultCommands(),
-    gitlab: buildPresetFromScripts('gitlab', ['team-activity', 'on-it-timestamps']),
+    // The ci-* concepts are DISABLED for gitlab, not merely unimplemented. A
+    // concept with no script falls through to the github default, so leaving
+    // them out would make a GitLab repo silently run `gh run list` against
+    // whatever GitHub remote gh happens to resolve — the silent-fallthrough
+    // class #1455 closed. Issue #13 asks for gitlab to "degrade loudly, not
+    // silently"; this is what makes it loud.
+    gitlab: buildPresetFromScripts('gitlab', [
+      'team-activity', 'on-it-timestamps',
+      'ci-runs', 'ci-run-view', 'ci-failures', 'ci-run-log',
+    ]),
     // pr-search and pr-diff were disabled here until #12 shipped gitea scripts
     // for them. team-activity and on-it-timestamps stay disabled and are not
     // coming: both are `gh api graphql` pass-throughs and Forgejo has no
@@ -136,7 +173,11 @@ function getProviderPresets(): Record<string, Record<string, string | null>> {
     // concept of its own, and without this it silently falls through to the
     // github default (`gh pr create`) instead of failing loudly. That's the
     // exact silent-fallthrough bug class #1455 closes.
-    linear: buildPresetFromScripts('linear', ['team-activity', 'on-it-timestamps', 'pr-create']),
+    linear: buildPresetFromScripts('linear', [
+      'team-activity', 'on-it-timestamps', 'pr-create',
+      // Linear has no CI of its own, and the same silent fallthrough applies.
+      'ci-runs', 'ci-run-view', 'ci-failures', 'ci-run-log',
+    ]),
   };
   return _providerPresets;
 }
@@ -392,7 +433,7 @@ export async function executeForgeCommand(
     const { stdout } = await execAsync(command, {
       cwd: options?.cwd,
       env: { ...process.env, ...forgeEnv, ...env },
-      timeout: 30_000,
+      timeout: options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       maxBuffer: options?.maxBuffer ?? DEFAULT_MAX_BUFFER,
     });
 
@@ -400,6 +441,97 @@ export async function executeForgeCommand(
   } catch (err: unknown) {
     logDebug(concept, err);
     return null;
+  }
+}
+
+/** Outcome of executeForgeCommandDetailed — every failure mode kept distinct. */
+export interface ForgeCommandResult {
+  /** True when the command exited 0. */
+  ok: boolean;
+  /** Parsed stdout (JSON, or the raw string when `raw` is set). Null if unparseable or empty. */
+  data: unknown | null;
+  /** Raw stdout, kept even on failure — the ci-* concepts print their error envelope there. */
+  stdout: string;
+  stderr: string;
+  /** Process exit code, or null when the process was killed by a signal. */
+  exitCode: number | null;
+  /** True when the command was killed for exceeding the timeout. */
+  timedOut: boolean;
+  /** True when the concept has no command at all (disabled, or no provider script). */
+  unavailable: boolean;
+  durationMs: number;
+}
+
+/**
+ * Execute a forge concept command and report HOW it went, not merely whether.
+ *
+ * `executeForgeCommand` returns `null` for every failure mode: a timeout, a
+ * non-zero exit, unparseable output and a disabled concept are one value. That
+ * ambiguity has now cost this project several rounds — #12 shipped a fix for
+ * `pr-exists` returning a null that porch read as "no PR exists", and #17 and
+ * #8 both turned a stalled call into a generic failure with nothing naming the
+ * stall. A caller that needs to tell those apart uses this instead.
+ *
+ * Note in particular that `stdout` is returned even when `ok` is false. The CI
+ * concepts print a structured error envelope on stdout precisely so that the
+ * class of failure survives; discarding stdout on a non-zero exit would throw
+ * it away at the last step.
+ *
+ * Additive: `executeForgeCommand` is unchanged and no existing caller moves.
+ */
+export async function executeForgeCommandDetailed(
+  concept: string,
+  env?: Record<string, string>,
+  options?: ForgeCommandOptions,
+): Promise<ForgeCommandResult> {
+  const started = Date.now();
+  const forgeConfig = resolveForgeConfig(options);
+  const command = getForgeCommand(concept, forgeConfig);
+
+  if (command === null) {
+    return {
+      ok: false, data: null, stdout: '', stderr: '',
+      exitCode: null, timedOut: false, unavailable: true,
+      durationMs: Date.now() - started,
+    };
+  }
+
+  const timeout = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const forgeEnv = buildForgeEnv(forgeConfig);
+
+  try {
+    const { stdout, stderr } = await execAsync(command, {
+      cwd: options?.cwd,
+      env: { ...process.env, ...forgeEnv, ...env },
+      timeout,
+      maxBuffer: options?.maxBuffer ?? DEFAULT_MAX_BUFFER,
+    });
+    return {
+      ok: true, data: parseOutput(stdout, options?.raw),
+      stdout: String(stdout), stderr: String(stderr),
+      exitCode: 0, timedOut: false, unavailable: false,
+      durationMs: Date.now() - started,
+    };
+  } catch (err: unknown) {
+    logDebug(concept, err);
+    const e = err as { code?: number | string; killed?: boolean; signal?: string; stdout?: string; stderr?: string };
+    // `killed` plus a signal is how Node reports the timeout it enforced —
+    // verified during #12 against a command whose grandchild held the stdout
+    // pipe. An exit code alone cannot be read as a timeout: a killed process
+    // can still exit with a status, and a script that times out INTERNALLY (the
+    // shell watchdog in scripts/forge/_timeout.sh) exits non-zero with its own
+    // timeout envelope on stdout, which is why stdout is preserved below.
+    const timedOut = e.killed === true && typeof e.signal === 'string';
+    return {
+      ok: false,
+      data: e.stdout ? parseOutput(e.stdout, options?.raw) : null,
+      stdout: e.stdout ?? '',
+      stderr: e.stderr ?? (err instanceof Error ? err.message : String(err)),
+      exitCode: typeof e.code === 'number' ? e.code : null,
+      timedOut,
+      unavailable: false,
+      durationMs: Date.now() - started,
+    };
   }
 }
 
@@ -428,7 +560,7 @@ export function executeForgeCommandSync(
       cwd: options?.cwd,
       env: { ...process.env, ...forgeEnv, ...env },
       encoding: 'utf-8',
-      timeout: 30_000,
+      timeout: options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       maxBuffer: options?.maxBuffer ?? DEFAULT_MAX_BUFFER,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
