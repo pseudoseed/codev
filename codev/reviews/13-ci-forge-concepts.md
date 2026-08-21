@@ -130,7 +130,7 @@ Added at the architect's direction at the dev-approval gate, and the reasoning i
 ## Test Results
 
 - `npm run build`: ✓ pass
-- `npm test`: ✓ pass — 5567 passed, 0 failed, 48 skipped (5615). **62 new tests** in `pir-13-ci-concepts.test.ts`, plus the two concept-count assertions updated in `forge.test.ts`.
+- `npm test`: ✓ pass — 5572 passed, 0 failed, 48 skipped (5620). **67 new tests** in `pir-13-ci-concepts.test.ts`, plus the two concept-count assertions updated in `forge.test.ts`.
 
 ### Verification coverage — three tiers, and they are not the same
 
