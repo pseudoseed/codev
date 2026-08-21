@@ -319,6 +319,16 @@ export interface AgentSelection {
   modelId?: string;
   /** Shell fragment pinning the model, or '' when no model was requested. */
   modelScriptFragment: string;
+  /**
+   * Whether `harnessName` came from an explicit `--harness`, rather than being
+   * inferred from config or defaulted. Load-bearing for
+   * `assertHarnessCommandAgrees`: an INFERRED name is allowed to disagree with
+   * the command, because an unrecognized builder command has always fallen back
+   * to the claude harness (see the Issue #4 gate-profile suite, which spawns
+   * `my-custom-agent` and expects it to reach the gate-profile check). Only a
+   * name the user actually asked for is a promise the command must keep.
+   */
+  explicit: boolean;
 }
 
 /**
@@ -400,7 +410,7 @@ export function resolveBuilderSelection(
     modelScriptFragment = provider.buildScriptModelArg!(modelId);
   }
 
-  return { harnessName, command, provider, modelId, modelScriptFragment };
+  return { harnessName, command, provider, modelId, modelScriptFragment, explicit: Boolean(opts.harness) };
 }
 
 /**
@@ -420,6 +430,11 @@ export function resolveBuilderSelection(
  * check instead, which is the check that actually governs deliverability.
  */
 export function assertHarnessCommandAgrees(selection: AgentSelection): void {
+  // Only an EXPLICIT --harness is a promise. An inferred name (config default, or
+  // the claude fallback for an unrecognized command) has always been allowed to
+  // differ from the command basename, and tightening that here would reject
+  // long-standing valid configs — a regression the Issue #4 suite catches.
+  if (!selection.explicit) return;
   if (!getBuiltinHarness(selection.harnessName)) return;
   const detected = detectHarnessFromCommand(selection.command);
   if (detected === selection.harnessName) return;

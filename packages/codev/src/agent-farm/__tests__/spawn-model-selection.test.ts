@@ -161,6 +161,24 @@ describe('per-spawn (harness, model) selection (Issue #2)', () => {
       expect(() => assertHarnessCommandAgrees(s)).not.toThrow();
     });
 
+    it('does NOT fire for an INFERRED harness whose command is unrecognized', () => {
+      // Regression: an unrecognized builder command has always fallen back to the
+      // claude harness, and Issue #4's suite depends on `my-custom-agent` reaching
+      // the gate-profile check rather than being rejected earlier. Asserting
+      // agreement on an inferred name broke three of those tests. Only a name the
+      // user explicitly asked for is a promise the command has to keep.
+      writeConfig({ shell: { builder: 'my-custom-agent' } });
+      const s = resolveBuilderSelection({}, ws);
+      expect(s.explicit).toBe(false);
+      expect(s.harnessName).toBe('claude');
+      expect(() => assertHarnessCommandAgrees(s)).not.toThrow();
+    });
+
+    it('marks an explicit --harness as explicit', () => {
+      writeConfig({ shell: { builder: 'claude' } });
+      expect(resolveBuilderSelection({ harness: 'claude' }, ws).explicit).toBe(true);
+    });
+
     it('passes for every ordinary built-in selection', () => {
       writeConfig({ shell: { builder: 'claude' } });
       for (const h of ['claude', 'codex', 'opencode']) {
