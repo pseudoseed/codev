@@ -3,6 +3,7 @@ import {
   DEFAULT_CLAUDE_MODEL,
   DEFAULT_CODEX_MODEL,
   DEFAULT_CODEX_REASONING_EFFORT,
+  DEFAULT_OPENCODE_MODEL,
   computeCodexCost,
 } from '../index.js';
 
@@ -27,6 +28,13 @@ describe('shipped consult lane defaults', () => {
     // are both rejected by Codex with a ChatGPT account.
     expect(DEFAULT_CODEX_MODEL).toBe('gpt-5.6-sol');
     expect(DEFAULT_CODEX_REASONING_EFFORT).toBe('medium');
+  });
+
+  it('pins the opencode lane to xai/grok-4.6', () => {
+    // The `xai/` prefix is load-bearing in the other direction from `-sol`: `x-ai/grok-4.6`, the
+    // spelling most other tooling uses, is rejected by the provider with a bare
+    // `UnknownError: Unexpected server error`. Live-probed 2026-08-21.
+    expect(DEFAULT_OPENCODE_MODEL).toBe('xai/grok-4.6');
   });
 });
 
