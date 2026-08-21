@@ -22,6 +22,19 @@ import * as path from 'node:path';
 const repoRoot = path.resolve(import.meta.dirname, '../../../..');
 const script = path.join(repoRoot, 'scripts/measure-prompt-surface.sh');
 
+/**
+ * Per-test ceiling for anything that shells out to the instrument.
+ *
+ * Measured on this repo: one `measure-prompt-surface.sh` invocation costs ~25-30s
+ * on a quiet machine, and several of these tests invoke it two or three times
+ * (two locales, two runs for determinism, a fixture plus the live repo). The old
+ * 60s ceiling therefore sat *below* the honest cost of the slowest cases, so
+ * under full-suite load they were killed mid-run — and a different one lost the
+ * race each time, which reads as flakiness rather than as a ceiling set too low.
+ * The whole file passes in isolation once given room.
+ */
+const INSTRUMENT_TIMEOUT_MS = 240_000;
+
 function run(root: string = repoRoot, env: Record<string, string> = {}): string {
   return execFileSync('bash', [script, root], {
     encoding: 'utf-8',
@@ -130,7 +143,7 @@ describe('T1b — per-file four-tier resolution, not directory-level selection',
     const out = run(dir);
     // Directory-level selection would have missed the override entirely.
     expect(out).toMatch(/\| spir \| \d+ \| 8 \| \d+ \|/);
-  }, 60_000);
+  }, INSTRUMENT_TIMEOUT_MS);
 
   it('prefers .codev/ over codev/ over codev-skeleton/', () => {
     const src = fs.readFileSync(script, 'utf-8');
@@ -154,7 +167,7 @@ describe('T2 — phantom-savings proof: includes are expanded', () => {
     fs.writeFileSync(path.join(dir, 'codev-skeleton/protocols/spir/templates/frag.md'), 'cc dd ee\n');
 
     expect(num(run(dir), 'ALWAYS_ON_WORDS')).toBe(before);
-  }, 60_000);
+  }, INSTRUMENT_TIMEOUT_MS);
 
   it('expands non-markdown includes too — protocol.json delivery depends on it (P6)', () => {
     const dir = makeFixture();
@@ -169,7 +182,7 @@ describe('T2 — phantom-savings proof: includes are expanded', () => {
     );
     // The JSON's words must appear in the served count, not vanish.
     expect(num(run(dir), 'ALWAYS_ON_WORDS')).toBeGreaterThan(before);
-  }, 60_000);
+  }, INSTRUMENT_TIMEOUT_MS);
 });
 
 describe('T3 — per-surface reporting completeness (not a ceiling)', () => {
@@ -189,11 +202,11 @@ describe('T3 — per-surface reporting completeness (not a ceiling)', () => {
         new RegExp(`^\\| ${name} \\|`, 'm'),
       );
     }
-  }, 60_000);
+  }, INSTRUMENT_TIMEOUT_MS);
 
   it('includes codev-only protocols with no skeleton twin (release)', () => {
     expect(run()).toMatch(/^\| release \|/m);
-  }, 60_000);
+  }, INSTRUMENT_TIMEOUT_MS);
 });
 
 describe('T11 — buckets vs audience loads are reported on different bases', () => {
@@ -202,7 +215,7 @@ describe('T11 — buckets vs audience loads are reported on different bases', ()
     expect(out).toContain('ALWAYS_ON(builder,p,I)   = SHARED + BUILDER_SPAWN[p]');
     expect(out).toMatch(/OVERLAP by design/);
     expect(out).toMatch(/these SUM/);
-  }, 60_000);
+  }, INSTRUMENT_TIMEOUT_MS);
 
   it('one bucket growing while another shrinks shows BOTH movements, not a netted zero', () => {
     const dir = makeFixture();
@@ -219,7 +232,7 @@ describe('T11 — buckets vs audience loads are reported on different bases', ()
 
     expect(sharedAfter).toBeLessThan(sharedBefore);
     expect(archAfter).toBeGreaterThan(archBefore);
-  }, 60_000);
+  }, INSTRUMENT_TIMEOUT_MS);
 });
 
 describe('T15 — relocation is visible, never reported as deletion (M0c)', () => {
@@ -236,7 +249,7 @@ describe('T15 — relocation is visible, never reported as deletion (M0c)', () =
     const after = run(dir);
     expect(num(after, 'ALWAYS_ON_WORDS')).toBeLessThan(num(before, 'ALWAYS_ON_WORDS'));
     expect(num(after, 'TOTAL_AUTHORED_WORDS')).toBe(num(before, 'TOTAL_AUTHORED_WORDS'));
-  }, 60_000);
+  }, INSTRUMENT_TIMEOUT_MS);
 
   it('counts all four skill trees — one-tree counting would report relocation as deletion', () => {
     const src = fs.readFileSync(script, 'utf-8');
@@ -271,13 +284,13 @@ describe('portability — the count must not depend on the host', () => {
     const utf8 = num(run(repoRoot, { LC_ALL: 'en_US.UTF-8' }), 'ALWAYS_ON_WORDS');
     const c = num(run(repoRoot, { LC_ALL: 'C' }), 'ALWAYS_ON_WORDS');
     expect(c).toBe(utf8);
-  }, 60_000);
+  }, INSTRUMENT_TIMEOUT_MS);
 });
 
 describe('T12 — determinism', () => {
   it('emits byte-identical output twice at the same commit', () => {
     expect(run()).toBe(run());
-  }, 60_000);
+  }, INSTRUMENT_TIMEOUT_MS);
 });
 
 describe('instrument correctness — asserted without pinning the live surface', () => {
@@ -304,7 +317,7 @@ describe('instrument correctness — asserted without pinning the live surface',
   // human reads them as findings rather than maintaining them as expectations.
 
   let out: string;
-  beforeAll(() => { out = run(); }, 60_000);
+  beforeAll(() => { out = run(); }, INSTRUMENT_TIMEOUT_MS);
 
   describe('layer 1 — invariants over the live repo (hold at any surface size)', () => {
     it('ALWAYS_ON = SHARED + BUILDER_SPAWN[spir] + I x (HOT + PHASE mean[spir])', () => {
@@ -330,7 +343,7 @@ describe('instrument correctness — asserted without pinning the live surface',
       const spir = out.match(/^\| spir \| \d+ \| (\d+) \| \d+ \|$/m)!;
       const hot = Number(out.match(/lessons-critical\(\d+\) = (\d+)/)![1]);
       expect(two - one).toBe(hot + Number(spir[1]));
-    }, 60_000);
+    }, INSTRUMENT_TIMEOUT_MS);
   });
 
   describe('layer 2 — absolute values on a fixture whose arithmetic a human can check', () => {
@@ -343,13 +356,13 @@ describe('instrument correctness — asserted without pinning the live surface',
     it('reports the hand-computed total for a known surface', () => {
       const out2 = run(makeFixture());
       expect(num(out2, 'ALWAYS_ON_WORDS')).toBe(107);
-    }, 60_000);
+    }, INSTRUMENT_TIMEOUT_MS);
 
     it('reports the hand-computed architect and consultant loads', () => {
       const out2 = run(makeFixture());
       expect(out2).toMatch(/\| Architect \(per session\) \| 10 \|/);
       expect(out2).toMatch(/\| Consultant \(per review, spir\) \| 4 \|/);
-    }, 60_000);
+    }, INSTRUMENT_TIMEOUT_MS);
 
     it('a component silently omitted would fail here even though invariants still hold', () => {
       // The blind spot invariants cannot see: drop the hot tier from SHARED and every
@@ -357,7 +370,7 @@ describe('instrument correctness — asserted without pinning the live surface',
       // Only an externally-known expected value catches it.
       const out2 = run(makeFixture());
       expect(Number(out2.match(/\| SHARED [^|]*\| (\d+) \|/)![1])).toBe(7);
-    }, 60_000);
+    }, INSTRUMENT_TIMEOUT_MS);
   });
 
   describe('layer 3 — the frozen baseline artifacts are historical records', () => {
