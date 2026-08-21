@@ -1,5 +1,16 @@
 # PIR Plan: Make opencode a working builder harness
 
+> **Revision after plan-approval (2026-08-21).** Approved with one required change:
+> **make idle a positive check, not the absence of busy.** As originally drafted, the
+> profile held only when `busyIndicatorPattern` matched — so if a later opencode renamed
+> that footer string, nothing would match, the composer would read as idle, and the gate
+> would return clean *while the agent was mid-turn*, injecting into live typing. That is
+> the opposite failure direction from `REGION_END_PATTERNS`, which HOLDS when it fails to
+> match; drift there makes the gate over-cautious, drift here would make it permissive.
+> The fix, added below in §2: an `idleIndicatorPattern` keyed on the measured idle footer
+> readout, with CLEAN requiring the idle pattern PRESENT **and** the busy pattern ABSENT,
+> so either string drifting produces a hold. The rest of the plan was approved as written.
+
 ## Understanding
 
 Issue #4 asks for two independent defects to be fixed so `opencode` can host Grok as a
@@ -187,10 +198,19 @@ claude/codex/agy):**
 - Add `┃` (U+2503) to `IGNORE_CHARS` (`render-gate.ts:143`). Safe: it's the same category of
   box-drawing chrome the set already carries (`│ ─ ━ ╌ ┄ ╭ ╰ ┌ └`), and none of the existing
   claude/codex/agy fixtures use this glyph (verified by grep).
-- Extend `GateProfile` (`render-gate.ts:99-120`) with two new **optional** fields:
+- Extend `GateProfile` (`render-gate.ts:99-120`) with three new **optional** fields:
   - `busyIndicatorPattern?: RegExp` — if any screen line matches, the verdict is forced
     not-clean before any composer logic runs. New `GateVerdict.detail` value
     `'busy-indicator'` for telemetry.
+  - `idleIndicatorPattern?: RegExp` — **(required change at plan-approval)** if set, CLEAN
+    additionally requires this to be PRESENT on screen. Keyed on the measured idle footer
+    readout `<tokens> (<pct>%) · $<cost>`, which opencode renders only between turns; the
+    mid-turn footer replaces it with the interrupt hint. New `GateVerdict.detail` value
+    `'no-idle-indicator'`. This is what makes the busy check safe under version drift:
+    a busy-only rule fails *permissive* (rename the string → nothing matches → inject into
+    a live turn), while requiring the idle half fails toward *hold*. With both required,
+    either string drifting holds. Measured against opencode **1.18.18**, in both the
+    zero-cost (`9.5K (2%) · $`) and priced (`9.2K (2%) · $0.02`) forms.
   - `bottomAnchor?: { anchorPattern: RegExp; bodyPattern: RegExp; maxLookback?: number }` — an
     alternate resolution path for a composer whose one reliably-unique anchor line sits at the
     *bottom* of a variable-height box instead of the top. When set, `classifyBuffer` finds the
@@ -210,13 +230,20 @@ claude/codex/agy):**
 ```ts
 export const OPENCODE_PROFILE: GateProfile = {
   app: 'opencode',
-  busyIndicatorPattern: /esc interrupt/,
+  busyIndicatorPattern: /esc\s+interrupt/,
+  idleIndicatorPattern: /\(\d+%\)\s+·\s+\$/,
   bottomAnchor: {
-    anchorPattern: /^\s*┃\s*(Build|Plan)\s*·/,
+    rulePattern: /^\s*╹▀{5,}/,
     bodyPattern: /^\s*┃/,
+    maxLookback: 20,
   },
 };
 ```
+
+(The anchor is keyed on the composer's bottom **rule** rather than a `(Build|Plan)` mode
+name, as the draft plan had it — the rule is purely structural, so a custom `--agent` name
+cannot break it. The chrome/status row is then the row directly above the rule, excluded
+from scanning by construction. Confirmed against all five captured states.)
 
 Add `opencode: OPENCODE_PROFILE` to `PROFILES_BY_HARNESS` (`gate-profiles.ts:94-97`).
 `resolveProfile` needs no change — it already calls `detectHarnessFromCommand`, whose
@@ -323,14 +350,18 @@ unknown/custom harness `fatal()`s before any worktree work).
   alternative — forcing opencode into the existing top-down `markerPattern`/`regionEndPatterns`
   shape — was tried conceptually first and demonstrably false-cleans on a real 2-line draft (see
   Understanding); it isn't a viable alternative, not just a less-clean one.
-- **Risk: the mid-turn `busyIndicatorPattern` is a single measured string
-  (`esc interrupt`) from one opencode version (1.18.18).** A version drift that changes this
-  text would silently regress to false-clean during generation — the most dangerous class of
-  drift this issue exists to prevent. Mitigation: this is the same drift exposure
-  `REGION_END_PATTERNS` already accepts for claude/codex (documented as "DRIFT-FRAGILE" in
-  `gate-profiles.ts:41-49`); no new invariant is being weakened, but it's worth flagging
-  explicitly since it's new surface. No better measured alternative was found in this sandbox —
-  the composer itself gives no idle/busy signal at all.
+- **~~Risk: the mid-turn `busyIndicatorPattern` is a single measured string.~~
+  Resolved at plan-approval — see the revision note at the top.** The original argument
+  (that this was the same exposure `REGION_END_PATTERNS` already accepts) was wrong, and
+  the direction is what matters: `REGION_END_PATTERNS` failing to match HOLDS, so its
+  drift is over-caution; a busy-only check failing to match falls through to composer logic
+  that reads CLEAN, so its drift is permissive — the silent corruption this issue exists to
+  prevent. Fixed by requiring a positive `idleIndicatorPattern`. Residual risk is now
+  one-directional: if either footer string changes in a future opencode, every send to an
+  opencode builder holds until the profile is re-measured. The committed fixtures go red at
+  the same moment, so the drift is visible rather than silent.
+  (The draft also claimed "the composer itself gives no idle/busy signal at all" — true of
+  the composer box, but the footer carries *both* states, and only the busy half was used.)
 - **Alternative considered: reuse `opencode run` per the current docs.** Rejected — verified
   live that it's one-shot (exits after the first response), which doesn't satisfy "a builder
   that actually runs" for more than one turn, and the docs describing it predate `--prompt`
@@ -339,12 +370,12 @@ unknown/custom harness `fatal()`s before any worktree work).
   Rejected per the issue's explicit instruction, and also insufficient on its own — it doesn't
   solve the multi-row marker ambiguity or the mid-turn false-clean, so it wouldn't actually
   close the gap.
-- **Open question for review**: I could not reproduce a real tool-permission dialog in this
-  sandbox (bash calls went through unprompted, likely pre-existing permissive
-  `opencode.json`/global config from prior use of this installed CLI). The Test Plan below
-  gives a concrete recipe (force `"permission": {"bash": "ask"}` in the capture worktree) to
-  produce it during implementation; flagging now in case the reviewer already knows a more
-  reliable way to trigger it.
+- **~~Open question: could not reproduce a real tool-permission dialog.~~ Resolved during
+  implementation.** The Test Plan recipe worked: `{"permission": {"bash": "ask"}}` in the
+  capture directory's `opencode.json` plus a prompt requiring a shell command produced the
+  real dialog, captured as `opencode-dialog.busy.txt`. It replaces the whole composer
+  (no rule line to anchor on) *and* hides the footer (no idle indicator), so it holds for
+  two independent reasons — a blind Enter can never approve a shell command.
 - **Not in scope**: making unattended opencode builders auto-approve tool permissions
   (`--auto`, or a default `permission` block in the generated `opencode.json`). The issue's
   acceptance criteria don't mention it, and it's an orthogonal, security-relevant default
