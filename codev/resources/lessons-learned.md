@@ -207,6 +207,31 @@ Generalizable wisdom extracted from review documents, ordered by impact. Updated
 - [From #1338] Retiring an entry from a shared resolver/registry must **fail closed at every resolution path**, not just delete the entry: a pure delete makes the explicit-name path throw a generic "unknown" error (no migration guidance) and the auto-detect path *silently* fall back to the default provider (here, the claude harness) — a dangerous mis-injection, not a visible failure. Keep the retired name in the detector and add a retirement sentinel checked BEFORE both exits so every path yields the same specific message; then grep every caller — spawn preflight, launch, and especially the reconnect/clean-exit relaunch paths that mint fresh sessions — because those are exactly the ones an "it's unreachable" analysis misses (three of them surfaced only under adversarial review here).
 - [secfix-1] Adding the first **runtime (value)** import of a workspace package that was previously only **type-imported** (`import type`, erased at build) requires moving that dep from `devDependencies` to `dependencies` in the importing package. A devDependency is not installed for a published/deployed consumer, so the packaged build throws `Cannot find module` at **module load** — before any logger initializes, so it surfaces as a silent boot crash (e.g. a 30s startup timeout with zero log lines), not an obvious error. It is invisible to build+test because the monorepo symlinks everything at dev time. Verify the **packaged** artifact: `pnpm --filter <pkg> deploy --prod --legacy <dir>` (or a throwaway-prefix `npm install` of the tarballs) resolves only real `dependencies`, mimicking a published install — then load the entry module from it. Also update any hand-rolled local-install/packaging script that packs a *hand-picked subset* of workspace packages: it must now pack the newly-runtime dep too, or the install can't satisfy it.
 
+### An absent optional hook should mean "unsupported", and be asserted (Issue #2)
+
+When extending a provider interface with an optional capability method, absence is a *claim*:
+"this implementation cannot do it". Assert on it rather than letting the caller no-op.
+
+`consult`'s `--model-id` shipped registered, parsed, documented in `--help` and covered by
+passing unit tests — and was completely inert, because the action built its options
+field-by-field and never copied it across (spec 1286). Nothing failed loudly. The same shape
+recurs for any new flag: registered, documented, does nothing.
+
+Two habits close it: an assertion for the unsupported case
+(`assertLaneAcceptsModelOverride`, `assertHarnessAcceptsModel`), and a test that the flag
+reaches the options object at all.
+
+### Resolution helpers can differ by BRANCH, not just by result (Issue #2, #1338)
+
+`resolveHarness(name, custom, command)` behaves differently depending on whether `name` is
+supplied: the explicit path consults custom harnesses, the auto-detect path deliberately does
+not, so a retired built-in stays retired even when a same-named custom harness exists.
+
+Deriving the name yourself and passing it in *looks* equivalent and silently switches branches
+— in this case letting a custom `gemini` shadow a retirement and launch a CLI that #1338
+deliberately killed. When delegating to an existing resolver, **preserve its call shape**, not
+just its inputs.
+
 ## Process
 
 - [From #1347] For device-facing surfaces, PIR's dev-approval gate earns its cost precisely where automated checks are blind: the live-hardware pass caught Marketplace icon-spec violations (list icons must be white monochrome — `streamdeck validate` doesn't check this), a branding watermark colliding with the runtime-rendered key titles, and a stale extension host silently breaking follow-focus. Budget gate time for the real device, not just the diff.
@@ -413,6 +438,23 @@ Generalizable wisdom extracted from review documents, ordered by impact. Updated
   check which Tower is actually running (`ps` for the `tower-server.js` path) before suspecting the
   code; restarting Tower to pick up the branch build kills every running builder, so it is the
   human's call.
+
+### "No output and 0% CPU" is not evidence of a hung test run
+
+Under a buffered, single-fork runner (vitest with `singleFork`, no TTY) nothing is printed until
+the entire run finishes, so a healthy run looks identical to a wedged one. Worse, `ps` `%CPU` is
+a **lifetime average**, and a suite that shells out to `git`/`gh` is I/O-bound — this repo's
+reported 485s of test time burned almost no CPU. Low CPU is what *healthy* looks like here.
+
+Killing the run repeatedly and reading the silence as a hang cost far more than waiting once.
+Measure accumulated CPU time, or just let it finish, before concluding a process is blocked.
+
+### Add a new migration's version to the constant that a FRESH install seeds
+
+`ensureGlobalDatabase` seeds `_migrations` with `1..GLOBAL_CURRENT_VERSION` and returns early on
+a fresh database. Forget the bump and a fresh install records the older version and re-runs the
+new block on its next open. Nothing breaks loudly — the columns arrive from the schema anyway —
+so it survives review. Pin the constant to the highest migration block in a test.
 
 ## UI/UX
 

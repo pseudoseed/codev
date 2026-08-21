@@ -1,0 +1,24 @@
+id: '2'
+title: make-harness-model-a-first-cla
+protocol: pir
+phase: review
+plan_phases: []
+current_plan_phase: null
+gates:
+  plan-approval:
+    status: approved
+    requested_at: '2026-08-21T15:22:50.918Z'
+    approved_at: '2026-08-21T15:23:28.598Z'
+  dev-approval:
+    status: approved
+    requested_at: '2026-08-21T16:27:37.008Z'
+    approved_at: '2026-08-21T16:34:33.580Z'
+  pr:
+    status: pending
+    requested_at: '2026-08-21T16:53:34.589Z'
+iteration: 1
+build_complete: true
+history: []
+started_at: '2026-08-21T15:16:28.755Z'
+updated_at: '2026-08-21T16:53:34.590Z'
+pr_ready_for_human: true

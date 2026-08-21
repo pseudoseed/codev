@@ -142,7 +142,7 @@ function ensureGlobalDatabase(): Database.Database {
   configurePragmas(db);
 
   // Current migration version — bump when adding new migrations
-  const GLOBAL_CURRENT_VERSION = 17;
+  const GLOBAL_CURRENT_VERSION = 18;
 
   // Detect fresh vs existing database by checking if content tables exist.
   // On existing databases, GLOBAL_SCHEMA must NOT run because it references column names
@@ -615,6 +615,27 @@ function ensureGlobalDatabase(): Database.Database {
     }
     db.prepare('INSERT INTO _migrations (version) VALUES (17)').run();
     console.log('[info] Added not_before column to mailbox (Spec 1313 durable --delay)');
+  }
+
+  // Migration v18: Add harness/model columns to builders (Issue #2 — (harness, model)
+  // as a per-spawn parameter). Before this, the agent was a path string in workspace
+  // config, so `afx spawn --resume` could recompute it; now the pair is chosen per
+  // spawn and must be remembered, or a resume silently reverts to the config default.
+  // PRAGMA-gated ADD COLUMN mirroring v16/v17 — a blanket try/catch would let a real
+  // ALTER failure be recorded as "migrated", and upsertBuilder's INSERT now names both
+  // columns, so every subsequent builder write would fail against a table missing them.
+  const v18 = db.prepare('SELECT version FROM _migrations WHERE version = 18').get();
+  if (!v18) {
+    const builderCols = (db.prepare(`PRAGMA table_info(builders)`).all() as Array<{ name: string }>)
+      .map((c) => c.name);
+    if (!builderCols.includes('harness')) {
+      db.exec(`ALTER TABLE builders ADD COLUMN harness TEXT`);
+    }
+    if (!builderCols.includes('model')) {
+      db.exec(`ALTER TABLE builders ADD COLUMN model TEXT`);
+    }
+    db.prepare('INSERT INTO _migrations (version) VALUES (18)').run();
+    console.log('[info] Added harness/model columns to builders (Issue #2 per-spawn agent selection)');
   }
 
   return db;

@@ -27,9 +27,11 @@ afx spawn [number] [options]
 | `--soft` | Soft mode (AI follows protocol, you verify) |
 | `--strict` | Strict mode (porch orchestrates) — this is the default |
 | `--resume` | Resume builder in existing worktree |
+| `--harness <name>` | Agent harness for THIS spawn: `claude`, `codex`, `opencode`, or a custom harness. Overrides `.codev/config.json`; the config value stays the fallback. Refused at spawn if the harness has no render-gate profile. |
+| `--model <id>` | Pin the model for THIS spawn, e.g. `sonnet`, `claude-fable-5`, `x-ai/grok-4.6` (opencode wants `provider/model`). Resolved into the harness's own flag — never baked into a command path. Using it with a harness that has no model selector is an error, not a silent no-op. |
 | `--no-role` | Skip loading role prompt |
 
-**There is NO `-t`, `--title`, `--name`, or `--branch` flag.** The branch name is auto-generated from the issue title.
+**There is NO `-t`, `--title`, or `--name` flag.** Without `--branch`, the branch name is auto-generated from the issue title.
 
 **Examples:**
 ```bash
@@ -39,6 +41,8 @@ afx spawn 42 --protocol air            # AIR (small features)
 afx spawn 42 --protocol bugfix         # Bugfix
 afx spawn 42 --protocol spir --soft    # Soft mode
 afx spawn 42 --resume                  # Resume existing builder
+afx spawn 42 --protocol air --harness opencode --model x-ai/grok-4.6
+afx spawn 42 --protocol air --model sonnet   # pin a model, same harness
 afx spawn --task "fix the flaky test"  # Ad-hoc task (no issue)
 afx spawn 42 --protocol spir --force   # Skip dirty-worktree check
 ```

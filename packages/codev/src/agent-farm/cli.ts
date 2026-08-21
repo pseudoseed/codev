@@ -314,6 +314,8 @@ export async function runAgentFarm(args: string[]): Promise<void> {
     .option('--resume', 'Resume builder in existing worktree (skip worktree creation)')
     .option('--branch <name>', 'Use existing remote branch instead of creating a new one')
     .option('--remote <name>', 'Specify which remote to fetch the branch from (for fork PRs)')
+    .option('--harness <name>', 'Agent harness for this spawn (claude, codex, opencode, or a custom harness). Overrides .codev/config.json for this builder only; the config value stays the fallback.')
+    .option('--model <id>', 'Pin the model for this spawn (e.g. `sonnet`, `claude-fable-5`, `x-ai/grok-4.6`). Resolved into the harness\'s own flag rather than baked into a command path. Using it with a harness that has no model selector is an error, not a silent no-op.')
     .option('--no-role', 'Skip loading role prompt');
 
   // Catch removed flags with helpful migration messages
@@ -364,6 +366,8 @@ export async function runAgentFarm(args: string[]): Promise<void> {
           resume: options.resume as boolean | undefined,
           branch: options.branch as string | undefined,
           remote: options.remote as string | undefined,
+          harness: options.harness as string | undefined,
+          model: options.model as string | undefined,
           noRole: !(options.role as boolean),
         });
       } catch (error) {

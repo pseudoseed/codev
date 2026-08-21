@@ -197,11 +197,13 @@ export function upsertBuilder(builder: Builder): void {
   db.prepare(`
     INSERT INTO builders (
       workspace_path, id, name, port, pid, status, phase, worktree, branch,
-      type, task_text, protocol_name, issue_number, terminal_id, spawned_by_architect
+      type, task_text, protocol_name, issue_number, terminal_id, spawned_by_architect,
+      harness, model
     )
     VALUES (
       @workspacePath, @id, @name, 0, 0, @status, @phase, @worktree, @branch,
-      @type, @taskText, @protocolName, @issueNumber, @terminalId, @spawnedByArchitect
+      @type, @taskText, @protocolName, @issueNumber, @terminalId, @spawnedByArchitect,
+      @harness, @model
     )
     ON CONFLICT(workspace_path, id) DO UPDATE SET
       name = excluded.name,
@@ -214,7 +216,9 @@ export function upsertBuilder(builder: Builder): void {
       protocol_name = excluded.protocol_name,
       issue_number = excluded.issue_number,
       terminal_id = excluded.terminal_id,
-      spawned_by_architect = COALESCE(excluded.spawned_by_architect, builders.spawned_by_architect)
+      spawned_by_architect = COALESCE(excluded.spawned_by_architect, builders.spawned_by_architect),
+      harness = COALESCE(excluded.harness, builders.harness),
+      model = COALESCE(excluded.model, builders.model)
   `).run({
     workspacePath: ws,
     id: builder.id,
@@ -229,6 +233,8 @@ export function upsertBuilder(builder: Builder): void {
     issueNumber: builder.issueNumber != null ? String(builder.issueNumber) : null,
     terminalId: builder.terminalId ?? null,
     spawnedByArchitect: builder.spawnedByArchitect ?? null,
+    harness: builder.harness ?? null,
+    model: builder.model ?? null,
   });
 }
 

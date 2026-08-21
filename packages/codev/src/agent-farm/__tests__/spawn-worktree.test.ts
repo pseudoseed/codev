@@ -71,7 +71,7 @@ vi.mock('../../lib/forge.js', () => ({
 }));
 
 // Mock the harness resolution to return claude harness by default
-import { CLAUDE_HARNESS, OPENCODE_HARNESS } from '../utils/harness.js';
+import { CLAUDE_HARNESS, CODEX_HARNESS, OPENCODE_HARNESS } from '../utils/harness.js';
 const getBuilderHarnessMock = vi.fn(() => CLAUDE_HARNESS);
 const getWorktreeConfigMock = vi.fn(() => ({ symlinks: [], postSpawn: [], devCommand: null, devUrls: [] }));
 vi.mock('../utils/config.js', () => ({
@@ -526,6 +526,125 @@ describe('spawn-worktree', () => {
       const script = findScript()!;
       expect(script).toContain(`"$(cat '/tmp/worktree/.builder-prompt.txt')"`);
       expect(script).not.toContain('--prompt "$(cat');
+    });
+  });
+
+  describe('startBuilderSession model pinning (Issue #2)', () => {
+    function findScript(): string | undefined {
+      const writeCalls = vi.mocked(writeFileSync).mock.calls;
+      const scriptCall = writeCalls.find(
+        call => typeof call[0] === 'string' && call[0].endsWith('.builder-start.sh'),
+      );
+      return scriptCall ? (scriptCall[1] as string) : undefined;
+    }
+
+    function launcherBody(script: string, name: 'entry' | 'pinned' | 'unpinned' | 'resume'): string | undefined {
+      return script.match(new RegExp(`codev_launch_${name}\\(\\) \\{\\n(.*)\\n\\}`))?.[1].trim();
+    }
+
+    const selection = (modelScriptFragment: string) => ({
+      harnessName: 'claude',
+      command: 'claude',
+      provider: CLAUDE_HARNESS,
+      modelId: modelScriptFragment ? 'sonnet' : undefined,
+      modelScriptFragment,
+    }) as any;
+
+    it('pins the model in EVERY launch form, including crash-resume', async () => {
+      // The whole reason the model folds into the base command rather than being
+      // appended per-form: a crash restart must come back on the same model. If it
+      // only reached the fresh launch, a builder would silently change model the
+      // first time Tower relaunched it.
+      getBuilderHarnessMock.mockReturnValue(CLAUDE_HARNESS);
+      const resume = { sessionId: 'abc-1234-uuid', scriptFragment: "--resume 'abc-1234-uuid'" };
+      await startBuilderSession(
+        { workspaceRoot: '/tmp/ws' } as any,
+        'pir-2-m', '/tmp/worktree', 'claude',
+        'PROMPT', 'ROLE', 'codev', resume, selection("--model 'sonnet'"),
+      );
+
+      const script = findScript()!;
+      // Assert each launcher EXISTS before asserting its content. The earlier
+      // `if (body !== undefined)` form meant a launcher regex that stopped matching
+      // would silently skip its own assertion — a test that passes by not looking.
+      for (const form of ['entry', 'pinned', 'resume'] as const) {
+        const body = launcherBody(script, form);
+        expect(body, `${form} launcher missing from generated script`).toBeDefined();
+        expect(body, `${form} launcher`).toContain("--model 'sonnet'");
+      }
+      expect(launcherBody(script, 'resume')).toContain('--resume');
+    });
+
+    it.each([
+      ['claude', CLAUDE_HARNESS],
+      ['codex', CODEX_HARNESS],
+      ['opencode', OPENCODE_HARNESS],
+    ])('an empty model fragment leaves the %s script byte-identical', async (name, provider) => {
+      // The plan's test plan said all three harnesses; covering only claude was an
+      // undocumented narrowing. The fold point is harness-agnostic, but that is the
+      // claim under test, not a reason to skip it.
+      getBuilderHarnessMock.mockReturnValue(provider);
+      await startBuilderSession(
+        { workspaceRoot: '/tmp/ws' } as any,
+        `pir-2-${name}`, '/tmp/worktree', name,
+        'PROMPT', 'ROLE', 'codev',
+      );
+      const without = findScript()!;
+
+      vi.mocked(writeFileSync).mockClear();
+      getBuilderHarnessMock.mockReturnValue(provider);
+      await startBuilderSession(
+        { workspaceRoot: '/tmp/ws' } as any,
+        `pir-2-${name}`, '/tmp/worktree', name,
+        'PROMPT', 'ROLE', 'codev', undefined,
+        { harnessName: name, command: name, provider, modelScriptFragment: '' } as any,
+      );
+      const withEmpty = findScript()!;
+
+      const norm = (t: string) => t.replace(/[0-9a-f-]{36}/g, '<uuid>');
+      expect(norm(withEmpty)).toBe(norm(without));
+    });
+
+    it('an empty model fragment leaves the script byte-identical (claude, explicit)', async () => {
+      // The regression that matters most: this change threads a new optional
+      // parameter through the highest-churn file in the repo, so a spawn that
+      // names no model must produce exactly the bytes it produced before.
+      getBuilderHarnessMock.mockReturnValue(CLAUDE_HARNESS);
+      await startBuilderSession(
+        { workspaceRoot: '/tmp/ws' } as any,
+        'pir-2-a', '/tmp/worktree', 'claude',
+        'PROMPT', 'ROLE', 'codev',
+      );
+      const without = findScript()!;
+
+      vi.mocked(writeFileSync).mockClear();
+      getBuilderHarnessMock.mockReturnValue(CLAUDE_HARNESS);
+      await startBuilderSession(
+        { workspaceRoot: '/tmp/ws' } as any,
+        'pir-2-a', '/tmp/worktree', 'claude',
+        'PROMPT', 'ROLE', 'codev', undefined, selection(''),
+      );
+      const withEmpty = findScript()!;
+
+      // The session id is freshly minted per launch (Issue #1224), so normalise
+      // that one value; everything else must match byte for byte.
+      const norm = (t: string) => t.replace(/[0-9a-f-]{36}/g, '<uuid>');
+      expect(norm(withEmpty)).toBe(norm(without));
+    });
+
+    it('the selection\'s provider wins over the config harness', async () => {
+      // Without this, `--harness opencode` would resolve claude here and generate a
+      // claude-shaped script for an opencode binary — a builder that launches wrong.
+      getBuilderHarnessMock.mockReturnValue(CLAUDE_HARNESS);
+      await startBuilderSession(
+        { workspaceRoot: '/tmp/ws' } as any,
+        'pir-2-oc', '/tmp/worktree', 'opencode',
+        'PROMPT', 'ROLE', 'codev', undefined,
+        { harnessName: 'opencode', command: 'opencode', provider: OPENCODE_HARNESS, modelScriptFragment: '' } as any,
+      );
+
+      const script = findScript()!;
+      expect(script).toContain('--prompt "$(cat');
     });
   });
 

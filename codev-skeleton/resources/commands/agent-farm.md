@@ -160,6 +160,8 @@ afx spawn [issue-number] --protocol <name> [options]
 - `--shell` - Spawn a bare Claude session (no `--protocol` needed)
 - `--worktree` - Spawn worktree session (no `--protocol` needed)
 - `--files <files>` - Context files (comma-separated)
+- `--harness <name>` - Agent harness for this spawn: `claude`, `codex`, `opencode`, or a custom harness defined in `.codev/config.json`. Overrides the workspace default for this builder only; the config value remains the fallback. A harness with no measured render-gate profile is refused at spawn time rather than producing a builder that runs but can never be messaged.
+- `--model <id>` - Pin the model for this spawn (e.g. `sonnet`, `claude-fable-5`, `x-ai/grok-4.6` — opencode expects `provider/model`). The `(harness, model)` pair is resolved into the harness's own flag rather than baked into a command path, and is remembered so `--resume` relaunches on the same pair. Requesting a model from a harness that has no model selector is an error, not a silent no-op.
 - `--no-role` - Skip loading role prompt
 
 **Preconditions:**

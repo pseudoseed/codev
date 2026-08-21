@@ -208,6 +208,11 @@ CREATE TABLE IF NOT EXISTS builders (
   issue_number TEXT,
   terminal_id TEXT,
   spawned_by_architect TEXT,
+  -- Issue #2: the (harness, model) pair this builder was spawned with. NULL means
+  -- "not recorded" — every row written before this existed, and any spawn that
+  -- named no model. Fresh installs get these here; existing ones via migration v18.
+  harness TEXT,
+  model TEXT,
   started_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (workspace_path, id)

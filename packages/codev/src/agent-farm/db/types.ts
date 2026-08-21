@@ -44,6 +44,8 @@ export interface DbBuilder {
   issue_number: string | null;
   terminal_id: string | null;
   spawned_by_architect: string | null;   // Spec 755: spawning architect's name; null for legacy rows
+  harness: string | null;                // Issue #2: harness this builder was spawned with; null when unrecorded
+  model: string | null;                  // Issue #2: model pinned at spawn; null when none was requested
   started_at: string;
   updated_at: string;
 }
@@ -151,6 +153,8 @@ export function dbBuilderToBuilder(row: DbBuilder): Builder {
     issueNumber: row.issue_number ?? undefined,
     terminalId: row.terminal_id ?? undefined,
     spawnedByArchitect: row.spawned_by_architect ?? undefined,
+    harness: row.harness ?? undefined,
+    model: row.model ?? undefined,
   };
 }
 
