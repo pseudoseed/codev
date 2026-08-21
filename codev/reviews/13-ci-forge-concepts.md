@@ -170,6 +170,44 @@ Also verified against a second real run (`32448538074`, the architect's): 919 li
 
 **4. Provider degradation**: `resolveAllConcepts` reports all four concepts as `disabled` for `gitlab` and `linear` — not merely absent, which would fall through to the github default and run `gh` against whatever remote it resolved.
 
+## ⚠ Review lane coverage — read this before trusting the review depth
+
+**As of 2026-08-21 ~17:00 MDT, two of the three lanes could not run, and the PR is being HELD rather than merged on the remainder.**
+
+| Lane | Verdict | Why |
+|---|---|---|
+| **codex** (gpt-5.6-sol) | **NEVER RAN** | Provider quota. Refused in seconds, before any model work: *"You've hit your usage limit… try again at Aug 27th, 2026 4:01 PM."* The same quota blocked codex on #2, #4, #11 and #12 the same day. |
+| **gemini** (agy) | **NEVER RAN** | Provider quota, **not** the reason porch reported — see below. Resets ~2026-08-28. |
+| **claude** (opus-5) | in progress at time of writing | — |
+
+**Porch's own gate summary will say otherwise, and it is wrong.** Both lane files carry `VERDICT: SKIPPED`, which `parseVerdict` (`porch/verdict.ts`) does not recognise — it knows only `APPROVE`, `REQUEST_CHANGES`, `COMMENT` — so it falls through to the "treat as COMMENT" default, and `allApprove` counts `COMMENT` as approval. Porch will print **"All reviewers approved!"** over two reviewers that read nothing. That is **#20**, filed by PIR #12; it is porch behaviour, not anything in this diff, and it is not fixed here. Read this table, not the summary line.
+
+**The lane files themselves are gitignored** (`.gitignore:65`, `codev/projects/*/*.txt`), which is why the evidence is restated here, where it survives the merge.
+
+### Porch reported a remedy that cannot work
+
+The gemini skip notice read:
+
+> The Gemini (Antigravity `agy`) reviewer was skipped: agy exited with code 1. This is a non-blocking skip; the remaining reviewers still apply. To enable the Gemini lane, install the CLI (https://antigravity.google/cli/install.sh) and run `agy` once to sign in.
+
+agy **is** installed and authenticated. Probed directly, verbatim:
+
+```
+$ agy --version
+1.1.17
+$ which agy
+/Users/chris/.local/bin/agy
+$ echo hello | agy -p "reply with the single word OK"
+Error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 157h50m8s.
+rc=1
+```
+
+Reinstalling and signing in again would have changed nothing and cost whoever followed the advice their afternoon. A confidently printed remedy that cannot work is the same defect class as #21, where the stuck-mailbox alert names a command that cannot clear a composer. The architect is filing it separately.
+
+### Why this PR is held rather than merged on one lane
+
+One of three would be the thinnest coverage of the day, on the diff least suited to it: five POSIX `sh` scripts, a hand-rolled awk extractor and a pile of jq, where the two absent lanes are the ones that most often catch quoting and portability defects — and where two of the three bugs found during implementation were exactly that class. PR #24 (issue #22) adds an **opencode** consult lane on an account unrelated to either exhausted quota; the architect is merging it and re-running this review phase with that lane available, rather than waiting for the Aug 27/28 quota resets or merging thin. **This section is rewritten with the real verdicts once that re-run completes.**
+
 ## Architecture Updates
 
 **COLD — `codev/resources/arch.md`**, § Integration Points → Forge Concept Commands. Concept count 18 → 22, plus four additions, all current-state reference rather than changelog:
