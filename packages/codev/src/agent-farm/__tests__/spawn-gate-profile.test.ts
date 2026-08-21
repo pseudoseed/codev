@@ -106,6 +106,23 @@ describe('spawn render-gate-profile preflight (Issue #4)', () => {
     expect(stateLeftBehind()).toEqual({ builders: [], porch: [] });
   });
 
+  it('rejects gemini-as-builder — the documented custom-harness recipe is architect-only now', async () => {
+    // README documents a custom `gemini` harness as the escape hatch for retained
+    // enterprise/API-key access. That recipe survives for `architectHarness` but NOT for
+    // builders: gemini has no measured gate profile, so a builder on it could never be
+    // messaged. Pinned here so the docs and this pre-flight cannot drift apart silently —
+    // shipping that contradiction is exactly what CMAP caught on this PR.
+    mkdirSync(join(ws, '.codev'), { recursive: true });
+    writeFileSync(join(ws, '.codev', 'config.json'), JSON.stringify({
+      shell: { builder: 'gemini --yolo', builderHarness: 'gemini' },
+      harness: { gemini: { roleArgs: [], roleScriptFragment: '' } },
+    }));
+
+    await expect(spawn({ protocol: 'maintain', force: true }))
+      .rejects.toThrow(/has no render-gate profile/);
+    expect(stateLeftBehind()).toEqual({ builders: [], porch: [] });
+  });
+
   it('opencode passes the preflight (Issue #4 gave it a measured profile)', async () => {
     writeBuilderCommand('opencode');
 

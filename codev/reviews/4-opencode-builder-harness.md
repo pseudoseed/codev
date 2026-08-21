@@ -69,8 +69,15 @@ This affects **anyone running a custom builder harness** whose command basename 
 degraded-but-spawnable setup into "cannot spawn at all". That is deliberate and consistent
 with the fail-closed precedent `assertBuilderHarnessNotRetired` set, but it is a real
 upgrade-time break rather than a no-op, and the fix is to measure a profile for the harness —
-not to add an escape hatch. `shell.builder` for architects is unaffected; this is the builder
-path only.
+not to add an escape hatch. Architects are unaffected; they take no gated mail.
+
+**One such recipe was documented in this repo**, and CMAP caught that this PR would have
+shipped the contradiction: `README.md` offered a custom `gemini` harness as the escape hatch
+for users retaining enterprise/API-key Gemini CLI access, with `shell.builder: "gemini --yolo"`
++ `builderHarness: "gemini"`. That spawn now aborts. The README section is updated here to
+scope the recipe to `architectHarness` and state plainly that gemini-as-builder is no longer
+spawnable, and `spawn-gate-profile.test.ts` pins that exact config as rejected so the docs and
+the pre-flight cannot drift apart again.
 
 ---
 
@@ -170,13 +177,19 @@ without the measurement, which review correctly flagged.
 
 ## Consultation coverage — read this before trusting the review depth
 
-**Only one of three external lanes ran.** Codex was out of usage quota (until Aug 27) and the
-agy/Gemini lane is unauthenticated in this environment and skipped non-blockingly. So this
-change — which touches core Tower message-delivery code, where the failure mode is silent
-input corruption — did **not** get a full 3-way review. The Claude lane did run and was
-substantive (it found the transcript-forgery and zero-row false-CLEANs), and a second
-adversarial pass found the width-dependent one. But a PR reviewer should weight this as
-one-lane coverage on a security-adjacent path, not three.
+**Two of three lanes ran on the final PR; Codex never ran at all.** Codex has been out of
+usage quota throughout this project (until Aug 27), so this change — which touches core Tower
+message-delivery code, where the failure mode is silent input corruption — did **not** get a
+full 3-way review. Gemini/agy was unauthenticated during the mid-implementation passes and
+skipped non-blockingly, but did run on the final review (APPROVE, HIGH). Claude ran throughout
+and was substantive at every pass: it found the transcript-forgery and zero-row false-CLEANs
+mid-implementation, and on the final pass caught the README/pre-flight contradiction above.
+The width-dependent false-CLEAN came from a separate adversarial pass.
+
+A PR reviewer should weight this as **two-lane coverage on a security-adjacent path**, with
+the strongest independent verifier (Codex) absent. Every blocking finding raised was
+reproduced and fixed rather than argued down; one was briefly retracted on a bad measurement
+and then re-confirmed against a pinned commit (see the process note above).
 
 ## Architecture Updates
 
@@ -236,6 +249,17 @@ already covers the general shape. Added:
      no-gate-profile message and leaves no worktree or porch state behind.
   5. `npx vitest run src/agent-farm/__tests__/render-gate.test.ts` — the width sweeps are the
      guard that would have caught the main bug.
+
+**Two `held` results during step 2 are expected, not defects:**
+
+- **Before the first turn finishes.** The idle indicator is the session usage readout, which
+  opencode only renders *after* a completed turn. A freshly spawned builder therefore holds
+  (`no-idle-indicator`) until its `--prompt` turn returns. Wait for the reply, then send.
+- **If the builder's viewport is showing this repo's own gate source.** `busyIndicatorPattern`
+  is matched screen-wide, so an opencode builder displaying `gate-profiles.ts`,
+  `render-gate.test.ts`, or the fixtures reads its own `esc interrupt` string and holds
+  (`busy-indicator`) until that scrolls off. The screen-wide match is deliberate — it only ever
+  over-holds — but it makes this repo a confusing place to demo the feature.
 
 ## Flaky Tests
 
