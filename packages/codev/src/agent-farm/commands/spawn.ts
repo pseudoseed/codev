@@ -20,8 +20,6 @@ import type { SpawnOptions, BuilderType, Config } from '../types.js';
 import {
   getConfig,
   ensureDirectories,
-  getResolvedCommands,
-  getBuilderHarness,
   assertBuilderHarnessNotRetired,
   resolveBuilderSelection,
   assertHarnessCommandAgrees,
