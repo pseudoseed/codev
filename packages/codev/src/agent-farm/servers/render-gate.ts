@@ -133,9 +133,14 @@ export interface GateProfile {
    */
   busyIndicatorPattern?: RegExp;
   /**
-   * Optional per-app IDLE signal: a screen line that positively proves the agent is
+   * Optional per-app IDLE signal: a FOOTER line that positively proves the agent is
    * between turns. When set, CLEAN additionally requires this pattern to be PRESENT
    * — the absence of a busy signal is never enough on its own.
+   *
+   * Matched only against rows BELOW the composer, never the whole screen: the transcript
+   * above the composer is agent-authored, so a screen-wide match would let a reply that
+   * happened to print the footer's shape (`… (85%) · $12`) vouch for the agent's own
+   * idleness. App chrome below the composer cannot be forged by model output.
    *
    * This is the direction that matters. {@link busyIndicatorPattern} fails
    * PERMISSIVE under app drift: rename the busy string and nothing matches, the
@@ -276,6 +281,14 @@ interface ComposerRegion {
   to: number;
   /** Row whose column-0 cell is the marker glyph, skipped by position. -1 when not applicable. */
   markerRow: number;
+  /**
+   * First row BELOW the composer and its bottom chrome — where an app's status footer
+   * renders. {@link GateProfile.idleIndicatorPattern} is matched only from here down, so
+   * transcript output cannot satisfy it: everything the agent prints is ABOVE the composer,
+   * so a reply that happened to contain the footer's shape (`… (85%) · $12`) can never be
+   * mistaken for the real footer.
+   */
+  footerFrom: number;
 }
 
 /**
@@ -314,7 +327,12 @@ function resolveBottomAnchorRegion(
     // no proven upper bound (a torn or mid-repaint frame) — indeterminate, so hold.
     if (candidate < 0) return { detail: 'no-region-end' };
     if (!anchor.bodyPattern.test(lines[candidate])) {
-      return { from: candidate + 1, to: chromeRow, markerRow: -1 };
+      // A box whose chrome row has NO content rows above it is not a shape the app
+      // renders — it is a torn/partial repaint (chrome and rule painted, content rows
+      // not yet). Left alone it collapses the region to zero rows, and a zero-row region
+      // reaches CLEAN without examining a single cell, hiding a real draft. Hold instead.
+      if (candidate + 1 >= chromeRow) return { detail: 'no-region-end' };
+      return { from: candidate + 1, to: chromeRow, markerRow: -1, footerFrom: ruleRow + 1 };
     }
     from = candidate;
   }
@@ -356,7 +374,7 @@ function resolveRegion(
     // empty/dim, return a false CLEAN).
     return { detail: 'no-region-end' };
   }
-  return { from: markerRow, to: endRow, markerRow };
+  return { from: markerRow, to: endRow, markerRow, footerFrom: endRow + 1 };
 }
 
 /**
@@ -452,18 +470,29 @@ export function classifyBuffer(
     }
   }
 
-  // ...and where a profile declares one, idleness must be POSITIVELY proven, not
-  // inferred from the busy signal's absence. Drift in either string then holds.
-  if (profile.idleIndicatorPattern) {
-    const pattern = profile.idleIndicatorPattern;
-    if (!lines.some((line) => pattern.test(line))) {
-      return { clean: false, reason: 'busy', detail: 'no-idle-indicator' };
-    }
-  }
-
   const region = resolveRegion(lines, profile);
   if ('detail' in region) return { clean: false, reason: 'busy', detail: region.detail };
   const { from: regionFrom, to: regionTo, markerRow } = region;
+
+  // An empty span would fall through the cell loop below and reach CLEAN on
+  // `userCells === 0` — a verdict reached without examining a single cell. "Zero cells
+  // examined" is indeterminate, not empty, so it is rejected here rather than left to the
+  // counter. Unreachable via the top-down model (its region always contains the marker
+  // row); a second line of defence for region models that can collapse.
+  if (regionTo <= regionFrom) return { clean: false, reason: 'busy', detail: 'no-region-end' };
+
+  // ...and where a profile declares one, idleness must be POSITIVELY proven, not inferred
+  // from the busy signal's absence. Scoped to the FOOTER (below the composer), because the
+  // transcript above it is agent-authored: a reply containing the footer's shape must not
+  // be able to vouch for the agent's own idleness. Runs after region resolution so the
+  // footer's start is known; a frame with no resolvable composer has already been held.
+  if (profile.idleIndicatorPattern) {
+    const pattern = profile.idleIndicatorPattern;
+    const footer = lines.slice(region.footerFrom);
+    if (!footer.some((line) => pattern.test(line))) {
+      return { clean: false, reason: 'busy', detail: 'no-idle-indicator' };
+    }
+  }
 
   const top = buf.viewportY;
   const cell = buf.getNullCell();

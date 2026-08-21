@@ -246,6 +246,22 @@ describe('render-gate — opencode: bottom-anchored composer + two-sided busy/id
     });
   });
 
+  it('the agent cannot forge its own idle proof from the transcript', async () => {
+    // The idle indicator is read from the FOOTER only. Everything the agent prints lands
+    // above the composer, so a reply that happens to contain the footer's shape must not
+    // count. Here the busy hint is ALSO drifted, so the transcript line is the only thing
+    // that could satisfy the idle check — and it must not.
+    const snap = snapshotFromRaw(screen(
+      '     Coverage rose to (85%) · $12 saved per run.',
+      ...composer(),
+      '   ⬝⬝⬝⬝⬝⬝⬝⬝  esc cancel                              tab agents  ctrl+p commands',
+    ));
+    expect(await classifyScreen(snap, OPENCODE_PROFILE)).toMatchObject({
+      clean: false,
+      detail: 'no-idle-indicator',
+    });
+  });
+
   it('the usage readout is matched in both its zero-cost and priced forms', async () => {
     const zeroCost = '   /tmp/wt                                       9.5K (2%) · $  ctrl+p commands';
     const priced = '   /tmp/wt                                     12.1K (3%) · $0.42  ctrl+p commands';
@@ -266,15 +282,21 @@ describe('render-gate — opencode: bottom-anchored composer + two-sided busy/id
       '  ┃   Allow once   Allow always   Reject',
       '  ┃',
     ];
+    // ...so there is no rule line to anchor a composer region on, and it holds there —
+    // with or without a footer.
     expect(await classifyScreen(snapshotFromRaw(screen(...dialogRows)), OPENCODE_PROFILE)).toMatchObject({
       clean: false,
-      detail: 'no-idle-indicator',
+      detail: 'no-composer-marker',
     });
-    // ...and independently, even were the idle footer somehow present, there is no
-    // rule line to anchor a composer region on, so it still holds.
     expect(
       await classifyScreen(snapshotFromRaw(screen(...dialogRows, IDLE_FOOTER)), OPENCODE_PROFILE),
     ).toMatchObject({ clean: false, detail: 'no-composer-marker' });
+    // ...and independently, a variant that KEPT the composer chrome (so a region resolves)
+    // but still hid the footer is caught by the idle check instead. Either guard alone
+    // holds this state.
+    expect(
+      await classifyScreen(snapshotFromRaw(screen(...composer('△ Permission required'))), OPENCODE_PROFILE),
+    ).toMatchObject({ clean: false, detail: 'no-idle-indicator' });
   });
 
   it('a rule with no box row above it (torn frame) → busy', async () => {
@@ -290,6 +312,20 @@ describe('render-gate — opencode: bottom-anchored composer + two-sided busy/id
     // instead of walking into transcript content above.
     const unbounded = screen(...Array.from({ length: 29 }, () => '  ┃  x'), STATUS, RULE, IDLE_FOOTER);
     expect(await classifyScreen(snapshotFromRaw(unbounded), OPENCODE_PROFILE)).toMatchObject({
+      clean: false,
+      detail: 'no-region-end',
+    });
+  });
+
+  it('a box with NO content rows is a torn frame, not an empty composer', async () => {
+    // Regression guard (CMAP, 2026-08-21): chrome + rule + footer painted but the content
+    // rows not yet repainted collapses the region to zero rows. The cell loop then examines
+    // nothing, and "zero cells examined" must not read as "zero user cells found" — that is
+    // a CLEAN verdict reached without looking at a single cell, and the torn/partial-repaint
+    // frames the module header documents are exactly how it gets reached. Every measured
+    // opencode box has >= 3 content rows, so no legitimate state is lost by holding here.
+    const torn = screen('', STATUS, RULE, IDLE_FOOTER);
+    expect(await classifyScreen(snapshotFromRaw(torn), OPENCODE_PROFILE)).toMatchObject({
       clean: false,
       detail: 'no-region-end',
     });

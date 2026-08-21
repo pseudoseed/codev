@@ -126,6 +126,12 @@ export const AGY_PROFILE: GateProfile = {
  * the footer, so no idle indicator) — a blind Enter can never approve a shell command;
  * and a freshly-booted TUI that has not yet run a turn → busy, because the usage readout
  * only appears after the first turn (`no-idle-indicator`).
+ *
+ * Known wart, not a bug: `busyIndicatorPattern` is matched against the WHOLE screen, while
+ * `idleIndicatorPattern` is scoped to the footer. That asymmetry is deliberate — a stray
+ * busy match only ever HOLDS — but it means an opencode builder viewing this very file (or
+ * the gate fixtures) holds its mail until `esc interrupt` scrolls out of the viewport.
+ * Recognise it as a self-reference, not a delivery outage.
  */
 export const OPENCODE_PROFILE: GateProfile = {
   app: 'opencode',

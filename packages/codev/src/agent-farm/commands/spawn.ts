@@ -894,8 +894,11 @@ async function spawnPir(options: SpawnOptions, config: Config): Promise<void> {
  * to it, so it is caught here instead, before any worktree, terminal or db state exists.
  *
  * Checked against the resolved builder COMMAND (not the harness name), because the gate
- * identifies apps that way too — one source of truth, so this can never pass something
- * the gate would later refuse. Applies to custom harnesses as well: an unmeasured custom
+ * identifies apps that way too — the same `resolveProfile` table, so the two agree on what
+ * is deliverable. They are not literally one lookup: at runtime the gate sees the
+ * `.builder-start.sh` wrapper and relies on the delivery wiring re-extracting the agent
+ * command from it, so the agreement rests on both sides naming the same agent, not on a
+ * single call site. Applies to custom harnesses as well: an unmeasured custom
  * agent is exactly the case that produces an unmessageable builder. There is no bypass
  * flag, matching the fail-closed precedent `assertBuilderHarnessNotRetired` set — the
  * fix is to measure a profile, not to skip the check.
