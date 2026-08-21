@@ -2086,7 +2086,7 @@ All interactions with the repository hosting platform (GitHub by default) are ro
 
 **Configuration**: `.codev/config.json` `forge` section maps concept names to shell commands. Set to `null` to disable a concept. Omit to use the default (`gh`-based) command.
 
-**18 concepts**: `issue-view`, `pr-list`, `issue-list`, `issue-search`, `issue-comment`, `pr-exists`, `recently-closed`, `recently-merged`, `user-identity`, `team-activity`, `on-it-timestamps`, `pr-create`, `pr-merge`, `pr-search`, `pr-view`, `pr-diff`, `auth-status`, `repo-archive`.
+**22 concepts**: `issue-view`, `pr-list`, `issue-list`, `issue-search`, `issue-comment`, `pr-exists`, `recently-closed`, `recently-merged`, `user-identity`, `team-activity`, `on-it-timestamps`, `pr-create`, `pr-merge`, `pr-search`, `pr-view`, `pr-diff`, `auth-status`, `repo-archive`, `ci-runs`, `ci-run-view`, `ci-failures`, `ci-run-log`.
 
 **Environment variables**: Each concept receives `CODEV_*` env vars (e.g., `CODEV_ISSUE_NUMBER`, `CODEV_PR_NUMBER`) that the command uses to parameterize its output.
 
@@ -2100,6 +2100,27 @@ All interactions with the repository hosting platform (GitHub by default) are ro
 
 - Gitea's `/repos/{o}/{r}/pulls` list is priced **per returned PR object**, not per request: 0.78s at `limit=1`, 32.8s at `limit=50`. Paging it is linear in total PRs regardless of page size, so on a 1599-PR repo a full walk costs ~17 minutes. Anything answerable by a targeted endpoint must not use it. The cheap index for the same rows is `/issues?type=pulls` (~1.8s per 50), which carries `pull_request.merged_at` but no head/base refs.
 - `head.ref` is rewritten to `refs/pull/N/head` once a merged PR's source branch is deleted — the normal state of every merged PR — but **`head.label` retains the original branch name**, and `GET /pulls/{base}/{head}` matches on the stored head branch. Branch→PR lookup is therefore possible after branch deletion, which the earlier `head.ref` scan had documented as impossible.
+
+**Invoking a concept**: `codev forge <concept>` (`src/commands/forge.ts`), a thin wrapper over `executeForgeCommandDetailed` that passes the ambient `CODEV_*` through, prints stdout verbatim and exits with the script's own code. **Naming a concept script by path bypasses resolution** — the config lookup, the provider preset and any per-repo override — so a project that overrides a concept gets the github default against its own forge. Its own exit codes: `2` unknown concept (lists the valid ones), `3` disabled for this provider (named).
+
+**`executeForgeCommandDetailed(concept, env, options)`** exists because `executeForgeCommand` collapses every failure mode to `null`: a timeout, a non-zero exit, unparseable output and a disabled concept arrive identically. It returns `{ok, data, stdout, stderr, exitCode, timedOut, unavailable, durationMs}` and **keeps stdout on the failure path**. Use it whenever "could not answer" and "answered no" must not be the same value.
+
+**CI concepts (PIR #13)** — `ci-runs`, `ci-run-view`, `ci-failures`, `ci-run-log`, tiered so the cheap question stays cheap: only the last two ever read log bytes. Their contract adds two rules to the exit-status one above:
+
+- **Errors are values.** Every ci-* concept prints one JSON object on stdout on success *and* failure, so the class of failure (`timeout` | `not-found` | `unsupported-server` | `forge-error` | `bad-input`) survives a non-zero exit.
+- **Anything carrying log text also carries `logLines`, `returnedLines`, `truncated`.** When extraction recognises nothing it returns `extracted: false` with the job identity and a ready-to-run `next`, and **no log lines at all** — never a fallback slice, which a reader treats as a diagnosis.
+
+Shared implementation, so the two providers cannot drift: `scripts/forge/_ci-extract.sh` (the extraction ladder — ANSI stripping, then vitest/jest → go test → tsc → the runner's `##[error]` marker → a line-**anchored** first error → refusal), `_ci-lib.sh` (envelope, caps, `$TMPDIR` log cache keyed by job id and written only for terminal jobs, window parsing), `_timeout.sh` (#12's watchdog, now used by both providers).
+
+**CI behavior verified live against GitHub (gh 2.87.0), Forgejo 15.0.2 and Forgejo 16.0.0-dev** (PIR #13). Each of these looks like something else and is not:
+
+- **`gh run view --log-failed` does not narrow to the failing step.** It selects the failing JOB and returns all of it — 2528 lines / 293 KB on the reference run, with every line tagged `UNKNOWN STEP` because gh's filename-to-step mapping had missed. Both providers therefore fetch `actions/jobs/{id}/logs` and codev extracts; the failing step NAME comes from `gh run view --json jobs`.
+- **Forgejo has no Actions job-log API before 16.0** (released 2026-07-16). On 15.x there is no token-reachable log by any route: `tea actions runs view` / `runs logs` both 404, and the web UI's log route is session-only, rejecting an API token and basic auth alike. `ci-failures` / `ci-run-log` return `unsupported-server` there naming both versions; `ci-runs` / `ci-run-view` keep working.
+- **Forgejo ignores `limit` unless `page` is also sent** — `actions/runs?limit=3` returned all 6922 runs. `status=` filters server-side; **`branch=` and `event=` are silently ignored**.
+- **A `pull_request` run records `head_branch` as `#<pr-number>`**, not a branch name, so branch filtering resolves the branch to its PR first (the #12 base/head lookup) and filters client-side.
+- **Run `id` and `index_in_repo` are two id spaces and both resolve on `/actions/runs/{x}`**, to different real runs. Concepts take `id` only and refuse a non-numeric value rather than guess.
+- **Forgejo rejects `status=canceled`** — the spelling its own `tea` CLI documents — and accepts `cancelled`; GitHub wants `cancelled` too.
+- `actions/runs` costs ~17.8 KB **per run** (an embedded repository object) at ~0.3s per page; `actions/tasks` is 482 B per job and is the cheaper index, but its ids are TASK ids, which the log API does not accept.
 
 ### Two remote-command paths into an editor surface (Spec 1401)
 
