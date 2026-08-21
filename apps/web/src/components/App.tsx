@@ -190,10 +190,13 @@ export function App() {
         <div style={{ display: activeTab?.type === 'work' ? undefined : 'none', height: '100%' }}>
           <WorkView state={state} onRefresh={refresh} onSelectTab={selectTab} />
         </div>
-        <div style={{ display: activeTab?.type === 'analytics' ? undefined : 'none', height: '100%' }}>
-          <AnalyticsView isActive={activeTab?.type === 'analytics'} />
-        </div>
-        {state?.teamEnabled && (
+        {/* Issue #14: a hidden tab isn't just visually hidden — it isn't mounted at all. */}
+        {!state?.hideTabs?.includes('analytics') && (
+          <div style={{ display: activeTab?.type === 'analytics' ? undefined : 'none', height: '100%' }}>
+            <AnalyticsView isActive={activeTab?.type === 'analytics'} />
+          </div>
+        )}
+        {state?.teamEnabled && !state?.hideTabs?.includes('team') && (
           <div style={{ display: activeTab?.type === 'team' ? undefined : 'none', height: '100%' }}>
             <TeamView isActive={activeTab?.type === 'team'} />
           </div>

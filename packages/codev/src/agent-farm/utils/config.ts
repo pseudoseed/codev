@@ -521,6 +521,18 @@ export function getWorktreeConfig(workspaceRoot?: string): ResolvedWorktreeConfi
   };
 }
 
+/**
+ * Load the `dashboard.hideTabs` block from .codev/config.json (Issue #14).
+ * Unconfigured repos get `{ hideTabs: [] }` — no tabs hidden.
+ */
+export function getDashboardConfig(workspaceRoot?: string): { hideTabs: string[] } {
+  const root = workspaceRoot || findWorkspaceRoot();
+  const userConfig = loadUserConfig(root);
+  return {
+    hideTabs: userConfig?.dashboard?.hideTabs ?? [],
+  };
+}
+
 const ACTIVITY_EVENTS: ReadonlySet<string> = new Set<ActivityEvent>(['window-focus', 'builder-active']);
 
 interface RawActivityHook { on?: string[]; url?: string; background?: boolean }

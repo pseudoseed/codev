@@ -42,7 +42,7 @@ import {
   serveStaticFile,
 } from './tower-utils.js';
 import { handleTunnelEndpoint } from './tower-tunnel.js';
-import { getWorktreeConfig, getActivityHooks } from '../utils/config.js';
+import { getWorktreeConfig, getActivityHooks, getDashboardConfig } from '../utils/config.js';
 import { ensureCodevConfigWatcher } from './codev-config-watcher.js';
 import { hasTeam, loadTeamMembers, loadMessages, type TeamMember, type TeamMessage } from '../../lib/team.js';
 import { fetchTeamGitHubData, type TeamMemberGitHubData } from '../../lib/team-github.js';
@@ -2769,6 +2769,7 @@ async function handleWorkspaceState(
     version,
     hostname: (() => { try { return readCloudConfig()?.tower_name; } catch { return undefined; } })(),
     teamEnabled: await hasTeam(path.join(workspacePath, 'codev', 'team')),
+    hideTabs: getDashboardConfig(workspacePath).hideTabs,
   };
 
   // Spec 761: build the architects collection from entry.architects (skip dead

@@ -10,6 +10,7 @@ import {
   getBuilderHarness,
   assertBuilderHarnessNotRetired,
   setCliOverrides,
+  getDashboardConfig,
 } from '../utils/config.js';
 import { logger } from '../utils/logger.js';
 import { existsSync } from 'node:fs';
@@ -32,6 +33,7 @@ const configMock = vi.hoisted(() => ({
     architectHarness?: string;
     builderHarness?: string;
   },
+  dashboard: undefined as { hideTabs?: string[] } | undefined,
 }));
 
 vi.mock('../../lib/config.js', () => ({
@@ -39,6 +41,7 @@ vi.mock('../../lib/config.js', () => ({
     shell: configMock.shell,
     porch: { consultation: { models: ['gemini', 'codex', 'claude'] } },
     framework: { source: 'local' },
+    dashboard: configMock.dashboard,
   }),
 }));
 
@@ -261,5 +264,28 @@ describe('assertBuilderHarnessNotRetired spawn preflight (#1338)', () => {
       expect.stringMatching(/non-retirement, deferred/),
     );
     debugSpy.mockRestore();
+  });
+});
+
+describe('getDashboardConfig (Issue #14)', () => {
+  afterEach(() => {
+    configMock.dashboard = undefined;
+  });
+
+  it('returns hideTabs: [] when no dashboard block is configured', () => {
+    const result = getDashboardConfig('/fake/workspace');
+    expect(result).toEqual({ hideTabs: [] });
+  });
+
+  it('returns the configured hideTabs list', () => {
+    configMock.dashboard = { hideTabs: ['analytics', 'team'] };
+    const result = getDashboardConfig('/fake/workspace');
+    expect(result).toEqual({ hideTabs: ['analytics', 'team'] });
+  });
+
+  it('returns hideTabs: [] when the dashboard block omits hideTabs', () => {
+    configMock.dashboard = {};
+    const result = getDashboardConfig('/fake/workspace');
+    expect(result).toEqual({ hideTabs: [] });
   });
 });

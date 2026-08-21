@@ -91,6 +91,12 @@ export interface DashboardState {
   version?: string;
   hostname?: string;
   teamEnabled?: boolean;
+  /**
+   * Tab ids to hide from the dashboard tab strip (Issue #14), sourced from
+   * `.codev/config.json`'s `dashboard.hideTabs`. An explicit hide always wins
+   * over derived state (e.g. `teamEnabled`).
+   */
+  hideTabs?: string[];
 }
 
 // --- Terminal Entry (returned by tower routes) ---
