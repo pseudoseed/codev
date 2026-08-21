@@ -130,7 +130,39 @@ Added at the architect's direction at the dev-approval gate, and the reasoning i
 ## Test Results
 
 - `npm run build`: ✓ pass
-- `npm test`: ✓ pass — 5573 passed, 0 failed, 48 skipped (5621). **68 new tests** in `pir-13-ci-concepts.test.ts`, plus the two concept-count assertions updated in `forge.test.ts`.
+- `npm test`: ✓ pass — 5622 passed, 0 failed, 48 skipped (5670), after merging `origin/main`. **70 new tests** in `pir-13-ci-concepts.test.ts`, plus the two concept-count assertions updated in `forge.test.ts`.
+
+### Branch CI: red, and NOT because of a failing test
+
+**Read this before reading `npm test: ✓ pass` above.** That line is the local suite and it is true; the branch's own CI is a separate claim, and at the time of writing it was **red**. The claude review lane caught the review presenting it as resolved when it was not. Here is what it actually is.
+
+The last red run (`32536232930`) reports:
+
+```
+Test Files  280 passed | 3 skipped (284)
+⎯⎯ Unhandled Errors ⎯⎯
+Error: [vitest-pool]: Worker forks emitted error.
+Caused by: Error: Worker exited unexpectedly
+```
+
+**No test failed.** A vitest worker fork died during teardown, so one file went unreported. `.github/workflows/test.yml` already knows about this and tries to tolerate it — its own comment says *"Vitest forks pool has a known issue where the worker process crashes during cleanup after all tests pass"* — with:
+
+```sh
+if grep -q "Test Files.*passed" /tmp/vitest-output.txt && ! grep -q "failed" /tmp/vitest-output.txt; then
+  echo "::warning::Vitest worker crashed during cleanup but all tests passed"
+```
+
+**That guard cannot fire.** `grep -q "failed"` runs over the whole captured output, and "failed" appears in it six times on this run — none of them a failing test:
+
+| line | what it is |
+|---|---|
+| 1475 | **the guard's own script**, echoed into the log by the Actions runner |
+| 1657, 1663, 1664 | `spec-1470` test names and stdout — `reentry-failed`, `clear-failed`, "reports a **failed** Tower send" |
+| 2202, 2205 | `git fetch … failed` warnings printed by consult tests |
+
+So *any* worker crash in this repository is a hard CI failure regardless of the test results, and the tolerance the workflow author wrote has never been reachable. That is a defect in `test.yml`, not in this diff, and it is **not fixed here** — fixing another team's CI gate to turn an unrelated red green is the scope creep the review phase warns against. It is reported to the architect with this evidence.
+
+What this PR *did* cause, and has fixed, is the earlier red: the `TMPDIR` harness bug above, which failed 31 tests on Linux while passing locally.
 
 ### Verification coverage — three tiers, and they are not the same
 
@@ -290,22 +322,27 @@ The architect counted this as the seventh arrival of the same rule in one day. T
 ## How to Test Locally
 
 - **View diff**: VSCode sidebar → right-click builder `pir-13` → **Review Diff**
-- **The headline path** (needs `gh` authenticated against this repo):
+- **Build the branch first, and invoke ITS cli** — the globally installed `codev` predates this
+  PR and has no `forge` subcommand (`error: unknown command 'forge'`):
   ```bash
-  CODEV_CI_RUN_ID=32515040122 codev forge ci-failures | jq
+  pnpm --filter @cluesmith/codev build
+  CODEV_CI_RUN_ID=32515040122 node packages/codev/dist/cli.js forge ci-failures | jq
   # 23 lines out of 2528: the AssertionError, the test file and line, the step name
   ```
+  Substitute `node packages/codev/dist/cli.js` for `codev` in every command below. After this
+  merges and you reinstall globally, plain `codev forge …` works.
 - **The windows**, and that the second call is free (cached):
   ```bash
-  CODEV_CI_RUN_ID=32515040122 CODEV_CI_LOG_GREP=AssertionError codev forge ci-run-log | jq '{from,to,matches,matchLines}'
-  CODEV_CI_RUN_ID=32515040122 codev forge ci-run-log            # refuses: no window
+  CODEV_CI_RUN_ID=32515040122 CODEV_CI_LOG_GREP=AssertionError node packages/codev/dist/cli.js forge ci-run-log | jq '{from,to,matches,matchLines}'
+  CODEV_CI_RUN_ID=32515040122 node packages/codev/dist/cli.js forge ci-run-log   # refuses: no window
   ```
 - **Loud degradation**, from a Forgejo repo (`~/dev/entriq`):
   ```bash
-  CODEV_CI_RUN_ID=11130 codev forge ci-run-view | jq '{jobSource, jobs: (.jobs|length)}'   # works
-  CODEV_CI_RUN_ID=11130 codev forge ci-failures | jq '{error, serverVersion, needs}'       # unsupported-server
-  codev forge team-activity                                                                # named, exit 3
-  codev forge ci-failure                                                                   # unknown, lists valid, exit 2
+  CLI=/path/to/this/worktree/packages/codev/dist/cli.js
+  CODEV_CI_RUN_ID=11130 node $CLI forge ci-run-view | jq '{jobSource, jobs: (.jobs|length)}'   # works
+  CODEV_CI_RUN_ID=11130 node $CLI forge ci-failures | jq '{error, serverVersion, needs}'       # unsupported-server
+  node $CLI forge team-activity                                                                # named, exit 3
+  node $CLI forge ci-failure                                                                   # unknown, lists valid, exit 2
   ```
 - **`codev doctor`** in both repos: four new concepts, `gh` under github, `tea` under gitea.
 

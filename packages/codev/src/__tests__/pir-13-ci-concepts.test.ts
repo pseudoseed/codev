@@ -265,6 +265,44 @@ describe.skipIf(!hasJq())('#13 — extraction returns the assertion, not the log
     expect(got.text).toContain('FAIL\tforgejo.org/modules/lfs');
   });
 
+  it('does NOT anchor on a PASSING test whose captured stderr contains a real Error line', () => {
+    // Found by running ci-failures against this repository's own red CI run
+    // (32536232930) while this PR was open. The extractor returned
+    // `Error: Refusing to POST /api/tunnel/disconnect ...` from inside a
+    // `stderr |` block belonging to a test that PASSED — that test asserts the
+    // error is thrown, so the text is the suite working as designed — while the
+    // real failure sat 355 lines further down. Same decoy class as the
+    // artifact-canvas one, arriving through a different door: this decoy IS
+    // anchored at the start of its line, so anchoring alone does not stop it.
+    const raw = fixtureLog('github-vitest-worker-crash');
+    expect(raw, 'the fixture no longer carries the decoy').toContain('Refusing to POST /api/tunnel/disconnect');
+
+    const got = extract(raw)!;
+    expect(got.text).not.toContain('Refusing to POST');
+    expect(got.rung).toBe('vitest-unhandled');
+    expect(got.text).toContain('Unhandled Error');
+    expect(got.text).toContain('Worker forks emitted error');
+  });
+
+  it('reads a captured block as capture until the blank line that ends it', () => {
+    const log = [
+      'stderr | some.test.ts > a suite > a passing case',
+      'Error: this is expected output from a passing test',
+      '    at somewhere',
+      '',
+      ' ✓ some.test.ts (3 tests) 4ms',
+      ' ✓ other.test.ts (1 test) 2ms',
+      ' ✓ third.test.ts (2 tests) 3ms',
+      ' ✓ fourth.test.ts (2 tests) 3ms',
+      'Error: this one is real',
+      'more',
+    ].join('\n');
+    const got = extract(log)!;
+    expect(got.rung).toBe('first-error');
+    expect(got.text).toContain('this one is real');
+    expect(got.text).not.toContain('expected output from a passing test');
+  });
+
   it('returns NOTHING when nothing is recognisable, rather than an arbitrary slice', () => {
     const noise = Array.from(
       { length: 400 },

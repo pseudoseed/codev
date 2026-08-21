@@ -93,6 +93,8 @@ ci_extract() {
       last_failed_banner = 0       # vitest "⎯⎯ Failed Tests N ⎯⎯"
       first_ts_error = 0
       first_go_fail = 0
+      first_unhandled = 0
+      in_capture = 0
       for (i = 1; i <= n; i++) {
         s = line[i]
         if (!first_marker && s ~ /^##\[error\]/ && !is_noise_marker(s)) first_marker = i
@@ -104,6 +106,20 @@ ci_extract() {
         if (s ~ /^[0-9]+ (passing|tests? passed)/) last_pass_boundary = i
         if (!first_ts_error && s ~ /error TS[0-9]+:/) first_ts_error = i
         if (!first_go_fail && s ~ /^ *--- FAIL: /) first_go_fail = i
+        if (!first_unhandled && s ~ /Unhandled Error/) first_unhandled = i
+        # Vitest prints a PASSING tests captured output as a block:
+        #   stderr | path.test.ts > suite > name
+        #   <the captured lines>
+        #   <blank line ends it>
+        # Those lines are a test working as designed, and rung 6 must not anchor
+        # on one. Marking the region is the only way to tell them apart: the
+        # captured text is often a perfectly formed "Error: ..." at the start of
+        # its line, which is exactly what rung 6 looks for.
+        if (s ~ /^(stdout|stderr) \| /) { in_capture = 1; captured[i] = 1 }
+        else if (in_capture) {
+          if (s ~ /^[ \t]*$/) in_capture = 0
+          else captured[i] = 1
+        }
       }
 
       # ---- rung 1: a recognised test runner --------------------------------
@@ -151,7 +167,18 @@ ci_extract() {
         exit 0
       }
 
-      # ---- rung 4: the runner error marker ---------------------------------
+      # ---- rung 4: vitest unhandled errors ---------------------------------
+      # A worker that dies, an unhandled rejection, a native teardown crash. No
+      # test reports as failed, so the rungs above find nothing, and the run is
+      # still red. Below the Failed Tests rung because a real assertion beats a
+      # teardown crash when both are present.
+      if (first_unhandled) {
+        to = first_unhandled + 12; if (to > n) to = n
+        emit("vitest-unhandled", first_unhandled, to)
+        exit 0
+      }
+
+      # ---- rung 5: the runner error marker ---------------------------------
       # GitHub puts the message INSIDE the marker (##[error]AssertionError:
       # expected null to be unauth), so the marker line is itself the answer and
       # what FOLLOWS it is the useful context. What precedes it, on the log this
@@ -166,7 +193,7 @@ ci_extract() {
         exit 0
       }
 
-      # ---- rung 5: the first ANCHORED error, preferring after the last pass -
+      # ---- rung 6: the first ANCHORED error, preferring after the last pass -
       # Anchoring at the start of the line is what makes this safe: the false
       # positive this ladder was built against ("[artifact-canvas] Error: host
       # blew up", printed by a passing test) has its "Error:" mid-line and
@@ -183,6 +210,12 @@ ci_extract() {
               s ~ /^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception): / ||
               s ~ /^error(\[[A-Z0-9]+\])?: /) {
             if (is_noise_marker(s)) continue
+          # A passing tests captured stdout/stderr is not a diagnosis. Found by
+          # running ci-failures against this repos own red CI run: it returned
+          # `Error: Refusing to POST /api/tunnel/disconnect ...` from inside a
+          # `stderr |` block belonging to a test that PASSED, while the real
+          # failure sat 350 lines further down.
+          if (i in captured) continue
             from = i - 3; if (from < 1) from = 1
             to = i + 3; if (to > n) to = n
             emit("first-error", from, to)
@@ -191,7 +224,7 @@ ci_extract() {
         }
       }
 
-      # ---- rung 6: give up honestly ----------------------------------------
+      # ---- rung 7: give up honestly ----------------------------------------
       exit 1
     }
     function emit(rung, from, to,   i) {
