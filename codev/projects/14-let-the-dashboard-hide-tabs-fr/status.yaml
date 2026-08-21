@@ -1,0 +1,14 @@
+id: '14'
+title: let-the-dashboard-hide-tabs-fr
+protocol: air
+phase: implement
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: pending
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-21T18:15:21.362Z'
+updated_at: '2026-08-21T18:15:21.363Z'
