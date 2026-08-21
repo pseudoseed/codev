@@ -135,6 +135,36 @@ users. (2) The mock server's simulated network-blip used `ws.close(1006)`, which
 Screenshots for all of round 1 and round 2 (40+ PNGs) saved in
 `codev/state/task-XC9L-screenshots/` in this worktree.
 
+## Round 3 — fix applied, PR opened
+
+Per architect direction: the code-level inconsistency (refresh button skips
+`scrollCtrl.safeFit()`) maps directly onto the "doesn't always stick to the
+bottom" symptom and doesn't need a captured screenshot to justify fixing.
+Applied all four requested items:
+1. `Terminal.tsx`'s `reconnectRef.current` live-socket branch now calls
+   `scrollCtrl.safeFit()` instead of `fitRef.current.fit()`; the SIGWINCH
+   `sendControl(ws, 'resize', ...)` call is unchanged, still runs right after.
+2. Fixed the misleading "Preserves all scroll history" comment — clarified
+   that scrollback *contents* were always preserved, but scroll *position*
+   needed `safeFit()`, which it now gets.
+3. Added two regression tests to `Terminal.fit-scroll.test.tsx` (scrolled-up
+   → `scrollToLine` restore; at-bottom → `scrollToBottom`), and fixed an
+   existing `Terminal.controls.test.tsx` test that needed a non-zero
+   container rect now that the refresh path goes through the real,
+   visibility-aware `safeFit()` instead of an unconditional raw `fit()`.
+4. Did not chase leftover-lines further — round 2's negative results above
+   stand as the record of what was ruled out.
+
+Verified: `vitest run` on the two touched test files (16 passed, 1
+pre-existing unrelated skip) and the full `apps/web` suite (337 passed, 1
+skip), plus a clean `tsc -b`. Committed
+(`apps/web/src/components/Terminal.tsx`, both test files, this thread log)
+and opened **https://github.com/pseudoseed/codev/pull/3** against
+`pseudoseed/codev` main, noting in the PR body that it's a clean upstream
+candidate for `cluesmith/codev` too (no pseudoseed-specific context).
+Screenshots directory left untracked in the worktree (not committed —
+reference material, not part of the fix).
+
 ## Outcome (round 2)
 No visual corruption reproduced end-to-end despite extensive real-app testing (resize
 storms, tab-switch-while-streaming, disconnect/reconnect mid-replay, scrolled+reflow
