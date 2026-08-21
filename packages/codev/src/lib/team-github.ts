@@ -11,7 +11,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isValidGitHubHandle } from './team.js';
 import type { TeamMember } from './team.js';
-import { executeForgeCommand, type ForgeConfig } from './forge.js';
+import {
+  executeForgeCommand,
+  describeUnavailableConcept,
+  getForgeCommand,
+  isConceptDisabled,
+  type ForgeConfig,
+} from './forge.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -324,6 +330,17 @@ export async function fetchTeamGitHubData(
   const repo = await getRepoInfo(cwd);
   if (!repo) {
     return { data: new Map(), error: 'Could not determine repository. Configure forge concepts in .codev/config.json.' };
+  }
+
+  // Distinguish "this forge cannot do it" from "the call came back empty".
+  // Both used to surface as "returned no data", which reads as a transient
+  // failure and invites a retry that can never succeed: team-activity is a
+  // batched `gh api graphql` query and Forgejo has no GraphQL at all.
+  if (isConceptDisabled('team-activity', forgeConfig) || getForgeCommand('team-activity', forgeConfig) === null) {
+    return {
+      data: new Map(),
+      error: `${describeUnavailableConcept('team-activity', forgeConfig)} — team forge activity cannot be reported`,
+    };
   }
 
   const query = buildTeamGraphQLQuery(validMembers, repo.owner, repo.name);

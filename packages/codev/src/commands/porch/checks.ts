@@ -361,6 +361,23 @@ async function runPrExistsViaConcept(
       CODEV_BRANCH_NAME: branchName.trim(),
     }, { cwd, workspaceRoot: cwd });
 
+    // `null` is not `false`. executeForgeCommand returns null when the command
+    // failed, timed out (it imposes a 30s ceiling), was disabled, or printed
+    // something unparseable — none of which mean "there is no PR". Reporting it
+    // as a plain failed check with `output: "null"` reads as "no PR found" and
+    // sends the builder off to create a duplicate. Say which it was.
+    if (result === null) {
+      return {
+        name,
+        command: forgeCmd,
+        passed: false,
+        error: 'the pr-exists forge concept returned no usable answer — it failed, timed out, '
+          + 'or is disabled for this provider. This is NOT the same as "no PR exists"; '
+          + 'run the concept command directly to see its stderr.',
+        duration_ms: Date.now() - startTime,
+      };
+    }
+
     // The concept returns a truthy value (string "true", boolean true, or number > 0)
     const passed = result === true || result === 'true' || (typeof result === 'number' && result > 0);
 

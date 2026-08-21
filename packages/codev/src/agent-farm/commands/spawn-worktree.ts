@@ -587,10 +587,18 @@ export async function checkBugfixCollisions(
     }
   }
 
-  // 3. Check for open PRs referencing this issue via pr-search concept
+  // 3. Check for open PRs referencing this issue via pr-search concept.
+  //
+  // `is:open` is explicit and load-bearing. This check used to rely on
+  // pr-search defaulting to open-only, which was never stated anywhere. Once
+  // pr-search searches every state — which it must, so that a merged PR is
+  // findable after the fact (#759/#1331) — an implicit default turns this into
+  // "did this issue EVER have a PR", and every re-spawn, every follow-up to a
+  // partial fix and every retry after a closed PR aborts with a factually wrong
+  // "Found N open PR(s)". Say what we mean instead of leaning on a default.
   try {
     const result = await executeForgeCommand('pr-search', {
-      CODEV_SEARCH_QUERY: `in:body #${issueNumber}`,
+      CODEV_SEARCH_QUERY: `in:body #${issueNumber} is:open`,
     }, { forgeConfig });
     if (result && Array.isArray(result) && result.length > 0) {
       const openPRs = result as Array<{ number: number; title?: string; headRefName?: string }>;
