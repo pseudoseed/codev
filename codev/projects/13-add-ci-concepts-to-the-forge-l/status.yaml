@@ -1,7 +1,7 @@
 id: '13'
 title: add-ci-concepts-to-the-forge-l
 protocol: pir
-phase: plan
+phase: implement
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -17,4 +17,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-21T20:35:23.798Z'
-updated_at: '2026-08-21T20:58:47.287Z'
+updated_at: '2026-08-21T20:59:08.728Z'
