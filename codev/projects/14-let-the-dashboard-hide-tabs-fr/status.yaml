@@ -1,7 +1,7 @@
 id: '14'
 title: let-the-dashboard-hide-tabs-fr
 protocol: air
-phase: implement
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,7 +11,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-21T18:15:21.362Z'
-updated_at: '2026-08-21T18:45:45.678Z'
+updated_at: '2026-08-21T18:46:04.198Z'
 pr_history:
   - phase: implement
     pr_number: 18
