@@ -27,6 +27,7 @@ import {
 } from '../../lib/consult-lanes.js';
 import type { ModelReasoningEffort } from '@openai/codex-sdk';
 import { getResolver, GitRefResolver, type ArtifactResolver } from '../porch/artifacts.js';
+import { findVerdict } from '../porch/verdict.js';
 import { MetricsDB } from './metrics.js';
 import { extractUsage, extractReviewText, type SDKResultLike, type UsageData } from './usage-extractor.js';
 import { executeForgeCommandSync } from '../../lib/forge.js';
@@ -1305,17 +1306,29 @@ export function resolveOpencodeBin(): string | null {
  * because a *catalog listing* broke would turn a diagnostic into an outage.
  */
 export function listOpencodeModels(bin = 'opencode'): string[] {
+  let out: string;
   try {
-    const out = execFileSync(bin, ['models'], {
+    out = execFileSync(bin, ['models'], {
       encoding: 'utf-8',
       timeout: OPENCODE_MODELS_TIMEOUT_MS,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    return out.split('\n').map(l => l.trim()).filter(l => l.length > 0);
   } catch {
     return [];
   }
+  // Keep only `provider/model`-shaped lines. Today `opencode models` prints nothing else (probed
+  // 2026-08-21), but if it ever gains a header or an annotation, parsing those as ids would turn a
+  // *valid* model into "Unknown opencode model" — a hard failure caused by a cosmetic change in
+  // someone else's CLI. Filtering means a decorated listing degrades to "catalog unreadable", which
+  // hands authority back to the provider instead of blocking the lane. (Raised by claude at review.)
+  return out
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => OPENCODE_MODEL_LINE_RE.test(l));
 }
+
+/** A bare `provider/model` line, the entire shape `opencode models` emits. */
+const OPENCODE_MODEL_LINE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
  * Provenance banner prepended to an opencode review.
@@ -1353,6 +1366,7 @@ export async function runOpencodeConsultation(
   outputPath?: string,
   metricsCtx?: MetricsContext,
   modelChoice?: LaneModelChoice,
+  requireVerdict = false,
 ): Promise<void> {
   const startTime = Date.now();
   const choice = modelChoice
@@ -1363,10 +1377,17 @@ export async function runOpencodeConsultation(
     // A missing CLI is a hard failure here, unlike the agy lane's skip. See the header: a lane that
     // silently produces nothing is counted as an approval (#20), and "not installed" is a
     // configuration mistake with an obvious fix, not a transient environment state.
+    //
+    // A stale CODEV_OPENCODE_BIN reaches this same branch, so it gets its own message: "install
+    // opencode" is the wrong instruction for someone whose override points at a path that moved.
     discardStaleOutput(outputPath);
+    const override = process.env.CODEV_OPENCODE_BIN;
     throw new Error(
-      'opencode not found. Install it (https://opencode.ai), or drop "opencode" from ' +
-      'porch.consultation in .codev/config.json.'
+      override
+        ? `CODEV_OPENCODE_BIN points at ${override}, which does not exist. ` +
+          `Correct it or unset it to fall back to opencode on PATH.`
+        : 'opencode not found. Install it (https://opencode.ai), or drop "opencode" from ' +
+          'porch.consultation in .codev/config.json.'
     );
   }
 
@@ -1457,13 +1478,39 @@ export async function runOpencodeConsultation(
       // fail() owns settling on both error paths — it clears the timer and cleans up itself, so
       // this handler must NOT pre-settle or those paths would be swallowed by its own guard.
       if (code !== 0) {
-        fail(`opencode exited with code ${code}`, code ?? 1);
+        // `code === null` means a signal killed it (OOM, external kill). Still a hard failure — this
+        // lane has no skip path — but saying "exited with code null" sends the reader hunting for a
+        // provider error that was never printed.
+        fail(
+          code === null
+            ? 'opencode was killed by a signal before producing a review'
+            : `opencode exited with code ${code}`,
+          code ?? 1,
+        );
         return;
       }
       // A zero exit with nothing on stdout is the #20 shape exactly: no review, but nothing that
       // looks like a failure either. Refuse to let it pass as one.
       if (raw.length === 0) {
         fail('opencode produced no review output', 0);
+        return;
+      }
+      // Same shape one step further in: a protocol-mode run that answered, but never stated a
+      // verdict. `parseVerdict` cannot distinguish that from a stated COMMENT, and `allApprove`
+      // counts COMMENT as an approval — so silence would become consent.
+      //
+      // This guard also covers what the header would otherwise break. `parseVerdict` treats output
+      // under 50 characters as REQUEST_CHANGES, a floor that exists to catch exactly this; the
+      // 76-character provenance banner lifts a two-word non-answer over it and converts a would-be
+      // REQUEST_CHANGES into an approval. Found by the opencode lane reviewing its own PR, which is
+      // a better argument for the lane than anything in the PR body.
+      if (requireVerdict && findVerdict(raw) === null) {
+        fail(
+          'opencode produced a review with no VERDICT line. A review that states no verdict is ' +
+          'not a verdict — porch would read it as a non-blocking COMMENT and count it as an ' +
+          'approval.',
+          0,
+        );
         return;
       }
 
@@ -1581,7 +1628,11 @@ async function runConsultation(
     const startTime = Date.now();
     const choice = resolveLaneModelChoice(workspaceRoot, 'opencode', DEFAULT_OPENCODE_MODEL, modelIdOverride);
     logResolvedModel(model, choice.id, choice.key);
-    await runOpencodeConsultation(query, role, workspaceRoot, outputPath, metricsCtx, choice);
+    // `generalMode` is an ad-hoc `--prompt`, where no verdict is expected or asked for. Protocol
+    // mode is a review, and a review owes a verdict.
+    await runOpencodeConsultation(
+      query, role, workspaceRoot, outputPath, metricsCtx, choice, !generalMode,
+    );
     logQuery(workspaceRoot, model, query, (Date.now() - startTime) / 1000);
     return;
   }

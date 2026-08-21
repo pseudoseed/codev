@@ -30,6 +30,7 @@ import {
   resolveLaneModelChoice,
   DEFAULT_OPENCODE_MODEL,
 } from '../index.js';
+import { findVerdict, parseVerdict } from '../../porch/verdict.js';
 import {
   assertOpencodeModelAvailable,
   MODEL_CONFIGURABLE_LANES,
@@ -68,6 +69,11 @@ if (mode === 'reject') {
   process.exit(1);
 }
 if (mode === 'empty') { process.exit(0); }
+if (mode === 'no-verdict-short') { process.stdout.write('ok'); process.exit(0); }
+if (mode === 'no-verdict-long') {
+  process.stdout.write('A long review that discusses the code at length but never states a verdict line.\\n');
+  process.exit(0);
+}
 process.stdout.write('Looks fine to me.\\n\\nVERDICT: APPROVE\\nSUMMARY: ok\\nCONFIDENCE: HIGH\\n');
 process.exit(0);
 `;
@@ -257,9 +263,13 @@ describe('nothing degrades into a passing review (#20)', () => {
       .rejects.toThrow(/produced no review output/);
   });
 
-  it('a missing CLI rejects', async () => {
+  it('an unresolvable binary rejects rather than skipping', async () => {
+    // The agy lane emits a COMMENT skip here; this one refuses. Which of the two resolution
+    // failures produced it is asserted separately, under "a stale CODEV_OPENCODE_BIN says so" —
+    // the bare not-on-PATH branch is unreachable from a suite by design, because the isolation
+    // guard fires before resolution can reach the real install.
     process.env.CODEV_OPENCODE_BIN = path.join(dir, 'not-installed');
-    await expect(_runOpencodeConsultation('q', 'role', dir)).rejects.toThrow(/opencode not found/);
+    await expect(_runOpencodeConsultation('q', 'role', dir)).rejects.toThrow(/does not exist/);
   });
 
   it('leaves no stale review file for porch to accept', async () => {
@@ -311,5 +321,120 @@ describe('binary resolution', () => {
 
   it('returns an empty catalog rather than throwing when the listing fails', () => {
     expect(listOpencodeModels(path.join(dir, 'nope'))).toEqual([]);
+  });
+});
+
+// --- the verdict requirement -----------------------------------------------------------
+
+/**
+ * A protocol-mode review that states no verdict is refused.
+ *
+ * This is the defect the lane found in its own first review, and it is worth stating precisely
+ * because the obvious "fix" is wrong. `parseVerdict` treats output under 50 characters as
+ * REQUEST_CHANGES — a floor meant to catch a lane that produced nothing useful. But length was
+ * always a *proxy* for "a review happened", and this lane's 76-character provenance banner clears
+ * the floor on its own: a two-word non-answer becomes COMMENT, and `allApprove` counts COMMENT as
+ * an approval. The header did not break a working guard; it exposed one that was already measuring
+ * the wrong thing, and raising 50 to 100 would only postpone the next banner.
+ *
+ * So the lane asks the real question — did the reviewer state a verdict? — via `findVerdict`.
+ */
+describe('a protocol-mode review must state a verdict', () => {
+  it('rejects a short verdict-less review the header would otherwise smuggle past the floor', async () => {
+    process.env.FAKE_OPENCODE_MODE = 'no-verdict-short';
+    await expect(_runOpencodeConsultation('q', 'role', dir, undefined, undefined, undefined, true))
+      .rejects.toThrow(/no VERDICT line/);
+  });
+
+  it('rejects a LONG verdict-less review too — this is not about length', async () => {
+    process.env.FAKE_OPENCODE_MODE = 'no-verdict-long';
+    await expect(_runOpencodeConsultation('q', 'role', dir, undefined, undefined, undefined, true))
+      .rejects.toThrow(/no VERDICT line/);
+  });
+
+  it('leaves no review file behind when it rejects', async () => {
+    process.env.FAKE_OPENCODE_MODE = 'no-verdict-long';
+    const outputPath = path.join(dir, 'review.md');
+    await _runOpencodeConsultation('q', 'role', dir, outputPath, undefined, undefined, true)
+      .catch(() => {});
+    expect(fs.existsSync(outputPath)).toBe(false);
+  });
+
+  it('does not require a verdict in general mode, where none was asked for', async () => {
+    // `consult -m opencode --prompt "..."` is a question, not a review.
+    process.env.FAKE_OPENCODE_MODE = 'no-verdict-long';
+    await expect(_runOpencodeConsultation('q', 'role', dir, undefined, undefined, undefined, false))
+      .resolves.toBeUndefined();
+  });
+
+  it('accepts a review that does state one', async () => {
+    const outputPath = path.join(dir, 'review.md');
+    await _runOpencodeConsultation('q', 'role', dir, outputPath, undefined, undefined, true);
+    expect(fs.readFileSync(outputPath, 'utf-8')).toContain('VERDICT: APPROVE');
+  });
+
+  it('checks the verdict against the review, not against the header', () => {
+    // Guards the regression directly: were the check applied to header+review, a future header
+    // carrying the word VERDICT would satisfy it without the reviewer saying anything.
+    const header = opencodeReviewHeader({
+      id: 'xai/grok-4.6', key: null, source: null, fromFlag: false,
+    });
+    expect(findVerdict(header + 'ok')).toBeNull();
+    expect(parseVerdict(header + 'ok')).toBe('COMMENT');   // what porch would have believed
+  });
+});
+
+// --- large prompts ----------------------------------------------------------------------
+
+describe('a prompt too large for argv', () => {
+  it('goes to a temp file that opencode is pointed at', async () => {
+    const huge = 'x'.repeat(150_000);
+    await _runOpencodeConsultation(huge, 'role', dir);
+    const promptArg = opencodeArgv().at(-1)!;
+    // ARG_MAX: the prompt must NOT be inline.
+    expect(promptArg.length).toBeLessThan(1000);
+    expect(promptArg).toMatch(/Read the full consultation prompt from this file: .*\.md/);
+
+    const tempFile = promptArg.match(/from this file: (\S+\.md)/)![1];
+    // Cleaned up after the run — the file existed only for opencode to read.
+    expect(fs.existsSync(tempFile)).toBe(false);
+  });
+
+  it('keeps a normal prompt inline', async () => {
+    await _runOpencodeConsultation('a short query', 'role', dir);
+    expect(opencodeArgv().at(-1)!).toContain('a short query');
+  });
+});
+
+// --- catalog parsing --------------------------------------------------------------------
+
+describe('catalog parsing tolerates a decorated listing', () => {
+  it('keeps only provider/model lines', () => {
+    const decorated = path.join(dir, 'opencode-decorated');
+    fs.writeFileSync(decorated, `#!/usr/bin/env node
+process.stdout.write('Available models:\\n\\n  xai/grok-4.6 (default)\\nxai/grok-4.3\\n');
+process.exit(0);
+`, { mode: 0o755 });
+    // The header and the annotated line are dropped rather than parsed as ids.
+    expect(listOpencodeModels(decorated)).toEqual(['xai/grok-4.3']);
+  });
+
+  it('a listing with no parseable line reads as "unknown", never as "nothing is valid"', () => {
+    // Otherwise a cosmetic change in someone else's CLI turns every valid id into a hard failure.
+    const garbage = path.join(dir, 'opencode-garbage');
+    fs.writeFileSync(garbage, `#!/usr/bin/env node
+process.stdout.write('Error: could not reach the model registry\\n');
+process.exit(0);
+`, { mode: 0o755 });
+    expect(listOpencodeModels(garbage)).toEqual([]);
+    expect(() => assertOpencodeModelAvailable('xai/grok-4.6', [], null)).not.toThrow();
+  });
+});
+
+describe('a stale CODEV_OPENCODE_BIN says so', () => {
+  it('does not tell you to install opencode when the override is the problem', async () => {
+    process.env.CODEV_OPENCODE_BIN = path.join(dir, 'moved-away');
+    await expect(_runOpencodeConsultation('q', 'role', dir))
+      .rejects.toThrow(/CODEV_OPENCODE_BIN points at .*moved-away, which does not exist/);
   });
 });

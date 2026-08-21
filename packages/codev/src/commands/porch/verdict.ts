@@ -7,9 +7,9 @@
 import type { Verdict, ReviewResult } from './types.js';
 
 /**
- * Parse verdict from consultation output.
+ * The verdict a review explicitly states, or `null` when it states none.
  *
- * Looks for the verdict line in format:
+ * Recognises the verdict line in the format:
  *   VERDICT: APPROVE
  *   VERDICT: REQUEST_CHANGES
  *   VERDICT: COMMENT
@@ -18,15 +18,12 @@ import type { Verdict, ReviewResult } from './types.js';
  *   **VERDICT: APPROVE**
  *   *VERDICT: APPROVE*
  *
- * Safety: If no explicit verdict found (empty output, crash, malformed),
- * defaults to REQUEST_CHANGES to prevent proceeding with unverified code.
+ * Split out of `parseVerdict` so a caller can tell "the reviewer said COMMENT" apart from "the
+ * reviewer said nothing and COMMENT is what we defaulted to". `parseVerdict` cannot express that
+ * difference — both come back as COMMENT, and `allApprove` counts COMMENT as an approval — so a
+ * lane that wants to refuse a verdict-less review has to ask this instead (#22).
  */
-export function parseVerdict(output: string): Verdict {
-  // Empty or very short output = something went wrong
-  if (!output || output.trim().length < 50) {
-    return 'REQUEST_CHANGES';
-  }
-
+export function findVerdict(output: string): Verdict | null {
   // Scan lines LAST→FIRST so the actual verdict (at the end) takes priority
   // over template text echoed by codex CLI at the start of output.
   // Skip template lines containing "[" (e.g., "VERDICT: [APPROVE | REQUEST_CHANGES | COMMENT]")
@@ -42,9 +39,23 @@ export function parseVerdict(output: string): Verdict {
       if (value.startsWith('COMMENT')) return 'COMMENT';
     }
   }
+  return null;
+}
+
+/**
+ * Parse verdict from consultation output.
+ *
+ * Safety: If no explicit verdict found (empty output, crash, malformed),
+ * defaults to REQUEST_CHANGES to prevent proceeding with unverified code.
+ */
+export function parseVerdict(output: string): Verdict {
+  // Empty or very short output = something went wrong
+  if (!output || output.trim().length < 50) {
+    return 'REQUEST_CHANGES';
+  }
 
   // No valid VERDICT: line found but the consult ran — treat as COMMENT (non-blocking skip)
-  return 'COMMENT';
+  return findVerdict(output) ?? 'COMMENT';
 }
 
 /**
