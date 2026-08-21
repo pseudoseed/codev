@@ -18,21 +18,34 @@ messaged. It is the prerequisite for #2 (per-spawn `--model`).
 
 ## Files Changed
 
-- `packages/codev/src/agent-farm/servers/render-gate.ts` (+359 / −)
-- `packages/codev/src/agent-farm/servers/gate-profiles.ts` (+87 / −)
+**Implementation** (5 files, +494 / −30):
+
+- `packages/codev/src/agent-farm/servers/render-gate.ts` (+333 / −26)
+- `packages/codev/src/agent-farm/servers/gate-profiles.ts` (+84 / −3)
 - `packages/codev/src/agent-farm/commands/spawn.ts` (+43 / −0)
 - `packages/codev/src/agent-farm/utils/harness.ts` (+26 / −0)
-- `packages/codev/src/agent-farm/commands/spawn-worktree.ts` (+9 / −)
-- `packages/codev/src/agent-farm/__tests__/render-gate.test.ts` (+273 / −)
-- `packages/codev/src/agent-farm/__tests__/spawn-gate-profile.test.ts` (+124 / −0, new)
+- `packages/codev/src/agent-farm/commands/spawn-worktree.ts` (+8 / −1)
+
+**Tests and fixtures** (11 files, +574 / −3):
+
+- `packages/codev/src/agent-farm/__tests__/render-gate.test.ts` (+270 / −3)
+- `packages/codev/src/agent-farm/__tests__/spawn-gate-profile.test.ts` (+141 / −0, new)
 - `packages/codev/src/agent-farm/__tests__/spawn-worktree.test.ts` (+46 / −0)
 - `packages/codev/src/agent-farm/__tests__/harness.test.ts` (+31 / −0)
 - `packages/codev/src/agent-farm/__tests__/fixtures/gate/README.md` (+81 / −0)
-- `packages/codev/src/agent-farm/__tests__/fixtures/gate/opencode-{idle,draft,midturn,dialog,boot}.*.txt` (5 new captures)
-- `codev/plans/4-opencode-builder-harness.md` (+419 / −0, new)
-- `README.md` (+2 / −2)
+- `packages/codev/src/agent-farm/__tests__/fixtures/gate/opencode-{idle,draft,midturn,dialog,boot}.*.txt`
+  (5 new captures, one line each — raw PTY byte streams, 9.8–30 KB)
 
-18 files, +1494 / −35.
+**Docs and protocol artifacts** (5 files, +832 / −8):
+
+- `codev/reviews/4-opencode-builder-harness.md` (+284 / −0, new — this file)
+- `codev/plans/4-opencode-builder-harness.md` (+419 / −0, new)
+- `codev/resources/arch.md` (+49 / −0)
+- `codev/resources/lessons-learned.md` (+33 / −0)
+- `README.md` (+17 / −8)
+- `codev/projects/4-make-opencode-a-working-builde/status.yaml` (+30 / −0, porch state)
+
+**21 files, +1900 / −41.**
 
 ## Commits
 
