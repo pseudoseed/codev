@@ -1,6 +1,6 @@
 # consult - AI Consultation CLI
 
-The `consult` command provides a unified interface for AI consultation with external models (Gemini, Codex, Claude, Hermes). It operates in three modes: general (ad-hoc prompts), protocol-based (structured reviews), and stats.
+The `consult` command provides a unified interface for AI consultation with external models (Gemini, Codex, Claude, Hermes, opencode). It operates in three modes: general (ad-hoc prompts), protocol-based (structured reviews), and stats.
 
 ## Synopsis
 

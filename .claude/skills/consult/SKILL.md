@@ -1,11 +1,11 @@
 ---
 name: consult
-description: AI consultation CLI — query Gemini, Codex, or Claude for reviews and analysis. ALWAYS check this skill before running any `consult` command. Use when reviewing specs, plans, implementations, or PRs with external models, running parallel 3-way reviews (cmap), or checking consultation stats. The `-m` model flag is always required except for `consult stats`.
+description: AI consultation CLI — query Gemini, Codex, Claude, or opencode/Grok for reviews and analysis. ALWAYS check this skill before running any `consult` command. Use when reviewing specs, plans, implementations, or PRs with external models, running parallel 3-way reviews (cmap), or checking consultation stats. The `-m` model flag is always required except for `consult stats`.
 ---
 
 # consult - AI Consultation CLI
 
-Query external AI models for reviews and analysis. Supports Gemini, Codex, and Claude.
+Query external AI models for reviews and analysis. Supports Gemini, Codex, Claude, hermes, and opencode.
 
 ## Synopsis
 
