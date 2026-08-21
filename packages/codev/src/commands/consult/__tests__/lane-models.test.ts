@@ -227,13 +227,13 @@ describe('--model-id is refused by lanes with no model selector', () => {
     } catch (err) {
       message = (err as Error).message;
     }
-    for (const lane of ['claude', 'codex', 'gemini']) expect(message).toContain(lane);
+    for (const lane of ['claude', 'codex', 'gemini', 'opencode']) expect(message).toContain(lane);
   });
 
   it('accepts every configurable lane, gemini included', () => {
     // gemini is configurable by spec; its passthrough lands in phase_3. Asserting it here means
     // phase_3 cannot narrow this contract without failing a test.
-    for (const lane of ['claude', 'codex', 'gemini']) {
+    for (const lane of ['claude', 'codex', 'gemini', 'opencode']) {
       expect(() => assertLaneAcceptsModelOverride(lane)).not.toThrow();
     }
   });

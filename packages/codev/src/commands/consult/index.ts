@@ -22,15 +22,17 @@ import {
   resolveReasoningEffort,
   validateModelId,
   assertLaneAcceptsModelOverride,
+  assertOpencodeModelAvailable,
   type ConfigurableLane,
 } from '../../lib/consult-lanes.js';
 import type { ModelReasoningEffort } from '@openai/codex-sdk';
 import { getResolver, GitRefResolver, type ArtifactResolver } from '../porch/artifacts.js';
+import { findVerdict } from '../porch/verdict.js';
 import { MetricsDB } from './metrics.js';
 import { extractUsage, extractReviewText, type SDKResultLike, type UsageData } from './usage-extractor.js';
 import { executeForgeCommandSync } from '../../lib/forge.js';
 import { preflightAgyAuth, recordAgyAuthState, type AgyAuthState } from './agy-auth-cache.js';
-import { assertAgyLaneAllowedUnderTest } from '../../lib/test-env.js';
+import { assertAgyLaneAllowedUnderTest, assertOpencodeLaneAllowedUnderTest } from '../../lib/test-env.js';
 
 // Content reference — resolved artifact content with a display label
 interface ContentRef {
@@ -51,6 +53,10 @@ const MODEL_CONFIGS: Record<string, ModelConfig> = {
   // cli/args are NOT used for dispatch (agy's binary path is resolved at runtime).
   gemini: { cli: 'agy', args: [], envVar: null },
   hermes: { cli: 'hermes', args: ['chat', '-q'], envVar: null },
+  // opencode dispatches via runOpencodeConsultation (it needs `-m` and a pre-flight
+  // catalog check), so cli/args here are the shape the runner builds on, not a
+  // literal argv — the prompt and `-m <id>` are appended by the runner.
+  opencode: { cli: 'opencode', args: ['run'], envVar: null },
 };
 
 // Models that use an Agent SDK instead of CLI subprocess
@@ -417,6 +423,20 @@ export const DEFAULT_CODEX_REASONING_EFFORT = 'medium' as const;
 
 /** Shipped default model id for the claude consult lane (#1288). */
 export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5';
+
+/**
+ * Shipped default model id for the opencode consult lane (#22).
+ *
+ * The `xai/` prefix is LOAD-BEARING. `x-ai/grok-4.6` — the spelling most other tooling uses — was
+ * live-probed on 2026-08-21 and rejected by the provider with a bare `UnknownError: Unexpected
+ * server error` and empty stdout. `assertOpencodeModelAvailable` exists so that mistake is named
+ * before the spawn instead of arriving as that.
+ *
+ * The lane exists to supply a reviewer on an account shared with no other lane, so it defaults to
+ * the strongest Grok `opencode models` lists rather than to whatever opencode would pick — an
+ * unpinned default could silently land on a model from a provider a sibling lane already uses.
+ */
+export const DEFAULT_OPENCODE_MODEL = 'xai/grok-4.6';
 
 interface CodexModelPricing {
   inputPer1M: number;
@@ -1249,6 +1269,290 @@ async function runAgyConsultation(
   });
 }
 
+// --- opencode lane (#22) ------------------------------------------------------
+
+/** Codev-owned hard cap on a single `opencode run`. Matches the agy lane's budget. */
+const OPENCODE_TIMEOUT_MS = 6 * 60 * 1000;
+
+/** How long `opencode models` gets to print its catalog before the pre-flight gives up. */
+const OPENCODE_MODELS_TIMEOUT_MS = 30_000;
+
+/** Bounded tail of the lane's output, retained so a failure can quote why it failed. */
+const OPENCODE_FAILURE_TAIL_MAX_CHARS = 2000;
+
+/**
+ * Resolve the `opencode` binary, or `null` when it isn't installed.
+ *
+ * The single chokepoint for the test-isolation guard, and it has to be resolution rather than the
+ * spawn: the pre-flight below *executes* the binary (`opencode models`) before any review runs, so
+ * guarding only `runOpencodeConsultation`'s spawn would still let a suite reach the real CLI.
+ */
+export function resolveOpencodeBin(): string | null {
+  // Explicit override (tests, or a non-PATH install): honoured as given, never quietly replaced
+  // with a different binary the caller did not ask for.
+  const override = process.env.CODEV_OPENCODE_BIN;
+  if (override) return fs.existsSync(override) ? override : null;
+
+  assertOpencodeLaneAllowedUnderTest();
+
+  return commandExists('opencode') ? 'opencode' : null;
+}
+
+/**
+ * The model ids `opencode` offers on this machine, or `[]` if the catalog could not be read.
+ *
+ * `[]` deliberately means "unknown", not "none": the pre-flight below then skips the existence
+ * check and lets the provider be the authority, which is the pre-1286 behaviour. Failing the lane
+ * because a *catalog listing* broke would turn a diagnostic into an outage.
+ */
+export function listOpencodeModels(bin = 'opencode'): string[] {
+  let out: string;
+  try {
+    out = execFileSync(bin, ['models'], {
+      encoding: 'utf-8',
+      timeout: OPENCODE_MODELS_TIMEOUT_MS,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch {
+    return [];
+  }
+  // Keep only `provider/model`-shaped lines. Today `opencode models` prints nothing else (probed
+  // 2026-08-21), but if it ever gains a header or an annotation, parsing those as ids would turn a
+  // *valid* model into "Unknown opencode model" — a hard failure caused by a cosmetic change in
+  // someone else's CLI. Filtering means a decorated listing degrades to "catalog unreadable", which
+  // hands authority back to the provider instead of blocking the lane. (Raised by claude at review.)
+  return out
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => OPENCODE_MODEL_LINE_RE.test(l));
+}
+
+/** A bare `provider/model` line, the entire shape `opencode models` emits. */
+const OPENCODE_MODEL_LINE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * Provenance banner prepended to an opencode review.
+ *
+ * The issue's requirement, verbatim: "Record which model the lane used in the review output. `Grok
+ * 4.6` and `Grok 4.3` are not interchangeable evidence." Stderr logging is not enough — the review
+ * file is what outlives the run and what a later reader actually opens.
+ *
+ * Safe to prepend: `parseVerdict` scans lines LAST→FIRST, so a header cannot shadow the verdict at
+ * the end, and this line carries no `VERDICT:` token of its own.
+ */
+export function opencodeReviewHeader(choice: LaneModelChoice): string {
+  const from = choice.key ? ` (from ${choice.key})` : ' (shipped default)';
+  return `_Reviewed by the opencode lane — model: \`${choice.id}\`${from}._\n\n`;
+}
+
+/**
+ * Run the `opencode` consult lane (`opencode run -m <id> <prompt>`).
+ *
+ * ## Why this lane hard-fails where the agy lane skips
+ *
+ * The gemini/agy lane degrades to a non-blocking COMMENT skip because it is OAuth-fragile: an
+ * unauthenticated `agy` is a routine state on a developer's machine, and wedging every phase on it
+ * would be worse than losing a lane. opencode has no equivalent failure mode — it authenticates
+ * once and stays that way.
+ *
+ * So the trade-off runs the other way here, and #20 is why it matters: porch counts a lane that
+ * produced nothing as an approval. A lane that quietly emits a skip is a lane that quietly lowers
+ * the bar. Missing CLI, unknown model, non-zero exit, and empty output all throw.
+ */
+export async function runOpencodeConsultation(
+  queryText: string,
+  role: string,
+  workspaceRoot: string,
+  outputPath?: string,
+  metricsCtx?: MetricsContext,
+  modelChoice?: LaneModelChoice,
+  requireVerdict = false,
+): Promise<void> {
+  const startTime = Date.now();
+  const choice = modelChoice
+    ?? resolveLaneModelChoice(workspaceRoot, 'opencode', DEFAULT_OPENCODE_MODEL);
+
+  const bin = resolveOpencodeBin();
+  if (!bin) {
+    // A missing CLI is a hard failure here, unlike the agy lane's skip. See the header: a lane that
+    // silently produces nothing is counted as an approval (#20), and "not installed" is a
+    // configuration mistake with an obvious fix, not a transient environment state.
+    //
+    // A stale CODEV_OPENCODE_BIN reaches this same branch, so it gets its own message: "install
+    // opencode" is the wrong instruction for someone whose override points at a path that moved.
+    discardStaleOutput(outputPath);
+    const override = process.env.CODEV_OPENCODE_BIN;
+    throw new Error(
+      override
+        ? `CODEV_OPENCODE_BIN points at ${override}, which does not exist. ` +
+          `Correct it or unset it to fall back to opencode on PATH.`
+        : 'opencode not found. Install it (https://opencode.ai), or drop "opencode" from ' +
+          'porch.consultation in .codev/config.json.'
+    );
+  }
+
+  // Pre-flight the id against opencode's own catalog. The provider's rejection is
+  // `UnknownError: Unexpected server error` with empty stdout — useless for finding a typo'd
+  // prefix — so the check has to happen while we still know what was asked for.
+  try {
+    assertOpencodeModelAvailable(choice.id, listOpencodeModels(bin), choice.key);
+  } catch (err) {
+    discardStaleOutput(outputPath);
+    throw err;
+  }
+
+  // opencode has no system-prompt flag, so the role folds into the prompt (hermes/agy precedent).
+  const prompt = `${role}\n\n---\n\n${queryText}`;
+  let tempFile: string | null = null;
+  let promptArg = prompt;
+  // Large inline argv can exceed ARG_MAX (E2BIG) — write it out and point opencode at the file.
+  // The temp file lands in the consult sandbox dir, the same one the agy lane uses.
+  if (prompt.length > CLI_PROMPT_INLINE_MAX_CHARS) {
+    tempFile = path.join(consultSandboxDir(), `codev-consult-prompt-${Date.now()}.md`);
+    fs.writeFileSync(tempFile, prompt);
+    promptArg = [
+      `Read the full consultation prompt from this file: ${tempFile}`,
+      'You have file access. Read files directly from disk to review code.',
+    ].join('\n\n');
+  }
+
+  const args = [...MODEL_CONFIGS.opencode.args, '-m', choice.id, promptArg];
+
+  const cleanup = () => {
+    if (tempFile && fs.existsSync(tempFile)) {
+      try { fs.unlinkSync(tempFile); } catch { /* best-effort */ }
+    }
+  };
+
+  return new Promise<void>((resolve, reject) => {
+    const proc = spawn(bin, args, {
+      cwd: workspaceRoot,
+      // stderr is piped, not inherited: opencode writes its banner and its tool-call trace there,
+      // and that trace is the only text explaining a rejection, so it is retained rather than
+      // spilled into the parent's stream.
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    const outChunks: Buffer[] = [];
+    let outputTail = '';
+    let settled = false;
+
+    const fail = (message: string, exitCode: number) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { proc.kill('SIGTERM'); } catch { /* already gone */ }
+      cleanup();
+      recordOpencodeMetrics(metricsCtx, startTime, exitCode, message, choice.id);
+      console.error(`\n[opencode FAILED: ${message}]`);
+      // "No review file" must mean none EXISTS, not merely that this run wrote none — porch keys
+      // off the file's presence and would otherwise advance on an earlier iteration's review.
+      discardStaleOutput(outputPath);
+      const err = new Error(
+        `${message}` +
+        (outputTail.trim()
+          ? `\n\nopencode output (last ${OPENCODE_FAILURE_TAIL_MAX_CHARS} chars):\n${outputTail.trim()}`
+          : '')
+      );
+      reject(annotateModelError(err, 'opencode', choice));
+    };
+
+    const timer = setTimeout(
+      () => fail(`opencode timed out after ${OPENCODE_TIMEOUT_MS / 1000}s`, 1),
+      OPENCODE_TIMEOUT_MS,
+    );
+
+    const watch = (buf: Buffer, isStdout: boolean) => {
+      if (isStdout) outChunks.push(buf);
+      outputTail = (outputTail + buf.toString('utf-8')).slice(-OPENCODE_FAILURE_TAIL_MAX_CHARS);
+    };
+    proc.stdout?.on('data', (b: Buffer) => watch(b, true));
+    proc.stderr?.on('data', (b: Buffer) => watch(b, false));
+
+    proc.on('error', (err) => fail(`opencode failed to start: ${err.message}`, 1));
+
+    proc.on('close', (code) => {
+      if (settled) return;
+      const raw = Buffer.concat(outChunks).toString('utf-8').trim();
+
+      // fail() owns settling on both error paths — it clears the timer and cleans up itself, so
+      // this handler must NOT pre-settle or those paths would be swallowed by its own guard.
+      if (code !== 0) {
+        // `code === null` means a signal killed it (OOM, external kill). Still a hard failure — this
+        // lane has no skip path — but saying "exited with code null" sends the reader hunting for a
+        // provider error that was never printed.
+        fail(
+          code === null
+            ? 'opencode was killed by a signal before producing a review'
+            : `opencode exited with code ${code}`,
+          code ?? 1,
+        );
+        return;
+      }
+      // A zero exit with nothing on stdout is the #20 shape exactly: no review, but nothing that
+      // looks like a failure either. Refuse to let it pass as one.
+      if (raw.length === 0) {
+        fail('opencode produced no review output', 0);
+        return;
+      }
+      // Same shape one step further in: a protocol-mode run that answered, but never stated a
+      // verdict. `parseVerdict` cannot distinguish that from a stated COMMENT, and `allApprove`
+      // counts COMMENT as an approval — so silence would become consent.
+      //
+      // This guard also covers what the header would otherwise break. `parseVerdict` treats output
+      // under 50 characters as REQUEST_CHANGES, a floor that exists to catch exactly this; the
+      // 76-character provenance banner lifts a two-word non-answer over it and converts a would-be
+      // REQUEST_CHANGES into an approval. Found by the opencode lane reviewing its own PR, which is
+      // a better argument for the lane than anything in the PR body.
+      if (requireVerdict && findVerdict(raw) === null) {
+        fail(
+          'opencode produced a review with no VERDICT line. A review that states no verdict is ' +
+          'not a verdict — porch would read it as a non-blocking COMMENT and count it as an ' +
+          'approval.',
+          0,
+        );
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+
+      // `opencode run` prints the assistant's plain text to stdout (its banner and tool trace go to
+      // stderr), so stdout IS the review. Live-probed 2026-08-21, including the `VERDICT:` line
+      // surviving verbatim — which is why verdict parsing needs no opencode-specific case.
+      const content = opencodeReviewHeader(choice) + raw;
+      process.stdout.write(content);
+      writeConsultOutput(outputPath, content);
+      recordOpencodeMetrics(metricsCtx, startTime, 0, null, choice.id);
+      console.error(`\n[opencode completed in ${((Date.now() - startTime) / 1000).toFixed(1)}s]`);
+      resolve();
+    });
+  });
+}
+
+/** Metrics row for the opencode lane. `opencode run` reports no token usage, so those stay null. */
+function recordOpencodeMetrics(
+  metricsCtx: MetricsContext | undefined,
+  startTime: number,
+  exitCode: number,
+  errorMessage: string | null,
+  modelId: string,
+): void {
+  if (!metricsCtx) return;
+  recordMetrics(metricsCtx, {
+    // Always a real id — unlike hermes, this lane never runs without one.
+    modelId,
+    durationSeconds: (Date.now() - startTime) / 1000,
+    inputTokens: null,
+    cachedInputTokens: null,
+    outputTokens: null,
+    costUsd: null,
+    exitCode,
+    errorMessage,
+  });
+}
+
 /**
  * Record the model a lane actually ran, so a transcript answers "what did this use?".
  *
@@ -1314,6 +1618,21 @@ async function runConsultation(
     // No configured id means agy chooses; say so rather than printing a value we did not set.
     logResolvedModel(model, choice?.id ?? "agy's own default", choice?.key ?? null);
     await runAgyConsultation(query, role, workspaceRoot, outputPath, metricsCtx, choice);
+    logQuery(workspaceRoot, model, query, (Date.now() - startTime) / 1000);
+    return;
+  }
+
+  // opencode lane → `opencode run` (#22). Dispatched here rather than through the generic
+  // MODEL_CONFIGS path below because it needs `-m` and a pre-flight catalog check.
+  if (model === 'opencode') {
+    const startTime = Date.now();
+    const choice = resolveLaneModelChoice(workspaceRoot, 'opencode', DEFAULT_OPENCODE_MODEL, modelIdOverride);
+    logResolvedModel(model, choice.id, choice.key);
+    // `generalMode` is an ad-hoc `--prompt`, where no verdict is expected or asked for. Protocol
+    // mode is a review, and a review owes a verdict.
+    await runOpencodeConsultation(
+      query, role, workspaceRoot, outputPath, metricsCtx, choice, !generalMode,
+    );
     logQuery(workspaceRoot, model, query, (Date.now() - startTime) / 1000);
     return;
   }
@@ -2372,8 +2691,8 @@ export async function consult(options: ConsultOptions): Promise<void> {
     }
   }
 
-  // Add file access instruction for Gemini
-  if (model === 'gemini' || model === 'hermes') {
+  // Add file access instruction for the agentic CLI lanes
+  if (model === 'gemini' || model === 'hermes' || model === 'opencode') {
     query += '\n\nYou have file access. Read files directly from disk to review code.';
   }
 
@@ -2426,5 +2745,6 @@ export {
   MODEL_CONFIGS as _MODEL_CONFIGS,
   MODEL_ALIASES as _MODEL_ALIASES,
   runAgyConsultation as _runAgyConsultation,
+  runOpencodeConsultation as _runOpencodeConsultation,
   agySkipContent as _agySkipContent,
 };

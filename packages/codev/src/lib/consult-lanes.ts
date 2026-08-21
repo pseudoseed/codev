@@ -26,7 +26,7 @@ import { canonicalProtocolName, listProtocolNames, listReviewTypes } from './ske
 // ---------------------------------------------------------------------------
 
 /** Lanes whose model id can be configured. `hermes` is absent: `hermes chat -q` has no model selector. */
-export const MODEL_CONFIGURABLE_LANES = ['claude', 'codex', 'gemini'] as const;
+export const MODEL_CONFIGURABLE_LANES = ['claude', 'codex', 'gemini', 'opencode'] as const;
 export type ConfigurableLane = (typeof MODEL_CONFIGURABLE_LANES)[number];
 
 /** Lanes exposing a reasoning-effort knob. Deliberately narrower than MODEL_CONFIGURABLE_LANES. */
@@ -57,7 +57,7 @@ const _REASONING_EFFORTS_ARE_EXHAUSTIVE: UncoveredEffort extends never ? true : 
 void _REASONING_EFFORTS_ARE_EXHAUSTIVE;
 
 /** Lane names accepted in `porch.consultation.*` lists (includes hermes — it IS a review backend). */
-export const VALID_LANE_NAMES = ['gemini', 'codex', 'claude', 'hermes'];
+export const VALID_LANE_NAMES = ['gemini', 'codex', 'claude', 'hermes', 'opencode'];
 
 /** Whole-value special modes, accepted wherever a lane list is accepted. */
 export const SPECIAL_MODES = ['none', 'parent'] as const;
@@ -160,6 +160,46 @@ export function assertLaneAcceptsModelOverride(lane: string, flag = '--model-id'
   fail(
     `${flag} is not supported for the "${lane}" lane. ` +
     `Lanes that accept a model id: ${quoted(MODEL_CONFIGURABLE_LANES)}.${extra}`
+  );
+}
+
+/**
+ * Reject an `opencode` model id the local `opencode` install does not offer.
+ *
+ * This is NOT the hardcoded catalog the header of this file forbids. `available` is whatever
+ * `opencode models` printed on this machine at call time — the provider tool answering for itself,
+ * which is the same authority the no-catalog rule defers to. The only difference is that it is
+ * reachable *before* the spawn.
+ *
+ * Reaching it before the spawn is the whole point. A wrong provider prefix (`x-ai/` for `xai/`)
+ * comes back from the provider as `UnknownError: Unexpected server error` with empty stdout — text
+ * naming neither the model nor the mistake (live-probed 2026-08-21). So the useful message can only
+ * be built here, where the intended id and the real catalog are both in hand.
+ *
+ * An empty `available` means the catalog could not be read; the caller decides what that means
+ * rather than this function reading "no list" as "nothing is valid".
+ */
+export function assertOpencodeModelAvailable(
+  id: string,
+  available: readonly string[],
+  key: string | null,
+): void {
+  if (available.length === 0 || available.includes(id)) return;
+
+  // Same model name, different provider prefix — by far the likeliest way to get here, and exactly
+  // what the provider's own error is useless for.
+  const bare = (m: string) => m.slice(m.indexOf('/') + 1);
+  const samePart = available.filter(m => bare(m) === bare(id));
+
+  const where = key ? ` (from ${key})` : '';
+  const hint = samePart.length > 0
+    ? `\nDid you mean ${quoted(samePart)}? The model name is right; the provider prefix is not.`
+    : '';
+
+  fail(
+    `Unknown opencode model ${JSON.stringify(id)}${where}.\n` +
+    `\`opencode models\` on this machine offers: ${quoted([...available].sort())}.${hint}\n` +
+    `Codev does not fall back to a default model — correct the id at the source above.`
   );
 }
 

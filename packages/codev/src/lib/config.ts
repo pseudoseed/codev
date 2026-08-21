@@ -81,7 +81,7 @@ export interface CodevConfig {
      * local catalog of ids goes stale the moment a provider ships a new model. The provider is the
      * authority: a rejected id fails the consultation loudly, with no fallback to the default.
      */
-    models?: Partial<Record<'claude' | 'codex' | 'gemini', string>>;
+    models?: Partial<Record<'claude' | 'codex' | 'gemini' | 'opencode', string>>;
     /** Codex-only; a closed enum bound to the SDK's ModelReasoningEffort union. */
     reasoningEffort?: { codex?: ModelReasoningEffort };
     /** Codex-only per-1M token rates; all three required together. */

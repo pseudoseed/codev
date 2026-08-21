@@ -93,6 +93,39 @@ export function assertAgyLaneAllowedUnderTest(): void {
 }
 
 /**
+ * Explicit opt-in for deliberately exercising the REAL `opencode` binary from a test.
+ *
+ * Same shape as `realAgyOptIn`, for the same reason with a different cost: an unpinned opencode
+ * lane in a suite does not open a browser window, it bills a real Grok call and takes minutes.
+ */
+export function realOpencodeOptIn(): boolean {
+  const raw = process.env.CODEV_ALLOW_REAL_OPENCODE;
+  return raw === '1' || raw === 'true';
+}
+
+/**
+ * Guard the opencode lane against reaching the real binary from a test (#22).
+ *
+ * The agy guard's reasoning applies unchanged: the single call site is `resolveOpencodeBin()`, in
+ * the branch taken when `CODEV_OPENCODE_BIN` is unset, because resolution is not passive — the
+ * lane's pre-flight *executes* the candidate with `models` before any review runs.
+ *
+ * The lane hard-fails rather than skipping, so an unpinned suite would surface as a test failure
+ * either way; this makes the failure say what is actually wrong instead of "opencode exited 1".
+ */
+export function assertOpencodeLaneAllowedUnderTest(): void {
+  if (!isUnderTestRunner()) return;
+  if (realOpencodeOptIn()) return;
+  if (process.env.CODEV_OPENCODE_BIN) return;
+  throw new Error(
+    'Refusing to resolve the opencode binary under a test runner without a pinned ' +
+    'CODEV_OPENCODE_BIN (#22). This test reached the opencode consult lane by omission and ' +
+    'would have spawned the real CLI — a billed Grok call per spawn. Pin a fake binary, or set ' +
+    'CODEV_ALLOW_REAL_OPENCODE=1 if this test genuinely means to run the real CLI.',
+  );
+}
+
+/**
  * True when cloud-mutating side effects must be refused because we are running
  * under a test (#1515).
  *

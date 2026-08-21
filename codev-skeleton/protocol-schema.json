@@ -169,7 +169,7 @@
           "description": "Models to consult",
           "items": {
             "type": "string",
-            "enum": ["gemini", "codex", "claude"]
+            "enum": ["gemini", "codex", "claude", "hermes", "opencode"]
           },
           "minItems": 1
         },
