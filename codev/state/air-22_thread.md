@@ -75,3 +75,54 @@ Real `opencode`, real Grok, built CLI:
 `porch.consultation.models` still defaults to `["gemini", "codex", "claude"]`. Changing the
 default rotation is an architectural call the issue does not make, so opencode is available
 but opt-in.
+
+## The lane found a real bug in itself, on its first run
+
+CMAP on PR #24 came back: claude=APPROVE, opencode=COMMENT, codex=quota-blocked
+(resets Aug 27), gemini=skipped (agy exited 1, which emits the non-blocking COMMENT
+that `allApprove` counts as an approval — #20, live, in the review of the PR about #20).
+
+The opencode lane's finding, verified before acting on it:
+
+    parseVerdict('ok')          -> REQUEST_CHANGES
+    parseVerdict(header + 'ok') -> COMMENT           // header is 76 chars
+
+`opencodeReviewHeader` — the provenance banner added to satisfy the issue's "record
+which model the lane used" — lifts a short verdict-less review over `parseVerdict`'s
+50-character floor. REQUEST_CHANGES becomes COMMENT, and COMMENT counts as approval.
+The PR that claims to reduce #20's blast radius was opening a fresh #20 hole.
+
+**The deeper point, which the architect named and which belongs in the PR body:** the
+50-char floor is a *proxy* — length standing in for "a review actually happened". It was
+never measuring the right thing. It held by luck, and any lane prefixing provenance, a
+banner, a model id or a timestamp defeats it. My header did not break a working guard; it
+exposed one that was already wrong. Anyone "fixing" this by bumping 50 to 100 reintroduces
+it with the next slightly longer header.
+
+Fix: extract `findVerdict()` from `parseVerdict()` — it returns the verdict a review
+*states*, or `null`. That is the distinction `parseVerdict` structurally cannot express
+(a stated COMMENT and no verdict at all return the same value), and it is the same
+distinction #20 needs. Whoever picks up #20 should reuse it rather than write a second one.
+The lane then hard-fails a protocol-mode review with no verdict — a reviewer that produced
+output but no verdict has not reviewed. General mode (`--prompt`) is exempt: a question is
+not a review.
+
+Worth stating plainly rather than hiding: a lane approving the PR that adds it is weak
+evidence. A lane finding a real defect in its own implementation, in the exact failure
+class the PR exists to reduce, is much stronger — and stronger than an APPROVE from it
+would have been.
+
+Also fixed from claude's review: a stale `CODEV_OPENCODE_BIN` said "install opencode"
+instead of naming the override; `listOpencodeModels` now keeps only `provider/model`-shaped
+lines, so a future decorated listing degrades to "catalog unreadable" (provider stays the
+authority) instead of turning a valid id into a hard failure; tests added for the
+large-prompt temp-file branch; `persistent-output.test.ts` and `lane-models.test.ts` lane
+loops extended.
+
+## Flaky tests
+
+`src/terminal/__tests__/session-manager.test.ts > auto-restart logic > respects maxRestarts
+limit` timed out once in the full run (5533 passed / 1 failed), while I had two vitest
+suites running concurrently. Passes standalone: 91/91 in 28s. Timing-sensitive under load,
+unrelated to consult. Not skipped — a test that passes cleanly on its own should not be
+annotated away.

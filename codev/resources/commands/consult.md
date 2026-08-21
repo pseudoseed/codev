@@ -232,9 +232,19 @@ named, and **no review file is written** — so porch cannot advance on a lane t
 you do *not* get is a silent substitution of the default model.
 
 The `opencode` lane takes the strict side of this contract with no exceptions at all: a missing
-CLI, an unknown id, a non-zero exit, and a clean exit that produced nothing all fail the lane and
-leave no review file. It has no OAuth-fragility to accommodate, and a lane that quietly produces
-nothing is a lane porch counts as an approval.
+CLI, an unknown id, a non-zero exit, a clean exit that produced nothing, and — in protocol mode — a
+review that states no `VERDICT:` line all fail the lane and leave no review file. It has no
+OAuth-fragility to accommodate, and a lane that quietly produces nothing is a lane porch counts as
+an approval.
+
+That last one deserves its own note, because the guard it replaces looks adequate and is not.
+`parseVerdict` treats output under 50 characters as `REQUEST_CHANGES`; anything longer with no
+verdict line falls through to `COMMENT`, which `allApprove` counts as an approval. The floor is a
+**proxy** — length standing in for "a review actually happened" — and any lane that prefixes
+provenance, a banner, a model id or a timestamp clears it without reviewing anything. Raising 50 to
+100 postpones the problem to the next slightly longer header. Ask the real question instead:
+`findVerdict()` returns the verdict a review *states*, or `null`, which is the distinction issue
+\#20 also needs. Reuse it rather than writing a second one.
 
 One deliberate exception: a `gemini` lane **with no model id resolved** still skips non-blockingly
 when `agy` is missing or unauthenticated (consultation is best-effort there). Once an id *is*
@@ -368,6 +378,7 @@ consult -m hermes --protocol spir --type spec
 | Gemini | ~120-180s | Antigravity CLI (`agy`); agentic file access via `--sandbox`, plain text output |
 | Codex | ~200-250s | Shell command exploration, read-only sandbox |
 | Claude | ~60-120s | Agent SDK with Read/Glob/Grep tools |
+| opencode | ~40-120s | `opencode run` (Grok); agentic file access, plain text output. Add ~2-5s for the `opencode models` pre-flight |
 
 ## Prerequisites
 
@@ -383,6 +394,10 @@ npm install -g @openai/codex
 # Gemini lane → Antigravity CLI (`agy`), replacing the retired Gemini CLI
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy   # run once and sign in (OAuth / Google subscription)
+
+# opencode lane (Grok, and whatever else your opencode account reaches)
+npm install -g opencode-ai
+opencode models   # confirms auth and prints the ids this lane will accept
 ```
 
 Configure auth:
