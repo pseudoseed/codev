@@ -9,7 +9,7 @@ MAINTAIN polices the cap and keeps the map in sync with lessons-learned.md's sec
 - Trust the protocol — never skip CMAP/consultation; it catches security, design, and protocol issues solo review misses.
 - Check for existing work (PRs, git history) before building from scratch.
 - "It compiled" / "tests pass" is not "it works" — verify the real user path end-to-end before calling it done.
-- Model permissions as roles/capabilities, not booleans — booleans don't extend.
+- A truncated result is indistinguishable from a complete one once emitted — give "I stopped early" its own signal and emit nothing, never a partial answer that reads as whole.
 - Single source of truth beats distributed state — consolidate duplicates rather than syncing them.
 - After any rename or framework change, grep the whole repo across BOTH codev/ and codev-skeleton/ before claiming "all fixed."
 - When stuck (2 failed hypotheses or ~30 min), get an outside model's perspective instead of guessing.
