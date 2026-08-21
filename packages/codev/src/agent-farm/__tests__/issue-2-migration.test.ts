@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { GLOBAL_SCHEMA } from '../db/schema.js';
 
@@ -105,6 +105,24 @@ describe('Issue #2 — builders harness/model migration (v18)', () => {
     const after = builderColumns(db);
     expect(() => applyV18(db)).not.toThrow();
     expect(builderColumns(db)).toEqual(after);
+  });
+
+  it('GLOBAL_CURRENT_VERSION covers v18, so a fresh install records it', () => {
+    // Caught by running the real CLI, not by a unit test: a fresh global.db seeds
+    // `_migrations` with 1..GLOBAL_CURRENT_VERSION and returns EARLY, before the
+    // migration blocks. Forgetting the bump leaves a fresh install reporting v17
+    // and re-running the v18 block on its next open. The columns still arrive
+    // (GLOBAL_SCHEMA has them), so nothing breaks loudly — which is exactly why
+    // this needs a test rather than trust.
+    const src = readFileSync(
+      resolve(__dirname, '..', 'db', 'index.ts'),
+      'utf8',
+    );
+    const declared = src.match(/GLOBAL_CURRENT_VERSION = (\d+)/)?.[1];
+    const highest = Math.max(
+      ...[...src.matchAll(/VALUES \((\d+)\)'\)\.run\(\)/g)].map(m => Number(m[1])),
+    );
+    expect(Number(declared)).toBe(highest);
   });
 
   it('existing rows survive with NULL for both columns', () => {
