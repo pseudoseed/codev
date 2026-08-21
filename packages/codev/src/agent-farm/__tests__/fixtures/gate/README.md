@@ -42,6 +42,40 @@ encodes the expected verdict: `<app>-<state>.<clean|busy>.txt`.
   (default-fg text counts), trust → busy (palette-12 option counts — a blind Enter
   never confirms filesystem trust). The raw measurement (with real render + per-cell
   fg attributes) is archived in the Phase 3 review.
+- **opencode-*.txt** — **real captures** from `opencode` **1.18.18** (hosting Grok 4.6 via
+  xAI) under a PTY at 110×32, taken for Issue #4. Five states, each committed as the raw
+  byte stream the gate classifies:
+  - `opencode-idle.clean.txt` — a completed turn, composer empty. The composer box is
+    genuinely blank (opencode renders **no placeholder** once a session has messages), and
+    the footer carries the session usage readout `8.3K (2%) · $0.01`.
+  - `opencode-draft.busy.txt` — the same session with a typed, unsubmitted draft that wraps
+    onto **two rows**. This is the fixture that pins why opencode needs its own region
+    model: its box is bottom-anchored and grows upward, every row is prefixed with the same
+    `┃`, so "the last row carrying the marker" is the *status* row and a top-down scan from
+    it to the rule covers only chrome — the draft above would go unscanned and classify
+    **clean**. The upward `bottomAnchor` scan is what sees it.
+  - `opencode-midturn.busy.txt` — submitted, agent still generating. Compare its composer
+    box with the idle fixture: they are **identical**. The two states differ only in the
+    footer, which is why this profile classifies on footer signals at all.
+  - `opencode-dialog.busy.txt` — a real tool-permission dialog (`△ Permission required` /
+    `Allow once  Allow always  Reject`), produced by setting `{"permission":{"bash":"ask"}}`
+    in the capture directory's `opencode.json` and prompting for a shell command. It
+    replaces the whole composer *and* hides the footer, so it holds twice over — a blind
+    Enter can never approve a shell command.
+  - `opencode-boot.busy.txt` — a freshly booted TUI that has not yet run a turn. Its footer
+    shows the version, not the usage readout, so the required idle indicator is absent and
+    the gate holds (`no-idle-indicator`). Its composer also carries the first-run
+    placeholder `Ask anything…`, rendered in RGB gray at normal intensity — not SGR-dim and
+    not palette-indexed, so no existing placeholder exemption applies to it.
+
+  **opencode uses SGR-dim nowhere.** Measured across all captured states — the five above
+  plus the `/` command palette and the `@` agent picker — there are **zero dim cells on the
+  whole screen**, not merely in the composer. `OPENCODE_PROFILE` therefore sets
+  `treatDimAsPlaceholder: false` rather than inheriting the claude/codex convention that dim
+  marks placeholder chrome. Nothing is lost by dropping it (there is no dim text to exempt),
+  and keeping it would mean any dim affordance a future opencode ships — a queued-message
+  preview, an inline completion — would be silently skipped and a real draft would read
+  empty. agy already showed these attribute conventions do not port between TUIs.
 - **wrapper-boot.busy.txt** — **synthetic** builder launch-loop screen (a born-dirty
   state with no composer marker). App-agnostic: no marker → busy under any profile.
 
@@ -55,3 +89,50 @@ profile as `placeholderFgPalette`. Either way the exclusion is attribute-based, 
 a text allowlist. A future TUI (or a shim) that renders a plain, un-de-emphasized
 placeholder trips toward *busy* (fail-safe: a message is held, never misdelivered);
 classifier-health telemetry (Phase 4/7) surfaces such a profile drift.
+
+### Fixtures are swept across widths, not asserted at capture width
+
+`render-gate.test.ts` classifies every opencode fixture at **every width from 40 to 140**,
+and requires each `busy` fixture to read busy at all of them. This is not thoroughness for
+its own sake — a fixture asserted only at its capture width is not a regression test.
+`opencode-draft.busy.txt`, a real frame with a live two-line draft, classified **CLEAN at 43
+of those 101 widths** before the region model was bounded positively on both edges: past
+~100 cols the draft's own row wraps, the continuation row fails `bodyPattern`, the upward
+scan accepted that as the top of the box, and the region collapsed onto the bottom pad row —
+pure chrome, zero user cells, `clean`. The draft was never scanned.
+
+Width mismatch is reachable in production, so this is not a synthetic concern:
+`PtySession.resize` always resizes the gate mirror but can drop the app-side resize, and the
+alt buffer does not reflow, so the mirror can sit at a geometry the app never paints at.
+Note that a straightforward PTY drive at a fixed size will NOT surface this — matching
+geometry is exactly the case where the box never wraps — which is why the sweep, not a live
+drive, is the guard.
+
+**Reading the sweep numbers.** A capture is clean from **its own capture width upward**, and
+holds below it, where its rows genuinely wrap. Measured on real captures taken at three
+widths (app and mirror matched, as in production):
+
+| capture | idle @ own width | draft @ own width | clean across 40–140 |
+|---|---|---|---|
+| 80 cols | DELIVER | HOLD | 80–140 |
+| 100 cols | DELIVER | HOLD | 100–140 |
+| 120 cols | DELIVER | HOLD | 120–140 |
+| 110 cols (`opencode-idle.clean.txt`) | DELIVER | — | 110–140 |
+
+So "`opencode-idle.clean.txt` is clean at only 31 of 101 widths" measures the *fixture's*
+capture geometry, not the profile: it is a 110-wide frame, and the 70 holding widths are all
+narrower mirrors. A real builder does not sit in that state — the mirror tracks the live
+geometry. The two ways to reach a genuine mismatch are both benign: a resize is *transient*
+until the app repaints on SIGWINCH (the drainer retries held mail on its next tick, so it
+self-clears rather than sticking), and a *dropped* resize only happens on the
+`status !== 'running'` branches — a session that cannot receive mail anyway.
+
+opencode adds a case the above cannot cover: an **empty composer does not mean an idle
+agent** there, because its box renders identically mid-turn. Its profile therefore also
+requires a positive **idle** signal (the footer usage readout) and rejects a **busy** one
+(the footer interrupt hint). Requiring both is deliberate and directional — a busy-only
+rule fails *permissive* under version drift (rename the string, nothing matches, the gate
+injects into a live turn), while requiring the idle half fails toward *hold*. With both,
+either string drifting produces a hold, never an injection. If a future opencode changes
+either footer string, these fixtures go red and every send holds until the profile is
+re-measured — the intended direction.

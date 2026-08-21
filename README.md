@@ -375,13 +375,13 @@ Agent Farm supports multiple AI coding agents as shells. Configure in `.codev/co
 {
   "shell": {
     "architect": "claude --dangerously-skip-permissions",
-    "builder": "opencode run"
+    "builder": "opencode"
   }
 }
 ```
 
 OpenCode supports 75+ LLM providers (OpenAI, Anthropic, Google, Ollama, etc.). When using OpenCode as a builder:
-- Include `run` in the command (plain `opencode` launches the TUI, which hangs in a PTY session)
+- Use plain `opencode`, not `opencode run`. The harness seeds the builder's initial task via `--prompt`, which starts the TUI with the message already in flight and leaves it running. `opencode run` answers once and exits, so the builder would stop after a single turn.
 - Configure tool permissions for unattended execution in `~/.config/opencode/opencode.json` or your project's `opencode.json`:
   ```json
   { "permission": { "edit": "allow", "bash": "allow" } }
@@ -458,15 +458,24 @@ both roles:
 }
 ```
 If you retain Gemini CLI access (a Standard/Enterprise subscription or API-key auth), you can still
-run it by defining a **custom harness** named `gemini` in `.codev/config.json` **and selecting it
-explicitly** with `shell.builderHarness` / `shell.architectHarness`. The explicit selector is
-**required**: a bare auto-detected `gemini` command (e.g. `shell.builder: "gemini --yolo"` with no
-`builderHarness`) stays retired, because auto-detection resolves the built-in namespace only.
+run it **as an architect** by defining a **custom harness** named `gemini` in `.codev/config.json`
+**and selecting it explicitly** with `shell.architectHarness`. The explicit selector is
+**required**: a bare auto-detected `gemini` command stays retired, because auto-detection resolves
+the built-in namespace only.
+
+> **Gemini is no longer usable as a *builder*.** `afx spawn` refuses any builder harness with no
+> render-gate profile (issue #4), and only claude, codex and opencode have one. Without a profile
+> `afx send` can never deliver to the builder — every message holds forever with reason
+> `no-profile` — so the spawn now aborts up front instead of producing a builder you can start but
+> never message. There is no bypass flag; the remedy is to measure a profile for the agent
+> (`packages/codev/src/agent-farm/servers/gate-profiles.ts`). This applies to any custom builder
+> harness, not just gemini. Architects are unaffected — they take no gated mail.
+
 ```json
 {
   "shell": {
-    "builder": "gemini --yolo",
-    "builderHarness": "gemini"
+    "architect": "gemini --yolo",
+    "architectHarness": "gemini"
   },
   "harness": {
     "gemini": {

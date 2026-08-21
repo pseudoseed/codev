@@ -21,7 +21,14 @@ import { RingBuffer } from '../../terminal/ring-buffer.js';
 import { SessionScreen } from '../../terminal/session-screen.js';
 import { classifyScreen, classifyBuffer } from '../servers/render-gate.js';
 import type { RingSnapshot, GateProfile } from '../servers/render-gate.js';
-import { CLAUDE_PROFILE, CODEX_PROFILE, AGY_PROFILE, resolveProfile } from '../servers/gate-profiles.js';
+import {
+  CLAUDE_PROFILE,
+  CODEX_PROFILE,
+  AGY_PROFILE,
+  OPENCODE_PROFILE,
+  resolveProfile,
+  hasGateProfile,
+} from '../servers/gate-profiles.js';
 
 const COLS = 110;
 const ROWS = 32;
@@ -51,6 +58,7 @@ const FIXTURE_DIR = fileURLToPath(new URL('./fixtures/gate', import.meta.url));
 function profileForFixture(name: string): GateProfile {
   if (name.startsWith('codex')) return CODEX_PROFILE;
   if (name.startsWith('agy')) return AGY_PROFILE;
+  if (name.startsWith('opencode')) return OPENCODE_PROFILE;
   return CLAUDE_PROFILE; // claude-* and the marker-less wrapper/boot fixture
 }
 
@@ -70,6 +78,11 @@ describe('render-gate — real captured fixtures (Spec 1313)', () => {
       'agy-idle.clean',
       'agy-draft.busy',
       'agy-trust.busy',
+      'opencode-idle.clean',
+      'opencode-draft.busy',
+      'opencode-midturn.busy',
+      'opencode-dialog.busy',
+      'opencode-boot.busy',
       'wrapper-boot.busy',
     ]) {
       expect(fixtures.some((f) => f.startsWith(required))).toBe(true);
@@ -168,6 +181,247 @@ describe('render-gate — synthetic branch coverage (Spec 1313)', () => {
 
   it('an empty replay is busy (a session with no output is not a verified-empty prompt)', async () => {
     expect((await classifyScreen(snapshotFromRaw(''), CLAUDE_PROFILE)).clean).toBe(false);
+  });
+});
+
+/**
+ * opencode's two structural departures (Issue #4), pinned synthetically so each branch
+ * is exercised deterministically. The real captures live in the fixture suite above;
+ * these isolate the individual rules.
+ */
+describe('render-gate — opencode: bottom-anchored composer + two-sided busy/idle rule (Issue #4)', () => {
+  const RULE = '  ╹' + '▀'.repeat(100);
+  const STATUS = '  ┃  Build · Grok 4.6 xAI · high';
+  const IDLE_FOOTER = '   /tmp/wt                                     8.3K (2%) · $0.01  ctrl+p commands';
+  const BUSY_FOOTER = '   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt                              tab agents  ctrl+p commands';
+
+  /**
+   * A composer box in the measured opencode shape: a BLANK row separating it from the
+   * transcript (the profile's `topEdgePattern`), a top pad row, the content rows, a bottom
+   * pad row, the status row, and the rule. With no content the box is still 3 rows tall —
+   * `[pad][empty][pad]` — which is the measured minimum and what `minContentRows` pins.
+   */
+  const composer = (...content: string[]) => [
+    '',
+    '  ┃',
+    ...(content.length ? content : ['']).map((c) => (c ? `  ┃  ${c}` : '  ┃')),
+    '  ┃',
+    STATUS,
+    RULE,
+  ];
+
+  it('idle: empty box + the usage readout → clean', async () => {
+    const snap = snapshotFromRaw(screen(...composer(), IDLE_FOOTER));
+    expect(await classifyScreen(snap, OPENCODE_PROFILE)).toMatchObject({ clean: true, detail: 'empty' });
+  });
+
+  it('a draft ABOVE the status row is seen — the case the top-down model false-cleans', async () => {
+    // Every row of opencode's box starts with `┃`, so "last row carrying the marker"
+    // is the STATUS row and a top-down scan from it to the rule covers only chrome,
+    // never the draft sitting above. The upward scan is what makes this busy.
+    const snap = snapshotFromRaw(screen(...composer('refactor the widget factory'), IDLE_FOOTER));
+    expect(await classifyScreen(snap, OPENCODE_PROFILE)).toMatchObject({ clean: false, detail: 'user-text' });
+  });
+
+  it('a multi-row draft is seen on every row, not just the one nearest the status row', async () => {
+    const snap = snapshotFromRaw(screen(...composer('first line of the draft', 'second line too'), IDLE_FOOTER));
+    expect((await classifyScreen(snap, OPENCODE_PROFILE)).clean).toBe(false);
+    // ...and the row furthest from the anchor is genuinely scanned, not incidentally
+    // caught by the nearer one: with ONLY the far row occupied it must still be busy.
+    const farOnly = snapshotFromRaw(screen(...composer('far from the anchor', '', ''), IDLE_FOOTER));
+    expect((await classifyScreen(farOnly, OPENCODE_PROFILE)).clean).toBe(false);
+  });
+
+  it('mid-turn: the composer box is byte-identical to idle, and ONLY the busy footer holds it', async () => {
+    const box = composer();
+    // Same box, different footer — the whole reason this profile needs footer signals.
+    const idle = snapshotFromRaw(screen(...box, IDLE_FOOTER));
+    const busy = snapshotFromRaw(screen(...box, BUSY_FOOTER));
+    expect((await classifyScreen(idle, OPENCODE_PROFILE)).clean).toBe(true);
+    expect(await classifyScreen(busy, OPENCODE_PROFILE)).toMatchObject({
+      clean: false,
+      detail: 'busy-indicator',
+    });
+  });
+
+  it('idleness must be PROVEN, not inferred: busy-string drift holds instead of injecting', async () => {
+    // The regression guard for the whole design. Simulate a future opencode renaming
+    // its interrupt hint: the busy pattern no longer matches, the composer still reads
+    // empty — under a busy-only rule that is a false CLEAN into a live turn. The
+    // required idle indicator is absent while generating, so it holds instead.
+    const drifted = '   ⬝⬝⬝⬝⬝⬝⬝⬝  esc cancel                                 tab agents  ctrl+p commands';
+    const snap = snapshotFromRaw(screen(...composer(), drifted));
+    expect(await classifyScreen(snap, OPENCODE_PROFILE)).toMatchObject({
+      clean: false,
+      detail: 'no-idle-indicator',
+    });
+  });
+
+  it('the agent cannot forge its own idle proof from the transcript', async () => {
+    // The idle indicator is read from the FOOTER only. Everything the agent prints lands
+    // above the composer, so a reply that happens to contain the footer's shape must not
+    // count. Here the busy hint is ALSO drifted, so the transcript line is the only thing
+    // that could satisfy the idle check — and it must not.
+    const snap = snapshotFromRaw(screen(
+      '     Coverage rose to (85%) · $12 saved per run.',
+      ...composer(),
+      '   ⬝⬝⬝⬝⬝⬝⬝⬝  esc cancel                              tab agents  ctrl+p commands',
+    ));
+    expect(await classifyScreen(snap, OPENCODE_PROFILE)).toMatchObject({
+      clean: false,
+      detail: 'no-idle-indicator',
+    });
+  });
+
+  it('the usage readout is matched in both its zero-cost and priced forms', async () => {
+    const zeroCost = '   /tmp/wt                                       9.5K (2%) · $  ctrl+p commands';
+    const priced = '   /tmp/wt                                     12.1K (3%) · $0.42  ctrl+p commands';
+    for (const footer of [zeroCost, priced]) {
+      expect((await classifyScreen(snapshotFromRaw(screen(...composer(), footer)), OPENCODE_PROFILE)).clean)
+        .toBe(true);
+    }
+  });
+
+  it('the permission dialog is held TWICE OVER — it hides the footer AND removes the rule', async () => {
+    // A blind Enter here would approve a shell command, so this state gets belt and
+    // braces. As captured, the dialog replaces the whole composer AND the footer, so
+    // the idle check fires first...
+    const dialogRows = [
+      '  ┃',
+      '  ┃  △ Permission required',
+      '  ┃  $ echo hello',
+      '  ┃   Allow once   Allow always   Reject',
+      '  ┃',
+    ];
+    // ...so there is no rule line to anchor a composer region on, and it holds there —
+    // with or without a footer.
+    expect(await classifyScreen(snapshotFromRaw(screen(...dialogRows)), OPENCODE_PROFILE)).toMatchObject({
+      clean: false,
+      detail: 'no-composer-marker',
+    });
+    expect(
+      await classifyScreen(snapshotFromRaw(screen(...dialogRows, IDLE_FOOTER)), OPENCODE_PROFILE),
+    ).toMatchObject({ clean: false, detail: 'no-composer-marker' });
+    // ...and independently, a variant that KEPT the composer chrome (so a region resolves)
+    // but still hid the footer is caught by the idle check instead. Either guard alone
+    // holds this state.
+    expect(
+      await classifyScreen(snapshotFromRaw(screen(...composer('△ Permission required'))), OPENCODE_PROFILE),
+    ).toMatchObject({ clean: false, detail: 'no-idle-indicator' });
+  });
+
+  it('a rule with no box row above it (torn frame) → busy', async () => {
+    const torn = screen('   some transcript text', RULE, IDLE_FOOTER);
+    expect(await classifyScreen(snapshotFromRaw(torn), OPENCODE_PROFILE)).toMatchObject({
+      clean: false,
+      detail: 'no-composer-marker',
+    });
+  });
+
+  it('an upward scan that never terminates within maxLookback holds rather than reading upward', async () => {
+    // Every row a box row: the scan can never prove an upper bound, so it must hold
+    // instead of walking into transcript content above.
+    const unbounded = screen(...Array.from({ length: 29 }, () => '  ┃  x'), STATUS, RULE, IDLE_FOOTER);
+    expect(await classifyScreen(snapshotFromRaw(unbounded), OPENCODE_PROFILE)).toMatchObject({
+      clean: false,
+      detail: 'no-region-end',
+    });
+  });
+
+  it('a box of only box-drawing glyphs is a draft, not chrome', async () => {
+    // A pasted tree/table is made entirely of characters IGNORE_CHARS discards, so a
+    // character-class rule reads the composer as empty and delivers onto the draft. The
+    // bottom-anchored model counts content POSITIONALLY — past the row's leading box
+    // glyph — so the paste counts. (CMAP, 2026-08-21.)
+    const snap = snapshotFromRaw(screen(...composer('├── src', '│   └── index.ts'), IDLE_FOOTER));
+    expect((await classifyScreen(snap, OPENCODE_PROFILE)).clean).toBe(false);
+  });
+
+  it('a draft of non-ASCII spaces is a draft, not padding', async () => {
+    // `\s` matches NBSP and U+3000, so a pasted run of them is invisible to a
+    // whitespace-class rule while sitting in the composer as real content.
+    for (const space of [' ', '　']) {
+      const snap = snapshotFromRaw(screen(...composer(space.repeat(6)), IDLE_FOOTER));
+      expect((await classifyScreen(snap, OPENCODE_PROFILE)).clean).toBe(false);
+    }
+  });
+
+  it('dim text in the composer counts — opencode was measured to use no dim at all', async () => {
+    // The claude/codex "dim means placeholder" convention is NOT inherited here: zero dim
+    // cells were measured across all seven captured opencode states. Any dim affordance a
+    // future version adds would otherwise be a silent false-CLEAN.
+    const snap = snapshotFromRaw(screen(...composer(`${DIM}refactor the widget factory${RESET}`), IDLE_FOOTER));
+    expect((await classifyScreen(snap, OPENCODE_PROFILE)).clean).toBe(false);
+  });
+
+  it('a box with NO content rows is a torn frame, not an empty composer', async () => {
+    // Regression guard (CMAP, 2026-08-21): chrome + rule + footer painted but the content
+    // rows not yet repainted collapses the region to zero rows. The cell loop then examines
+    // nothing, and "zero cells examined" must not read as "zero user cells found" — that is
+    // a CLEAN verdict reached without looking at a single cell, and the torn/partial-repaint
+    // frames the module header documents are exactly how it gets reached. Every measured
+    // opencode box has >= 3 content rows, so no legitimate state is lost by holding here.
+    const torn = screen('', STATUS, RULE, IDLE_FOOTER);
+    expect(await classifyScreen(snapshotFromRaw(torn), OPENCODE_PROFILE)).toMatchObject({
+      clean: false,
+      detail: 'no-region-end',
+    });
+  });
+
+  it('the status row is chrome: its normal-intensity RGB text never counts as a draft', async () => {
+    // `Build · Grok 4.6 xAI · high` is truecolor and never dim, so neither the
+    // universal dim skip nor a palette rule can exempt it — it is excluded by being
+    // the anchor row. Were it scanned, EVERY frame would classify busy.
+    const snap = snapshotFromRaw(screen(...composer(), IDLE_FOOTER));
+    expect((await classifyScreen(snap, OPENCODE_PROFILE)).clean).toBe(true);
+  });
+});
+
+/**
+ * Width sweep over the committed opencode captures (Issue #4, CMAP 2026-08-21).
+ *
+ * A fixture asserted only at its capture width is not a regression test. `opencode-draft`
+ * — a real frame with a live two-line draft — classified CLEAN at 43 of these 101 widths
+ * before the region model was bounded positively: past ~100 cols the draft's own row wraps,
+ * the continuation row fails `bodyPattern`, the upward scan accepted that as the top of the
+ * box, and the region collapsed onto the bottom pad row, which is pure chrome. Zero user
+ * cells, CLEAN, draft never scanned.
+ *
+ * Width mismatch is reachable in production: `PtySession.resize` always resizes the gate
+ * mirror but can drop the app-side resize, and the alt buffer does not reflow — so the
+ * mirror can sit indefinitely at a geometry the app never paints at.
+ *
+ * These sweeps are the guard. A `busy` fixture must classify busy at EVERY width; there is
+ * no width at which a screen with a draft, a live turn, or a dialog may read as an empty
+ * prompt.
+ */
+describe('render-gate — opencode fixtures across terminal widths (Issue #4)', () => {
+  const FROM = 40;
+  const TO = 140;
+
+  for (const name of ['opencode-draft.busy.txt', 'opencode-midturn.busy.txt', 'opencode-dialog.busy.txt', 'opencode-boot.busy.txt']) {
+    it(`${name} classifies busy at EVERY width ${FROM}–${TO}`, async () => {
+      const raw = readFileSync(`${FIXTURE_DIR}/${name}`, 'utf8');
+      const cleanAt: number[] = [];
+      for (let cols = FROM; cols <= TO; cols++) {
+        const v = await classifyScreen({ replay: raw, cols, rows: 32 }, OPENCODE_PROFILE);
+        if (v.clean) cleanAt.push(cols);
+      }
+      expect(cleanAt).toEqual([]);
+    });
+  }
+
+  it('opencode-idle.clean.txt is clean from its capture width UP, and holds where it wraps', async () => {
+    // An idle capture is clean at its own width and every wider mirror, and holds only
+    // below it, where its rows genuinely wrap. So the sweep's clean-count measures the
+    // FIXTURE's capture geometry (110), not the profile's behavior: a real builder's mirror
+    // tracks the live geometry, and captures taken at 80/100/120 deliver at their own
+    // widths just the same (see the fixtures README table).
+    const raw = readFileSync(`${FIXTURE_DIR}/opencode-idle.clean.txt`, 'utf8');
+    for (let cols = FROM; cols <= TO; cols++) {
+      const v = await classifyScreen({ replay: raw, cols, rows: 32 }, OPENCODE_PROFILE);
+      expect(v.clean, `cols=${cols}`).toBe(cols >= 110);
+    }
   });
 });
 
@@ -404,8 +658,21 @@ describe('resolveProfile — strict, fail-safe app identity (Spec 1313)', () => 
     expect(resolveProfile({ command: 'bash', args: ['.builder-start.sh'], label: 'spir-1313' })).toBeNull();
   });
 
-  it('an unmeasured but known harness (gemini/opencode) resolves to null (no profile yet)', () => {
+  it('opencode resolves to the opencode profile (Issue #4 — measured against 1.18.18)', () => {
+    expect(resolveProfile({ command: 'opencode' })?.app).toBe('opencode');
+    expect(resolveProfile({ command: '/opt/homebrew/bin/opencode', label: 'pir-4' })?.app).toBe('opencode');
+  });
+
+  it('an unmeasured harness (gemini) still resolves to null (no profile)', () => {
     expect(resolveProfile({ command: 'gemini' })).toBeNull();
-    expect(resolveProfile({ command: 'opencode' })).toBeNull();
+  });
+
+  it('hasGateProfile mirrors resolveProfile exactly — the spawn pre-flight and the gate agree', () => {
+    for (const cmd of ['claude', 'codex', 'opencode', 'agy', '/opt/homebrew/bin/opencode']) {
+      expect(hasGateProfile(cmd)).toBe(true);
+    }
+    for (const cmd of ['gemini', 'my-custom-agent', 'bash', '']) {
+      expect(hasGateProfile(cmd)).toBe(false);
+    }
   });
 });

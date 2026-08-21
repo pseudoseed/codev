@@ -6,10 +6,11 @@
  * layout change is a profile drift the smoke suite catches, never a silent
  * misdelivery — an unmatched marker classifies NOT clean.
  *
- * Measured apps have a profile: claude, codex (spike g2), and agy (Spec 1313
+ * Measured apps have a profile: claude, codex (spike g2), agy (Spec 1313
  * Phase 3 measurement — its own marker `> ` and a color-keyed placeholder rule,
- * because agy renders its idle hint in palette-8 gray, not SGR-dim). Everything
- * else — gemini, opencode, an unknown binary, or a launch we can't identify —
+ * because agy renders its idle hint in palette-8 gray, not SGR-dim), and opencode
+ * (Issue #4 — a bottom-anchored composer plus a two-sided busy/idle footer rule).
+ * Everything else — gemini, an unknown binary, or a launch we can't identify —
  * resolves to `null`, and the caller holds the message with reason `no-profile`.
  * This is the strict app-identity table the spike mandates (constraint 10): we
  * deliberately do NOT reuse `resolveHarness`, whose claude fallback would make an
@@ -90,10 +91,76 @@ export const AGY_PROFILE: GateProfile = {
   placeholderFgPalette: 8,
 };
 
+/**
+ * opencode composer profile (Issue #4 — net-new measurement against **opencode
+ * 1.18.18**; both indicator strings below were read off real captured frames from
+ * that version, committed under `__tests__/fixtures/gate/opencode-*.txt`).
+ *
+ * opencode breaks the top-down region model outright. Its composer is a multi-row box
+ * with a FIXED BOTTOM (a `╹▀▀▀…` rule) that grows UPWARD as the draft gets longer, and
+ * every row of the box — content rows and the chrome status row alike — is prefixed with
+ * the same `┃` glyph. "Last row carrying the marker" therefore resolves to the *status*
+ * row, and a top-down scan from there to the rule covers only that chrome row while the
+ * draft sits above it, unscanned: a measured false-clean on any draft at all (compare
+ * `opencode-draft.busy.txt`, whose text occupies the two rows above the status row). So
+ * it gets `bottomAnchor` — its own region model — rather than a loosened shared pattern.
+ *
+ * It also breaks the assumption that an empty composer means an idle agent: mid-turn,
+ * the composer box is byte-identical to idle (compare `opencode-midturn.busy.txt` with
+ * `opencode-idle.clean.txt` — the boxes match; only the footer differs). The two states
+ * are distinguishable ONLY in the footer below the rule, and BOTH halves are used:
+ *   - busy: the interrupt hint `esc interrupt`, rendered only while generating.
+ *   - idle: the session usage readout `<tokens> (<pct>%) · $<cost>`, rendered only
+ *     between turns. Measured in both its zero-cost (`9.5K (2%) · $`) and priced
+ *     (`9.2K (2%) · $0.02`) forms, hence the trailing `\$` with nothing required after it.
+ * Requiring the idle half to be PRESENT is what makes this safe under version drift: if
+ * xAI renames the interrupt hint, the busy pattern stops matching but the idle pattern
+ * does too, so the gate holds instead of injecting into a live turn. Neither string alone
+ * would give that.
+ *
+ * Consequences, all measured against committed fixtures: idle → clean (the box is
+ * genuinely empty — opencode renders no placeholder once a session has messages);
+ * draft → busy (default-fg RGB text in the upward-scanned rows); mid-turn → busy
+ * (`busy-indicator`); the tool-permission dialog → busy, for two independent reasons
+ * (it replaces the whole composer, so there is no rule line to anchor on, AND it hides
+ * the footer, so no idle indicator) — a blind Enter can never approve a shell command;
+ * and a freshly-booted TUI that has not yet run a turn → busy, because the usage readout
+ * only appears after the first turn (`no-idle-indicator`).
+ *
+ * Known wart, not a bug: `busyIndicatorPattern` is matched against the WHOLE screen, while
+ * `idleIndicatorPattern` is scoped to the footer. That asymmetry is deliberate — a stray
+ * busy match only ever HOLDS — but it means an opencode builder viewing this very file (or
+ * the gate fixtures) holds its mail until `esc interrupt` scrolls out of the viewport.
+ * Recognise it as a self-reference, not a delivery outage.
+ */
+export const OPENCODE_PROFILE: GateProfile = {
+  app: 'opencode',
+  busyIndicatorPattern: /esc\s+interrupt/,
+  idleIndicatorPattern: /\(\d+%\)\s+·\s+\$/,
+  bottomAnchor: {
+    rulePattern: /^\s*╹▀{5,}/,
+    bodyPattern: /^\s*┃/,
+    // Measured: the box is always preceded by a blank row separating it from the
+    // transcript — in every captured state, including with a `/` or `@` picker open.
+    topEdgePattern: /^\s*$/,
+    // Measured floor: the smallest box opencode renders is [pad][content][pad] above the
+    // status row — 3 rows, in the idle and boot captures alike. A draft only grows it.
+    minContentRows: 3,
+    maxLookback: 20,
+  },
+  // Measured: opencode uses SGR-dim NOWHERE — zero dim cells across all seven captured
+  // states (idle, draft, mid-turn, dialog, boot, and the `/` and `@` pickers), whole
+  // screen, not just the composer. So the claude/codex dim-is-placeholder convention is
+  // not inherited here: nothing would be exempted by it except, one day, a dim affordance
+  // opencode has not shipped yet — which would be a silent false-CLEAN.
+  treatDimAsPlaceholder: false,
+};
+
 /** Registry keyed by the harness name `detectHarnessFromCommand` returns. */
 const PROFILES_BY_HARNESS: Record<string, GateProfile> = {
   claude: CLAUDE_PROFILE,
   codex: CODEX_PROFILE,
+  opencode: OPENCODE_PROFILE,
 };
 
 /**
@@ -132,4 +199,18 @@ export function resolveProfile(identity: AppIdentity): GateProfile | null {
   const harness = detectHarnessFromCommand(identity.command);
   if (harness && harness in PROFILES_BY_HARNESS) return PROFILES_BY_HARNESS[harness];
   return null;
+}
+
+/**
+ * Whether `command` resolves to a measured classifier profile — i.e. whether `afx send`
+ * could ever deliver to an agent launched with it (Issue #4, acceptance criterion 4).
+ *
+ * Exists so the spawn pre-flight can refuse a builder harness the gate cannot classify,
+ * instead of creating a worktree, a terminal and a builder row for an agent that would
+ * hold every message forever with reason `no-profile` — an unmessageable builder that
+ * looks healthy. Deliberately the SAME strict identity table `resolveProfile` uses, so
+ * the pre-flight can never disagree with the runtime gate about what is deliverable.
+ */
+export function hasGateProfile(command: string): boolean {
+  return resolveProfile({ command }) !== null;
 }

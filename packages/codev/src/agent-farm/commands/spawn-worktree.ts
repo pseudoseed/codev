@@ -1098,7 +1098,14 @@ export async function startBuilderSession(
   // env only, fragment '') — preserving the historical command text exactly,
   // double space included, so session-less scripts stay byte-identical.
   const withRole = roleContent ? `${baseCmd} ${roleFragment}` : baseCmd;
-  const promptArg = `"$(cat '${promptFile}')"`;
+  // Issue #4: how the initial prompt is passed is harness-specific. Omitting the hook
+  // keeps the historical bare positional (claude/codex/custom), so their generated
+  // scripts are byte-identical; opencode overrides it because its positional slot is a
+  // project path, not a message.
+  const promptFileReadExpr = `"$(cat '${promptFile}')"`;
+  const promptArg = harness.buildScriptPromptArg
+    ? harness.buildScriptPromptArg(promptFileReadExpr)
+    : promptFileReadExpr;
   const freshCommand = `${withRole} ${promptArg}`;
 
   if (resume) {

@@ -1801,6 +1801,55 @@ Spec 1313 replaced Spec 403's in-memory, timer-based, force-flushing `SendBuffer
 6. **Rows address agents, not PTYs.** A respawned terminal for the same agent drains its predecessor's held mail on the first clean gate pass. Dead-session sends persist as `no-live-pty` and deliver on respawn (no drop-with-WARN).
 7. **`--interrupt`** is the sole bypass — an explicit, deliberate sender action (interrupts the agent, writes without a gate check). It is a per-message command, not a timeout/valve, so it does not weaken the no-force-path invariant. `noEnter` sends are gate-checked staging (write text, no Enter) → report `delivered`.
 
+#### Per-app profiles: opencode's two departures (Issue #4)
+
+Profiles are per-app *data* measured from real captured frames, and **opencode (1.18.18)
+breaks both assumptions the claude/codex/agy profiles share**, so it carries its own region
+model rather than a loosened shared pattern.
+
+1. **Its composer is bottom-anchored and grows upward.** The box's bottom edge is a fixed rule
+   (`╹▀▀▀…`) and content rows extend up as the draft grows; *every* row of the box — content
+   rows and the chrome status row alike — is prefixed with the same `┃`. So "the last row
+   carrying the marker" resolves to the *status* row, and a top-down scan from it covers only
+   chrome while the draft sits above it, unscanned. `bottomAnchor` instead finds the rule and
+   scans **upward**. Its bounds are **positive on both edges**: only `topEdgePattern` (a blank
+   row, measured) ends the scan, a region shorter than `minContentRows` (3, measured) is a torn
+   frame, and a wrapped row anywhere in the box holds as `geometry-mismatch`. Treating "failed
+   `bodyPattern`" as proof of the upper bound was a live false-CLEAN — a real captured draft
+   classified clean at 43 of 101 terminal widths, because past ~100 cols the draft's own row
+   wraps and the region collapsed onto the box's ignorable bottom pad row. Width mismatch is
+   reachable: `PtySession.resize` always resizes the gate mirror but can drop the app-side
+   resize, and the alt buffer does not reflow.
+2. **An empty composer does not mean an idle agent.** Mid-turn, opencode's box renders
+   *identically* to idle; the states differ only in the footer below the rule. Both halves are
+   therefore required: CLEAN needs `busyIndicatorPattern` (`esc interrupt`) ABSENT **and**
+   `idleIndicatorPattern` (the usage readout `(N%) · $`) PRESENT. The direction is the point —
+   a busy-only rule fails *permissive* under version drift (rename the string, nothing matches,
+   the composer reads empty, inject into a live turn), while requiring the idle half fails
+   toward *hold*. The idle pattern is matched only **below** the composer, since the transcript
+   above it is agent-authored and must not be able to vouch for the agent's own idleness.
+
+Also profile-scoped: **`treatDimAsPlaceholder`** (default `true` — the claude/codex rule that
+SGR-dim marks placeholder chrome). opencode sets it `false`, measured: zero dim cells across
+all seven captured states, whole screen. Assuming it would mean any dim affordance a future
+version ships silently hides a real draft. Rendering-attribute conventions do **not** port
+between TUIs — agy needed `placeholderFgPalette` for the same reason.
+
+Fixtures are swept across widths 40–140 (`render-gate.test.ts`), with every `busy` fixture
+required to read busy at all of them. A fixture asserted only at its capture geometry is not
+a regression test, and a live PTY drive will not surface these — matching geometry is exactly
+the case where the box never wraps.
+
+#### Spawn-time gate-profile pre-flight (Issue #4)
+
+`afx spawn` aborts when the resolved builder command has no gate profile
+(`hasGateProfile` → `fatal`), before any worktree, terminal or db state exists. Without it a
+spawn succeeds into a builder that runs, looks healthy in every listing, and holds every
+message forever with `no-profile` — a failure invisible until someone tries to talk to it.
+Fail-closed with **no bypass flag**, matching `assertBuilderHarnessNotRetired`; the remedy is
+to measure a profile, not to skip the check. **Breaking for custom builder harnesses** whose
+command basename is not claude/codex/opencode (agy also resolves).
+
 #### Escalation & visibility (never delivery)
 
 A held row past the escalation age (`DEFAULT_ESCALATION_MS`, default 60s; `.codev/config.json` `mailbox.escalationSeconds`) is flagged `escalated` and emits the `mailbox-escalation` SSE event — **visibility only, never a delivery trigger**. Every held-state change (hold/deliver/supersede/dismiss) fires `overview-changed` so the dashboard/VSCode held-count indicators stay live (`setMailboxBroadcaster(broadcastNotification)` wires the boot-time drainer, which has no `RouteContext`, into the SSE fan-out). `afx inbox` lists held rows (workspace-scoped; metadata only, never bodies), `afx inbox show <id>` displays a single row including its body (the one body-surfacing CLI view; works on a row of any status), and `afx inbox dismiss <id>` soft-marks a row dismissed (any workspace operator; CLI-only). Terminal rows (delivered/superseded/dismissed) are pruned after `mailbox.retentionDays` (default 30) by the drainer; **held rows are never pruned**. Cron delivers through the same gate via `deliverCronMessage` (`cron-delivery.ts`) with a per-task supersede key (a newer run replaces the older *held* row) and logs the real outcome.

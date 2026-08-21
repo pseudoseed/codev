@@ -41,7 +41,16 @@
  *   (c) zero normal-intensity (non-dim), non-whitespace, non-chrome cells in that
  *       region — with one measured exemption: claude's suggested-command *ghost* cursor
  *       cell (an inverse, non-dim char at the cursor followed by a non-empty dim run), which
- *       is composer chrome, not typed text (see `isGhostCursorCell`).
+ *       is composer chrome, not typed text (see `isGhostCursorCell`), AND
+ *   (d) for a profile that declares them (Issue #4, opencode): its mid-turn
+ *       `busyIndicatorPattern` ABSENT and its `idleIndicatorPattern` PRESENT. Some TUIs
+ *       render an identical composer whether idle or mid-turn, so composer emptiness is
+ *       not evidence of idleness there; idleness must be positively proven, and drift in
+ *       either string then holds rather than injecting into a live turn.
+ * Region resolution has two models: the original top-down `markerPattern` +
+ * `regionEndPatterns`, and `bottomAnchor` for a box anchored at its bottom rule that grows
+ * upward (opencode) — see `GateProfile.bottomAnchor` for why the top-down model
+ * false-cleans there.
  * The placeholder-vs-user-text distinction is an SGR attribute — both TUIs
  * render rotating placeholder/hint text DIM while typed text is normal-intensity
  * (measured, spike g2) — so no placeholder allowlist is needed. Anything
@@ -99,14 +108,112 @@ export interface RingSnapshot {
 export interface GateProfile {
   /** App identity this profile classifies (e.g. 'claude', 'codex'). */
   app: string;
-  /** Matches the composer prompt marker at the START of the input row. */
-  markerPattern: RegExp;
+  /**
+   * Matches the composer prompt marker at the START of the input row. Required
+   * for the top-down region model (claude/codex/agy); a profile that resolves its
+   * region via {@link bottomAnchor} instead leaves it unset.
+   */
+  markerPattern?: RegExp;
   /**
    * A line matching any of these ENDS the composer region (the rule/status lines
    * rendered directly below the input). Scanning stops there so status chrome
-   * below the composer is never counted as user text.
+   * below the composer is never counted as user text. Paired with
+   * {@link markerPattern}; unset for a {@link bottomAnchor} profile.
    */
-  regionEndPatterns: RegExp[];
+  regionEndPatterns?: RegExp[];
+  /**
+   * Optional per-app BUSY signal: a screen line that proves the agent is
+   * mid-turn. When any line matches, the verdict is not-clean before any composer
+   * logic runs. Needed by an app whose composer looks identical idle and mid-turn
+   * (opencode), where composer emptiness alone is not evidence of idleness.
+   *
+   * A busy pattern on its own is NOT sufficient — it fails permissive if the app
+   * renames the string. It must be paired with {@link idleIndicatorPattern}, which
+   * fails toward hold. See the two-sided rule on that field.
+   */
+  busyIndicatorPattern?: RegExp;
+  /**
+   * Optional per-app IDLE signal: a FOOTER line that positively proves the agent is
+   * between turns. When set, CLEAN additionally requires this pattern to be PRESENT
+   * — the absence of a busy signal is never enough on its own.
+   *
+   * Matched only against rows BELOW the composer, never the whole screen: the transcript
+   * above the composer is agent-authored, so a screen-wide match would let a reply that
+   * happened to print the footer's shape (`… (85%) · $12`) vouch for the agent's own
+   * idleness. App chrome below the composer cannot be forged by model output.
+   *
+   * This is the direction that matters. {@link busyIndicatorPattern} fails
+   * PERMISSIVE under app drift: rename the busy string and nothing matches, the
+   * composer reads empty, and the gate injects into a live turn. This pattern fails
+   * toward HOLD: rename the idle string and nothing matches, so the gate holds. With
+   * both required, EITHER string drifting produces a hold rather than a corrupting
+   * injection — the same fail-safe direction `regionEndPatterns` already has.
+   */
+  idleIndicatorPattern?: RegExp;
+  /**
+   * Optional alternate region model for a composer that is anchored at its BOTTOM
+   * and grows UPWARD, which the {@link markerPattern} + {@link regionEndPatterns}
+   * top-down model cannot express.
+   *
+   * opencode renders a multi-row box whose bottom edge is fixed (a rule line) and
+   * whose content rows extend upward as the draft grows. Every row of the box —
+   * content rows and the chrome status row alike — starts with the same glyph, so
+   * "the last row carrying the marker" resolves to the *status* row and a top-down
+   * scan from there covers only chrome, never the draft text sitting above it. That
+   * is a measured false-clean on any draft (see the fixtures), which is why this app
+   * gets its own region model rather than a loosened shared pattern.
+   *
+   * Resolution: find the LAST row matching `rulePattern` (the box's bottom edge).
+   * The row directly above it is the app's chrome/status row — excluded from
+   * scanning by construction, since it always carries normal-intensity text. From
+   * there scan UPWARD while rows match `bodyPattern`, stopping at a row that matches
+   * `topEdgePattern`; the region is every row so collected.
+   *
+   * The region is bounded POSITIVELY on both edges — a row must be *proven outside* the
+   * box (`topEdgePattern`) to end the scan. "Failed `bodyPattern`" is NOT proof of an
+   * upper bound and must never be treated as one: a row also fails it when it is a
+   * wrapped continuation, a torn repaint, or chrome the app draws differently, and
+   * accepting those as the top edge silently truncates the region toward the box's
+   * bottom pad row — which is guaranteed-ignorable chrome, so the composer reads EMPTY
+   * with a real draft sitting unscanned above it. That was a live false-CLEAN on a real
+   * captured draft at 43 of 101 terminal widths (CMAP, 2026-08-21). A row that is
+   * neither in-box nor a proven top edge now HOLDS.
+   *
+   * `minContentRows` is the second half of the same defence: the app has a minimum box
+   * height, so a shorter region is a torn frame rather than an empty composer. Together
+   * they make truncation fail toward hold instead of toward clean.
+   */
+  bottomAnchor?: {
+    /** The rule line closing the bottom of the composer box. */
+    rulePattern: RegExp;
+    /** Every row belonging to the composer box matches this. */
+    bodyPattern: RegExp;
+    /**
+     * A row PROVABLY outside the box, ending the upward scan (measured: the app leaves a
+     * blank row between the transcript and the composer). Required — without a positive
+     * upper bound the region cannot be trusted.
+     */
+    topEdgePattern: RegExp;
+    /**
+     * Fewest content rows the app ever renders inside the box. A region shorter than this
+     * is a torn/partial frame, not an empty composer, and holds.
+     */
+    minContentRows: number;
+    /** Upward-scan bound; an unterminated scan holds. Defaults to {@link DEFAULT_MAX_LOOKBACK}. */
+    maxLookback?: number;
+  };
+  /**
+   * Whether SGR-dim marks placeholder/hint chrome for this app (default `true` — the
+   * claude/codex measurement).
+   *
+   * Explicit rather than inherited, because it is an app-specific rendering fact and the
+   * cost of assuming it wrongly is a false-CLEAN: any dim text a TUI draws in its composer
+   * would be skipped as a "placeholder" and a real draft would read empty. agy already
+   * showed these attribute conventions do not port between TUIs (it needed
+   * {@link placeholderFgPalette} because its hint is a color, not dim). A profile must
+   * therefore have MEASURED its app's dim usage before leaving this on.
+   */
+  treatDimAsPlaceholder?: boolean;
   /**
    * Optional per-app placeholder signal: a 16-color palette index whose cells are
    * treated as placeholder/hint chrome (ignored), NOT user text. This is the
@@ -129,21 +236,59 @@ export interface GateVerdict {
    * reason). `no-composer-marker` = wrapper/boot/picker/unknown screen (or a torn
    * replay that dropped the marker); `no-region-end` = a marker with no rule/status
    * line beneath it to bound the composer (a partial/mid-repaint frame) — held
-   * rather than scanning into status chrome; `user-text` = a draft or menu occupies
-   * the composer; `empty` = clean.
+   * rather than scanning into status chrome; `busy-indicator` = the profile's
+   * mid-turn signal is on screen; `no-idle-indicator` = the profile requires a
+   * positive idle signal and it is absent (a boot screen, a dialog that hides the
+   * footer, or profile drift); `geometry-mismatch` = a composer row is a wrapped
+   * continuation, so the mirror's width disagrees with the width the app painted at and
+   * no row boundary is trustworthy; `user-text` = a draft or menu occupies the composer;
+   * `empty` = clean.
    */
-  detail: 'no-composer-marker' | 'no-region-end' | 'user-text' | 'empty';
+  detail:
+    | 'no-composer-marker'
+    | 'no-region-end'
+    | 'busy-indicator'
+    | 'no-idle-indicator'
+    | 'geometry-mismatch'
+    | 'user-text'
+    | 'empty';
 }
 
 /**
  * Box-drawing / prompt chrome that is never "user text". The composer marker
  * glyphs (❯ ›) live here too; the marker cell is additionally skipped by
  * position so a profile whose marker is not listed still never self-trips.
+ *
+ * `┃` (U+2503 HEAVY VERTICAL) is opencode's composer-box edge — the heavy sibling
+ * of the `│` already here — and prefixes every row of its box, including the rows
+ * the bottom-anchor scan reads.
  */
-const IGNORE_CHARS = new Set(['❯', '›', '│', '▌', '─', '━', '╌', '┄', '╭', '╰', '┌', '└', '']);
+const IGNORE_CHARS = new Set(['❯', '›', '│', '┃', '▌', '─', '━', '╌', '┄', '╭', '╰', '┌', '└', '']);
+
+/**
+ * Default upward-scan bound for {@link GateProfile.bottomAnchor}. Measured
+ * composer boxes are 3–5 rows; 20 is a backstop for a pathologically long draft,
+ * not an expected trigger, and exceeding it holds rather than reading upward into
+ * transcript content.
+ */
+const DEFAULT_MAX_LOOKBACK = 20;
 
 /** All-whitespace (incl. NBSP and other Unicode spaces) → ignorable. */
 const WHITESPACE = /^\s+$/u;
+
+/**
+ * First column of USER content in a bottom-anchored composer row: everything up to and
+ * including the box's leading edge glyph is chrome, everything after it is the user's.
+ *
+ * Positional, not character-class based. The shared {@link IGNORE_CHARS} set cannot serve
+ * here: it would also discard a *draft* composed of box-drawing glyphs (a pasted tree or
+ * table), which reads as an empty composer and delivers a message onto it. Rows reaching
+ * this have already matched the profile's `bodyPattern`, so a leading glyph exists.
+ */
+function boxContentColumn(line: string): number {
+  const glyph = line.search(/\S/);
+  return glyph === -1 ? 0 : glyph + 1;
+}
 
 /** Rendered viewport lines, right-trimmed — the same extraction the spike asserts on. */
 function screenLines(term: HeadlessTerminal, rows: number): string[] {
@@ -179,6 +324,112 @@ function findRegionEnd(lines: string[], markerRow: number, endPatterns: RegExp[]
     if (endPatterns.some((p) => p.test(lines[i]))) return i;
   }
   return -1;
+}
+
+/** The composer row span to cell-scan: `[from, to)`, plus the marker row when one exists. */
+interface ComposerRegion {
+  from: number;
+  to: number;
+  /** Row whose column-0 cell is the marker glyph, skipped by position. -1 when not applicable. */
+  markerRow: number;
+  /**
+   * First row BELOW the composer and its bottom chrome — where an app's status footer
+   * renders. {@link GateProfile.idleIndicatorPattern} is matched only from here down, so
+   * transcript output cannot satisfy it: everything the agent prints is ABOVE the composer,
+   * so a reply that happened to contain the footer's shape (`… (85%) · $12`) can never be
+   * mistaken for the real footer.
+   */
+  footerFrom: number;
+}
+
+/**
+ * Resolve the composer region for a {@link GateProfile.bottomAnchor} profile — a box
+ * anchored at its bottom rule and growing upward (opencode). Returns the row span to
+ * scan, or a `detail` explaining why the frame is indeterminate (→ the caller holds).
+ *
+ * The row directly above the rule is the app's chrome/status row and is excluded from
+ * the returned span: it always carries normal-intensity text, so scanning it would
+ * classify every frame `user-text`.
+ */
+function resolveBottomAnchorRegion(
+  lines: string[],
+  anchor: NonNullable<GateProfile['bottomAnchor']>,
+): ComposerRegion | { detail: 'no-composer-marker' | 'no-region-end' } {
+  let ruleRow = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (anchor.rulePattern.test(lines[i])) ruleRow = i;
+  }
+  // No rule line: a dialog that replaced the composer, a boot/wrapper screen, or a
+  // torn frame. Never clean.
+  if (ruleRow === -1) return { detail: 'no-composer-marker' };
+
+  // The chrome/status row must sit directly above the rule. When it does not, the
+  // frame is not the measured composer shape — hold rather than guess at bounds.
+  const chromeRow = ruleRow - 1;
+  if (chromeRow < 0 || !anchor.bodyPattern.test(lines[chromeRow])) {
+    return { detail: 'no-composer-marker' };
+  }
+
+  const maxLookback = anchor.maxLookback ?? DEFAULT_MAX_LOOKBACK;
+  let from = chromeRow; // walked upward below; ends at the topmost content row
+  let bounded = false;
+  for (let scanned = 0; scanned < maxLookback; scanned++) {
+    const candidate = from - 1;
+    // Ran off the top of the viewport without meeting the top edge: no proven upper
+    // bound (a torn or mid-repaint frame) — indeterminate, so hold.
+    if (candidate < 0) break;
+    // The ONLY accepted proof that the box has ended.
+    if (anchor.topEdgePattern.test(lines[candidate])) { bounded = true; break; }
+    // Neither in-box nor a proven top edge: a wrapped continuation row, a torn repaint,
+    // or unrecognized chrome. The region's extent is unknowable here, and guessing it
+    // truncates toward clean, so hold.
+    if (!anchor.bodyPattern.test(lines[candidate])) return { detail: 'no-region-end' };
+    from = candidate;
+  }
+  // Exhausted the lookback with every row still inside the box: unterminated.
+  if (!bounded) return { detail: 'no-region-end' };
+
+  // A box shorter than the app ever renders is a torn frame, not an empty composer.
+  if (chromeRow - from < anchor.minContentRows) return { detail: 'no-region-end' };
+
+  return { from, to: chromeRow, markerRow: -1, footerFrom: ruleRow + 1 };
+}
+
+/**
+ * Resolve the composer region for any profile: the bottom-anchored model when the
+ * profile declares one, else the original top-down marker + region-end model, whose
+ * behavior for claude/codex/agy is unchanged.
+ */
+function resolveRegion(
+  lines: string[],
+  profile: GateProfile,
+): ComposerRegion | { detail: 'no-composer-marker' | 'no-region-end' } {
+  if (profile.bottomAnchor) return resolveBottomAnchorRegion(lines, profile.bottomAnchor);
+
+  // A profile with neither region model cannot bound a composer at all. Unreachable
+  // for the shipped profiles (the types make one of the two mandatory in practice);
+  // treated as indeterminate rather than scanned, per fail-toward-hold.
+  if (!profile.markerPattern || !profile.regionEndPatterns) {
+    return { detail: 'no-composer-marker' };
+  }
+
+  const markerRow = findMarkerRow(lines, profile.markerPattern);
+  if (markerRow === -1) {
+    // No composer marker: a wrapper/boot screen, a full-screen picker with no marker, a
+    // mirror that has not yet repainted a coherent frame, or an unrenderable snapshot.
+    // Never clean — the safe direction.
+    return { detail: 'no-composer-marker' };
+  }
+
+  const endRow = findRegionEnd(lines, markerRow, profile.regionEndPatterns);
+  if (endRow === -1) {
+    // A marker with no rule/status line beneath it: a partial/mid-repaint frame. The
+    // composer has no proven lower bound, so hold rather than scan into the status chrome
+    // below it (which would either miscount chrome as user text or, if it renders
+    // empty/dim, return a false CLEAN).
+    return { detail: 'no-region-end' };
+  }
+  return { from: markerRow, to: endRow, markerRow, footerFrom: endRow + 1 };
 }
 
 /**
@@ -264,23 +515,66 @@ export function classifyBuffer(
   const buf = term.buffer.active;
   const lines = screenLines(term, rows);
 
-  const markerRow = findMarkerRow(lines, profile.markerPattern);
-  if (markerRow === -1) {
-    // No composer marker: a wrapper/boot screen, a full-screen picker with no marker, a
-    // mirror that has not yet repainted a coherent frame, or an unrenderable snapshot.
-    // Never clean — the safe direction.
-    return { clean: false, reason: 'busy', detail: 'no-composer-marker' };
+  // A profile-declared mid-turn signal settles the verdict before any composer logic:
+  // an app whose composer looks the same idle and mid-turn (opencode) would otherwise
+  // read as an empty prompt while it is generating.
+  if (profile.busyIndicatorPattern) {
+    const pattern = profile.busyIndicatorPattern;
+    if (lines.some((line) => pattern.test(line))) {
+      return { clean: false, reason: 'busy', detail: 'busy-indicator' };
+    }
   }
 
-  const endRow = findRegionEnd(lines, markerRow, profile.regionEndPatterns);
-  if (endRow === -1) {
-    // A marker with no rule/status line beneath it: a partial/mid-repaint frame. The
-    // composer has no proven lower bound, so hold rather than scan into the status chrome
-    // below it (which would either miscount chrome as user text or, if it renders
-    // empty/dim, return a false CLEAN).
-    return { clean: false, reason: 'busy', detail: 'no-region-end' };
+  const region = resolveRegion(lines, profile);
+  if ('detail' in region) return { clean: false, reason: 'busy', detail: region.detail };
+  const { from: regionFrom, to: regionTo, markerRow } = region;
+
+  // An empty span would fall through the cell loop below and reach CLEAN on
+  // `userCells === 0` — a verdict reached without examining a single cell. "Zero cells
+  // examined" is indeterminate, not empty, so it is rejected here rather than left to the
+  // counter. Unreachable via the top-down model (its region always contains the marker
+  // row); a second line of defence for region models that can collapse.
+  if (regionTo <= regionFrom) return { clean: false, reason: 'busy', detail: 'no-region-end' };
+
+  // ...and where a profile declares one, idleness must be POSITIVELY proven, not inferred
+  // from the busy signal's absence. Scoped to the FOOTER (below the composer), because the
+  // transcript above it is agent-authored: a reply containing the footer's shape must not
+  // be able to vouch for the agent's own idleness. Runs after region resolution so the
+  // footer's start is known; a frame with no resolvable composer has already been held.
+  if (profile.idleIndicatorPattern) {
+    const pattern = profile.idleIndicatorPattern;
+    const footer = lines.slice(region.footerFrom);
+    if (!footer.some((line) => pattern.test(line))) {
+      return { clean: false, reason: 'busy', detail: 'no-idle-indicator' };
+    }
   }
+
   const top = buf.viewportY;
+
+  // Geometry check (bottom-anchored profiles). A row inside the composer box is a WRAPPED
+  // continuation only when the mirror's width disagrees with the width the app painted at
+  // — `PtySession.resize` always resizes the gate mirror but can drop the app-side resize
+  // (`return false`), and the alt buffer does not reflow, so that disagreement can persist
+  // indefinitely. Every row boundary on such a screen is untrustworthy: the app's own rows
+  // no longer line up with the mirror's. Checked across the box, its rule, and the rule's
+  // continuation, so an overflowing rule is caught too.
+  //
+  // The rule row is deliberately included even though a SHORT box can survive narrowing
+  // intact (an empty composer has nothing long enough to wrap, so only the full-width rule
+  // spills). That frame is still proof the app painted wider than the mirror, and the
+  // moment the user types a line long enough to wrap, the region breaks. So the cost is
+  // accepted knowingly: while the mirror's geometry is wrong, an idle-LOOKING opencode
+  // composer holds its mail rather than being trusted. A hold is visible (mailbox-delivery
+  // `recordStreak` escalates a sustained one) and self-heals on the next correct repaint;
+  // trusting a misread composer is not visible and does not heal.
+  if (profile.bottomAnchor) {
+    for (let row = regionFrom; row <= region.footerFrom && row < rows; row++) {
+      if (buf.getLine(top + row)?.isWrapped) {
+        return { clean: false, reason: 'busy', detail: 'geometry-mismatch' };
+      }
+    }
+  }
+
   const cell = buf.getNullCell();
   const probe = buf.getNullCell(); // scratch cell for the ghost-tail look-ahead (never clobbers `cell`)
   // Cursor position is viewport-relative (matching `row`, which indexes from `viewportY`).
@@ -288,15 +582,28 @@ export function classifyBuffer(
   const cursorCol = buf.cursorX;
   let userCells = 0;
 
-  for (let row = markerRow; row < endRow; row++) {
+  for (let row = regionFrom; row < regionTo; row++) {
     const line = buf.getLine(top + row);
     if (!line) continue;
-    for (let col = 0; col < cols; col++) {
+    // A bottom-anchored box marks its chrome by POSITION: the row's leading glyph is the
+    // box edge and everything after it is the user's. Counting content positionally rather
+    // than by character class is what stops a draft made only of box-drawing glyphs
+    // (a pasted tree or table) from reading as chrome and classifying empty.
+    const contentFrom = profile.bottomAnchor ? boxContentColumn(lines[row]) : 0;
+    for (let col = contentFrom; col < cols; col++) {
       line.getCell(col, cell);
       const ch = cell.getChars();
-      if (!ch || WHITESPACE.test(ch) || IGNORE_CHARS.has(ch)) continue;
+      if (!ch) continue;
+      if (profile.bottomAnchor) {
+        // Only a plain space or tab is empty here. `\s` would also swallow NBSP and
+        // U+3000, which a paste can carry and which are real content, not padding.
+        if (ch === ' ' || ch === '\t') continue;
+      } else if (WHITESPACE.test(ch) || IGNORE_CHARS.has(ch)) {
+        continue;
+      }
       if (row === markerRow && col === 0) continue; // the marker glyph itself
-      if (cell.isDim()) continue; // placeholder / hint chrome renders dim (claude/codex)
+      // Dim is placeholder chrome only where the app was MEASURED to use it that way.
+      if (cell.isDim() && (profile.treatDimAsPlaceholder ?? true)) continue;
       if (
         profile.placeholderFgPalette !== undefined &&
         cell.isFgPalette() &&
