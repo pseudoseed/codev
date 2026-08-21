@@ -201,3 +201,184 @@ export interface PrCreateResult {
 
 /** Output of the `auth-status` concept command: exit code only. */
 // Exit code 0 = authenticated, non-zero = not authenticated.
+
+// =============================================================================
+// CI concepts (#13)
+// =============================================================================
+//
+// Four concepts, tiered so that the cheap question stays cheap: `ci-runs` and
+// `ci-run-view` never read a log, `ci-failures` reads exactly one job's and
+// returns a bounded extract, and `ci-run-log` is the deliberate raw window.
+//
+// Two contract-wide rules, both of which exist because breaking them produced
+// real wrong answers:
+//
+//  1. **Every response that carries log text also carries `logLines`,
+//     `returnedLines` and `truncated`.** A trimmed answer must never read as a
+//     whole one.
+//  2. **Failure is a value, not an absence.** These concepts print `CiError` on
+//     stdout even when they exit non-zero, so a timeout, a missing run and a
+//     server too old to answer stay distinguishable after
+//     `executeForgeCommand` has flattened everything else to `null`. Read them
+//     with `executeForgeCommandDetailed` when the distinction matters.
+
+/** Error envelope printed on stdout by any ci-* concept that cannot answer. */
+export interface CiError {
+  ok: false;
+  /**
+   * Stable machine token:
+   * - `timeout` — the forge did not answer inside the watchdog; carries `seconds`
+   * - `not-found` — no such run or job
+   * - `unsupported-server` — the forge is too old to have the API; carries
+   *   `serverVersion` and `needs`. Distinct from "nothing failed", deliberately:
+   *   Forgejo gained the Actions job-log API only in 16.0, and an empty
+   *   `failures` array on an older server would say "your CI is fine" when the
+   *   truth is "I cannot see your CI at all".
+   * - `forge-error` — the forge answered with an error
+   * - `bad-input` — missing or unusable input (exit 2)
+   */
+  error: 'timeout' | 'not-found' | 'unsupported-server' | 'forge-error' | 'bad-input';
+  detail: string;
+  seconds?: number;
+  remedy?: string;
+  serverVersion?: string;
+  needs?: string;
+  runId?: number | string;
+  jobId?: number | string;
+  jobName?: string;
+  /** Failing jobs the concept could still name on an unsupported server. */
+  failingJobs?: Array<{ jobId?: number; taskId?: number; jobName: string }>;
+}
+
+/** One run in `ci-runs` output. */
+export interface CiRunItem {
+  /** The API id. This is what ci-run-view / ci-failures / ci-run-log take. */
+  id: number;
+  /**
+   * The human run number (`index_in_repo` on Forgejo, `number` on GitHub).
+   * Never pass this as CODEV_CI_RUN_ID: on Forgejo both id spaces resolve on
+   * the same route, so a number is silently a *different, real* run.
+   */
+  number: number;
+  name: string;
+  workflow: string;
+  status: string;
+  /** GitHub only. Forgejo has no conclusion field — `status` carries it. */
+  conclusion: string | null;
+  /**
+   * The branch as the forge recorded it. On Forgejo a `pull_request` run
+   * records `#<pr-number>` rather than a branch name; ci-runs resolves
+   * CODEV_BRANCH_NAME to that form before filtering.
+   */
+  branch: string | null;
+  sha: string | null;
+  event: string;
+  url: string;
+  createdAt: string;
+}
+
+/** Output of the `ci-runs` concept. */
+export interface CiRunsResult {
+  ok: true;
+  provider: string;
+  runs: CiRunItem[];
+  /** True when more runs exist than were returned, for any reason. */
+  truncated: boolean;
+  note?: string | null;
+}
+
+/** One job in `ci-run-view` output. */
+export interface CiJobItem {
+  /**
+   * The job id the log concepts take. **Null on Forgejo < 16**, which exposes
+   * no jobs API: those jobs are recovered from `actions/tasks` and only a
+   * `taskId` exists. A task id looks like a job id and is not one, so it is
+   * never reported as `id`.
+   */
+  id: number | null;
+  taskId?: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  /** GitHub only; Forgejo exposes no per-step data, so this is `[]` there. */
+  failedSteps: Array<{ name: string; number: number; conclusion: string }>;
+}
+
+/** Output of the `ci-run-view` concept. */
+export interface CiRunViewResult {
+  ok: true;
+  provider: string;
+  /** Which route produced `jobs`: `run-view` | `runs-jobs` | `tasks-scan`. */
+  jobSource: string;
+  run: Omit<CiRunItem, 'name'> & { title?: string; name?: string };
+  jobs: CiJobItem[];
+  truncated?: boolean;
+}
+
+/** One extracted failure in `ci-failures` output. */
+export interface CiFailureItem {
+  jobId: number;
+  jobName: string;
+  stepName?: string | null;
+  stepNumber?: number | null;
+  /**
+   * Which rung of the extraction ladder fired: `vitest`, `go-test`, `tsc`,
+   * `runner-marker`, `first-error`. Present so a reader can weigh the answer —
+   * a `first-error` match is a weaker claim than a `vitest` one.
+   */
+  matchedBy?: string;
+  text?: string;
+  from?: number;
+  to?: number;
+  logLines: number;
+  returnedLines?: number;
+  truncated?: boolean;
+}
+
+/** Output of the `ci-failures` concept. */
+export interface CiFailuresResult {
+  ok: true;
+  provider: string;
+  runId: number | string;
+  runStatus: string;
+  runConclusion: string | null;
+  jobsFailed: number;
+  /**
+   * False means extraction found nothing it recognised — NOT that the job
+   * passed. The response then carries `reason`, the job identity, `logLines`,
+   * and a ready-to-run `next` command, so the refusal is a handoff to
+   * ci-run-log rather than a dead end. It never falls back to returning
+   * arbitrary lines, which a reader would treat as a diagnosis.
+   */
+  extracted: boolean;
+  reason?: string;
+  failures: CiFailureItem[];
+  otherFailingJobs?: Array<{ id: number; name: string }>;
+  cached?: boolean;
+  next?: string;
+}
+
+/** Output of the `ci-run-log` concept. */
+export interface CiRunLogResult {
+  ok: true;
+  provider: string;
+  runId: number | string;
+  jobId: number;
+  jobName: string;
+  window: { kind: 'head' | 'tail' | 'grep'; arg: string };
+  logLines: number;
+  returnedLines: number;
+  /** First and last line numbers returned, into the FULL log. 0/0 for no match. */
+  from: number;
+  to: number;
+  /** False in grep mode: the returned lines have gaps. See `matchLines`. */
+  contiguous: boolean;
+  truncated: boolean;
+  /** grep mode only: how many lines matched, and which. */
+  matches: number | null;
+  matchLines: number[] | null;
+  cached?: boolean;
+  lines: string[];
+}
