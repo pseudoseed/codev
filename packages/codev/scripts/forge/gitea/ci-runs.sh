@@ -85,17 +85,26 @@ while [ "$PAGE" -le "$CI_MAX_PAGES" ]; do
         } ]' "$TMP/page.json")
   ACC=$(printf '%s\n%s' "$ACC" "$HITS" | jq -s -c 'add')
 
-  [ "$(printf '%s' "$ACC" | jq 'length')" -ge "$LIMIT" ] && break
+  # -gt, not -ge: stopping at exactly LIMIT would leave `truncated` (computed
+  # below as length > limit) reading false when there is more to see. One extra
+  # item is what makes "there are more runs than this" a fact rather than a
+  # guess — the same reason the github script asks gh for LIMIT + 1.
+  [ "$(printf '%s' "$ACC" | jq 'length')" -gt "$LIMIT" ] && break
   if [ "$RAW" -lt "$GITEA_PAGE_LIMIT" ]; then break; fi
   PAGE=$((PAGE + 1))
-  # Ran out of pages we are allowed to walk while a client-side filter was still
-  # discarding candidates. Say so: a short list and a truncated one look
-  # identical once printed.
-  if [ "$PAGE" -gt "$CI_MAX_PAGES" ] && { [ -n "$CODEV_BRANCH_NAME" ] || [ -n "$CODEV_CI_WORKFLOW" ]; }; then
-    TRUNCATED=true
-    echo "${CONCEPT}: stopped after ${CI_MAX_PAGES} pages of runs while filtering; raise CODEV_CI_MAX_PAGES for a deeper search" >&2
-  fi
 done
+
+# The loop condition — not a break — is what ends a walk that ran out of
+# allowance, so PAGE past the ceiling means there was more to see. Checking it
+# here rather than inside the loop also covers the UNFILTERED case: asking for
+# 200 runs from a 6922-run repo collects exactly 200 and used to report
+# truncated=false, because the old check only fired when a client-side filter
+# was active. A capped answer that says it is complete is the failure this
+# whole issue is about.
+if [ "$PAGE" -gt "$CI_MAX_PAGES" ]; then
+  TRUNCATED=true
+  echo "${CONCEPT}: stopped after ${CI_MAX_PAGES} pages of runs; raise CODEV_CI_MAX_PAGES for a deeper search" >&2
+fi
 
 printf '%s' "$ACC" | jq -c --argjson limit "$LIMIT" --argjson truncated "$TRUNCATED" --argjson note "$NOTE" '{
   ok: true, provider: "gitea",
