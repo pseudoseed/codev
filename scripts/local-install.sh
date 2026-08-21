@@ -17,6 +17,13 @@ cd "$REPO_ROOT"
 unset npm_config_prefix
 unset PNPM_CONFIG_PREFIX
 
+# Build first (#11) — packing whatever happens to be sitting in dist/ silently
+# ships stale code: the tarball installs fine and the printed version doesn't
+# change (it comes from package.json, not from dist freshness), so a correct
+# install of a stale artifact looks identical to success. The build is
+# incremental, so this costs nothing when dist is already current.
+pnpm -w run build
+
 # Pack — clear stale tarballs first so the install glob matches exactly one file.
 # codev-types is packed+installed too: codev now imports it at runtime (the
 # request-auth wire constants), so it must be a real installed dependency, not
