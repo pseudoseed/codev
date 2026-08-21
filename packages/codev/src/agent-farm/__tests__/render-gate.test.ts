@@ -411,15 +411,16 @@ describe('render-gate — opencode fixtures across terminal widths (Issue #4)', 
     });
   }
 
-  it('opencode-idle.clean.txt is clean at its capture width, and never wrongly clean elsewhere', async () => {
-    // The idle capture is a 110-wide frame. At its own width it must deliver; at narrower
-    // widths its rows wrap, which IS a genuine geometry mismatch, and holding there is
-    // correct rather than a limitation — in production the mirror matches the app's width.
+  it('opencode-idle.clean.txt is clean from its capture width UP, and holds where it wraps', async () => {
+    // An idle capture is clean at its own width and every wider mirror, and holds only
+    // below it, where its rows genuinely wrap. So the sweep's clean-count measures the
+    // FIXTURE's capture geometry (110), not the profile's behavior: a real builder's mirror
+    // tracks the live geometry, and captures taken at 80/100/120 deliver at their own
+    // widths just the same (see the fixtures README table).
     const raw = readFileSync(`${FIXTURE_DIR}/opencode-idle.clean.txt`, 'utf8');
-    expect((await classifyScreen({ replay: raw, cols: 110, rows: 32 }, OPENCODE_PROFILE)).clean).toBe(true);
-    for (let cols = FROM; cols < 110; cols++) {
+    for (let cols = FROM; cols <= TO; cols++) {
       const v = await classifyScreen({ replay: raw, cols, rows: 32 }, OPENCODE_PROFILE);
-      expect(v.clean, `cols=${cols} must not be clean when the frame wraps`).toBe(false);
+      expect(v.clean, `cols=${cols}`).toBe(cols >= 110);
     }
   });
 });

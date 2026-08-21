@@ -103,10 +103,29 @@ pure chrome, zero user cells, `clean`. The draft was never scanned.
 
 Width mismatch is reachable in production, so this is not a synthetic concern:
 `PtySession.resize` always resizes the gate mirror but can drop the app-side resize, and the
-alt buffer does not reflow, so the mirror can sit indefinitely at a geometry the app never
-paints at. Note that a straightforward PTY drive at a fixed size will NOT surface this —
-matching geometry is exactly the case where the box never wraps — which is why the sweep,
-not a live drive, is the guard.
+alt buffer does not reflow, so the mirror can sit at a geometry the app never paints at.
+Note that a straightforward PTY drive at a fixed size will NOT surface this — matching
+geometry is exactly the case where the box never wraps — which is why the sweep, not a live
+drive, is the guard.
+
+**Reading the sweep numbers.** A capture is clean from **its own capture width upward**, and
+holds below it, where its rows genuinely wrap. Measured on real captures taken at three
+widths (app and mirror matched, as in production):
+
+| capture | idle @ own width | draft @ own width | clean across 40–140 |
+|---|---|---|---|
+| 80 cols | DELIVER | HOLD | 80–140 |
+| 100 cols | DELIVER | HOLD | 100–140 |
+| 120 cols | DELIVER | HOLD | 120–140 |
+| 110 cols (`opencode-idle.clean.txt`) | DELIVER | — | 110–140 |
+
+So "`opencode-idle.clean.txt` is clean at only 31 of 101 widths" measures the *fixture's*
+capture geometry, not the profile: it is a 110-wide frame, and the 70 holding widths are all
+narrower mirrors. A real builder does not sit in that state — the mirror tracks the live
+geometry. The two ways to reach a genuine mismatch are both benign: a resize is *transient*
+until the app repaints on SIGWINCH (the drainer retries held mail on its next tick, so it
+self-clears rather than sticking), and a *dropped* resize only happens on the
+`status !== 'running'` branches — a session that cannot receive mail anyway.
 
 opencode adds a case the above cannot cover: an **empty composer does not mean an idle
 agent** there, because its box renders identically mid-turn. Its profile therefore also
