@@ -126,6 +126,8 @@ export interface CodevConfig {
   };
   dashboard?: {
     frontend?: 'react' | 'legacy';
+    /** Tab ids to hide from the dashboard tab strip (Issue #14), e.g. ['analytics', 'team']. */
+    hideTabs?: string[];
   };
   framework?: {
     source?: string;

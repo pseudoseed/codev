@@ -287,6 +287,8 @@ export interface UserConfig {
   };
   dashboard?: {
     frontend?: 'react' | 'legacy';
+    /** Tab ids to hide from the dashboard tab strip (Issue #14), e.g. ['analytics', 'team']. */
+    hideTabs?: string[];
   };
   /** Forge concept command overrides. Keys are concept names, values are command strings or null (disabled). */
   forge?: Record<string, string | null>;

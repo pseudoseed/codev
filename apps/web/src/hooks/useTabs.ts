@@ -66,15 +66,49 @@ function buildArchitectTabs(state: DashboardState | null): Tab[] {
   });
 }
 
+/**
+ * Static tab ids Issue #14's `dashboard.hideTabs` config is expected to name.
+ * `work` is deliberately excluded: it's the home tab and the fallback target
+ * when another tab vanishes, so hiding it would brick the dashboard. The
+ * server (`getDashboardConfig`) already strips `work` out before this ever
+ * sees it; excluding it here too means a `work` id that somehow arrives
+ * anyway is reported as "unknown" rather than silently honored.
+ */
+const KNOWN_HIDEABLE_TAB_IDS = new Set(['analytics', 'team']);
+// Module-scoped so a typo'd id warns once per session rather than on every render.
+const warnedUnknownHideTabIds = new Set<string>();
+
+function warnUnknownHideTabIds(hideTabs: string[]): void {
+  for (const id of hideTabs) {
+    if (!KNOWN_HIDEABLE_TAB_IDS.has(id) && !warnedUnknownHideTabIds.has(id)) {
+      warnedUnknownHideTabIds.add(id);
+      console.warn(`[useTabs] Unknown tab id "${id}" in dashboard.hideTabs config — ignoring.`);
+    }
+  }
+}
+
 function buildTabs(state: DashboardState | null): Tab[] {
-  const tabs: Tab[] = [
+  const hideTabs = state?.hideTabs ?? [];
+  warnUnknownHideTabIds(hideTabs);
+
+  let tabs: Tab[] = [
     { id: 'work', type: 'work', label: 'Work', closable: false },
     { id: 'analytics', type: 'analytics', label: 'Analytics', closable: false, persistent: true },
   ];
 
+  // An explicit hide wins over derived state: `team` is still pushed here when
+  // `teamEnabled` is true, and filtered out below when `hideTabs` names it.
   if (state?.teamEnabled) {
     tabs.push({ id: 'team', type: 'team', label: 'Team', closable: false });
   }
+
+  // Filtered before dynamic (architect/builder/shell/file) tabs are appended,
+  // since `hideTabs` only ever targets the static config-driven tab ids above.
+  // `work` is exempt even if it somehow appears in `hideTabs` — it's the home
+  // tab and the vanished-active-tab fallback target (below); removing it
+  // would blank the dashboard. `getDashboardConfig` already strips it
+  // server-side, so this is defense-in-depth, not the primary guard.
+  tabs = tabs.filter(t => t.id === 'work' || !hideTabs.includes(t.id));
 
   tabs.push(...buildArchitectTabs(state));
 
@@ -200,6 +234,20 @@ export function useTabs(state: DashboardState | null) {
     // is *usually* main but isn't guaranteed during deploy-window state shape
     // transitions. The explicit `'architect'` fallback is robust.
     if (!currentIds.has(activeTabId)) {
+      // Issue #14: if the previously-active tab vanished because config now
+      // hides it, land on the first tab that actually exists in the rebuilt
+      // list (normally `work`) rather than the architect fallback below — a
+      // hidden analytics/team tab shouldn't hand focus to an architect pane.
+      // Deliberately NOT a hardcoded 'work': `work` can't be hidden today
+      // (guarded both server- and client-side), but hardcoding an id here
+      // would silently re-break the moment a future hideable tab exists.
+      if ((state?.hideTabs ?? []).includes(activeTabId)) {
+        if (tabs.length > 0) {
+          setActiveTabId(tabs[0].id);
+        }
+        knownTabIds.current = currentIds;
+        return;
+      }
       const mainTab = tabs.find(t => t.id === 'architect');
       if (mainTab) {
         setActiveTabId('architect');

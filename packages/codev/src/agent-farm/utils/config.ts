@@ -521,6 +521,30 @@ export function getWorktreeConfig(workspaceRoot?: string): ResolvedWorktreeConfi
   };
 }
 
+// `work` is the dashboard's home tab and the fallback target when another tab
+// vanishes — hiding it would brick the view, so config is not allowed to.
+const PROTECTED_DASHBOARD_TAB_IDS: ReadonlySet<string> = new Set(['work']);
+let warnedProtectedHideTabId = false;
+
+/**
+ * Load the `dashboard.hideTabs` block from .codev/config.json (Issue #14).
+ * Unconfigured repos get `{ hideTabs: [] }` — no tabs hidden. `work` is
+ * stripped out if present, warned once, rather than honored.
+ */
+export function getDashboardConfig(workspaceRoot?: string): { hideTabs: string[] } {
+  const root = workspaceRoot || findWorkspaceRoot();
+  const userConfig = loadUserConfig(root);
+  const rawHideTabs = userConfig?.dashboard?.hideTabs ?? [];
+  const hasProtected = rawHideTabs.some(id => PROTECTED_DASHBOARD_TAB_IDS.has(id));
+  if (hasProtected && !warnedProtectedHideTabId) {
+    warnedProtectedHideTabId = true;
+    logger.warn('dashboard.hideTabs cannot hide "work" (the home/fallback tab) — ignoring it.');
+  }
+  return {
+    hideTabs: rawHideTabs.filter(id => !PROTECTED_DASHBOARD_TAB_IDS.has(id)),
+  };
+}
+
 const ACTIVITY_EVENTS: ReadonlySet<string> = new Set<ActivityEvent>(['window-focus', 'builder-active']);
 
 interface RawActivityHook { on?: string[]; url?: string; background?: boolean }

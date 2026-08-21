@@ -1,0 +1,22 @@
+id: '14'
+title: let-the-dashboard-hide-tabs-fr
+protocol: air
+phase: verified
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: approved
+    requested_at: '2026-08-21T18:46:14.137Z'
+    approved_at: '2026-08-21T18:53:37.720Z'
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-21T18:15:21.362Z'
+updated_at: '2026-08-21T18:54:04.497Z'
+pr_history:
+  - phase: implement
+    pr_number: 18
+    branch: builder/air-14
+    created_at: '2026-08-21T18:45:45.677Z'
+pr_ready_for_human: false
