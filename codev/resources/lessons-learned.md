@@ -68,6 +68,16 @@ Generalizable wisdom extracted from review documents, ordered by impact. Updated
 
 ## Architecture
 
+- [From #4] **Do not port a rendering-attribute convention from one TUI to another without
+  measuring the second one.** claude and codex de-emphasize composer placeholder text with
+  SGR-dim, so the render gate skips dim cells as chrome. agy already broke that (its hint is a
+  *foreground color*, needing `placeholderFgPalette`), and opencode inherited the dim rule with
+  no measurement behind it — meaning any dim affordance it might ship would silently hide a real
+  draft. Measuring took one capture pass (result: zero dim cells across seven states) and turned
+  an assumption into an explicit, documented `treatDimAsPlaceholder: false`. When an inherited
+  default's failure mode is silent and the measurement is cheap, measure — and when a
+  same-shaped exception has already been needed once, treat the convention as app-specific by
+  default rather than universal.
 - [From #1428] Twinned per-app *presentation* maps kept aligned by sync-note comments are an
   accepted pattern (owner-ruled), not a violation of the "consolidate duplicates rather than
   syncing" lesson. When two apps must present the same vocabulary but can't/shouldn't cross-import
@@ -270,6 +280,15 @@ Generalizable wisdom extracted from review documents, ordered by impact. Updated
 
 ## Testing
 
+- [From #4] **A fixture asserted only at its capture geometry is not a regression test.** Five
+  real captured TUI frames all classified correctly at their 110-column capture width, and one
+  of them — a frame with a live draft in the composer — classified as an *empty prompt* at 43
+  of 101 other widths, because past ~100 cols the draft's own row wrapped and broke the parser's
+  region bounds. Nothing in the suite varied the one dimension that mattered. When a fixture is
+  a rendering of something, sweep whatever can change the rendering (width, DPI, locale, theme)
+  and assert the invariant across the sweep, not the single captured instance. Note also that a
+  live end-to-end drive would *not* have caught this: it runs at matching geometry, which is
+  exactly the case that works.
 - [From #1497] A vitest unit test that (transitively) value-imports a workspace package needs that package's `dist` built first — vite resolves the runtime `exports.default → ./dist`, not the TS source. Type-only imports are elided, which is why most vscode `__tests__` never hit this and why the pre-existing `terminal-manager.test.ts` retreated to source-string assertions ("constructing a full `TerminalManager` requires heavyweight deps"). But a *behavioural* capture from a class buried behind such imports is viable: importing the real `TerminalManager` (it value-imports `@cluesmith/codev-types` + `codev-sdk` via `terminal-adapter`) worked once `codev-types`/`codev-sdk` were built, letting the test assert real `injectArchitectText` `sendText` routing instead of a source regex. It passes in CI because `test.yml` runs `pnpm build` before vitest; locally, build the deps first. Companion to #907 (esbuild's `default → ./dist` condition needs the package built) — the same dist-before-consume rule, on the vitest side.
 - [From #1401] **A guard is not a guard until you have watched it fail.** Two variants bit in one
   project. (a) A compile-time exhaustiveness check written as a bare conditional type alias
@@ -595,6 +614,20 @@ Generalizable wisdom extracted from review documents, ordered by impact. Updated
 
 ## Debugging and Root Cause Analysis
 
+- [From #4] **Reproduce a reported finding against a pinned commit, never a working tree.** A
+  reviewer reported a false-CLEAN at specific terminal widths; a follow-up sweep found nothing
+  and the finding was retracted — but that sweep had measured the working tree *mid-edit*, with
+  the fix already applied, so it was measuring the fix and reading the clean result as proof the
+  bug never existed. `git worktree add --detach <sha>` (or an A/B of old and new logic over
+  identical inputs) settles it in one run. Corollary: a clean result is only evidence about the
+  code you actually ran, and "I could not reproduce it" is a claim about your harness until you
+  can say which commit it was built from.
+- [From #4] **Two reviews disagreeing may both be right — compare the conditions before picking
+  a winner.** One review drove the real binary under a PTY at a fixed size and found no
+  false-CLEAN; another found one at 43 of 101 widths. Both were correct: matching geometry is
+  precisely the case where the bug (a wrapped row inside a TUI box) cannot occur. Before
+  treating a negative result as refuting a positive one, check whether it even exercised the
+  condition — otherwise the more thorough-looking method silently vetoes the finding.
 - [From #1347] Verify image transforms numerically, never visually: white-on-transparent output renders invisibly on light preview grounds, and ImageMagick 7's `-channel RGB -fill white -colorize 100` silently produced red glyphs with corrupted alpha while *looking* plausible in a montage. Recolor glyphs by alpha-composition (PIL: white layer + `putalpha`) and assert channel means (`magick -format "%[fx:mean.r]"`) before committing assets.
 - [From #1150] When users report a **newly recurring** symptom, correlate the report window against what shipped just before it, before accepting a low-probability failure theory. The issue's root-cause analysis blamed a swallowed SQLite error and WAL loss (both real defects, both rare); a reviewer's "is a failed SQLite update actually probable?" challenge prompted enumerating every writer of the table, which surfaced the #1118 consolidation (shipped one week before the reports) deterministically re-inserting stale snapshot rows. The rare-event defects were still worth fixing, but ranking them as *the* cause would have shipped a fix while misdescribing the bug. Enumerate all writers of the corrupted state, not just the suspicious-looking one.
 - [From #1055] A VS Code command whose button is **visible but does nothing** after an extension change is often a **stale Extension Development Host**, not a code regression — package.json contribution + compiled-JS changes don't fully take effect until a `Developer: Reload Window`. Before hunting a dispatch bug, confirm the symptom survives a clean reload. Here an "editor delete no longer works" report against a byte-for-byte-unchanged delete command evaporated on reload; a speculative menu-placement fix was started, then reverted once it proved environmental. Diff-the-actual-code first, and let the tester rule out a stale host before you change working behavior.
