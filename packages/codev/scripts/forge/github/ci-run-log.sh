@@ -33,6 +33,8 @@ if [ -z "$CODEV_CI_RUN_ID" ]; then
   echo "${CONCEPT}: CODEV_CI_RUN_ID is required" >&2
   exit 2
 fi
+ci_require_id "$CONCEPT" CODEV_CI_RUN_ID "$CODEV_CI_RUN_ID"
+[ -z "$CODEV_CI_JOB_ID" ] || ci_require_id "$CONCEPT" CODEV_CI_JOB_ID "$CODEV_CI_JOB_ID"
 
 # Window first: a malformed request should not cost an API call.
 ci_window_parse "$CONCEPT"

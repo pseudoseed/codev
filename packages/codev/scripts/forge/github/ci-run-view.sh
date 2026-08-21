@@ -24,6 +24,8 @@ if [ -z "$CODEV_CI_RUN_ID" ]; then
   echo "${CONCEPT}: CODEV_CI_RUN_ID is required" >&2
   exit 2
 fi
+ci_require_id "$CONCEPT" CODEV_CI_RUN_ID "$CODEV_CI_RUN_ID"
+[ -z "$CODEV_CI_JOB_ID" ] || ci_require_id "$CONCEPT" CODEV_CI_JOB_ID "$CODEV_CI_JOB_ID"
 
 rc=0
 OUT=$(gh_run_json "$CODEV_CI_RUN_ID") || rc=$?

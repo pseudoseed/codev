@@ -29,6 +29,8 @@ if [ -z "$CODEV_CI_RUN_ID" ]; then
   echo "${CONCEPT}: CODEV_CI_RUN_ID is required" >&2
   exit 2
 fi
+ci_require_id "$CONCEPT" CODEV_CI_RUN_ID "$CODEV_CI_RUN_ID"
+[ -z "$CODEV_CI_JOB_ID" ] || ci_require_id "$CONCEPT" CODEV_CI_JOB_ID "$CODEV_CI_JOB_ID"
 
 REPO="$(gitea_repo)" || exit 1
 TMP=$(mktemp -d)

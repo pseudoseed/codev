@@ -125,6 +125,26 @@ ci_status_is_terminal() {
   esac
 }
 
+# Require a run/job id to be a plain positive integer.
+#
+#   ci_require_id <concept> <VAR_NAME> "<value>"
+#
+# Both ids are interpolated into a URL path on the gitea side and into a jq
+# `--argjson` on both sides, so a non-numeric value either builds a URL nobody
+# meant or kills jq under `set -e` with nothing on stdout. Neither is a useful
+# answer, and "CODEV_CI_RUN_ID must be numeric" is.
+ci_require_id() {
+  _concept="$1"; _name="$2"; _value="$3"
+  case "$_value" in
+    ''|*[!0-9]*)
+      _msg="${_name} must be a numeric id, got '${_value}' — pass the \`id\` field from ci-runs, not the run \`number\` or a URL"
+      jq -cn --arg d "$_msg" '{ok: false, error: "bad-input", detail: $d}'
+      echo "${_concept}: ${_msg}" >&2
+      exit 2
+      ;;
+  esac
+}
+
 # Assert that a captured payload really is JSON, and emit an envelope if not.
 #
 #   ci_require_json <concept> "<payload>" "<what produced it>"

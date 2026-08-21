@@ -430,6 +430,19 @@ describe.skipIf(!hasJq())('#13 — ci-failures returns a bounded extract with it
     expect(r.json!.ok).toBe(false);
   });
 
+  it.each([
+    ['ci-failures.sh', { CODEV_CI_RUN_ID: '../../etc/passwd' }],
+    ['ci-run-log.sh', { CODEV_CI_RUN_ID: '32515040122', CODEV_CI_JOB_ID: 'x; echo pwned', CODEV_CI_LOG_TAIL: '5' }],
+    ['ci-run-view.sh', { CODEV_CI_RUN_ID: 'https://github.com/o/r/actions/runs/123' }],
+  ])('%s rejects a non-numeric id before it reaches a URL or jq', (script, env) => {
+    stubGh(ONE_FAILING_JOB);
+    const r = run(githubDir, script, env);
+    expect(r.status).toBe(2);
+    expect(r.json!.error).toBe('bad-input');
+    expect(r.json!.detail).toContain('must be a numeric id');
+    expect(fileLines(path.join(tmp, 'gh.log'))).toEqual([]);
+  });
+
   it('emits an envelope when the forge CLI exits 0 with something that is not JSON', () => {
     // An auth prompt, an empty body, an HTML error page. Without a guard this
     // reaches jq, dies under `set -e`, and leaves jq's diagnostic on stderr
