@@ -15,8 +15,10 @@ gates:
     approved_at: '2026-08-21T16:34:33.580Z'
   pr:
     status: pending
+    requested_at: '2026-08-21T16:53:34.589Z'
 iteration: 1
 build_complete: true
 history: []
 started_at: '2026-08-21T15:16:28.755Z'
-updated_at: '2026-08-21T16:43:56.028Z'
+updated_at: '2026-08-21T16:53:34.590Z'
+pr_ready_for_human: true
