@@ -48,6 +48,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import { getForgeCommand, resolveAllConcepts, executeForgeCommandDetailed } from '../lib/forge.js';
+import { runForgeConcept } from '../commands/forge.js';
 
 const codevPkgRoot = path.resolve(import.meta.dirname, '..', '..');
 const forgeScripts = path.join(codevPkgRoot, 'scripts', 'forge');
@@ -883,5 +884,93 @@ describe.skipIf(!hasJq())('#13 — Forgejo, as it actually behaves', () => {
     expect(r.json!.error).toBe('bad-input');
     expect(r.json!.detail).toContain('in_progress');
     expect(fileLines(path.join(tmp, 'tea.log'))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// codev forge <concept>
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!hasJq())('#13 — codev forge runs a concept through the real resolver', () => {
+  /** A workspace with a .codev/config.json, so resolution has something to resolve. */
+  function workspace(forge: Record<string, unknown>): string {
+    const root = path.join(tmp, 'ws');
+    fs.mkdirSync(path.join(root, '.codev'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.codev', 'config.json'), JSON.stringify({ forge }));
+    return root;
+  }
+
+  function capture() {
+    const out: string[] = [];
+    const err: string[] = [];
+    return { out, err, stdout: (t: string) => out.push(t), stderr: (t: string) => err.push(t) };
+  }
+
+  it('HONOURS a per-repo override — the reason this command exists', () => {
+    // Naming the script by path bypasses the config lookup, the provider preset
+    // and any override. A project that overrides ci-failures would have its
+    // override silently ignored, and would get GitHub's script against a
+    // Forgejo repo. The reference Forgejo repo carried three such overrides
+    // until #12 shipped, so this is not hypothetical.
+    const custom = path.join(tmp, 'my-ci-failures.sh');
+    fs.writeFileSync(custom, '#!/bin/sh\necho \'{"ok":true,"mine":true}\'\n', { mode: 0o755 });
+    fs.chmodSync(custom, 0o755);
+
+    const io = capture();
+    return runForgeConcept('ci-failures', { cwd: workspace({ 'ci-failures': custom }), ...io }).then((code) => {
+      expect(code).toBe(0);
+      expect(JSON.parse(io.out.join(''))).toEqual({ ok: true, mine: true });
+    });
+  });
+
+  it('names a concept disabled for the provider and exits non-zero', async () => {
+    const io = capture();
+    const code = await runForgeConcept('team-activity', { cwd: workspace({ provider: 'gitea' }), ...io });
+    expect(code).not.toBe(0);
+    expect(io.out.join('')).toBe('');
+    expect(io.err.join('')).toContain('team-activity');
+    expect(io.err.join(''), 'a disabled concept must name WHY it is unavailable').toContain('gitea');
+  });
+
+  it('lists the valid concepts when given an unknown name', async () => {
+    const io = capture();
+    const code = await runForgeConcept('ci-failure', { cwd: workspace({}), ...io });
+    expect(code).toBe(2);
+    expect(io.err.join('')).toContain('not a known forge concept');
+    expect(io.err.join('')).toContain('ci-failures');
+    expect(io.err.join('')).toContain('pr-exists');
+  });
+
+  it('prints stdout verbatim and propagates the exit code, envelope included', async () => {
+    // A concept that fails still has something to say — the ci-* scripts print
+    // their error envelope on stdout precisely so the class of failure survives
+    // a non-zero exit. Swallowing stdout on failure would throw it away at the
+    // last step.
+    const failing = path.join(tmp, 'failing.sh');
+    fs.writeFileSync(failing, '#!/bin/sh\necho \'{"ok":false,"error":"timeout","seconds":60}\'\nexit 1\n', { mode: 0o755 });
+    fs.chmodSync(failing, 0o755);
+
+    const io = capture();
+    const code = await runForgeConcept('ci-runs', { cwd: workspace({ 'ci-runs': failing }), ...io });
+    expect(code).toBe(1);
+    expect(JSON.parse(io.out.join('')).error).toBe('timeout');
+  });
+
+  it('passes the ambient CODEV_* environment through to the script', async () => {
+    const echoer = path.join(tmp, 'echo-env.sh');
+    fs.writeFileSync(echoer, '#!/bin/sh\nprintf \'{"runId":"%s"}\' "$CODEV_CI_RUN_ID"\n', { mode: 0o755 });
+    fs.chmodSync(echoer, 0o755);
+
+    const previous = process.env.CODEV_CI_RUN_ID;
+    process.env.CODEV_CI_RUN_ID = '32515040122';
+    try {
+      const io = capture();
+      const code = await runForgeConcept('ci-failures', { cwd: workspace({ 'ci-failures': echoer }), ...io });
+      expect(code).toBe(0);
+      expect(JSON.parse(io.out.join('')).runId).toBe('32515040122');
+    } finally {
+      if (previous === undefined) delete process.env.CODEV_CI_RUN_ID;
+      else process.env.CODEV_CI_RUN_ID = previous;
+    }
   });
 });

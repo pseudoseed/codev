@@ -27,6 +27,24 @@ Forge concept commands decouple codev from direct `gh` CLI calls. Each GitHub op
 | `ci-failures` | `CODEV_CI_RUN_ID`, `CODEV_CI_JOB_ID` (optional) | The failing job's assertion, extracted and capped |
 | `ci-run-log` | `CODEV_CI_RUN_ID`, `CODEV_CI_JOB_ID` (opt), and exactly one of `CODEV_CI_LOG_TAIL` / `CODEV_CI_LOG_HEAD` / `CODEV_CI_LOG_GREP` | A raw log window |
 
+## Running a concept
+
+```bash
+codev forge <concept>          # CODEV_* environment is passed through
+CODEV_CI_RUN_ID=32515040122 codev forge ci-failures | jq
+```
+
+**Never call a concept script by its path.** `packages/codev/scripts/forge/github/ci-failures.sh`
+bypasses resolution — it skips the `.codev/config.json` lookup, the provider
+preset, and any per-repo override — so a project that overrides that concept
+gets GitHub's script against its own forge and never learns why.
+
+`codev forge` is a thin dispatcher over the same resolver every other caller
+uses: it prints the script's stdout verbatim (envelope included on the failure
+path) and exits with the script's own exit code. Its own exit codes are `2` for
+an unknown concept name (it lists the valid ones) and `3` for a concept
+disabled for this provider, which it names rather than printing nothing.
+
 ## CI concepts
 
 Four concepts, **tiered so the cheap question stays cheap**. A builder asks about
