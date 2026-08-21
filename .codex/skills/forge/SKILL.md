@@ -22,6 +22,132 @@ Forge concept commands decouple codev from direct `gh` CLI calls. Each GitHub op
 | `pr-view` | `CODEV_PR_NUMBER`, `CODEV_INCLUDE_COMMENTS` (optional) | View PR details (JSON or text) |
 | `pr-diff` | `CODEV_PR_NUMBER`, `CODEV_DIFF_NAME_ONLY` (optional) | Get PR diff |
 | `auth-status` | — | Check forge authentication status |
+| `ci-runs` | `CODEV_BRANCH_NAME`, `CODEV_CI_STATUS`, `CODEV_CI_WORKFLOW`, `CODEV_CI_LIMIT` (all optional) | List workflow runs (no log bytes) |
+| `ci-run-view` | `CODEV_CI_RUN_ID` | One run plus per-job status (no log bytes) |
+| `ci-failures` | `CODEV_CI_RUN_ID`, `CODEV_CI_JOB_ID` (optional) | The failing job's assertion, extracted and capped |
+| `ci-run-log` | `CODEV_CI_RUN_ID`, `CODEV_CI_JOB_ID` (opt), and exactly one of `CODEV_CI_LOG_TAIL` / `CODEV_CI_LOG_HEAD` / `CODEV_CI_LOG_GREP` | A raw log window |
+
+## Running a concept
+
+```bash
+codev forge <concept>          # CODEV_* environment is passed through
+CODEV_CI_RUN_ID=32515040122 codev forge ci-failures | jq
+```
+
+**Never call a concept script by its path.** `packages/codev/scripts/forge/github/ci-failures.sh`
+bypasses resolution — it skips the `.codev/config.json` lookup, the provider
+preset, and any per-repo override — so a project that overrides that concept
+gets GitHub's script against its own forge and never learns why.
+
+`codev forge` is a thin dispatcher over the same resolver every other caller
+uses: it prints the script's stdout verbatim (envelope included on the failure
+path) and exits with the script's own exit code. Its own exit codes are `2` for
+an unknown concept name (it lists the valid ones) and `3` for a concept
+disabled for this provider, which it names rather than printing nothing.
+
+## CI concepts
+
+Four concepts, **tiered so the cheap question stays cheap**. A builder asks about
+CI at four moments and they cost very different amounts:
+
+| Question | Concept | Reads a log? |
+|---|---|---|
+| Did my push pass? | `ci-runs` | No |
+| Is it still running, and which job is pending? | `ci-runs`, `ci-run-view` | No |
+| It failed — why? | `ci-failures` | Yes, one job |
+| Is this mine or pre-existing? | `ci-runs` with `CODEV_CI_WORKFLOW` | No |
+| Extraction gave up — show me the log | `ci-run-log` | Yes, one window |
+
+`ci-run-log` is a separate concept rather than a flag on `ci-failures` on
+purpose: a window parameter on the main call gets passed by habit, and then
+every status question drags a log again.
+
+### The response envelope
+
+Every ci-* concept prints ONE JSON object on stdout — **on success and on
+failure**. Errors are values, not absences, because `executeForgeCommand`
+flattens every failure mode to `null`:
+
+```json
+{ "ok": false, "error": "timeout", "seconds": 60,
+  "detail": "GET repos/o/r/actions/tasks did not return within 60s",
+  "remedy": "raise CODEV_FORGE_TIMEOUT" }
+```
+
+`error` is one of `timeout`, `not-found`, `unsupported-server`, `forge-error`,
+`bad-input`. Use `executeForgeCommandDetailed()` (not `executeForgeCommand`) when
+you need to tell a timeout from a failure — it returns `{ok, data, stdout,
+stderr, exitCode, timedOut, unavailable, durationMs}` and keeps stdout on the
+failure path.
+
+**Any response carrying log text also carries `logLines`, `returnedLines` and
+`truncated`.** A trimmed answer must never read as a whole one.
+
+### `ci-failures`, and what it does when it cannot tell
+
+Extraction runs a ladder and names the rung that fired in `matchedBy`:
+`vitest`, `go-test`, `tsc`, `runner-marker`, `first-error`. When nothing
+matches it does **not** fall back to the last N lines:
+
+```json
+{ "extracted": false, "reason": "no recognized failure pattern",
+  "failures": [{ "jobId": 11952749, "jobName": "test-unit", "logLines": 1599 }],
+  "next": "ci-run-log CODEV_CI_RUN_ID=6554924 CODEV_CI_JOB_ID=11952749 CODEV_CI_LOG_TAIL=80" }
+```
+
+A builder handed 50 arbitrary lines treats them as the diagnosis; one told
+extraction failed reads the log with the targeted call the response hands it.
+
+### `ci-run-log` windows
+
+Exactly one of `CODEV_CI_LOG_TAIL=N`, `CODEV_CI_LOG_HEAD=N`, or
+`CODEV_CI_LOG_GREP=<ere>` (with `CODEV_CI_LOG_CONTEXT`, default 3). Zero or two
+is exit 2 — there is deliberately no default. The response carries `from` and
+`to` as line numbers into the full log; in grep mode `contiguous` is false and
+`matchLines` lists exactly which lines matched.
+
+### Run ids
+
+`CODEV_CI_RUN_ID` is always the **`id`** field from `ci-runs`, never `number`.
+On Forgejo the two are separate id spaces and **both resolve on the same
+route**, so passing the number silently answers about a different, real run.
+
+### Provider notes
+
+| | GitHub | Forgejo/Gitea |
+|---|---|---|
+| Runs | `gh run list` | `GET actions/runs` (always with `page=`) |
+| Jobs | `gh run view --json jobs` | `GET actions/runs/{id}/jobs` (Forgejo ≥16) or a scan of `actions/tasks` (Forgejo 15) |
+| Log | `gh api repos/{owner}/{repo}/actions/jobs/{id}/logs` | `GET actions/jobs/{id}/logs` (**Forgejo ≥16 only**) |
+| Per-step data | yes | no — `failedSteps` is always `[]` |
+| `conclusion` | yes | always `null`; `status` carries it |
+
+**`gh run view --log-failed` is not used**, despite selecting failed steps in
+principle. Measured on run 32515040122 of this repository it returned 2528
+lines / 293 KB with every line tagged `UNKNOWN STEP`: it selects the failing
+JOB, and its filename-to-step mapping had missed. The per-job log endpoint is
+used on both providers instead.
+
+**Forgejo below 16.0 has no Actions log API at all.** `ci-failures` and
+`ci-run-log` return `error: "unsupported-server"` there, naming the version
+found and the version needed and still listing the failing job names;
+`ci-runs` and `ci-run-view` keep working. An old server must never be
+mistaken for a run with no failures.
+
+**Forgejo records a `pull_request` run's branch as `#<pr-number>`**, not as a
+branch name, and ignores `branch=` on the query. `ci-runs` resolves
+`CODEV_BRANCH_NAME` to its PR ref first and filters client-side, so a branch
+with no PR gets a `note` saying only push runs can match.
+
+**`gitlab` and `linear` have all four concepts explicitly disabled**, not merely
+unimplemented — otherwise they would fall through to the GitHub default and run
+`gh` against whatever remote it resolved.
+
+### Log cache
+
+A terminal job's log is immutable, so both log concepts cache it under
+`$TMPDIR/codev-ci-logs/<provider>/<repo>/<jobId>.log`. An in-progress job is
+never cached or read from cache. `CODEV_CI_NO_CACHE=1` bypasses it.
 
 ## Configuration
 
@@ -88,6 +214,13 @@ so a PR targeting an integration branch needs that variable.
 | `CODEV_FORGE_MERGED_DAYS` | 7 | `recently-merged` window when `CODEV_SINCE_DATE` is unset |
 | `CODEV_FORGE_MERGED_MAX` | 300 | merged PRs `recently-merged` will resolve before refusing |
 | `CODEV_FORGE_SEARCH_MAX` | 10 | PRs `pr-search` resolves for one issue number |
+| `CODEV_CI_LIMIT` | 20 | runs `ci-runs` returns |
+| `CODEV_CI_MAX_PAGES` | 4 | pages `ci-runs` walks while filtering client-side |
+| `CODEV_CI_TASKS_MAX_PAGES` | 20 | pages the Forgejo-15 task scan walks (it stops early once past the run) |
+| `CODEV_CI_MAX_STEP_BYTES` | 2048 | cap on one extracted failure |
+| `CODEV_CI_MAX_BYTES` | 8192 | cap on a whole ci-* response |
+| `CODEV_CI_NO_CACHE` | unset | `1` disables the log cache |
+| `CODEV_CI_CACHE_MAX_MB` | 32 | largest log that will be cached |
 
 ### Exit statuses
 
