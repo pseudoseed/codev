@@ -1,16 +1,104 @@
 # Codev v2 UI — Functional Requirements & Options
 
-**Status:** Decided — Option 2, multi-machine in v1. Not a spec. No implementation authorized;
-spikes 1-4 in the appendix come first.
-**Date:** 2026-08-21 (rev. 3, decision recorded)
+**Status:** Decided — Option 2, multi-machine in v1, built as an additive fork-owned app.
+Not a spec. No implementation authorized; spikes in the appendix come first.
+**Date:** 2026-08-21 (rev. 4, fork constraint recorded)
 **Author:** Architect (main)
 **Reviewed by:** Claude Opus 5, Grok 4.6 (Codex unavailable, Gemini unauthenticated)
-**Decided by:** the human, 2026-08-21 — **multi-machine ships in v1.**
+**Decided by:** the human, 2026-08-21 — **multi-machine ships in v1**, and **this is a
+bespoke UI for one person on a fork that must keep merging upstream.**
+
+> ⚠️ **The reviews predate the fork constraint.** Both reviewers recommended Option 1
+> (refactor `apps/web` in place) over Option 2. Neither knew this repository is a fork of
+> an active upstream. Part 0 explains why that reverses their conclusion.
 
 FRD = Functional Requirements Document: what the system must *do*, in
 user-observable terms, before anyone chooses how to build it. Part 3 gives the
 architectural options; Part 4 gives the requirements those options must satisfy.
 Part 7 records what the reviews changed.
+
+---
+
+## Part 0 — The fork constraint (governs everything below)
+
+This repository is `pseudoseed/codev`, a fork of `cluesmith/codev`, which is active
+(upstream PRs in the 1500s). Upstream changes must keep merging cleanly. **The v2 UI is
+bespoke — for one person, on this fork only. Upstream will never adopt it.**
+
+That single fact reverses the ordinary cost model.
+
+| | Ordinary repo | Fork tracking an active upstream |
+|---|---|---|
+| Edit an existing file | Cheap | **A merge conflict paid at every sync, forever** |
+| Add a file upstream lacks | Costs dual maintenance | **Nearly free — upstream has no such path** |
+| Two front-ends | A trap to escape | **The goal.** The old UI is what stays mergeable |
+
+### The fork already behaves this way
+
+Measured at rev. 4, against merge-base `ff855d3e7`:
+
+- **130 commits ahead, 0 behind.**
+- **11,642 insertions against 300 deletions** across 137 files. The fork adds; it barely
+  edits.
+- **Untouched entirely:** `packages/codev/templates/tower.html`, `packages/sdk`,
+  `packages/codev/src/terminal` (including `pty-session.ts`), `apps/vscode`.
+- **Lightly touched:** `apps/web` (6 files, 291 insertions, 10 deletions — including 8
+  lines in `Terminal.tsx`), `tower-routes.ts` (3 lines).
+
+This discipline is why merges still work. **v2 must not break it.**
+
+### What this does to the options
+
+**Option 1 is now the worst option, not the safest.** It was "merge `tower.html` into
+`apps/web` and restructure the router" — heavy modification of two hot upstream files,
+one of which the fork has never touched. Both reviewers preferred it; neither knew about
+the fork. Their reasoning is void here.
+
+**Option 2 is right, but not for the reason rev. 3 gave.** The justification is no longer
+"multi-machine needs a new auth model" (though it does). It is that **a new pnpm workspace
+is the only change shape that survives upstream merges.**
+
+### The additive seam
+
+| Layer | Approach | Conflict surface |
+|---|---|---|
+| Client | New `apps/v2/` pnpm workspace, fork-owned | **Zero** — upstream has no such path |
+| Server | New fork-owned `v2-*.ts` modules under `agent-farm/servers/` | **Zero** for the modules |
+| Mount | One `if (url.pathname.startsWith('/v2/'))` block in `tower-routes.ts`'s existing path chain | **One small, stable block** |
+| Client runtime | Reuse `packages/sdk` **unmodified** — it is untouched and already environment-agnostic | **Zero** |
+| PTY | v2-owned attach wrapper; **do not change `PtySession`'s contract** | **Zero** |
+
+The rule: **v2 owns new files and mounts through one insertion point.** Any requirement
+below that cannot be met additively is a requirement to renegotiate, not an edit to make.
+
+### Where the real risk moved
+
+Not dual maintenance — that is now intended. The risk is the two items rev. 3 put on the
+critical path, both of which want to edit hot upstream files:
+
+- **Option 0 (server events)** wants `tower-server.ts` and `tower-routes.ts`, where the
+  fork already carries 419 insertions and upstream is active. **Must be additive:** a new
+  v2-owned event route, not modifications to existing handlers.
+- **FR-38 (resize)** wants `pty-session.ts:567`, a file the fork has **never** touched.
+  Rev. 3 called this spike 1. **Solve it in the v2 layer instead** — negotiate per-viewer
+  dimensions in the v2 attach wrapper rather than changing what `resize()` means for every
+  existing client.
+
+### The open question this creates
+
+`Terminal.tsx` is an upstream file the fork has already edited by 8 lines. §1.4 says import
+it rather than re-earn its scar map, and rev. 3 recommended refactoring it to accept an
+injected channel — **which is now a significant intrusion into an upstream file.** Three
+ways out, and this is a real decision:
+
+1. **Vendor a copy** into `apps/v2/`. Zero conflict; accepts drift from upstream fixes.
+2. **Import unmodified** and make v2's transport fit `Terminal.tsx`'s existing WebSocket
+   rather than the reverse. Zero conflict; constrains FR-32.
+3. **Contribute the channel-injection refactor upstream first**, then import. No fork
+   divergence at all, but gated on someone else's review and timeline.
+
+*Recommendation: (2) for v1.* It keeps the scar map, adds no divergence, and its cost —
+v2's terminal transport looks like today's — is the cheapest of the three to reverse.
 
 ---
 
@@ -251,19 +339,28 @@ v1** — that genuinely is a new auth and connection model the current key-in-th
 cannot grow into. If decision 4 lands on "one machine in v1," Option 2 is a rewrite
 in search of a problem.
 
-**Kill criteria — write these down before starting, or do not start:**
+**~~Kill criteria~~ — withdrawn in rev. 4.**
 
-1. Freeze user-visible features on `apps/web` the day v2 begins. Bugs only.
-2. A written parity checklist of *user-visible behaviors*, not components: tree,
-   spawn, send, cleanup, gate, terminal scar-map, overview, files. Roughly the 15
-   things actually done daily.
-3. A calendar date. If the checklist is not green by then, **delete v2** and land
-   the shell merge in `apps/web` instead. Do not "keep going."
-4. One URL. v2 replaces `/` and `/workspace/...`. No `?v2=1` that becomes permanent.
-5. One-way ratchet: when a v2 surface reaches parity, delete its v1 counterpart in
-   the same PR.
+Rev. 3 carried five: freeze `apps/web`, write a parity checklist, set a calendar date,
+one URL, delete v1 surfaces as v2 reaches parity. **All five are withdrawn.** They were
+Grok's answer to the two-front-ends-forever trap, and that trap does not apply here:
 
-If `apps/web` will not be frozen, both front-ends will be maintained forever.
+- **"Freeze `apps/web`"** is actively harmful. It is the surface that stays mergeable with
+  upstream; freezing it means refusing upstream improvements.
+- **"A calendar date, then delete v2"** gates nothing. There is no deadline, no user
+  waiting, and the old UI remains usable throughout and after.
+- **"One URL, delete v1 counterparts"** is backwards. v2 mounts at its own prefix
+  precisely so v1 keeps working untouched.
+
+**What replaces them — the constraints that actually bind:**
+
+1. **v2 adds files; it does not edit upstream ones.** The single permitted edit is the
+   mount block in `tower-routes.ts`.
+2. **The old UI keeps working, permanently, by design.** Not "until parity." It is the
+   fallback and the upstream-merge surface.
+3. **Any requirement that cannot be met additively gets renegotiated,** not forced through
+   as an upstream-file edit.
+4. **Upstream merges keep passing.** That is the health check that replaces a parity date.
 
 ### Option 3 — Fork T3 Code as the shell
 
@@ -287,12 +384,14 @@ page-injected loopback key cannot grow into it.
 
 Two consequences follow immediately, and neither is optional:
 
-1. **The five kill criteria above are now binding, not advisory.** Criterion 3 needs a
-   calendar date from the human before v2's first commit lands.
-2. **The critical path is server work, not UI work.** Option 0 (per-node events,
-   scoped subscriptions) plus FR-16, FR-34, FR-35 (pairing, per-method scopes, session
-   revocation) plus FR-38 (resize policy) are all Tower changes. Rev. 1 budgeted them
-   as none of the three options' cost. They are most of the project.
+1. **v2 is built additively** (Part 0). A new `apps/v2/` workspace plus fork-owned server
+   modules, mounted through one insertion point. The old UI is never frozen and never
+   deleted.
+2. **The critical path is server work, and it must be additive.** Option 0 (per-node
+   events, scoped subscriptions) plus FR-16, FR-34, FR-35 (pairing, per-method scopes,
+   session revocation) plus FR-38 (resize policy) are all Tower changes. Rev. 1 budgeted
+   them as none of the three options' cost — they are most of the project — and rev. 4
+   adds that each must land as **new v2-owned modules**, not edits to existing handlers.
 
 Steal T3 Code's *patterns* — environments, scoped control socket, pairing tokens,
 Tailscale — without their orchestration model or their code. Option 3 was rejected by
@@ -505,9 +604,9 @@ Reviewer positions shown where they converged.
 5. **Scope of v1:** ✅ **Decided: multi-machine ships in v1.** This is what selects
    Option 2, promotes FR-1's machine level to unconditional, and moves FR-16/34/35
    from "later auth work" onto the critical path.
-6. **Old UI:** ⧗ open, and now urgent — kill criterion 1 requires freezing `apps/web`
-   the day v2 begins. *Both: do not run two UIs indefinitely. Cut the shell over, or freeze
-   `apps/web` on day one of v2.*
+6. **Old UI:** ✅ **Decided: both run indefinitely, by design.** The old UI stays usable
+   during and after v2's deployment, and stays the surface that merges with upstream.
+   *The reviewers' "do not run two UIs indefinitely" assumed a normal repo; see Part 0.*
 7. **Mobile reach:** ⧗ open. *Both: browser-only. PWA now, Capacitor as a door not walked
    through, never SwiftUI. Do not extract a new client-runtime package —
    `packages/sdk` already is one.*
@@ -587,16 +686,19 @@ iPad touch quality. Safari's exact live-WebGL-context cap.
 
 ### Spikes, re-ranked — all before any spec
 
-1. **Multi-client resize policy.** Confirmed bug, blocks the two-device premise,
-   server change. Do this first.
+1. **Multi-client resize policy — in the v2 layer.** Confirmed bug
+   (`pty-session.ts:567` is last-writer-wins), blocks the two-device premise. **Do not
+   change `PtySession`'s contract:** that file is untouched by the fork and hot upstream.
+   Spike a v2-owned attach wrapper that negotiates per-viewer dimensions. Do this first.
 2. **HTTPS on a phone.** Tailscale Serve to an iPhone: pairing, WS, PWA install,
    push permission, one delivered notification. **If this fails, the mobile half of
    this document is fiction.**
 3. **iPad keyboard weekend test** on the *current* app: an hour with a hardware
    keyboard, twenty minutes without. Decides PWA vs a later Capacitor shell. Costs
    nothing.
-4. **`Terminal.tsx` channel injection** refactor, in the current app under current
-   tests. Gates whether FR-27 is achievable at all under a transport change.
+4. **`Terminal.tsx` reuse strategy** — vendor a copy, import unmodified, or upstream the
+   refactor (Part 0). Rev. 3 recommended refactoring it in place; rev. 4 downgrades that,
+   because it is an upstream file. *Recommend importing unmodified for v1.*
 5. **dockview on a real iPad**, only if FR-7's tablet clause is promoted to MUST.
 
 **No longer a spike:** "can Tower serve multiple clients per terminal" — yes, it
