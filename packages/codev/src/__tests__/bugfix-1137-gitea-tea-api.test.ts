@@ -18,6 +18,15 @@
  *     fast (stderr + non-zero exit) when there's no usable origin remote.
  *   - `issue-view` warns on stderr when the comments fetch degrades to [].
  *
+ * Issue #12 note: `pr-exists` and `recently-merged` no longer read the `pulls`
+ * LIST endpoint, so their fixtures and tests below moved with them. Forgejo
+ * charges that endpoint per returned PR object (~0.65s each, measured), which
+ * made a 1599-PR repo cost ~17 minutes for `pr-exists` and ~26 minutes for
+ * `recently-merged`. #1137's guarantee is unchanged and still asserted: reads go
+ * through `tea api`, never `tea pulls list`, and a paged read is not silently
+ * truncated. What changed is which endpoints are paged — `pr-exists` now pages
+ * nothing at all, which is the strongest form of "does not truncate".
+ *
  * `tea` isn't available in CI (see the in-repo #920 note), so this test stubs a
  * fake `tea` on PATH that answers `api <endpoint>` (and `comments add`) with
  * captured Gitea REST fixtures, points the scripts at a throwaway git repo with
@@ -60,13 +69,31 @@ case "$2" in
   repos/acme/widgets/pulls/42)
     echo '{"number":42,"title":"Add widget","body":"PR body","state":"open","html_url":"https://git.example.com/acme/widgets/pulls/42","url":"https://git.example.com/api/v1/repos/acme/widgets/pulls/42","user":{"login":"alice"},"base":{"ref":"main"},"head":{"ref":"feature/x"},"additions":10,"deletions":3}' ;;
 
-  # --- pr-exists: state=all, paginated -------------------------------------
-  # page 1 = 50 items (open feature/x, merged feature/done, closed-not-merged
-  # feature/abandoned, + 47 open pad). page 2 = 1 merged item on feature/deep.
-  "repos/acme/widgets/pulls?state=all&limit=50&page=1")
-    jq -cn '[{number:42,state:"open",merged:false,head:{ref:"feature/x"}},{number:40,state:"closed",merged:true,head:{ref:"feature/done"}},{number:39,state:"closed",merged:false,head:{ref:"feature/abandoned"}}] + [range(47)|{number:(1000+.),state:"open",merged:false,head:{ref:("pad-"+(.|tostring))}}]' ;;
-  "repos/acme/widgets/pulls?state=all&limit=50&page=2")
-    echo '[{"number":900,"state":"closed","merged":true,"head":{"ref":"feature/deep"}}]' ;;
+  # --- the repo probe ------------------------------------------------------
+  # pr-exists resolves the repo before answering, both to learn the default
+  # branch and to prove the repo is readable: Gitea's 404 for an unknown repo is
+  # byte-identical to its 404 for a branch with no PR, so without this probe a
+  # typo'd repo would answer a confident "false".
+  repos/acme/widgets)
+    echo '{"default_branch":"main"}' ;;
+
+  # --- pr-exists: one base/head lookup per branch (#12) --------------------
+  # No list call, no paging. "feature/done" is MERGED with its branch deleted,
+  # so its .head.ref reads refs/pull/40/head and only .head.label still
+  # carries the branch name — the shape that made a head.ref scan unable to find
+  # a merged PR at all.
+  repos/acme/widgets/pulls/main/feature/x)
+    echo '{"number":42,"state":"open","merged":false,"head":{"ref":"feature/x","label":"feature/x"},"base":{"ref":"main"}}' ;;
+  repos/acme/widgets/pulls/main/feature/done)
+    echo '{"number":40,"state":"closed","merged":true,"head":{"ref":"refs/pull/40/head","label":"feature/done"},"base":{"ref":"main"}}' ;;
+  repos/acme/widgets/pulls/main/feature/abandoned)
+    echo '{"number":39,"state":"closed","merged":false,"head":{"ref":"feature/abandoned","label":"feature/abandoned"},"base":{"ref":"main"}}' ;;
+  # Any other branch has no PR. Gitea answers that with a 404 body, which is
+  # BYTE-IDENTICAL to its 404 for an unreadable repository — the reason
+  # pr-exists probes the repo first. Served from a file because the real body
+  # contains an apostrophe.
+  repos/acme/widgets/pulls/main/*)
+    cat "$TEA_NOT_FOUND" ;;
 
   # --- pr-list: state=open, paginated --------------------------------------
   # page 1 = the rich #42 item + 49 pad (50 total). page 2 = 1 item (#900).
@@ -75,13 +102,23 @@ case "$2" in
   "repos/acme/widgets/pulls?state=open&limit=50&page=2")
     echo '[{"number":900,"title":"Deep open PR","html_url":"https://git.example.com/acme/widgets/pulls/900","body":"deep","state":"open","created_at":"2026-07-01T11:00:00Z","user":{"login":"erin"},"requested_reviewers":[],"draft":false}]' ;;
 
-  # --- recently-merged: state=closed, paginated ----------------------------
-  # page 1 = 50 items, only #40 merged (the rest merged:false pad). page 2 = 1
-  # merged item (#901) — so a merged PR beyond page 1 must still surface.
-  "repos/acme/widgets/pulls?state=closed&limit=50&page=1")
-    jq -cn '[{number:40,title:"Done PR",html_url:"https://git.example.com/acme/widgets/pulls/40",body:"merged body",state:"closed",merged:true,merged_at:"2026-07-05T12:00:00Z",created_at:"2026-07-02T09:00:00Z",head:{ref:"feature/done"}},{number:39,title:"Abandoned",state:"closed",merged:false,head:{ref:"feature/abandoned"}}] + [range(48)|{number:(2000+.),title:"pad",state:"closed",merged:false,head:{ref:"pad"}}]' ;;
-  "repos/acme/widgets/pulls?state=closed&limit=50&page=2")
-    echo '[{"number":901,"title":"Deep merge","html_url":"https://git.example.com/acme/widgets/pulls/901","body":"deep merged","state":"closed","merged":true,"merged_at":"2026-07-06T12:00:00Z","created_at":"2026-07-03T09:00:00Z","head":{"ref":"feature/deep-merge"}}]' ;;
+  # --- recently-merged: the cheap ISSUES index, paginated (#12) ------------
+  # This index costs ~1.8s per 50 where the pulls list costs ~50s for the same
+  # rows, because it does not materialise head/base commit info. It carries
+  # everything the contract needs EXCEPT the head branch, which is then fetched
+  # per match below. Paging still matters here, so page 1 is a full 50 and #901
+  # lives only on page 2.
+  "repos/acme/widgets/issues?type=pulls&state=closed&since=2026-07-01T00:00:00Z&limit=50&page=1")
+    jq -cn '[{number:40,title:"Done PR",html_url:"https://git.example.com/acme/widgets/pulls/40",body:"merged body",created_at:"2026-07-02T09:00:00Z",pull_request:{merged_at:"2026-07-05T12:00:00Z"}},{number:39,title:"Abandoned",body:"",created_at:"2026-07-02T09:00:00Z",pull_request:{merged_at:null}}] + [range(48)|{number:(2000+.),title:"pad",body:"",created_at:"d",pull_request:{merged_at:null}}]' ;;
+  "repos/acme/widgets/issues?type=pulls&state=closed&since=2026-07-01T00:00:00Z&limit=50&page=2")
+    echo '[{"number":901,"title":"Deep merge","html_url":"https://git.example.com/acme/widgets/pulls/901","body":"deep merged","created_at":"2026-07-03T09:00:00Z","pull_request":{"merged_at":"2026-07-06T12:00:00Z"}}]' ;;
+
+  # Head branches, one request per merged match. Both branches are deleted, so
+  # .head.label is the only place the name survives.
+  repos/acme/widgets/pulls/40)
+    echo '{"number":40,"head":{"ref":"refs/pull/40/head","label":"feature/done"}}' ;;
+  repos/acme/widgets/pulls/901)
+    echo '{"number":901,"head":{"ref":"refs/pull/901/head","label":"feature/deep-merge"}}' ;;
 
   # --- issue-view ----------------------------------------------------------
   repos/acme/widgets/issues/99)
@@ -114,6 +151,13 @@ function hasJq(): boolean {
 }
 
 const jqAvailable = hasJq();
+
+/**
+ * The window `recently-merged` asks for. Since #12 the concept takes a window
+ * and passes it to the server as a `since` filter rather than walking every
+ * closed pull and discarding most of it, so the fixtures are keyed by it.
+ */
+const SINCE = { CODEV_SINCE_DATE: '2026-07-01T00:00:00Z' };
 
 /** Run a gitea forge script under the fake `tea`, return trimmed stdout. */
 function runScript(name: string, env: Record<string, string> = {}): string {
@@ -154,7 +198,18 @@ describe.skipIf(!jqAvailable)('bugfix #1137: gitea preset routes reads through `
     execFileSync('git', ['init', '-q'], { cwd: repoDir });
     execFileSync('git', ['remote', 'add', 'origin', 'git@git.example.com:acme/widgets.git'], { cwd: repoDir });
 
-    runEnv = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` };
+    // Gitea's 404 body, verbatim from Forgejo 15.x. Written to a file so the
+    // apostrophe in "couldn't" survives the fake tea's shell quoting.
+    const notFoundPath = join(fixture, 'notfound.json');
+    writeFileSync(
+      notFoundPath,
+      '{"message":"The target couldn\'t be found.","url":"https://git.example.com/api/swagger","errors":[]}',
+    );
+    runEnv = {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH ?? ''}`,
+      TEA_NOT_FOUND: notFoundPath,
+    };
   });
 
   afterAll(() => {
@@ -210,7 +265,11 @@ describe.skipIf(!jqAvailable)('bugfix #1137: gitea preset routes reads through `
     expect(runScript('pr-exists.sh', { CODEV_BRANCH_NAME: 'feature/x' })).toBe('true');
   });
 
-  it('pr-exists is true for a MERGED pull on the branch', () => {
+  it('pr-exists is true for a MERGED pull whose branch was deleted', () => {
+    // `.head.ref` on this fixture is "refs/pull/40/head". The old scan matched
+    // on head.ref and therefore could not find a merged PR by branch name at
+    // all; the base/head lookup matches on the stored head branch, which Gitea
+    // also exposes as `.head.label`.
     expect(runScript('pr-exists.sh', { CODEV_BRANCH_NAME: 'feature/done' })).toBe('true');
   });
 
@@ -222,10 +281,17 @@ describe.skipIf(!jqAvailable)('bugfix #1137: gitea preset routes reads through `
     expect(runScript('pr-exists.sh', { CODEV_BRANCH_NAME: 'no-such-branch' })).toBe('false');
   });
 
-  it('pr-exists paginates: a merged PR only on page 2 is found', () => {
-    // page 1 is a full 50 items; feature/deep exists ONLY on page 2, so this
-    // would false-negative (and block a porch pr_exists gate) without paging.
-    expect(runScript('pr-exists.sh', { CODEV_BRANCH_NAME: 'feature/deep' })).toBe('true');
+  it('pr-exists cannot truncate, because it does not list (#12)', () => {
+    // This replaces the old "a merged PR only on page 2 is found" test. That
+    // test proved the scan paged correctly; the scan is gone, because paging it
+    // correctly still cost ~17 minutes on a real 1599-PR Forgejo. The fake tea
+    // above serves NO `pulls?state=…` fixture any more, so a script that
+    // reintroduced the scan would fail here with "no fixture for", and the
+    // endpoint-level assertion lives in pir-12-gitea-pr-concepts.test.ts.
+    expect(runScript('pr-exists.sh', { CODEV_BRANCH_NAME: 'feature/x' })).toBe('true');
+    const { status, stderr } = runScriptFull('pr-exists.sh', { CODEV_BRANCH_NAME: 'feature/x' });
+    expect(status).toBe(0);
+    expect(stderr).not.toContain('no fixture');
   });
 
   it('issue-view returns body, browser url, and comments as an ARRAY', () => {
@@ -256,7 +322,7 @@ describe.skipIf(!jqAvailable)('bugfix #1137: gitea preset routes reads through `
   });
 
   it('recently-merged keeps merged pulls only and uses merged_at', () => {
-    const merged = JSON.parse(runScript('recently-merged.sh'));
+    const merged = JSON.parse(runScript('recently-merged.sh', SINCE));
     const done = merged.find((p: { number: number }) => p.number === 40);
     expect(done).toEqual({
       number: 40,
@@ -272,7 +338,7 @@ describe.skipIf(!jqAvailable)('bugfix #1137: gitea preset routes reads through `
   });
 
   it('recently-merged paginates: a merged PR only on page 2 is included', () => {
-    const merged = JSON.parse(runScript('recently-merged.sh'));
+    const merged = JSON.parse(runScript('recently-merged.sh', SINCE));
     expect(merged).toHaveLength(2); // #40 (page 1) + #901 (page 2)
     const deep = merged.find((p: { number: number }) => p.number === 901);
     expect(deep).toMatchObject({

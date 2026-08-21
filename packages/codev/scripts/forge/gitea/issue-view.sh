@@ -1,5 +1,6 @@
 #!/bin/sh
 # Forge concept: issue-view (Gitea via tea CLI)
+# forge-executable: tea
 # Input: CODEV_ISSUE_ID
 # Output: JSON {title, body, state, url, comments[]}  (IssueViewResult)
 #

@@ -113,6 +113,23 @@ export type RecentlyMergedResult = MergedPrItem[];
 export interface PrSearchItem {
   number: number;
   headRefName: string;
+  /**
+   * The PR's base branch. `consult`'s architect path (findPRForIssue) reads it
+   * to compute a merge-base against the PR's *actual* base rather than the
+   * repo's default branch, and warns and falls back when it is absent — so a
+   * concept that can supply it should.
+   */
+  baseRefName?: string;
+  /**
+   * `open`, `merged`, or `closed` (closed without merging), when the concept
+   * normalises it. Callers read `prs[0]`, and a search spanning every state
+   * (which is the default since #1331/#759 — a merged PR must be findable) can
+   * otherwise hand them a stale PR with no way to tell. Concepts that emit this
+   * order their results open-first.
+   */
+  state?: 'open' | 'merged' | 'closed';
+  title?: string;
+  url?: string;
 }
 
 /** Output of the `pr-search` concept command. */

@@ -10,7 +10,13 @@
  */
 
 import { UNCATEGORIZED_AREA } from '@cluesmith/codev-sdk/constants';
-import { executeForgeCommand, type ForgeConfig } from './forge.js';
+import {
+  executeForgeCommand,
+  getForgeCommand,
+  isConceptDisabled,
+  warnConceptUnavailable,
+  type ForgeConfig,
+} from './forge.js';
 import { getRepoInfo } from './team-github.js';
 import type { IssueViewResult, PrListItem, PrViewResult, IssueListItem } from './forge-contracts.js';
 
@@ -334,6 +340,21 @@ export async function fetchOnItTimestamps(
   if (issueIds.length === 0) return result;
 
   const unique = [...new Set(issueIds)];
+
+  // A concept disabled by a PROVIDER PRESET rather than by user config used to
+  // fall through to the GraphQL path below, call the concept, get null back and
+  // `continue` — an empty map, nothing on stderr, analytics quietly missing its
+  // wall-clock baseline. `forgeConfig?.[...]` cannot see a preset: for a gitea
+  // repo the key is absent from user config and null in the preset. Ask the
+  // resolver, which knows about both.
+  if (isConceptDisabled('on-it-timestamps', forgeConfig) || getForgeCommand('on-it-timestamps', forgeConfig) === null) {
+    warnConceptUnavailable(
+      'on-it-timestamps',
+      forgeConfig,
+      '"On it" timestamps are unavailable, so analytics falls back to PR createdAt for wall-clock time',
+    );
+    return result;
+  }
 
   // Check if a custom (non-default) on-it-timestamps command is configured.
   // Custom commands receive CODEV_ISSUE_NUMBERS and return a simple JSON map.

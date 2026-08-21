@@ -68,6 +68,8 @@ Generalizable wisdom extracted from review documents, ordered by impact. Updated
 
 ## Architecture
 
+- **Model permissions as roles/capabilities, not booleans — booleans don't extend.** A boolean answers one question and has to be joined by another the moment a second kind of actor appears; a capability set answers the general question once. (Demoted from the hot tier in PIR #12 to make room for the partial-result rule, which recurs across more subsystems.)
+
 - [From #4] **Do not port a rendering-attribute convention from one TUI to another without
   measuring the second one.** claude and codex de-emphasize composer placeholder text with
   SGR-dim, so the render gate skips dim cells as chrome. agy already broke that (its hint is a
@@ -635,6 +637,8 @@ so it survives review. Pin the constant to the highest migration block in a test
 
 ## Protocol Orchestration
 
+- [From #12, tracked as #20] **A reviewer that never ran must not be spellable as one that approved.** Porch printed "All reviewers approved!" for a project whose codex lane was quota-blocked and had read nothing, and there are *two* independent routes to that: `parseVerdict` maps anything it does not recognise — including the `VERDICT: SKIPPED` the NOT-RUN convention deliberately writes — to `COMMENT`, which `allApprove` counts as approval; and `allApprove` separately returns `true` when `reviews.length === 0`, so *zero* reviewers approves too. The fall-through's own comment states the bug out loud — "no valid VERDICT line found **but the consult ran**" — because the vocabulary was designed for a reviewer that ran and emitted something unparseable, and a reviewer that never ran cannot be expressed in it at all. Two general rules. First: when a convention exists to record an absence, the code that reads it has to know about that convention, or the convention only reassures the person who wrote it. Second: an enum whose values all mean "something happened" cannot represent nothing happening — check whether the missing case is *unhandled* or *inexpressible*, because widening a default fixes the first and not the second.
+
 - [From 0073] Pure YAML state format is simpler than markdown-with-frontmatter for machine-readable state. Standard format, standard libraries, no custom parsing.
 - [From 0073] Signal-based transitions (`<signal>NAME</signal>`) are simple and unambiguous for LLM output parsing. "Last signal wins" resolves ambiguity when multiple signals appear in output.
 - [From 0073] YAML key naming: use underscores (`spec_approval`) not hyphens (`spec-approval`) for compatibility with YAML parsing via regex.
@@ -655,6 +659,10 @@ so it survives review. Pin the constant to the highest migration block in a test
 - [From #1494] A relay meant to *trigger* an action must read as an imperative instruction, not a past-tense fact. A VS Code gate approval phrased "Human approved X in VS Code" was read by the receiving architect as *already done*, so it never relayed and the builder stalled at the gate; "Approve X, please pass it to the builder" is a call to act. Corollary: message provenance (who sent it, from where) belongs in **structured attribution** (the `from` field and the rendered header `[USER via VS Code]`), not in body text, or it leaks to downstream recipients and can be misread. Both failure modes surfaced only in a live end-to-end run, never in unit tests.
 
 ## Debugging and Root Cause Analysis
+
+- [From #12] **Killing a process is not the same as unblocking the caller, and a zero exit is not the same as success.** A shell timeout helper wrapped `tea api` in `$(...)`, killed it on schedule, printed its timeout message on time — and the command substitution stayed blocked for minutes, because a grandchild still held the write end of the pipe. Give the wrapped command a temp file instead of the caller's pipe, and redirect the watchdog's own stdout to `/dev/null` for the same reason. The second trap is subtler: classifying "we killed it" from the exit status (143/137) looks equivalent to recording it and is not — POSIX defines operand-less `wait` as *always* returning zero, so a wrapper script killed by SIGTERM reports success with an empty body, and the caller then misdiagnoses the empty response as a different failure entirely. Have the watchdog record that it fired; infer nothing.
+- [From #12] **Measure whether a remote endpoint is priced per request or per returned item before optimising around it.** Gitea's `/pulls` list costs ~0.65s *per PR object* (0.78s at `limit=1`, 32.8s at `limit=50`), so paging it costs the same total at any page size and a 1599-PR repo took ~17 minutes to answer one yes/no question. Every instinct — raise the page size, add a page cap, cache it — is useless against a per-item cost; the only fix is a targeted endpoint. One `limit=1` vs `limit=50` timing settles which regime you are in, and it takes a minute.
+- [From #12] **A hang reported from a shell is not always the hang your code has in production.** The same `pr-exists` script that never returned from a terminal was, in-process, being killed at 30s by `executeForgeCommand` and returning `null` — which the caller rendered as "no PR exists". Same root cause, two different bugs, and only one of them was the one being reported. Check what the in-process caller does with the failure before assuming the symptom you were handed is the whole symptom.
 
 - [From #4] **Reproduce a reported finding against a pinned commit, never a working tree.** A
   reviewer reported a false-CLEAN at specific terminal widths; a follow-up sweep found nothing

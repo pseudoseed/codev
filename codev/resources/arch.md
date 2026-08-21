@@ -2090,6 +2090,17 @@ All interactions with the repository hosting platform (GitHub by default) are ro
 
 **Environment variables**: Each concept receives `CODEV_*` env vars (e.g., `CODEV_ISSUE_NUMBER`, `CODEV_PR_NUMBER`) that the command uses to parameterize its output.
 
+**Provider presets** live as on-disk scripts under `packages/codev/scripts/forge/<provider>/<concept>.sh` and are resolved at runtime by `resolveScriptPath`. There is no `codev-skeleton/` mirror — these scripts are single-source. A concept a provider cannot support is set to `null` in its preset (`buildPresetFromScripts`), which is different from "no script": `null` is a deliberate refusal that callers must handle. `gitea` disables only `team-activity` and `on-it-timestamps`, both `gh api graphql` pass-throughs that Forgejo cannot serve at all.
+
+**A preset-disabled concept is invisible to `forgeConfig` lookups.** `forgeConfig?.['x']` reads *user config*; a concept nulled by a provider preset is absent from it. Code deciding whether a concept is available must ask `getForgeCommand` / `isConceptDisabled`, not index the config — the former is how a gitea repo silently returned an empty "On it" timestamp map for months.
+
+**Exit-status contract**: `0` an answer, `1` a failure, `2` a missing or unusable input, and **`3` a truncated result — with empty stdout**. A partial list is indistinguishable from a complete one once printed, so a concept that stops early must not print what it got. `null` reaching a caller from `executeForgeCommand` therefore means "could not answer" (failure, 30s timeout, or disabled) and must never be read as an empty answer.
+
+**Forge behavior verified against Forgejo 15.x / tea 0.14.2** (PIR #12) — two properties that look otherwise:
+
+- Gitea's `/repos/{o}/{r}/pulls` list is priced **per returned PR object**, not per request: 0.78s at `limit=1`, 32.8s at `limit=50`. Paging it is linear in total PRs regardless of page size, so on a 1599-PR repo a full walk costs ~17 minutes. Anything answerable by a targeted endpoint must not use it. The cheap index for the same rows is `/issues?type=pulls` (~1.8s per 50), which carries `pull_request.merged_at` but no head/base refs.
+- `head.ref` is rewritten to `refs/pull/N/head` once a merged PR's source branch is deleted — the normal state of every merged PR — but **`head.label` retains the original branch name**, and `GET /pulls/{base}/{head}` matches on the stored head branch. Branch→PR lookup is therefore possible after branch deletion, which the earlier `head.ref` scan had documented as impossible.
+
 ### Two remote-command paths into an editor surface (Spec 1401)
 
 Tower has **two** ways for an external controller to drive an editor, and picking the wrong one

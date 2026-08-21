@@ -126,7 +126,12 @@ function getProviderPresets(): Record<string, Record<string, string | null>> {
   _providerPresets = {
     github: getDefaultCommands(),
     gitlab: buildPresetFromScripts('gitlab', ['team-activity', 'on-it-timestamps']),
-    gitea: buildPresetFromScripts('gitea', ['team-activity', 'on-it-timestamps', 'pr-search', 'pr-diff']),
+    // pr-search and pr-diff were disabled here until #12 shipped gitea scripts
+    // for them. team-activity and on-it-timestamps stay disabled and are not
+    // coming: both are `gh api graphql` pass-throughs and Forgejo has no
+    // GraphQL. Their callers say so out loud rather than degrading quietly —
+    // see fetchOnItTimestamps and fetchTeamGitHubData.
+    gitea: buildPresetFromScripts('gitea', ['team-activity', 'on-it-timestamps']),
     // pr-create is explicitly disabled (not just "no script") — Linear has no PR
     // concept of its own, and without this it silently falls through to the
     // github default (`gh pr create`) instead of failing loudly. That's the
@@ -302,6 +307,56 @@ export function isConceptDisabled(
 ): boolean {
   if (!forgeConfig) return false;
   return concept in forgeConfig && forgeConfig[concept] === null;
+}
+
+/**
+ * Explain, in one sentence, why a concept has no command — for a human reading
+ * a terminal, not for a log file.
+ *
+ * A concept can be unavailable two ways that look identical to a caller and are
+ * not identical to a user: the project turned it off, or the forge provider
+ * never had it. Naming the provider is the difference between "why is this
+ * panel empty" and "right, Forgejo has no GraphQL".
+ */
+export function describeUnavailableConcept(
+  concept: string,
+  forgeConfig?: ForgeConfig | null,
+): string {
+  const provider = forgeConfig?.provider;
+  if (forgeConfig && concept !== 'provider' && concept in forgeConfig && forgeConfig[concept] === null) {
+    return `the \`${concept}\` forge concept is disabled in .codev/config.json`;
+  }
+  if (provider) {
+    return `the \`${concept}\` forge concept is not available for provider "${provider}"`;
+  }
+  return `the \`${concept}\` forge concept has no command configured`;
+}
+
+/** Concepts already warned about, so a per-poll code path warns once per process. */
+const _warnedConcepts = new Set<string>();
+
+/**
+ * Warn on stderr, once per concept per process, that a concept is unavailable
+ * and what that costs.
+ *
+ * Once per process rather than once per call: these sit on polled paths (the
+ * overview refreshes every 30s), and a warning printed on every poll is noise
+ * that trains people to ignore it — which is the same silence it was meant to
+ * break, arrived at by a different road.
+ */
+export function warnConceptUnavailable(
+  concept: string,
+  forgeConfig: ForgeConfig | null | undefined,
+  consequence: string,
+): void {
+  if (_warnedConcepts.has(concept)) return;
+  _warnedConcepts.add(concept);
+  console.error(`Warning: ${describeUnavailableConcept(concept, forgeConfig)} — ${consequence}.`);
+}
+
+/** Test seam: forget which concepts have been warned about. */
+export function _resetConceptWarnings(): void {
+  _warnedConcepts.clear();
 }
 
 // =============================================================================
