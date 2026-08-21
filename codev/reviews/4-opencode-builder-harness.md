@@ -2,6 +2,10 @@
 
 Fixes #4
 
+> **Two caveats up front, both detailed below:** this is a **breaking change** for anyone on a
+> custom builder harness, and it merged with **two of three review lanes — the Codex reviewer
+> never ran** (quota exhausted; skipped on explicit human instruction).
+
 ## Summary
 
 `opencode` could be configured as a builder harness but was unusable: it exited immediately
@@ -175,21 +179,35 @@ that these attribute conventions do not port between TUIs; it needed `placeholde
 because its hint is a foreground color rather than dim. opencode had inherited the assumption
 without the measurement, which review correctly flagged.
 
-## Consultation coverage — read this before trusting the review depth
+## ⚠️ This merged with TWO of THREE review lanes — Codex never ran
 
-**Two of three lanes ran on the final PR; Codex never ran at all.** Codex has been out of
-usage quota throughout this project (until Aug 27), so this change — which touches core Tower
-message-delivery code, where the failure mode is silent input corruption — did **not** get a
-full 3-way review. Gemini/agy was unauthenticated during the mid-implementation passes and
-skipped non-blockingly, but did run on the final review (APPROVE, HIGH). Claude ran throughout
-and was substantive at every pass: it found the transcript-forgery and zero-row false-CLEANs
-mid-implementation, and on the final pass caught the README/pre-flight contradiction above.
-The width-dependent false-CLEAN came from a separate adversarial pass.
+**Read this before trusting the review depth.** This change touches core Tower
+message-delivery code, where the failure mode is silent corruption of a live agent's input.
+It did **not** get the full 3-way review that code normally gets.
 
-A PR reviewer should weight this as **two-lane coverage on a security-adjacent path**, with
-the strongest independent verifier (Codex) absent. Every blocking finding raised was
-reproduced and fixed rather than argued down; one was briefly retracted on a bad measurement
-and then re-confirmed against a pinned commit (see the process note above).
+| Lane | Result |
+|---|---|
+| **codex** (gpt-5.6-sol) | **NEVER RAN** — provider usage quota exhausted; retried twice (≈08:00 and ≈14:50 UTC, 2026-08-21). Quota restores 2026-08-27. **No codex findings exist for this change.** |
+| gemini (agy) | APPROVE, HIGH |
+| claude | REQUEST_CHANGES, HIGH → blocking finding fixed (the README/pre-flight contradiction above) |
+
+The Codex lane was **skipped on explicit human instruction** on 2026-08-21, rather than block
+a fork-local change for six days. The absence is recorded as a NOT-RUN file at
+`codev/projects/4-make-opencode-a-working-builde/4-review-iter1-codex.txt`, which carries
+`VERDICT: SKIPPED` so it cannot be misread as a review that happened. Weigh this as **two-lane
+coverage on a security-adjacent path, with the strongest independent verifier absent.**
+
+What the two lanes that did run actually contributed: Claude ran at every pass and was
+substantive throughout — it found the transcript-forgery and zero-row false-CLEANs during
+implementation, and caught the README/pre-flight contradiction on the final pass. Gemini was
+unauthenticated during the mid-implementation passes (skipped non-blockingly) but ran on the
+final review. The width-dependent false-CLEAN — the most serious one — came from a separate
+adversarial pass, not from a standard lane. The architect independently swept all committed
+fixtures across widths 40–140 against both the pre-fix and post-fix region models.
+
+Every blocking finding raised was reproduced and fixed rather than argued down; one was
+briefly retracted on a bad measurement and then re-confirmed against a pinned commit (see the
+process note above).
 
 ## Architecture Updates
 
