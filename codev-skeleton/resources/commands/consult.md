@@ -21,7 +21,8 @@ consult stats [options]
 --model-id <id>        Override the provider model id for THIS invocation
 ```
 
-`-m/--model` picks the **lane** (`claude`, `codex`, `gemini`, `hermes`); `--model-id` picks the
+`-m/--model` picks the **lane** (`claude`, `codex`, `gemini`, `hermes`, `opencode`); `--model-id`
+picks the
 **model that lane runs**. The two are independent — see [Configuration](#configuration) for setting
 an id persistently instead.
 
@@ -30,12 +31,15 @@ consult -m codex --model-id gpt-5.6-sol --prompt "Review this design"
 ```
 
 - **Precedence**: `--model-id` > `consult.models.<lane>` > the lane's shipped default.
-- **Supported lanes**: `claude`, `codex`, `gemini`. Using it with `hermes` is an **error**, not a
-  silent no-op — `hermes chat -q` has no model selector, so accepting the flag there would mean
-  ignoring it.
-- **Validation is syntax-only.** Whether the id exists is the provider's call; a rejection fails
-  loudly with no fallback to the default. See
-  [the fail-fast contract](#the-fail-fast-contract-and-where-it-stops).
+- **Supported lanes**: `claude`, `codex`, `gemini`, `opencode`. Using it with `hermes` is an
+  **error**, not a silent no-op — `hermes chat -q` has no model selector, so accepting the flag
+  there would mean ignoring it.
+- **Validation is syntax-only**, with one exception. Whether the id exists is normally the
+  provider's call; a rejection fails loudly with no fallback to the default. See
+  [the fail-fast contract](#the-fail-fast-contract-and-where-it-stops). The exception is
+  `opencode`, whose id is checked against `opencode models` *before* the run — the provider
+  rejects an unknown id with a bare `UnknownError: Unexpected server error` and empty output,
+  which names neither the model nor the mistake.
 
 ## Models
 
@@ -45,6 +49,7 @@ consult -m codex --model-id gpt-5.6-sol --prompt "Review this design"
 | `codex` | `gpt` | @openai/codex | `gpt-5.6-sol` (medium reasoning effort) | Read-only sandbox, thorough |
 | `claude` | `opus` | Claude Agent SDK | `claude-opus-5` | Balanced analysis with tool use |
 | `hermes` | - | hermes CLI (`hermes chat -q`) | *(hermes' own default)* | Uses Hermes agent as consult backend |
+| `opencode` | - | opencode CLI (`opencode run`) | `xai/grok-4.6` | Agentic file access. A reviewer on an account no other lane shares. **Hard-fails** — never a silent skip. |
 
 > **The codex lane's `-sol` suffix is load-bearing.** Plain `gpt-5.6` and `gpt-5.6-codex` are both
 > rejected by Codex when running on a ChatGPT account (`The '<id>' model is not supported when
@@ -90,11 +95,14 @@ single invocation by [`--model-id`](#model-selection-options).
 { "consult": { "models": { "claude": "claude-opus-5", "codex": "gpt-5.6-sol" } } }
 ```
 
-Valid lanes: `claude`, `codex`, `gemini`. **`hermes` is rejected** — it is invoked as
+Valid lanes: `claude`, `codex`, `gemini`, `opencode`. **`hermes` is rejected** — it is invoked as
 `hermes chat -q` and exposes no model selector, so configuring one would silently do nothing.
 (`hermes` remains valid in `porch.consultation` lane lists; the two key spaces differ on purpose.)
 
 The `gemini` lane passes the id to `agy --model`, so the id space is agy's, not Google's API's.
+The `opencode` lane passes it to `opencode run -m`, so the id space is opencode's: a
+`provider/model` pair exactly as `opencode models` prints it. The prefix is `xai/`, **not**
+`x-ai/` — the wrong one is rejected before the run, naming the right one.
 
 ### `consult.reasoningEffort`
 
@@ -211,10 +219,22 @@ Codev checks a model id's *syntax* only (ASCII alphanumerics plus `. _ : / @ + -
 no leading punctuation) — never its existence. **There is no allowlist of model ids anywhere in
 Codev, by design**: a new model must work the day the provider ships it, without a Codev release.
 
+The `opencode` lane looks like an exception and is not one. It checks the id against
+`opencode models` before spawning — but that list is the provider tool answering for itself at call
+time, not a catalog Codev ships, so it cannot go stale. The check exists because opencode's own
+rejection is unusable: a wrong provider prefix comes back as `UnknownError: Unexpected server
+error` with empty output, naming neither the model nor the mistake. If the listing itself fails,
+the check stands down and the provider is the authority again.
+
 So a typo'd model id is not caught at config time. It reaches the backend, which rejects it; that
 lane exits non-zero, the provider's error text is surfaced, the config key that supplied the id is
 named, and **no review file is written** — so porch cannot advance on a lane that never ran. What
 you do *not* get is a silent substitution of the default model.
+
+The `opencode` lane takes the strict side of this contract with no exceptions at all: a missing
+CLI, an unknown id, a non-zero exit, and a clean exit that produced nothing all fail the lane and
+leave no review file. It has no OAuth-fragility to accommodate, and a lane that quietly produces
+nothing is a lane porch counts as an approval.
 
 One deliberate exception: a `gemini` lane **with no model id resolved** still skips non-blockingly
 when `agy` is missing or unauthenticated (consultation is best-effort there). Once an id *is*

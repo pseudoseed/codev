@@ -28,6 +28,7 @@ is not a thing, `-m codex --model-id gpt-5.6-sol` is.
 | `gemini` | `pro` | Antigravity CLI (`agy`); agentic file access (`--sandbox`), OAuth login; skips non-blockingly if unavailable |
 | `codex` | `gpt` | Thorough (~200-250s), shell exploration |
 | `claude` | `opus` | Agent SDK with tool use (~60-120s) |
+| `opencode` | - | `opencode run` (Grok, default `xai/grok-4.6`); agentic file access; hard-fails rather than skipping |
 
 ## All flags
 
@@ -35,11 +36,15 @@ is not a thing, `-m codex --model-id gpt-5.6-sol` is.
 -m, --model <model>         Lane to use (required except stats)
 --model-id <id>              Pin the provider model for this run, e.g.
                              `--model-id gpt-5.6-sol`. Outranks config
-                             `consult.models.<lane>`. Works on the claude, codex
-                             and gemini lanes; using it with a lane that has no
-                             model selector (hermes) is an error, not a no-op.
-                             Syntax is validated here; whether the model exists
-                             is the provider's call and fails loudly.
+                             `consult.models.<lane>`. Works on the claude, codex,
+                             gemini and opencode lanes; using it with a lane that
+                             has no model selector (hermes) is an error, not a
+                             no-op. Syntax is validated here; whether the model
+                             exists is the provider's call and fails loudly.
+                             Exception: an opencode id is checked against
+                             `opencode models` first — the prefix is `xai/`, not
+                             `x-ai/`, and the provider's own rejection says so
+                             nowhere.
 --prompt <text>              Inline prompt (general mode)
 --prompt-file <path>         Prompt file path (general mode)
 --protocol <name>            Protocol: spir, aspir, air, bugfix, maintain
