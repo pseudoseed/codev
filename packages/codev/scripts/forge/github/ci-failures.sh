@@ -48,6 +48,8 @@ if [ "$rc" -ne 0 ]; then
   exit 1
 fi
 
+ci_require_json "$CONCEPT" "$RUN" "gh run view ${CODEV_CI_RUN_ID}"
+
 FAILED=$(printf '%s' "$RUN" | jq -c "$GH_FAILED_JOBS_JQ")
 RUN_STATUS=$(printf '%s' "$RUN" | jq -r '.status // "unknown"')
 RUN_CONCLUSION=$(printf '%s' "$RUN" | jq -r '.conclusion // "null"')

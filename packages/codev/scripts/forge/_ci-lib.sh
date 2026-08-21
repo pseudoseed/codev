@@ -125,6 +125,25 @@ ci_status_is_terminal() {
   esac
 }
 
+# Assert that a captured payload really is JSON, and emit an envelope if not.
+#
+#   ci_require_json <concept> "<payload>" "<what produced it>"
+#
+# A forge CLI that exits 0 and prints something other than JSON — an auth
+# prompt, an empty body, an HTML error page — would otherwise reach `jq` and
+# kill the script under `set -e`, leaving jq's own diagnostic on stderr and
+# NOTHING on stdout. That is the one shape these concepts promised never to
+# produce: a caller with no structured answer at all.
+ci_require_json() {
+  _concept="$1"; _payload="$2"; _what="$3"
+  if printf '%s' "$_payload" | jq -e . >/dev/null 2>&1; then
+    return 0
+  fi
+  ci_fail "$_concept" forge-error \
+    "${_what} did not return JSON: $(printf '%s' "$_payload" | head -c 200 | tr '\n' ' ')"
+  exit 1
+}
+
 # ---------------------------------------------------------------------------
 # Log cache
 # ---------------------------------------------------------------------------

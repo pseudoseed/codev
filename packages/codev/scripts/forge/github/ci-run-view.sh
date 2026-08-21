@@ -37,6 +37,8 @@ if [ "$rc" -ne 0 ]; then
   exit 1
 fi
 
+ci_require_json "$CONCEPT" "$OUT" "gh run view ${CODEV_CI_RUN_ID}"
+
 printf '%s' "$OUT" | jq -c '{
   ok: true,
   provider: "github",

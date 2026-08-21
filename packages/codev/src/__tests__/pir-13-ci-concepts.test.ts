@@ -430,6 +430,18 @@ describe.skipIf(!hasJq())('#13 — ci-failures returns a bounded extract with it
     expect(r.json!.ok).toBe(false);
   });
 
+  it('emits an envelope when the forge CLI exits 0 with something that is not JSON', () => {
+    // An auth prompt, an empty body, an HTML error page. Without a guard this
+    // reaches jq, dies under `set -e`, and leaves jq's diagnostic on stderr
+    // with NOTHING on stdout — the one shape these concepts promised never to
+    // produce.
+    stub('gh', 'echo "gh: not logged into any hosts"');
+    const r = run(githubDir, 'ci-run-view.sh', { CODEV_CI_RUN_ID: '32515040122' });
+    expect(r.status).not.toBe(0);
+    expect(r.json!.error).toBe('forge-error');
+    expect(r.json!.detail).toContain('did not return JSON');
+  });
+
   it('translates the shared canceled into gh cancelled', () => {
     stubGh([]);
     run(githubDir, 'ci-runs.sh', { CODEV_CI_STATUS: 'canceled' });

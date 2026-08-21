@@ -49,6 +49,8 @@ if [ "$rc" -ne 0 ]; then
   exit 1
 fi
 
+ci_require_json "$CONCEPT" "$RUN" "gh run view ${CODEV_CI_RUN_ID}"
+
 if [ -n "$CODEV_CI_JOB_ID" ]; then
   TARGET=$(printf '%s' "$RUN" | jq -c --argjson j "$CODEV_CI_JOB_ID" 'first(.jobs[] | select(.databaseId == $j)) // empty')
   if [ -z "$TARGET" ]; then

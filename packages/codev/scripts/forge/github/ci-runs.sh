@@ -52,6 +52,8 @@ if [ "$rc" -ne 0 ]; then
   exit 1
 fi
 
+ci_require_json "$CONCEPT" "$OUT" "gh run list"
+
 printf '%s' "$OUT" | jq -c --argjson limit "$LIMIT" '{
   ok: true,
   provider: "github",
