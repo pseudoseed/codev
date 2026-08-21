@@ -45,7 +45,16 @@ forge_timeout() {
   # derived from the output file's ("$_tf.fired"), which mktemp does not reserve
   # — a predictable name in a world-writable tmpdir that anyone could pre-create
   # to make every call report a timeout.
-  _dir=$(mktemp -d) || return 1
+  # 125, not 1: a temp dir we could not create is NOT the wrapped command
+  # failing — the command never ran. Returning 1 made an unusable TMPDIR
+  # indistinguishable from "gh says no such run", and on Linux (where mktemp
+  # honours TMPDIR strictly, unlike macOS which falls back) that turned into a
+  # confident "run 32515040122 could not be read". Reproduced in an ubuntu:24.04
+  # container before fixing.
+  _dir=$(mktemp -d 2>/dev/null) || {
+    echo "forge: could not create a temporary directory under TMPDIR=${TMPDIR:-/tmp}; the command was never run" >&2
+    return 125
+  }
   _tf="${_dir}/out"
   _fired="${_dir}/fired"
   "$@" >"$_tf" &

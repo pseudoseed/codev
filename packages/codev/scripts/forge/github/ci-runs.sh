@@ -26,6 +26,8 @@ set -e
 
 CONCEPT=ci-runs
 
+ci_require_tmpdir "$CONCEPT"
+
 ci_check_status "$CONCEPT" "$CODEV_CI_STATUS"
 
 LIMIT=${CODEV_CI_LIMIT:-$CI_LIMIT_DEFAULT}

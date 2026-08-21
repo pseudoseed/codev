@@ -145,6 +145,40 @@ ci_require_id() {
   esac
 }
 
+# Fail loudly and early if TMPDIR is unusable.
+#
+# Every CI concept writes logs and windows to a temp dir, and the watchdog in
+# _timeout.sh needs one for every single call. macOS mktemp quietly falls back
+# to the system temp dir when TMPDIR points nowhere; GNU mktemp does not, so an
+# unusable TMPDIR fails on Linux and passes on a Mac. Checked ONCE up front, by
+# name, because the alternative is what it did before: the first forge call
+# failed for a reason nobody could see, and the concept reported "run <id> could
+# not be read" — a temp-dir problem wearing the face of a missing run.
+ci_require_tmpdir() {
+  _concept="$1"
+  # The explicit directory test comes FIRST, and is the reason this is uniform:
+  # relying on mktemp alone would keep the platform split, since macOS would
+  # quietly succeed against a TMPDIR that does not exist while Linux failed. A
+  # TMPDIR naming somewhere that is not a directory is an error on both, and the
+  # log cache — which reads ${TMPDIR:-/tmp} directly — silently does nothing on
+  # macOS in that state anyway.
+  if [ -n "$TMPDIR" ] && [ ! -d "$TMPDIR" ]; then
+    _msg="TMPDIR=${TMPDIR} is not a directory; no forge call was made"
+    jq -cn --arg d "$_msg" '{ok: false, error: "forge-error", detail: $d}' 2>/dev/null \
+      || printf '{"ok":false,"error":"forge-error","detail":"%s"}\n' "$_msg"
+    echo "${_concept}: ${_msg}" >&2
+    exit 1
+  fi
+  _probe=$(mktemp -d 2>/dev/null) || {
+    _msg="TMPDIR=${TMPDIR:-/tmp} is not usable (mktemp -d failed); no forge call was made"
+    jq -cn --arg d "$_msg" '{ok: false, error: "forge-error", detail: $d}' 2>/dev/null \
+      || printf '{"ok":false,"error":"forge-error","detail":"%s"}\n' "$_msg"
+    echo "${_concept}: ${_msg}" >&2
+    exit 1
+  }
+  rmdir "$_probe" 2>/dev/null || :
+}
+
 # Assert that a captured payload really is JSON, and emit an envelope if not.
 #
 #   ci_require_json <concept> "<payload>" "<what produced it>"

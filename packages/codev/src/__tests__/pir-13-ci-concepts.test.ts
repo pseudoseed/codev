@@ -77,6 +77,12 @@ let tmp: string;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pir13-'));
+  // The scripts run with TMPDIR pointed here so the log cache is per-test. It
+  // has to EXIST: macOS mktemp falls back to the system temp dir when TMPDIR
+  // points nowhere, GNU mktemp does not — so a missing directory passed locally
+  // and failed 31 tests on the Linux runner, with the concept reporting
+  // "run <id> could not be read" for what was really an unusable TMPDIR.
+  fs.mkdirSync(path.join(tmp, 'cache'), { recursive: true });
 });
 
 afterEach(() => {
@@ -442,6 +448,23 @@ describe.skipIf(!hasJq())('#13 — ci-failures returns a bounded extract with it
     expect(r.json!.error).toBe('bad-input');
     expect(r.json!.detail).toContain('must be a numeric id');
     expect(fileLines(path.join(tmp, 'gh.log'))).toEqual([]);
+  });
+
+  it('names an unusable TMPDIR instead of blaming the run', () => {
+    // The failure this cost a red CI run to find. mktemp -d fails on Linux when
+    // TMPDIR points nowhere; the watchdog needs one for EVERY call, so the
+    // first gh invocation died for an invisible reason and the concept answered
+    // "run 32515040122 could not be read" — a temp-dir problem wearing the face
+    // of a missing run. macOS hides it by falling back to the system temp dir.
+    stubGh(ONE_FAILING_JOB);
+    const r = run(githubDir, 'ci-failures.sh', {
+      CODEV_CI_RUN_ID: '32515040122',
+      TMPDIR: path.join(tmp, 'no-such-directory'),
+    });
+    expect(r.status).not.toBe(0);
+    expect(r.json!.error, 'an unusable TMPDIR was reported as a missing run').toBe('forge-error');
+    expect(r.json!.detail).toContain('TMPDIR');
+    expect(fileLines(path.join(tmp, 'gh.log')), 'the forge was called despite a broken TMPDIR').toEqual([]);
   });
 
   it('emits an envelope when the forge CLI exits 0 with something that is not JSON', () => {

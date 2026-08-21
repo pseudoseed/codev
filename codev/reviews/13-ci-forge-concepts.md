@@ -130,7 +130,7 @@ Added at the architect's direction at the dev-approval gate, and the reasoning i
 ## Test Results
 
 - `npm run build`: ✓ pass
-- `npm test`: ✓ pass — 5572 passed, 0 failed, 48 skipped (5620). **67 new tests** in `pir-13-ci-concepts.test.ts`, plus the two concept-count assertions updated in `forge.test.ts`.
+- `npm test`: ✓ pass — 5573 passed, 0 failed, 48 skipped (5621). **68 new tests** in `pir-13-ci-concepts.test.ts`, plus the two concept-count assertions updated in `forge.test.ts`.
 
 ### Verification coverage — three tiers, and they are not the same
 
@@ -219,6 +219,28 @@ The reason it survived to review is worth more than the fix: **the timeout test 
 A third finding was cosmetic (a misindented `exit` and a trailing space in `gitea/ci-runs.sh`), fixed.
 
 A fourth was noted rather than requested: the `Ci*` contracts in `forge-contracts.ts` are documentation-only, with no conformance test tying them to actual script output. **Deliberately not done here.** Adding it for the four CI contracts alone would leave the other eighteen forge contracts untested while implying they were covered — worse than uniformly untested. The architect is filing it as its own issue across all forge contracts.
+
+### What CI on this PR found that the local suite could not
+
+The branch's own CI went red while `npm test` was green locally, and the cause is the same platform split the review lane had just warned about — this time with a **wrong answer** at the end of it rather than a crash.
+
+**The trigger was a test-harness bug**: the harness pointed `TMPDIR` at a directory it never created. macOS `mktemp -d` ignores an unusable `TMPDIR` and falls back to the system temp dir; GNU `mktemp` honours it strictly and fails. So 31 tests passed on the Mac and failed on the Linux runner.
+
+**What the failure exposed is the part worth reading.** Every CI concept needs a temp dir, and the watchdog in `_timeout.sh` needs one for *every single call*. With `TMPDIR` unusable, `mktemp -d` failed inside the watchdog, `gh` was never run, and the wrapper returned 1 — indistinguishable from the wrapped command failing. The concept then answered:
+
+```json
+{"ok":false,"error":"not-found","detail":"run 32515040122 could not be read (gh exit 1); pass the `id` from ci-runs, not the run `number`"}
+```
+
+A temp-directory problem wearing the face of a missing run, complete with confident advice about which id to pass. That is the same rule this PR's hot-tier lesson is about, arriving one more time: **"I could not tell" must never be spelled the same way as "no."**
+
+Three fixes, and the diagnosis was made in an `ubuntu:24.04` container rather than by round-tripping CI:
+
+1. `forge_timeout` returns **125** when it cannot create a temp dir, not 1 — the command never ran, so it must not share a status with the command failing.
+2. Every CI concept runs `ci_require_tmpdir` before it touches a forge, which fails by name with `forge-error` and makes **no forge call at all**.
+3. The check tests `[ -d "$TMPDIR" ]` explicitly rather than leaning on `mktemp`, so macOS and Linux behave **identically**. Relying on `mktemp` alone would have preserved the split — and the log cache, which reads `${TMPDIR:-/tmp}` directly, silently does nothing on macOS in that state anyway.
+
+The harness bug is fixed, and the misdiagnosis is pinned by a test that passes on both platforms.
 
 ### Why this PR is held rather than merged on one lane
 

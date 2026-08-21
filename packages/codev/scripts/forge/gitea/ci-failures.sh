@@ -22,6 +22,8 @@ set -e
 
 CONCEPT=ci-failures
 
+ci_require_tmpdir "$CONCEPT"
+
 if [ -z "$CODEV_CI_RUN_ID" ]; then
   jq -cn '{ok: false, error: "bad-input", detail: "CODEV_CI_RUN_ID is required"}'
   echo "${CONCEPT}: CODEV_CI_RUN_ID is required" >&2
