@@ -204,6 +204,22 @@ rc=1
 
 Reinstalling and signing in again would have changed nothing and cost whoever followed the advice their afternoon. A confidently printed remedy that cannot work is the same defect class as #21, where the stuck-mailbox alert names a command that cannot clear a composer. The architect is filing it separately.
 
+### What the one lane that did run found
+
+**claude (opus-5) — VERDICT: COMMENT, CONFIDENCE: HIGH.** Two real defects, both fixed before this was written, and both in precisely the class the two absent lanes exist to catch.
+
+**1. The timeout layering was inverted, and my own test hid it.** `executeForgeCommandDetailed` defaults to a 30s ceiling; the scripts default to a 60s `CODEV_FORGE_TIMEOUT`. **At the defaults the outer kill fires first**, so a stalled forge arrived as a generic Node kill and the script's *named* timeout envelope — the entire point of the inner watchdog, and the thing #17 and #8 are about — never printed. The comment in `forge.ts` asserted the opposite ordering.
+
+The reason it survived to review is worth more than the fix: **the timeout test forced `CODEV_FORGE_TIMEOUT=2`, and a test that overrides the defaults cannot detect the defaults being wrong.** It proved the watchdog works when you tell it to; it could not prove that the watchdog is the ceiling that fires. The correction is a test that pins the **ordering at defaults** — it lets the real 60s-vs-30s relationship decide, and fails if the outer ceiling ever eats the inner one again.
+
+**The inversion predates this PR.** #12 gave the gitea scripts a 60s watchdog under this same 30s ceiling; it was inherited here, not introduced. Correcting it globally would change the timeout behaviour of every concept and every caller, so what this PR does is narrower: `codev forge` sets its ceiling to the script watchdog plus 30s, and `forge.ts` now documents the real ordering instead of the intended one. The general case is left to a caller passing `timeoutMs`.
+
+**2. `sed -n "1,0p"` on an empty job log.** head/tail built a reversed range whenever a log came back empty. **BSD sed tolerates it and GNU sed rejects it** — so this was invisible on the macOS box it was written on, and on Linux, *which is where CI runs*, the script would have aborted under `set -e` with nothing at all on stdout: the one shape these concepts promised never to produce. It is the textbook case for why the absent lanes matter, found by the lane that ran on the platform where it cannot bite. An empty log is now an answer (`logLines: 0`, empty window, `truncated: false`), pinned for all three window modes plus an assertion against the reversed range itself.
+
+A third finding was cosmetic (a misindented `exit` and a trailing space in `gitea/ci-runs.sh`), fixed.
+
+A fourth was noted rather than requested: the `Ci*` contracts in `forge-contracts.ts` are documentation-only, with no conformance test tying them to actual script output. **Deliberately not done here.** Adding it for the four CI contracts alone would leave the other eighteen forge contracts untested while implying they were covered — worse than uniformly untested. The architect is filing it as its own issue across all forge contracts.
+
 ### Why this PR is held rather than merged on one lane
 
 One of three would be the thinnest coverage of the day, on the diff least suited to it: five POSIX `sh` scripts, a hand-rolled awk extractor and a pile of jq, where the two absent lanes are the ones that most often catch quoting and portability defects — and where two of the three bugs found during implementation were exactly that class. PR #24 (issue #22) adds an **opencode** consult lane on an account unrelated to either exhausted quota; the architect is merging it and re-running this review phase with that lane available, rather than waiting for the Aug 27/28 quota resets or merging thin. **This section is rewritten with the real verdicts once that re-run completes.**

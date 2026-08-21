@@ -37,12 +37,22 @@ function resolveScriptPath(provider: string, concept: string): string {
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
 
 /**
- * Default wall-clock ceiling for a forge command (30s).
+ * Default wall-clock ceiling for a forge command (30s), unchanged since before
+ * the scripts had watchdogs of their own.
  *
- * The scripts carry their own, shorter watchdog (CODEV_FORGE_TIMEOUT, default
- * 60s in scripts/forge/_timeout.sh) so that a stalled CLI surfaces as a NAMED
- * timeout rather than as this outer kill, which can only report that something
- * died. Both exist: the inner one explains, the outer one guarantees.
+ * **It is SHORTER than the script watchdog, not longer** (CODEV_FORGE_TIMEOUT,
+ * default 60s in scripts/forge/_timeout.sh), and the ordering matters: whichever
+ * ceiling fires first decides what the caller learns. This one can only report
+ * that something died; the inner one reports WHICH endpoint stopped answering
+ * and how long it was given. With the defaults as they stand, a stalled forge
+ * hits this 30s kill first and the named message never gets to fire.
+ *
+ * That inversion predates the CI concepts — #12 gave the gitea scripts a 60s
+ * watchdog under this same 30s ceiling — and correcting it globally would change
+ * the timeout behaviour of every concept and every caller, so it is not done
+ * here. What IS done: any caller that needs the named envelope passes
+ * `timeoutMs` above the script watchdog. `codev forge` does exactly that (see
+ * commands/forge.ts), which is why its timeout path reports a timeout by name.
  */
 const DEFAULT_TIMEOUT_MS = 30_000;
 

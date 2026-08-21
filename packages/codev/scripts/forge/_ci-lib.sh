@@ -328,6 +328,23 @@ ci_window_emit() {
   _concept="$1"; _tmp="$2"; _provider="$3"; _run="$4"; _job="$5"; _jobname="$6"; _cached="$7"
   _log="${_tmp}/clean.log"
   _total=$(awk 'END {print NR}' "$_log")
+  # An empty log is an answer, not a crash. Without this, head/tail build
+  # `sed -n "1,0p"`, which BSD sed tolerates and GNU sed rejects — so the script
+  # would abort under `set -e` on Linux with NOTHING on stdout, which is the one
+  # shape these concepts promised never to produce. Found by the claude review
+  # lane and reproduced with `sed --posix` before fixing.
+  if [ "$_total" -eq 0 ]; then
+    jq -cn --arg provider "$_provider" --arg run "$_run" --argjson job "$_job" --arg jobName "$_jobname" \
+      --arg kind "$CI_WIN_KIND" --arg arg "$CI_WIN_ARG" --argjson cached "$_cached" \
+      '{ok: true, provider: $provider, runId: ($run | tonumber? // $run), jobId: $job, jobName: $jobName,
+        window: {kind: $kind, arg: $arg},
+        logLines: 0, returnedLines: 0, from: 0, to: 0,
+        contiguous: true, truncated: false,
+        matches: (if $kind == "grep" then 0 else null end),
+        matchLines: (if $kind == "grep" then [] else null end),
+        cached: $cached, lines: []}'
+    return 0
+  fi
   _matchlines=null
   _matches=null
   _contiguous=true

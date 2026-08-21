@@ -78,7 +78,22 @@ export async function runForgeConcept(
     return 3;
   }
 
-  const result = await executeForgeCommandDetailed(concept, undefined, { cwd, forgeConfig });
+  // The outer ceiling MUST sit above the script watchdog, or the wrong one wins.
+  // executeForgeCommandDetailed defaults to 30s while the scripts default to a
+  // 60s CODEV_FORGE_TIMEOUT, so with the defaults a stalled forge was killed by
+  // Node first and the script's named timeout envelope — the whole point of the
+  // inner watchdog — never printed. Found by the claude review lane, which also
+  // noted that the test hid it by forcing a 2s watchdog. Give the script its
+  // full allowance plus a margin, and keep this as the backstop it is meant to
+  // be: it fires only if the watchdog itself fails.
+  const watchdogSeconds = Number.parseInt(process.env.CODEV_FORGE_TIMEOUT ?? '', 10);
+  const innerMs = (Number.isFinite(watchdogSeconds) && watchdogSeconds > 0 ? watchdogSeconds : 60) * 1000;
+
+  const result = await executeForgeCommandDetailed(concept, undefined, {
+    cwd,
+    forgeConfig,
+    timeoutMs: innerMs + 30_000,
+  });
 
   // stdout verbatim, including on the failure path: the ci-* concepts print
   // their structured error envelope there precisely so the class of failure

@@ -572,6 +572,34 @@ describe.skipIf(!hasJq())('#13 — ci-run-log takes exactly one window, and says
     expect(narrow.json!.returnedLines).toBe(2);
   });
 
+  it.each(['tail', 'head', 'grep'])('survives an EMPTY log in %s mode', (kind) => {
+    // Without a guard, head/tail build `sed -n "1,0p"` — tolerated by BSD sed,
+    // REJECTED by GNU sed, so on Linux the script aborted under `set -e` with
+    // nothing on stdout. Found by the claude review lane on a macOS box, where
+    // the defect is invisible.
+    fs.writeFileSync(path.join(tmp, 'empty.log'), '');
+    stubGh(ONE_FAILING_JOB, path.join(tmp, 'empty.log'));
+    const env: Record<string, string> = { CODEV_CI_RUN_ID: '32515040122' };
+    if (kind === 'tail') env.CODEV_CI_LOG_TAIL = '10';
+    if (kind === 'head') env.CODEV_CI_LOG_HEAD = '10';
+    if (kind === 'grep') env.CODEV_CI_LOG_GREP = 'anything';
+
+    const r = run(githubDir, 'ci-run-log.sh', env);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.json!.ok).toBe(true);
+    expect(r.json!.logLines).toBe(0);
+    expect(r.json!.returnedLines).toBe(0);
+    expect(r.json!.lines).toEqual([]);
+    expect(r.json!.truncated).toBe(false);
+  });
+
+  it('builds no reversed sed range for an empty log', () => {
+    // The portable-behaviour assertion, since the box this runs on may be the
+    // one that tolerates it: reject the range itself, not just its effect.
+    const lib = fs.readFileSync(path.join(forgeScripts, '_ci-lib.sh'), 'utf-8');
+    expect(lib).toMatch(/if \[ "\$_total" -eq 0 \]; then/);
+  });
+
   it('reports no match as an empty window rather than as a failure', () => {
     stubWithFixture();
     const r = run(githubDir, 'ci-run-log.sh', {
@@ -631,6 +659,63 @@ describe.skipIf(!hasJq())('#13 — a timeout reports as a timeout, not as an emp
     expect(r.status).toBe(0);
     expect(r.stderr, 'the watchdog is reporting its own death onto a clean path').toBe('');
   });
+
+  it('codev forge puts its own ceiling ABOVE the script watchdog, so the named envelope wins', async () => {
+    // The inversion the claude lane caught: executeForgeCommandDetailed defaults
+    // to 30s and the scripts default to a 60s CODEV_FORGE_TIMEOUT, so at the
+    // DEFAULTS Node killed the command first and the script's named timeout
+    // envelope never printed. The earlier timeout test forced a 2s watchdog,
+    // which hid it. This one pins the ordering itself.
+    const watchdog = 4;
+    // The stub lives one directory DOWN from a copy of _timeout.sh, because
+    // _ci-lib.sh resolves its sibling as `$(dirname "$0")/../_timeout.sh` —
+    // the same layout every real provider directory has.
+    const providerDir = path.join(tmp, 'fake-provider');
+    fs.mkdirSync(providerDir, { recursive: true });
+    fs.copyFileSync(path.join(forgeScripts, '_timeout.sh'), path.join(tmp, '_timeout.sh'));
+    const slow = path.join(providerDir, 'slow-forge.sh');
+    fs.writeFileSync(
+      slow,
+      [
+        '#!/bin/sh',
+        `. ${JSON.stringify(path.join(forgeScripts, '_ci-lib.sh'))}`,
+        'rc=0',
+        'ci_tool sleep 30 || rc=$?',
+        '[ "$rc" -eq 124 ] && ci_fail_timeout ci-runs "the slow forge" "$CI_TIMEOUT"',
+        'exit 1',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    fs.chmodSync(slow, 0o755);
+
+    const root = path.join(tmp, 'ws-timeout');
+    fs.mkdirSync(path.join(root, '.codev'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.codev', 'config.json'), JSON.stringify({ forge: { 'ci-runs': slow } }));
+
+    const previous = process.env.CODEV_FORGE_TIMEOUT;
+    process.env.CODEV_FORGE_TIMEOUT = String(watchdog);
+    try {
+      const out: string[] = [];
+      const err: string[] = [];
+      const code = await runForgeConcept('ci-runs', {
+        cwd: root,
+        stdout: (t) => out.push(t),
+        stderr: (t) => err.push(t),
+      });
+      // The SCRIPT reported, not Node: a named envelope on stdout, and an exit
+      // status from the script rather than a signal kill.
+      expect(JSON.parse(out.join('')), 'the outer ceiling fired first and ate the named envelope').toMatchObject({
+        ok: false,
+        error: 'timeout',
+        seconds: watchdog,
+      });
+      expect(code).toBe(1);
+      expect(code, 'Node killed it — 124 is the outer backstop, not the inner watchdog').not.toBe(124);
+    } finally {
+      if (previous === undefined) delete process.env.CODEV_FORGE_TIMEOUT;
+      else process.env.CODEV_FORGE_TIMEOUT = previous;
+    }
+  }, 60_000);
 
   it('executeForgeCommandDetailed distinguishes a timeout from a failure and from silence', async () => {
     const slow = path.join(tmp, 'slow.sh');

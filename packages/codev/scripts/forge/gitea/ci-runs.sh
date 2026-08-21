@@ -57,8 +57,8 @@ while [ "$PAGE" -le "$CI_MAX_PAGES" ]; do
     exit 1
   fi
   if [ "$rc" -eq 44 ]; then
-    gitea_ci_unsupported "$CONCEPT" "workflow-runs" "$(jq -cn --arg r "$REPO" '{repo: $r}')" 
-  exit 1
+    gitea_ci_unsupported "$CONCEPT" "workflow-runs" "$(jq -cn --arg r "$REPO" '{repo: $r}')"
+    exit 1
   fi
   if [ "$rc" -ne 0 ]; then
     ci_fail "$CONCEPT" forge-error "Forgejo could not list workflow runs for ${REPO}: $(head -c 200 "$TMP/page.json")"
