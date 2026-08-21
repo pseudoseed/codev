@@ -195,9 +195,20 @@ describe('render-gate — opencode: bottom-anchored composer + two-sided busy/id
   const IDLE_FOOTER = '   /tmp/wt                                     8.3K (2%) · $0.01  ctrl+p commands';
   const BUSY_FOOTER = '   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt                              tab agents  ctrl+p commands';
 
-  /** A composer box: blank pad, the given content rows, blank spacer, status row, rule. */
-  const composer = (...content: string[]) =>
-    ['', '  ┃', ...content.map((c) => `  ┃  ${c}`), '  ┃', STATUS, RULE];
+  /**
+   * A composer box in the measured opencode shape: a BLANK row separating it from the
+   * transcript (the profile's `topEdgePattern`), a top pad row, the content rows, a bottom
+   * pad row, the status row, and the rule. With no content the box is still 3 rows tall —
+   * `[pad][empty][pad]` — which is the measured minimum and what `minContentRows` pins.
+   */
+  const composer = (...content: string[]) => [
+    '',
+    '  ┃',
+    ...(content.length ? content : ['']).map((c) => (c ? `  ┃  ${c}` : '  ┃')),
+    '  ┃',
+    STATUS,
+    RULE,
+  ];
 
   it('idle: empty box + the usage readout → clean', async () => {
     const snap = snapshotFromRaw(screen(...composer(), IDLE_FOOTER));
@@ -317,6 +328,32 @@ describe('render-gate — opencode: bottom-anchored composer + two-sided busy/id
     });
   });
 
+  it('a box of only box-drawing glyphs is a draft, not chrome', async () => {
+    // A pasted tree/table is made entirely of characters IGNORE_CHARS discards, so a
+    // character-class rule reads the composer as empty and delivers onto the draft. The
+    // bottom-anchored model counts content POSITIONALLY — past the row's leading box
+    // glyph — so the paste counts. (CMAP, 2026-08-21.)
+    const snap = snapshotFromRaw(screen(...composer('├── src', '│   └── index.ts'), IDLE_FOOTER));
+    expect((await classifyScreen(snap, OPENCODE_PROFILE)).clean).toBe(false);
+  });
+
+  it('a draft of non-ASCII spaces is a draft, not padding', async () => {
+    // `\s` matches NBSP and U+3000, so a pasted run of them is invisible to a
+    // whitespace-class rule while sitting in the composer as real content.
+    for (const space of [' ', '　']) {
+      const snap = snapshotFromRaw(screen(...composer(space.repeat(6)), IDLE_FOOTER));
+      expect((await classifyScreen(snap, OPENCODE_PROFILE)).clean).toBe(false);
+    }
+  });
+
+  it('dim text in the composer counts — opencode was measured to use no dim at all', async () => {
+    // The claude/codex "dim means placeholder" convention is NOT inherited here: zero dim
+    // cells were measured across all seven captured opencode states. Any dim affordance a
+    // future version adds would otherwise be a silent false-CLEAN.
+    const snap = snapshotFromRaw(screen(...composer(`${DIM}refactor the widget factory${RESET}`), IDLE_FOOTER));
+    expect((await classifyScreen(snap, OPENCODE_PROFILE)).clean).toBe(false);
+  });
+
   it('a box with NO content rows is a torn frame, not an empty composer', async () => {
     // Regression guard (CMAP, 2026-08-21): chrome + rule + footer painted but the content
     // rows not yet repainted collapses the region to zero rows. The cell loop then examines
@@ -337,6 +374,53 @@ describe('render-gate — opencode: bottom-anchored composer + two-sided busy/id
     // the anchor row. Were it scanned, EVERY frame would classify busy.
     const snap = snapshotFromRaw(screen(...composer(), IDLE_FOOTER));
     expect((await classifyScreen(snap, OPENCODE_PROFILE)).clean).toBe(true);
+  });
+});
+
+/**
+ * Width sweep over the committed opencode captures (Issue #4, CMAP 2026-08-21).
+ *
+ * A fixture asserted only at its capture width is not a regression test. `opencode-draft`
+ * — a real frame with a live two-line draft — classified CLEAN at 43 of these 101 widths
+ * before the region model was bounded positively: past ~100 cols the draft's own row wraps,
+ * the continuation row fails `bodyPattern`, the upward scan accepted that as the top of the
+ * box, and the region collapsed onto the bottom pad row, which is pure chrome. Zero user
+ * cells, CLEAN, draft never scanned.
+ *
+ * Width mismatch is reachable in production: `PtySession.resize` always resizes the gate
+ * mirror but can drop the app-side resize, and the alt buffer does not reflow — so the
+ * mirror can sit indefinitely at a geometry the app never paints at.
+ *
+ * These sweeps are the guard. A `busy` fixture must classify busy at EVERY width; there is
+ * no width at which a screen with a draft, a live turn, or a dialog may read as an empty
+ * prompt.
+ */
+describe('render-gate — opencode fixtures across terminal widths (Issue #4)', () => {
+  const FROM = 40;
+  const TO = 140;
+
+  for (const name of ['opencode-draft.busy.txt', 'opencode-midturn.busy.txt', 'opencode-dialog.busy.txt', 'opencode-boot.busy.txt']) {
+    it(`${name} classifies busy at EVERY width ${FROM}–${TO}`, async () => {
+      const raw = readFileSync(`${FIXTURE_DIR}/${name}`, 'utf8');
+      const cleanAt: number[] = [];
+      for (let cols = FROM; cols <= TO; cols++) {
+        const v = await classifyScreen({ replay: raw, cols, rows: 32 }, OPENCODE_PROFILE);
+        if (v.clean) cleanAt.push(cols);
+      }
+      expect(cleanAt).toEqual([]);
+    });
+  }
+
+  it('opencode-idle.clean.txt is clean at its capture width, and never wrongly clean elsewhere', async () => {
+    // The idle capture is a 110-wide frame. At its own width it must deliver; at narrower
+    // widths its rows wrap, which IS a genuine geometry mismatch, and holding there is
+    // correct rather than a limitation — in production the mirror matches the app's width.
+    const raw = readFileSync(`${FIXTURE_DIR}/opencode-idle.clean.txt`, 'utf8');
+    expect((await classifyScreen({ replay: raw, cols: 110, rows: 32 }, OPENCODE_PROFILE)).clean).toBe(true);
+    for (let cols = FROM; cols < 110; cols++) {
+      const v = await classifyScreen({ replay: raw, cols, rows: 32 }, OPENCODE_PROFILE);
+      expect(v.clean, `cols=${cols} must not be clean when the frame wraps`).toBe(false);
+    }
   });
 });
 

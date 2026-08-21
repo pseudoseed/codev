@@ -140,8 +140,20 @@ export const OPENCODE_PROFILE: GateProfile = {
   bottomAnchor: {
     rulePattern: /^\s*╹▀{5,}/,
     bodyPattern: /^\s*┃/,
+    // Measured: the box is always preceded by a blank row separating it from the
+    // transcript — in every captured state, including with a `/` or `@` picker open.
+    topEdgePattern: /^\s*$/,
+    // Measured floor: the smallest box opencode renders is [pad][content][pad] above the
+    // status row — 3 rows, in the idle and boot captures alike. A draft only grows it.
+    minContentRows: 3,
     maxLookback: 20,
   },
+  // Measured: opencode uses SGR-dim NOWHERE — zero dim cells across all seven captured
+  // states (idle, draft, mid-turn, dialog, boot, and the `/` and `@` pickers), whole
+  // screen, not just the composer. So the claude/codex dim-is-placeholder convention is
+  // not inherited here: nothing would be exempted by it except, one day, a dim affordance
+  // opencode has not shipped yet — which would be a silent false-CLEAN.
+  treatDimAsPlaceholder: false,
 };
 
 /** Registry keyed by the harness name `detectHarnessFromCommand` returns. */

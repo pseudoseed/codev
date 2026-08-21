@@ -67,6 +67,15 @@ encodes the expected verdict: `<app>-<state>.<clean|busy>.txt`.
     the gate holds (`no-idle-indicator`). Its composer also carries the first-run
     placeholder `Ask anything…`, rendered in RGB gray at normal intensity — not SGR-dim and
     not palette-indexed, so no existing placeholder exemption applies to it.
+
+  **opencode uses SGR-dim nowhere.** Measured across all captured states — the five above
+  plus the `/` command palette and the `@` agent picker — there are **zero dim cells on the
+  whole screen**, not merely in the composer. `OPENCODE_PROFILE` therefore sets
+  `treatDimAsPlaceholder: false` rather than inheriting the claude/codex convention that dim
+  marks placeholder chrome. Nothing is lost by dropping it (there is no dim text to exempt),
+  and keeping it would mean any dim affordance a future opencode ships — a queued-message
+  preview, an inline completion — would be silently skipped and a real draft would read
+  empty. agy already showed these attribute conventions do not port between TUIs.
 - **wrapper-boot.busy.txt** — **synthetic** builder launch-loop screen (a born-dirty
   state with no composer marker). App-agnostic: no marker → busy under any profile.
 
@@ -80,6 +89,24 @@ profile as `placeholderFgPalette`. Either way the exclusion is attribute-based, 
 a text allowlist. A future TUI (or a shim) that renders a plain, un-de-emphasized
 placeholder trips toward *busy* (fail-safe: a message is held, never misdelivered);
 classifier-health telemetry (Phase 4/7) surfaces such a profile drift.
+
+### Fixtures are swept across widths, not asserted at capture width
+
+`render-gate.test.ts` classifies every opencode fixture at **every width from 40 to 140**,
+and requires each `busy` fixture to read busy at all of them. This is not thoroughness for
+its own sake — a fixture asserted only at its capture width is not a regression test.
+`opencode-draft.busy.txt`, a real frame with a live two-line draft, classified **CLEAN at 43
+of those 101 widths** before the region model was bounded positively on both edges: past
+~100 cols the draft's own row wraps, the continuation row fails `bodyPattern`, the upward
+scan accepted that as the top of the box, and the region collapsed onto the bottom pad row —
+pure chrome, zero user cells, `clean`. The draft was never scanned.
+
+Width mismatch is reachable in production, so this is not a synthetic concern:
+`PtySession.resize` always resizes the gate mirror but can drop the app-side resize, and the
+alt buffer does not reflow, so the mirror can sit indefinitely at a geometry the app never
+paints at. Note that a straightforward PTY drive at a fixed size will NOT surface this —
+matching geometry is exactly the case where the box never wraps — which is why the sweep,
+not a live drive, is the guard.
 
 opencode adds a case the above cannot cover: an **empty composer does not mean an idle
 agent** there, because its box renders identically mid-turn. Its profile therefore also

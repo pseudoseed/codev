@@ -166,20 +166,54 @@ export interface GateProfile {
    * Resolution: find the LAST row matching `rulePattern` (the box's bottom edge).
    * The row directly above it is the app's chrome/status row — excluded from
    * scanning by construction, since it always carries normal-intensity text. From
-   * there scan UPWARD while rows match `bodyPattern`; the region is every row so
-   * collected. A scan that never finds a non-matching row within `maxLookback`
-   * rows (or reaches the top of the viewport) is unterminated and classifies
-   * `no-region-end` — the same "never scan an unbounded region" rule the top-down
-   * model follows.
+   * there scan UPWARD while rows match `bodyPattern`, stopping at a row that matches
+   * `topEdgePattern`; the region is every row so collected.
+   *
+   * The region is bounded POSITIVELY on both edges — a row must be *proven outside* the
+   * box (`topEdgePattern`) to end the scan. "Failed `bodyPattern`" is NOT proof of an
+   * upper bound and must never be treated as one: a row also fails it when it is a
+   * wrapped continuation, a torn repaint, or chrome the app draws differently, and
+   * accepting those as the top edge silently truncates the region toward the box's
+   * bottom pad row — which is guaranteed-ignorable chrome, so the composer reads EMPTY
+   * with a real draft sitting unscanned above it. That was a live false-CLEAN on a real
+   * captured draft at 43 of 101 terminal widths (CMAP, 2026-08-21). A row that is
+   * neither in-box nor a proven top edge now HOLDS.
+   *
+   * `minContentRows` is the second half of the same defence: the app has a minimum box
+   * height, so a shorter region is a torn frame rather than an empty composer. Together
+   * they make truncation fail toward hold instead of toward clean.
    */
   bottomAnchor?: {
     /** The rule line closing the bottom of the composer box. */
     rulePattern: RegExp;
     /** Every row belonging to the composer box matches this. */
     bodyPattern: RegExp;
+    /**
+     * A row PROVABLY outside the box, ending the upward scan (measured: the app leaves a
+     * blank row between the transcript and the composer). Required — without a positive
+     * upper bound the region cannot be trusted.
+     */
+    topEdgePattern: RegExp;
+    /**
+     * Fewest content rows the app ever renders inside the box. A region shorter than this
+     * is a torn/partial frame, not an empty composer, and holds.
+     */
+    minContentRows: number;
     /** Upward-scan bound; an unterminated scan holds. Defaults to {@link DEFAULT_MAX_LOOKBACK}. */
     maxLookback?: number;
   };
+  /**
+   * Whether SGR-dim marks placeholder/hint chrome for this app (default `true` — the
+   * claude/codex measurement).
+   *
+   * Explicit rather than inherited, because it is an app-specific rendering fact and the
+   * cost of assuming it wrongly is a false-CLEAN: any dim text a TUI draws in its composer
+   * would be skipped as a "placeholder" and a real draft would read empty. agy already
+   * showed these attribute conventions do not port between TUIs (it needed
+   * {@link placeholderFgPalette} because its hint is a color, not dim). A profile must
+   * therefore have MEASURED its app's dim usage before leaving this on.
+   */
+  treatDimAsPlaceholder?: boolean;
   /**
    * Optional per-app placeholder signal: a 16-color palette index whose cells are
    * treated as placeholder/hint chrome (ignored), NOT user text. This is the
@@ -205,7 +239,9 @@ export interface GateVerdict {
    * rather than scanning into status chrome; `busy-indicator` = the profile's
    * mid-turn signal is on screen; `no-idle-indicator` = the profile requires a
    * positive idle signal and it is absent (a boot screen, a dialog that hides the
-   * footer, or profile drift); `user-text` = a draft or menu occupies the composer;
+   * footer, or profile drift); `geometry-mismatch` = a composer row is a wrapped
+   * continuation, so the mirror's width disagrees with the width the app painted at and
+   * no row boundary is trustworthy; `user-text` = a draft or menu occupies the composer;
    * `empty` = clean.
    */
   detail:
@@ -213,6 +249,7 @@ export interface GateVerdict {
     | 'no-region-end'
     | 'busy-indicator'
     | 'no-idle-indicator'
+    | 'geometry-mismatch'
     | 'user-text'
     | 'empty';
 }
@@ -238,6 +275,20 @@ const DEFAULT_MAX_LOOKBACK = 20;
 
 /** All-whitespace (incl. NBSP and other Unicode spaces) → ignorable. */
 const WHITESPACE = /^\s+$/u;
+
+/**
+ * First column of USER content in a bottom-anchored composer row: everything up to and
+ * including the box's leading edge glyph is chrome, everything after it is the user's.
+ *
+ * Positional, not character-class based. The shared {@link IGNORE_CHARS} set cannot serve
+ * here: it would also discard a *draft* composed of box-drawing glyphs (a pasted tree or
+ * table), which reads as an empty composer and delivers a message onto it. Rows reaching
+ * this have already matched the profile's `bodyPattern`, so a leading glyph exists.
+ */
+function boxContentColumn(line: string): number {
+  const glyph = line.search(/\S/);
+  return glyph === -1 ? 0 : glyph + 1;
+}
 
 /** Rendered viewport lines, right-trimmed — the same extraction the spike asserts on. */
 function screenLines(term: HeadlessTerminal, rows: number): string[] {
@@ -320,24 +371,28 @@ function resolveBottomAnchorRegion(
   }
 
   const maxLookback = anchor.maxLookback ?? DEFAULT_MAX_LOOKBACK;
-  let from = chromeRow; // exclusive lower edge of the scan, walked upward below
+  let from = chromeRow; // walked upward below; ends at the topmost content row
+  let bounded = false;
   for (let scanned = 0; scanned < maxLookback; scanned++) {
     const candidate = from - 1;
-    // Reaching the top of the viewport without a non-matching row means the box has
-    // no proven upper bound (a torn or mid-repaint frame) — indeterminate, so hold.
-    if (candidate < 0) return { detail: 'no-region-end' };
-    if (!anchor.bodyPattern.test(lines[candidate])) {
-      // A box whose chrome row has NO content rows above it is not a shape the app
-      // renders — it is a torn/partial repaint (chrome and rule painted, content rows
-      // not yet). Left alone it collapses the region to zero rows, and a zero-row region
-      // reaches CLEAN without examining a single cell, hiding a real draft. Hold instead.
-      if (candidate + 1 >= chromeRow) return { detail: 'no-region-end' };
-      return { from: candidate + 1, to: chromeRow, markerRow: -1, footerFrom: ruleRow + 1 };
-    }
+    // Ran off the top of the viewport without meeting the top edge: no proven upper
+    // bound (a torn or mid-repaint frame) — indeterminate, so hold.
+    if (candidate < 0) break;
+    // The ONLY accepted proof that the box has ended.
+    if (anchor.topEdgePattern.test(lines[candidate])) { bounded = true; break; }
+    // Neither in-box nor a proven top edge: a wrapped continuation row, a torn repaint,
+    // or unrecognized chrome. The region's extent is unknowable here, and guessing it
+    // truncates toward clean, so hold.
+    if (!anchor.bodyPattern.test(lines[candidate])) return { detail: 'no-region-end' };
     from = candidate;
   }
   // Exhausted the lookback with every row still inside the box: unterminated.
-  return { detail: 'no-region-end' };
+  if (!bounded) return { detail: 'no-region-end' };
+
+  // A box shorter than the app ever renders is a torn frame, not an empty composer.
+  if (chromeRow - from < anchor.minContentRows) return { detail: 'no-region-end' };
+
+  return { from, to: chromeRow, markerRow: -1, footerFrom: ruleRow + 1 };
 }
 
 /**
@@ -495,6 +550,22 @@ export function classifyBuffer(
   }
 
   const top = buf.viewportY;
+
+  // Geometry check (bottom-anchored profiles). A row inside the composer box is a WRAPPED
+  // continuation only when the mirror's width disagrees with the width the app painted at
+  // — `PtySession.resize` always resizes the gate mirror but can drop the app-side resize
+  // (`return false`), and the alt buffer does not reflow, so that disagreement can persist
+  // indefinitely. Every row boundary on such a screen is untrustworthy: the app's own rows
+  // no longer line up with the mirror's. Checked across the box, its rule, and the rule's
+  // continuation, so an overflowing rule is caught too.
+  if (profile.bottomAnchor) {
+    for (let row = regionFrom; row <= region.footerFrom && row < rows; row++) {
+      if (buf.getLine(top + row)?.isWrapped) {
+        return { clean: false, reason: 'busy', detail: 'geometry-mismatch' };
+      }
+    }
+  }
+
   const cell = buf.getNullCell();
   const probe = buf.getNullCell(); // scratch cell for the ghost-tail look-ahead (never clobbers `cell`)
   // Cursor position is viewport-relative (matching `row`, which indexes from `viewportY`).
@@ -505,12 +576,25 @@ export function classifyBuffer(
   for (let row = regionFrom; row < regionTo; row++) {
     const line = buf.getLine(top + row);
     if (!line) continue;
-    for (let col = 0; col < cols; col++) {
+    // A bottom-anchored box marks its chrome by POSITION: the row's leading glyph is the
+    // box edge and everything after it is the user's. Counting content positionally rather
+    // than by character class is what stops a draft made only of box-drawing glyphs
+    // (a pasted tree or table) from reading as chrome and classifying empty.
+    const contentFrom = profile.bottomAnchor ? boxContentColumn(lines[row]) : 0;
+    for (let col = contentFrom; col < cols; col++) {
       line.getCell(col, cell);
       const ch = cell.getChars();
-      if (!ch || WHITESPACE.test(ch) || IGNORE_CHARS.has(ch)) continue;
+      if (!ch) continue;
+      if (profile.bottomAnchor) {
+        // Only a plain space or tab is empty here. `\s` would also swallow NBSP and
+        // U+3000, which a paste can carry and which are real content, not padding.
+        if (ch === ' ' || ch === '\t') continue;
+      } else if (WHITESPACE.test(ch) || IGNORE_CHARS.has(ch)) {
+        continue;
+      }
       if (row === markerRow && col === 0) continue; // the marker glyph itself
-      if (cell.isDim()) continue; // placeholder / hint chrome renders dim (claude/codex)
+      // Dim is placeholder chrome only where the app was MEASURED to use it that way.
+      if (cell.isDim() && (profile.treatDimAsPlaceholder ?? true)) continue;
       if (
         profile.placeholderFgPalette !== undefined &&
         cell.isFgPalette() &&
