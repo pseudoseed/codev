@@ -109,3 +109,40 @@ test now asserts it across the whole preset.
 `scripts/measure-prompt-surface.sh` takes ~31s per invocation on this machine and
 they call it twice. Proven pre-existing by running the same test against the
 unmodified main checkout, where it fails identically (77s). Left untouched.
+
+## 2026-08-21 — Review phase
+
+PR #19 open, body is the review file, verified byte-identical after creation.
+
+**Governance routing.** Promoted to `lessons-critical.md`: *a truncated result is
+indistinguishable from a complete one once emitted*. The hot file was at its cap of
+ten, so this required displacement — "model permissions as roles/capabilities, not
+booleans" moved into `lessons-learned.md` § Architecture with an expanded body and a
+note saying where it came from and why.
+
+I argued three independent arrivals at the principle. The architect corrected me
+upward: five, all on 2026-08-21, all different subsystems — the render gate returning
+CLEAN on a screen it had not proven empty (#4), log extraction refusing to return
+arbitrary lines as a diagnosis (#13), this PR's exit-3 contract, a timed-out forge
+command becoming `null` and reading as "no results" (#17), and a check that exceeded
+its bound reporting as a test failure rather than a timeout (#8). One mistake, five
+subsystems, one day.
+
+`arch.md` gained four lines under Forge Concept Commands. The one the architect
+singled out: **a preset-disabled concept is invisible to `forgeConfig` lookups**,
+because `forgeConfig?.['x']` reads user config only and a preset `null` is not in it.
+That is what silently emptied `on-it-timestamps` on every gitea repo, and it is
+invisible until seen.
+
+**Codex lane never ran.** Provider quota exhausted until 2026-08-27; two attempts
+(19:06:05Z and 19:06:35Z) both refused in ~6s before any model work. Recorded as a
+NOT-RUN file with `VERDICT: SKIPPED` / `CONFIDENCE: NONE`, the verbatim provider
+message, and both attempt times — the same convention #2, #4 and #11 used. That file
+is gitignored (`.gitignore:65`), which is exactly why the two-of-three coverage is
+stated in the PR body as well.
+
+Worth naming: the absent lane is the one that most often catches shell-quoting and
+POSIX-portability defects, and this diff is five POSIX `sh` scripts, a hand-rolled
+process watchdog and a pile of jq. That is the weakest possible pairing of "which lane
+is missing" against "what this change is made of", and it is stated in the PR body
+rather than buried.
