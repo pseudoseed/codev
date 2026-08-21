@@ -815,6 +815,24 @@ describe('spawn-worktree', () => {
       );
     });
 
+    it('asks pr-search for OPEN PRs explicitly, not by relying on its default', async () => {
+      // #12 / upstream #1331's review. pr-search now spans every state, so a PR
+      // that ever referenced this issue and has since merged would otherwise
+      // come back here and abort the spawn with a factually wrong "Found N open
+      // PR(s)" — killing every re-spawn, every follow-up to a partial fix and
+      // every retry after a closed PR. The mock in this file cannot catch a
+      // wrong query on its own, so the qualifier is asserted directly.
+      const { existsSync } = await import('node:fs');
+      vi.mocked(existsSync).mockReturnValueOnce(false);
+      executeForgeCommandMock.mockResolvedValueOnce([]);
+
+      await checkBugfixCollisions(42, '/tmp/wt', baseIssue, false);
+
+      const call = executeForgeCommandMock.mock.calls.find((c) => c[0] === 'pr-search');
+      expect(call, 'checkBugfixCollisions did not consult pr-search').toBeDefined();
+      expect((call![1] as Record<string, string>).CODEV_SEARCH_QUERY).toBe('in:body #42 is:open');
+    });
+
     it('warns when issue is already closed', async () => {
       const { existsSync } = await import('node:fs');
       vi.mocked(existsSync).mockReturnValueOnce(false);
