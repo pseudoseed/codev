@@ -124,6 +124,10 @@ Verbatim provider message, both attempts:
 
 The codex lane was skipped on explicit architect instruction rather than hold a fork-local change for six days. The absence is recorded as a NOT-RUN file at `codev/projects/12-forgejo-gitea-forge-parity-imp/12-review-iter1-codex.txt` carrying `VERDICT: SKIPPED` and `CONFIDENCE: NONE`, so it cannot be misread as a review that happened — but that path is gitignored (`.gitignore:65`), which is why the coverage is stated here too. The same quota blocked codex on #2, #4 and #11 earlier the same day.
 
+**Porch's own gate summary says otherwise, and it is wrong.** `porch next 12` reports `codex: COMMENT` and prints **"All reviewers approved!"**. `parseVerdict` (`porch/verdict.ts:41-47`) recognises only `APPROVE`, `REQUEST_CHANGES` and `COMMENT`; `VERDICT: SKIPPED` matches none of them, falls through to the "no valid VERDICT line found — treat as COMMENT" default, and `allApproved` counts `COMMENT` as approval. So a lane that never ran is indistinguishable from one that approved, in the exact summary a human reads when deciding to merge.
+
+That is this PR's own lesson pointed back at the tooling — a sixth arrival at it in one day, and the one with the largest blast radius, since it affects every project that records a skip. It is porch behaviour rather than anything in this diff, so it is **not fixed here**; it is filed for the architect. Read the table above, not porch's summary line.
+
 **Weigh this specifically.** The absent lane is the one that most often catches shell-quoting and POSIX-portability defects, and this diff is five POSIX `sh` scripts, a hand-rolled process watchdog, and a pile of jq. That is close to the worst pairing of *which* lane is missing against *what* the change is made of. Two of the three bugs found during implementation were exactly that class, and both were caught by tests rather than by reading.
 
 ### What the Claude lane found, and what changed because of it
