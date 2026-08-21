@@ -381,21 +381,27 @@ export function resolveBuilderSelection(
 
   let harnessName: string;
   let command: string;
+  let provider: HarnessProvider;
   if (opts.harness) {
     harnessName = opts.harness;
     command = resolveHarnessCommand(harnessName, root, customHarnesses);
+    // resolveHarness owns retirement and unknown-name errors; do not duplicate them.
+    provider = resolveHarness(harnessName, customHarnesses, command);
   } else {
     command = getResolvedCommands(root).builder;
-    // Mirror getBuilderHarness's own resolution order so the name we record
-    // matches the provider it resolves — explicit config first, then the
-    // command's own basename, then the claude default.
-    harnessName = userConfig?.shell?.builderHarness
-      || detectHarnessFromCommand(command)
-      || 'claude';
+    const configured = userConfig?.shell?.builderHarness;
+    // Delegate with the SAME call shape getBuilderHarness uses — the configured
+    // name (possibly undefined) plus the command — rather than resolving a name
+    // we derived ourselves. The difference is load-bearing: resolveHarness's
+    // auto-detect path deliberately never consults custom harnesses, so a
+    // detected retired name stays retired even when a same-named custom harness
+    // exists (Issue #1338). Passing our own detected name in would take the
+    // EXPLICIT path instead, letting a custom `gemini` shadow that retirement.
+    provider = resolveHarness(configured, customHarnesses, command);
+    // Recorded for the builder row and messages only; the provider above is
+    // authoritative.
+    harnessName = configured || detectHarnessFromCommand(command) || 'claude';
   }
-
-  // resolveHarness owns retirement and unknown-name errors; do not duplicate them.
-  const provider = resolveHarness(harnessName, customHarnesses, command);
 
   let modelId: string | undefined;
   let modelScriptFragment = '';

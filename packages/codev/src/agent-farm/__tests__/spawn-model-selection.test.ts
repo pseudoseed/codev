@@ -137,6 +137,27 @@ describe('per-spawn (harness, model) selection (Issue #2)', () => {
       writeConfig({ shell: { builder: 'claude' } });
       expect(() => resolveBuilderSelection({ harness: 'gemini' }, ws)).toThrow(/retired/i);
     });
+
+    it('an AUTO-DETECTED retired command stays retired even with a custom override', () => {
+      // Issue #1338's rule, and easy to break here: resolveHarness's auto-detect
+      // path deliberately never consults custom harnesses, so a detected `gemini`
+      // is retired regardless. Resolving a name we derived ourselves would take
+      // the EXPLICIT path and let this custom harness shadow the retirement —
+      // silently launching a retired CLI.
+      writeConfig({
+        shell: { builder: 'gemini --yolo' },
+        harness: { gemini: { roleArgs: [], roleScriptFragment: '' } },
+      });
+      expect(() => resolveBuilderSelection({}, ws)).toThrow(/retired/i);
+    });
+
+    it('but an EXPLICIT custom gemini still resolves — the documented escape hatch', () => {
+      writeConfig({
+        shell: { builder: 'gemini --yolo' },
+        harness: { gemini: { roleArgs: [], roleScriptFragment: '', command: 'gemini' } },
+      });
+      expect(() => resolveBuilderSelection({ harness: 'gemini' }, ws)).not.toThrow();
+    });
   });
 
   describe('assertHarnessCommandAgrees', () => {
