@@ -306,6 +306,32 @@ Architect-side harness/model selection — the issue scopes this to spawn.
 
 ---
 
+## Decisions taken at the plan-approval gate
+
+Both open questions were answered by the architect, who verified the consult claim
+independently against `consult --help` rather than taking the plan's word for it.
+
+1. **consult**: confirmed. `--model-id` already exists and `-m` is the lane, so the issue's
+   literal syntax would break every existing `consult -m codex` including porch's emissions.
+   **Not implemented.** consult and porch get no code change. Recorded on issue #2 so it is not
+   refiled, and the stale consult skill docs — which never mentioned `--model-id`, and are the
+   reason a shipped flag looked missing — are fixed here.
+2. **§5 (resume persistence)**: **keep.** The architect hit the inverse the same day: changing the
+   builder model by editing a wrapper script, then `afx spawn 4 --resume` picking the new value up.
+   Once the model is a spawn parameter rather than a wrapper, resume has to remember it.
+
+### Deviations from the plan as written, and why
+
+- **`buildWorktreeLaunchScript` IS threaded** (the plan said untouched). Leaving worktree mode out
+  would have made `--harness`/`--model` silently inert in one spawn mode — the exact failure the
+  rest of the change exists to prevent. Six lines, same shape as `startBuilderSession`.
+- **Two extra doc fixes** in files already being edited: the afx skill claimed "There is NO
+  `--branch` flag" when `cli.ts` registers one (Spec 609), and the consult skill was missing
+  `--branch`/`--base` alongside `--model-id`. Same staleness class; correcting a doc while leaving
+  a known-false line in it was not defensible.
+
+---
+
 ## Note on the artifact filename
 
 Porch's phase prompt named `codev/plans/0002-architect-builder.md`. That file already exists: it is

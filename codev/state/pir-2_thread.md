@@ -49,3 +49,51 @@ through the identical collision — but a content-reading check (`has_phases_jso
 wrong file.
 
 **Status**: plan committed, `plan-approval` gate pending. Awaiting human review.
+
+## Implement phase (2026-08-21)
+
+Plan approved; architect answered both gate questions. consult confirmed out of scope (they
+verified `--model-id` against `consult --help` themselves rather than taking my word). §5 resume
+persistence confirmed in — they'd hit the inverse the same day, changing the builder model via a
+wrapper script and having `afx spawn 4 --resume` pick it up.
+
+### Shape
+
+- `HarnessProvider` gained optional `buildModelArgs` / `buildScriptModelArg`, per the
+  `buildScriptPromptArg` precedent the architect named. Absence means "no model selector", and
+  `assertHarnessAcceptsModel` makes that loud.
+- `resolveBuilderSelection` resolves the pair once, above the mode dispatch, so the gate-profile
+  preflight judges the command that will actually launch. Reused `validateModelId` from
+  consult-lanes rather than writing a second regex (checked: no import cycle, and its `fail()`
+  throws rather than exiting, which matters because Tower imports config.ts).
+- The model folds into `baseCmd` once, so it reaches fresh, session-pinned, and crash-resume forms.
+
+### Two deviations from the plan, both deliberate
+
+1. **`buildWorktreeLaunchScript` IS threaded** (plan said untouched). Leaving worktree mode out
+   would make the flags silently inert in one spawn mode — the exact failure the change exists to
+   prevent. Six lines.
+2. **Two extra doc fixes** in files I was already editing: the afx skill claimed "There is NO
+   `--branch` flag" when `cli.ts` registers one (Spec 609); the consult skill was missing
+   `--branch`/`--base` as well as `--model-id`.
+
+### Bug caught by running it, not by tests
+
+The unit tests passed, but running the real CLI showed a fresh `global.db` reporting
+`max(_migrations.version) = 17`. `ensureGlobalDatabase` seeds `1..GLOBAL_CURRENT_VERSION` and
+**returns early** on a fresh install, so forgetting to bump that constant leaves v18 unrecorded.
+Nothing breaks loudly — the columns still arrive via GLOBAL_SCHEMA — which is precisely why it
+needed catching. Bumped to 18 and added a test that pins the constant to the highest migration
+block, so the next migration can't skip the bump silently.
+
+Good reminder that "tests pass" is not "it works": four fail-closed paths, the generated launch
+script, and the persisted row were all verified against the real `afx` binary in a temp workspace.
+
+### Verified end-to-end (real binary, temp workspace)
+
+- invalid model id / unknown harness / retired harness / unprofiled harness → all refuse, `.builders`
+  never created
+- valid `--model sonnet` → passes both preflights, fails later for an unrelated reason
+- generated `.builder-start.sh` carries `claude --model 'sonnet'` in every launcher **including**
+  `codev_launch_resume`
+- builder row persisted `harness=claude, model=sonnet`

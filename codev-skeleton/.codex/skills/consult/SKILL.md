@@ -16,6 +16,11 @@ consult stats [options]
 
 The `-m` / `--model` flag is **always required** except for `consult stats`.
 
+**`-m` picks the LANE, not the model.** `-m codex` selects the Codex backend; the
+provider model that backend runs is set by `--model-id` (or config
+`consult.models.<lane>`). The two are separate flags on purpose — `-m gpt-5.6-sol`
+is not a thing, `-m codex --model-id gpt-5.6-sol` is.
+
 ## Models
 
 | Flag value | Alias | Notes |
@@ -27,12 +32,23 @@ The `-m` / `--model` flag is **always required** except for `consult stats`.
 ## All flags
 
 ```
--m, --model <model>         Model to use (required except stats)
+-m, --model <model>         Lane to use (required except stats)
+--model-id <id>              Pin the provider model for this run, e.g.
+                             `--model-id gpt-5.6-sol`. Outranks config
+                             `consult.models.<lane>`. Works on the claude, codex
+                             and gemini lanes; using it with a lane that has no
+                             model selector (hermes) is an error, not a no-op.
+                             Syntax is validated here; whether the model exists
+                             is the provider's call and fails loudly.
 --prompt <text>              Inline prompt (general mode)
 --prompt-file <path>         Prompt file path (general mode)
 --protocol <name>            Protocol: spir, aspir, air, bugfix, maintain
 -t, --type <type>            Review type (see below)
 --issue <number>             Issue number (required in architect context)
+--branch <ref>               Read spec/plan artifacts from this git ref instead
+                             of the local workspace
+--base <ref>                 For --type integration: anchor the diff on this base
+                             branch (defaults to config consult.integrationBranch)
 --output <path>              Save result to file
 --plan-phase <phase>         Scope review to a plan phase (porch use)
 --context <path>             Context file with feedback (porch use)
