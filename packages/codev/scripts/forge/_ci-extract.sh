@@ -13,7 +13,10 @@
 # JOB and returned all of it. (The architect independently reproduced this on
 # run 32448538074: 919 lines, all 919 tagged UNKNOWN STEP.) `gh` attributes log
 # lines to steps by matching filenames, and falls back to UNKNOWN STEP when that
-# mapping fails. So codev extracts on GitHub too, and the concepts fetch
+# mapping fails — unreliably, not always: on run 32536232930 it attributed all
+# 1193 lines correctly. Attributed or not, the output is a whole job or a whole
+# step and never the assertion, which is 108 KB at best. So codev extracts on
+# GitHub too, and the concepts fetch
 # `repos/{owner}/{repo}/actions/jobs/{id}/logs` instead — one job, no invented
 # step column, and the same shape Forgejo 16 serves.
 #

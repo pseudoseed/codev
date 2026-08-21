@@ -17,6 +17,8 @@ Unit Tests	UNKNOWN STEP	2026-08-21T18:47:09.5820646Z Current runner version: '2.
 
 Every one of those 2528 lines is tagged `UNKNOWN STEP`. `--log-failed` selects the failing **job** and returns all of it; `gh` maps log files to steps by name and falls back to `UNKNOWN STEP` when that mapping misses. The architect independently reproduced this on run `32448538074`: 919 lines, all 919 tagged `UNKNOWN STEP` — and had read that same output earlier the same day while diagnosing #6 without registering what it meant.
 
+**One precision, raised by the claude lane and verified:** that attribution is *unreliable*, not always absent. On run `32536232930` the same command attributed all 1193 lines to the failing step correctly. It changes nothing about the design — attributed or not, what comes back is **a whole job or a whole step**, 293 KB and 108 KB respectively, and never the assertion — but "always UNKNOWN STEP" would have been an overstatement, so it is not claimed here or in `arch.md`.
+
 So codev extracts on **both** providers, and neither uses `--log-failed`. Both fetch `actions/jobs/{id}/logs` — one job, no invented step column, the same shape Forgejo 16 serves — which is also why they share one cache and one extractor. The failing step *name* comes from `gh run view --json jobs`, which is structured and reliable.
 
 Anyone reading #13 later should read this section instead of its "Provider notes".
@@ -85,7 +87,7 @@ No log lines at all. A builder handed 50 arbitrary lines treats them as the diag
 
 Every ci-* concept prints one JSON object on stdout on success **and** failure, so `timeout` / `not-found` / `unsupported-server` / `forge-error` / `bad-input` stay distinguishable after `executeForgeCommand` has flattened everything else to `null`. `executeForgeCommandDetailed` is added for callers that need the distinction in TypeScript: it returns `{ok, data, stdout, stderr, exitCode, timedOut, unavailable, durationMs}` and keeps stdout on the failure path.
 
-On a Forgejo below 16 the response is `unsupported-server`, naming the version found and the version needed **and still listing the failing job names it could determine** — never an empty `failures` array. "Your CI is fine" and "I cannot see your CI at all" are opposite facts and must not be the same observation.
+On a Forgejo below 16 the response is `unsupported-server`, naming the version found and the version needed **and still listing the failing job names it could determine** — never an empty `failures` array. It calls that list `failingJobs`, not `failures`, and the difference is deliberate: a `failures` entry carries an extract (`matchedBy`, `text`, `from`/`to`, `returnedLines`), and these have none — only a name and an id. Reusing the key would make an unsupported server shaped like a successful extraction with the details missing, which is a smaller version of the same lie the envelope exists to prevent. (Raised as an inconsistency by the claude lane; kept, with the reason stated here.) "Your CI is fine" and "I cannot see your CI at all" are opposite facts and must not be the same observation.
 
 ### `codev forge <concept>`
 
@@ -106,7 +108,7 @@ Added at the architect's direction at the dev-approval gate, and the reasoning i
 - `packages/codev/src/commands/forge.ts` (+97 / -0) — `codev forge <concept>`
 - `packages/codev/src/cli.ts` (+19 / -0)
 - `packages/codev/src/__tests__/pir-13-ci-concepts.test.ts` (+976 / -0)
-- `packages/codev/src/__tests__/fixtures/pir-13/{github-vitest-failure,forgejo-go-failure}.log.gz` (2 files, 57 KB)
+- `packages/codev/src/__tests__/fixtures/pir-13/{github-vitest-failure,forgejo-go-failure,github-vitest-worker-crash}.log.gz` (3 files, 98 KB) — the third is this branch's own red CI run, which produced the capture-block decoy
 - `packages/codev/src/__tests__/forge.test.ts` (+10 / -2) — concept count 18 → 22
 - `packages/codev/src/__tests__/spec-1280-measurement-instrument.test.ts` (+18 / -25) — timeout ceiling, see Flaky Tests
 - `.claude/skills/forge/SKILL.md`, `.codex/skills/forge/SKILL.md` (+133 / -0 each, byte-identical twins)
@@ -125,7 +127,13 @@ Added at the architect's direction at the dev-approval gate, and the reasoning i
 - `8e26a661a` fix(forge): reject a non-numeric run or job id before it reaches a URL
 - `067f7b179` test(forge): the concept count is 22, not 18
 - `9893db9cd` test: give the prompt-surface instrument a ceiling above its own cost
-- `3334bf9e8` feat(cli): codev forge \<concept\> — run a concept through the real resolver
+- `3334bf9e8` feat(cli): codev forge <concept> — run a concept through the real resolver
+- `5f57f107e` Review + retrospective
+- `79fb7b664` docs: record the review-lane coverage gap and porch's wrong remedy
+- `8a57b262c` fix: the two defects the claude review lane found
+- `9a5a19bac` docs: test counts after the review-lane fixes (5572 passed, 67 new)
+- `5a61226d6` fix: an unusable TMPDIR must not be reported as a missing run
+- `b1f8c7fce` fix(forge): the extractor pointed at a passing test
 
 ## Test Results
 
@@ -134,7 +142,9 @@ Added at the architect's direction at the dev-approval gate, and the reasoning i
 
 ### Branch CI: red, and NOT because of a failing test
 
-**Read this before reading `npm test: ✓ pass` above.** That line is the local suite and it is true; the branch's own CI is a separate claim, and at the time of writing it was **red**. The claude review lane caught the review presenting it as resolved when it was not. Here is what it actually is.
+**Read this before reading `npm test: ✓ pass` above.** That line is the local suite; the branch's own CI is a separate claim, and for several commits it was **red** while this file said nothing about it. The claude review lane caught that.
+
+**CI is green at HEAD** (`b1f8c7fc`: `Tests` ✓, `CLI Integration Tests` ✓), which confirms the diagnosis below — the red was an intermittent worker-teardown crash, not a failing test. The guard defect that turned that flake into a hard failure is still there for whoever hits it next.
 
 The last red run (`32536232930`) reports:
 
@@ -160,7 +170,7 @@ if grep -q "Test Files.*passed" /tmp/vitest-output.txt && ! grep -q "failed" /tm
 | 1657, 1663, 1664 | `spec-1470` test names and stdout — `reentry-failed`, `clear-failed`, "reports a **failed** Tower send" |
 | 2202, 2205 | `git fetch … failed` warnings printed by consult tests |
 
-So *any* worker crash in this repository is a hard CI failure regardless of the test results, and the tolerance the workflow author wrote has never been reachable. That is a defect in `test.yml`, not in this diff, and it is **not fixed here** — fixing another team's CI gate to turn an unrelated red green is the scope creep the review phase warns against. It is reported to the architect with this evidence.
+So *any* worker crash in this repository is a hard CI failure regardless of the test results, and the tolerance the workflow author wrote has never been reachable — which is why a flake that later cleared on a re-run cost this PR two red runs and a diagnosis. That is a defect in `test.yml`, not in this diff, and it is **not fixed here** — fixing another team's CI gate to turn an unrelated red green is the scope creep the review phase warns against. It is reported to the architect with this evidence.
 
 What this PR *did* cause, and has fixed, is the earlier red: the `TMPDIR` harness bug above, which failed 31 tests on Linux while passing locally.
 
@@ -204,13 +214,18 @@ Also verified against a second real run (`32448538074`, the architect's): 919 li
 
 ## ⚠ Review lane coverage — read this before trusting the review depth
 
-**As of 2026-08-21 ~17:00 MDT, two of the three lanes could not run, and the PR is being HELD rather than merged on the remainder.**
+**The rotation this review ran under was `["gemini", "codex", "claude", "opencode"]`**, the four-lane list in effect at the time (2026-08-21, ~16:50–17:30 MDT). The owner removed `gemini` from the rotation shortly afterwards — `["codex", "claude", "opencode"]` — so a later reader will see three names where this table has four. The table records what actually ran, not the current config.
 
-| Lane | Verdict | Why |
+The first pass had only ONE lane available and the PR was **held** rather than merged on it; the `opencode` lane (PR #24) was merged and installed mid-flight, which is what made a second live reviewer possible.
+
+| Lane | Verdict | Notes |
 |---|---|---|
-| **codex** (gpt-5.6-sol) | **NEVER RAN** | Provider quota. Refused in seconds, before any model work: *"You've hit your usage limit… try again at Aug 27th, 2026 4:01 PM."* The same quota blocked codex on #2, #4, #11 and #12 the same day. |
-| **gemini** (agy) | **NEVER RAN** | Provider quota, **not** the reason porch reported — see below. Resets ~2026-08-28. |
-| **claude** (opus-5) | in progress at time of writing | — |
+| **claude** (`claude-opus-5`) | **APPROVE**, HIGH | Ran twice more than required. First pass found the timeout inversion and the `sed -n "1,0p"` portability bug; second pass, on the corrected code, found the extractor pointing at a passing test and this file claiming green CI while the branch was red. Third pass, after those fixes: APPROVE, "no blocking issues", shellcheck and tsc clean, review claims verified independently. |
+| **opencode** (`xai/grok-4.6`) | **APPROVE**, HIGH | No key issues. Checked the three documented deviations rather than the code alone. |
+| **codex** (gpt-5.6-sol) | **NEVER RAN** | Provider quota, refused in seconds: *"You've hit your usage limit… try again at Aug 27th, 2026 4:01 PM."* Same quota blocked #2, #4, #11 and #12 the same day. |
+| **gemini** (agy) | **NEVER RAN** | Provider quota, **not** the reason porch reported — see below. Resets ~2026-08-28. Removed from the rotation by the owner after this review ran. |
+
+Every finding from every lane was reproduced before being acted on, and none was argued down. The four that changed the code are described in **What the lanes found** below.
 
 **Porch's own gate summary will say otherwise, and it is wrong.** Both lane files carry `VERDICT: SKIPPED`, which `parseVerdict` (`porch/verdict.ts`) does not recognise — it knows only `APPROVE`, `REQUEST_CHANGES`, `COMMENT` — so it falls through to the "treat as COMMENT" default, and `allApprove` counts `COMMENT` as approval. Porch will print **"All reviewers approved!"** over two reviewers that read nothing. That is **#20**, filed by PIR #12; it is porch behaviour, not anything in this diff, and it is not fixed here. Read this table, not the summary line.
 
@@ -236,9 +251,9 @@ rc=1
 
 Reinstalling and signing in again would have changed nothing and cost whoever followed the advice their afternoon. A confidently printed remedy that cannot work is the same defect class as #21, where the stuck-mailbox alert names a command that cannot clear a composer. The architect is filing it separately.
 
-### What the one lane that did run found
+### What the lanes found
 
-**claude (opus-5) — VERDICT: COMMENT, CONFIDENCE: HIGH.** Two real defects, both fixed before this was written, and both in precisely the class the two absent lanes exist to catch.
+**First pass — claude, COMMENT/HIGH.** Two real defects, both in precisely the class the absent lanes exist to catch.
 
 **1. The timeout layering was inverted, and my own test hid it.** `executeForgeCommandDetailed` defaults to a 30s ceiling; the scripts default to a 60s `CODEV_FORGE_TIMEOUT`. **At the defaults the outer kill fires first**, so a stalled forge arrived as a generic Node kill and the script's *named* timeout envelope — the entire point of the inner watchdog, and the thing #17 and #8 are about — never printed. The comment in `forge.ts` asserted the opposite ordering.
 
@@ -250,7 +265,15 @@ The reason it survived to review is worth more than the fix: **the timeout test 
 
 A third finding was cosmetic (a misindented `exit` and a trailing space in `gitea/ci-runs.sh`), fixed.
 
-A fourth was noted rather than requested: the `Ci*` contracts in `forge-contracts.ts` are documentation-only, with no conformance test tying them to actual script output. **Deliberately not done here.** Adding it for the four CI contracts alone would leave the other eighteen forge contracts untested while implying they were covered — worse than uniformly untested. The architect is filing it as its own issue across all forge contracts.
+**Second pass — claude, REQUEST_CHANGES/HIGH**, on the code after those fixes. Three findings, all correct:
+
+- **This file claimed CI was green when the branch was red.** Addressed in the CI section above: disclosed, diagnosed, and the guard defect reported rather than fixed.
+- **`ci-failures` pointed at a passing test** — the capture-block decoy, above. The best finding of the review, because it was found by *running this PR's tool against this PR's own failing CI*.
+- **"How to Test Locally" gave commands that do not work here.** The globally installed `codev` predates this PR and has no `forge` subcommand; the worktree build predated the `opencode` lane and rejected the workspace config. `main` is now merged (fixing the second) and the instructions build the branch and invoke its own CLI (fixing the first).
+
+**Third pass — claude, APPROVE/HIGH.** No blocking issues; four minor notes, all documentation accuracy, all applied: the fixture count (2 → 3), the commit list, the `--log-failed` overstatement corrected above and in `arch.md`, and the reason `failingJobs` is deliberately not spelled `failures`.
+
+A further note was noted rather than requested: the `Ci*` contracts in `forge-contracts.ts` are documentation-only, with no conformance test tying them to actual script output. **Deliberately not done here.** Adding it for the four CI contracts alone would leave the other eighteen forge contracts untested while implying they were covered — worse than uniformly untested. The architect is filing it as its own issue across all forge contracts.
 
 ### What CI on this PR found that the local suite could not
 

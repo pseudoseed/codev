@@ -33,8 +33,10 @@ GH_FAILED_JOBS_JQ='[.jobs[] | select(.conclusion == "failure" or .conclusion == 
 # Uses `gh api repos/{owner}/{repo}/actions/jobs/{id}/logs` — NOT
 # `gh run view --log-failed`. The reason is measured, and it contradicts the
 # issue that asked for this work: --log-failed returned 2528 lines / 293 KB for
-# one failing job on run 32515040122, every line tagged "UNKNOWN STEP", because
-# it selects the failing JOB and cannot always attribute lines to steps. The
+# one failing job on run 32515040122, every line tagged "UNKNOWN STEP". Its step
+# attribution is unreliable rather than always absent — on run 32536232930 the
+# same command attributed all 1193 lines correctly — but attributed or not, what
+# comes back is a whole job or a whole step, never the assertion. The
 # per-job endpoint returns the same bytes without the invented step column, for
 # exactly the job asked for, and mirrors the shape Forgejo 16 serves at
 # `actions/jobs/{id}/logs` — so both providers share one cache and one
