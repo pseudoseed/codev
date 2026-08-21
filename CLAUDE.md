@@ -135,10 +135,16 @@ apps/streamdeck; Elgato channel: profiles, Maker Console, packaging) · core · 
 
 ## Multi-agent consultation
 
-**Enabled by default.** Three reviewers: **Gemini** via the Antigravity CLI (`agy`, skips
-non-blockingly if unauthenticated), **GPT-5.6 Sol** (`gpt-5.6-sol` — the `-sol` suffix is
+**Enabled by default.** Three reviewers by default: **Gemini** via the Antigravity CLI (`agy`,
+skips non-blockingly if unauthenticated), **GPT-5.6 Sol** (`gpt-5.6-sol` — the `-sol` suffix is
 load-bearing) via the Codex SDK, and **Claude Opus 5** via the Agent SDK. Disable only when
 the user says "without consultation".
+
+An additional lane, **`opencode`** (`opencode run`, default `xai/grok-4.6` — the prefix is `xai/`,
+not `x-ai/`), is available but not in the default rotation. Reach for it when a default lane is
+quota-exhausted or unauthenticated: it is the one reviewer on an account none of the others share.
+Unlike the agy lane it never skips — every failure is loud, including a review that states no
+verdict.
 
 Consult after writing implementation code and after writing tests, before presenting results.
 **"cmap"** means run all three in parallel *in the background* and return control immediately.

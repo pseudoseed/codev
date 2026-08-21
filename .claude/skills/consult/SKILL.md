@@ -1,11 +1,11 @@
 ---
 name: consult
-description: AI consultation CLI — query Gemini, Codex, or Claude for reviews and analysis. ALWAYS check this skill before running any `consult` command. Use when reviewing specs, plans, implementations, or PRs with external models, running parallel 3-way reviews (cmap), or checking consultation stats. The `-m` model flag is always required except for `consult stats`.
+description: AI consultation CLI — query Gemini, Codex, Claude, or opencode/Grok for reviews and analysis. ALWAYS check this skill before running any `consult` command. Use when reviewing specs, plans, implementations, or PRs with external models, running parallel 3-way reviews (cmap), or checking consultation stats. The `-m` model flag is always required except for `consult stats`.
 ---
 
 # consult - AI Consultation CLI
 
-Query external AI models for reviews and analysis. Supports Gemini, Codex, and Claude.
+Query external AI models for reviews and analysis. Supports Gemini, Codex, Claude, hermes, and opencode.
 
 ## Synopsis
 
@@ -28,6 +28,7 @@ is not a thing, `-m codex --model-id gpt-5.6-sol` is.
 | `gemini` | `pro` | Antigravity CLI (`agy`); agentic file access (`--sandbox`), OAuth login; skips non-blockingly if unavailable |
 | `codex` | `gpt` | Thorough (~200-250s), shell exploration |
 | `claude` | `opus` | Agent SDK with tool use (~60-120s) |
+| `opencode` | - | `opencode run` (Grok, default `xai/grok-4.6`); agentic file access; hard-fails rather than skipping |
 
 ## All flags
 
@@ -35,11 +36,15 @@ is not a thing, `-m codex --model-id gpt-5.6-sol` is.
 -m, --model <model>         Lane to use (required except stats)
 --model-id <id>              Pin the provider model for this run, e.g.
                              `--model-id gpt-5.6-sol`. Outranks config
-                             `consult.models.<lane>`. Works on the claude, codex
-                             and gemini lanes; using it with a lane that has no
-                             model selector (hermes) is an error, not a no-op.
-                             Syntax is validated here; whether the model exists
-                             is the provider's call and fails loudly.
+                             `consult.models.<lane>`. Works on the claude, codex,
+                             gemini and opencode lanes; using it with a lane that
+                             has no model selector (hermes) is an error, not a
+                             no-op. Syntax is validated here; whether the model
+                             exists is the provider's call and fails loudly.
+                             Exception: an opencode id is checked against
+                             `opencode models` first — the prefix is `xai/`, not
+                             `x-ai/`, and the provider's own rejection says so
+                             nowhere.
 --prompt <text>              Inline prompt (general mode)
 --prompt-file <path>         Prompt file path (general mode)
 --protocol <name>            Protocol: spir, aspir, air, bugfix, maintain
