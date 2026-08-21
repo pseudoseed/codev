@@ -79,6 +79,60 @@ export function matchesProjectId(name: string, projectId: string): boolean {
 }
 
 /**
+ * Exact (canonical) form of {@link matchesProjectId}: the leading digits must equal
+ * `projectId` LITERALLY, without zero-stripping.
+ *
+ * `matchesProjectId` is deliberately lenient — it zero-strips both sides so id `2`
+ * matches `0002-foo.md` as well as `2-foo.md`. That leniency is correct for finding
+ * a legacy zero-padded artifact, but it makes id `2` ambiguous in a tree that holds
+ * BOTH, and `Array.find` then resolves the ambiguity by readdir order — i.e. by
+ * chance.
+ *
+ * This fork restarted issue numbering at 1 against a tree carrying legacy artifacts
+ * numbered into the 1400s, so the collision is systematic rather than incidental:
+ * project 2's review resolved to `0002-architect-builder-tick-001.md`, a 2025 TICK
+ * review of an unrelated spec, and the content checks read the wrong document. It
+ * recurs for every id whose zero-padded twin exists.
+ *
+ * CLAUDE.md's convention is "sequential numbering, no leading zeros", so `2-foo.md`
+ * is project 2's canonical artifact and `0002-foo.md` is a DIFFERENT document that
+ * merely collides. Preferring the exact form resolves that, while keeping the
+ * zero-stripped match as a fallback so genuinely zero-padded legacy projects still
+ * resolve when nothing canonical exists.
+ */
+export function matchesProjectIdExact(name: string, projectId: string): boolean {
+  const base = name.replace(/\.md$/, '');
+
+  // Prefix-N ids are already exact — there is no padding to strip.
+  if (/^[a-z]+(?:-[a-z]+)*-\d+$/i.test(projectId)) {
+    return base === projectId || base.startsWith(`${projectId}-`);
+  }
+
+  const numMatch = base.match(/^(\d+)/);
+  if (!numMatch) return false;
+  return numMatch[1] === projectId;
+}
+
+/**
+ * Find the artifact belonging to `projectId`: the canonical (exact) match if one
+ * exists, else the lenient zero-stripped match.
+ *
+ * THE single find-by-id entry point for this module. Every artifact lookup — spec,
+ * plan, review, project directory — routes through it so they cannot disagree about
+ * which file is project N's, which is exactly what happened when each site called
+ * `Array.find(matchesProjectId)` independently.
+ */
+export function findByProjectId(
+  names: string[],
+  projectId: string,
+  filter: (name: string) => boolean = () => true,
+): string | undefined {
+  const candidates = names.filter(filter);
+  return candidates.find(n => matchesProjectIdExact(n, projectId))
+    ?? candidates.find(n => matchesProjectId(n, projectId));
+}
+
+/**
  * Check if artifact content has pre-approval frontmatter.
  * Looks for YAML frontmatter with `approved:` and `validated:` fields.
  * Used by both LocalResolver and CliResolver for consistency.
@@ -107,7 +161,7 @@ export class LocalResolver implements ArtifactResolver {
 
     try {
       const files = fs.readdirSync(specsDir);
-      const specFile = files.find(f => f.endsWith('.md') && matchesProjectId(f, projectId));
+      const specFile = findByProjectId(files, projectId, f => f.endsWith('.md'));
       return specFile ? specFile.replace(/\.md$/, '') : null;
     } catch {
       return null;
@@ -131,7 +185,7 @@ export class LocalResolver implements ArtifactResolver {
     if (fs.existsSync(projectsDir)) {
       try {
         const dirs = fs.readdirSync(projectsDir);
-        const projDir = dirs.find(d => matchesProjectId(d, projectId));
+        const projDir = findByProjectId(dirs, projectId);
         if (projDir) {
           const planPath = path.join(projectsDir, projDir, 'plan.md');
           if (fs.existsSync(planPath)) {
@@ -147,7 +201,7 @@ export class LocalResolver implements ArtifactResolver {
 
     try {
       const files = fs.readdirSync(plansDir);
-      const planFile = files.find(f => f.endsWith('.md') && matchesProjectId(f, projectId));
+      const planFile = findByProjectId(files, projectId, f => f.endsWith('.md'));
       if (planFile) {
         return fs.readFileSync(path.join(plansDir, planFile), 'utf-8');
       }
@@ -162,7 +216,7 @@ export class LocalResolver implements ArtifactResolver {
 
     try {
       const files = fs.readdirSync(reviewsDir);
-      const reviewFile = files.find(f => f.endsWith('.md') && matchesProjectId(f, projectId));
+      const reviewFile = findByProjectId(files, projectId, f => f.endsWith('.md'));
       if (reviewFile) {
         return fs.readFileSync(path.join(reviewsDir, reviewFile), 'utf-8');
       }
@@ -222,7 +276,7 @@ export class CliResolver implements ArtifactResolver {
     const children = this.listChildren('specs');
     if (!children) return null;
 
-    const match = children.find(name => matchesProjectId(name, projectId));
+    const match = findByProjectId(children, projectId);
     return match || null;
   }
 
@@ -275,13 +329,13 @@ export class CliResolver implements ArtifactResolver {
   private findPlanBaseName(projectId: string): string | null {
     const children = this.listChildren('plans');
     if (!children) return null;
-    return children.find(name => matchesProjectId(name, projectId)) || null;
+    return findByProjectId(children, projectId) || null;
   }
 
   private findReviewBaseName(projectId: string): string | null {
     const children = this.listChildren('reviews');
     if (!children) return null;
-    return children.find(name => matchesProjectId(name, projectId)) || null;
+    return findByProjectId(children, projectId) || null;
   }
 
   private listChildren(subPath: string): string[] | null {
@@ -438,7 +492,7 @@ export class GitRefResolver implements ArtifactResolver {
 
   findSpecBaseName(projectId: string, _title: string): string | null {
     const files = this.listFiles('codev/specs');
-    const specFile = files.find(f => f.endsWith('.md') && matchesProjectId(f, projectId));
+    const specFile = findByProjectId(files, projectId, f => f.endsWith('.md'));
     return specFile ? specFile.replace(/\.md$/, '') : null;
   }
 
@@ -457,7 +511,7 @@ export class GitRefResolver implements ArtifactResolver {
         { cwd: this.workspaceRoot, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
       );
       const projDirs = stdout.split('\n').filter(Boolean).map(line => path.basename(line));
-      const projDir = projDirs.find(d => matchesProjectId(d, projectId));
+      const projDir = findByProjectId(projDirs, projectId);
       if (projDir) {
         const content = this.showFile(`codev/projects/${projDir}/plan.md`);
         if (content !== null) return content;
@@ -466,14 +520,14 @@ export class GitRefResolver implements ArtifactResolver {
 
     // Legacy location: codev/plans/<id>-*.md
     const files = this.listFiles('codev/plans');
-    const planFile = files.find(f => f.endsWith('.md') && matchesProjectId(f, projectId));
+    const planFile = findByProjectId(files, projectId, f => f.endsWith('.md'));
     if (!planFile) return null;
     return this.showFile(`codev/plans/${planFile}`);
   }
 
   getReviewContent(projectId: string, _title: string): string | null {
     const files = this.listFiles('codev/reviews');
-    const reviewFile = files.find(f => f.endsWith('.md') && matchesProjectId(f, projectId));
+    const reviewFile = findByProjectId(files, projectId, f => f.endsWith('.md'));
     if (!reviewFile) return null;
     return this.showFile(`codev/reviews/${reviewFile}`);
   }
