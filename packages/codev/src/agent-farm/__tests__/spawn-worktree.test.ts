@@ -529,6 +529,92 @@ describe('spawn-worktree', () => {
     });
   });
 
+  describe('startBuilderSession model pinning (Issue #2)', () => {
+    function findScript(): string | undefined {
+      const writeCalls = vi.mocked(writeFileSync).mock.calls;
+      const scriptCall = writeCalls.find(
+        call => typeof call[0] === 'string' && call[0].endsWith('.builder-start.sh'),
+      );
+      return scriptCall ? (scriptCall[1] as string) : undefined;
+    }
+
+    function launcherBody(script: string, name: 'entry' | 'pinned' | 'unpinned' | 'resume'): string | undefined {
+      return script.match(new RegExp(`codev_launch_${name}\\(\\) \\{\\n(.*)\\n\\}`))?.[1].trim();
+    }
+
+    const selection = (modelScriptFragment: string) => ({
+      harnessName: 'claude',
+      command: 'claude',
+      provider: CLAUDE_HARNESS,
+      modelId: modelScriptFragment ? 'sonnet' : undefined,
+      modelScriptFragment,
+    }) as any;
+
+    it('pins the model in EVERY launch form, including crash-resume', async () => {
+      // The whole reason the model folds into the base command rather than being
+      // appended per-form: a crash restart must come back on the same model. If it
+      // only reached the fresh launch, a builder would silently change model the
+      // first time Tower relaunched it.
+      getBuilderHarnessMock.mockReturnValue(CLAUDE_HARNESS);
+      const resume = { sessionId: 'abc-1234-uuid', scriptFragment: "--resume 'abc-1234-uuid'" };
+      await startBuilderSession(
+        { workspaceRoot: '/tmp/ws' } as any,
+        'pir-2-m', '/tmp/worktree', 'claude',
+        'PROMPT', 'ROLE', 'codev', resume, selection("--model 'sonnet'"),
+      );
+
+      const script = findScript()!;
+      for (const form of ['entry', 'pinned', 'resume'] as const) {
+        const body = launcherBody(script, form);
+        if (body !== undefined) expect(body, `${form} launcher`).toContain("--model 'sonnet'");
+      }
+      expect(launcherBody(script, 'resume')).toContain('--resume');
+      expect(launcherBody(script, 'resume')).toContain("--model 'sonnet'");
+    });
+
+    it('an empty model fragment leaves the script byte-identical', async () => {
+      // The regression that matters most: this change threads a new optional
+      // parameter through the highest-churn file in the repo, so a spawn that
+      // names no model must produce exactly the bytes it produced before.
+      getBuilderHarnessMock.mockReturnValue(CLAUDE_HARNESS);
+      await startBuilderSession(
+        { workspaceRoot: '/tmp/ws' } as any,
+        'pir-2-a', '/tmp/worktree', 'claude',
+        'PROMPT', 'ROLE', 'codev',
+      );
+      const without = findScript()!;
+
+      vi.mocked(writeFileSync).mockClear();
+      getBuilderHarnessMock.mockReturnValue(CLAUDE_HARNESS);
+      await startBuilderSession(
+        { workspaceRoot: '/tmp/ws' } as any,
+        'pir-2-a', '/tmp/worktree', 'claude',
+        'PROMPT', 'ROLE', 'codev', undefined, selection(''),
+      );
+      const withEmpty = findScript()!;
+
+      // The session id is freshly minted per launch (Issue #1224), so normalise
+      // that one value; everything else must match byte for byte.
+      const norm = (t: string) => t.replace(/[0-9a-f-]{36}/g, '<uuid>');
+      expect(norm(withEmpty)).toBe(norm(without));
+    });
+
+    it('the selection\'s provider wins over the config harness', async () => {
+      // Without this, `--harness opencode` would resolve claude here and generate a
+      // claude-shaped script for an opencode binary — a builder that launches wrong.
+      getBuilderHarnessMock.mockReturnValue(CLAUDE_HARNESS);
+      await startBuilderSession(
+        { workspaceRoot: '/tmp/ws' } as any,
+        'pir-2-oc', '/tmp/worktree', 'opencode',
+        'PROMPT', 'ROLE', 'codev', undefined,
+        { harnessName: 'opencode', command: 'opencode', provider: OPENCODE_HARNESS, modelScriptFragment: '' } as any,
+      );
+
+      const script = findScript()!;
+      expect(script).toContain('--prompt "$(cat');
+    });
+  });
+
   // =========================================================================
   // Collision Detection (unit-level)
   // =========================================================================
