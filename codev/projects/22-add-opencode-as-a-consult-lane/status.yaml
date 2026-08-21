@@ -1,7 +1,7 @@
 id: '22'
 title: add-opencode-as-a-consult-lane
 protocol: air
-phase: pr
+phase: verified
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -13,7 +13,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-21T22:35:07.319Z'
-updated_at: '2026-08-21T23:11:58.135Z'
+updated_at: '2026-08-21T23:12:07.438Z'
 pr_history:
   - phase: pr
     pr_number: 24
