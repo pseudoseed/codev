@@ -17,6 +17,12 @@ export interface Builder {
   issueNumber?: number | string;   // For bugfix mode
   terminalId?: string;    // Terminal session ID
   spawnedByArchitect?: string;   // Name of the architect that spawned this builder (Spec 755)
+  // Issue #2: the (harness, model) this builder was spawned with. Persisted so
+  // `afx spawn --resume` re-launches on the same pair instead of silently
+  // reverting to workspace config — a flag that quietly stops applying is worse
+  // than no flag.
+  harness?: string;
+  model?: string;
 }
 
 export interface UtilTerminal {
@@ -107,6 +113,11 @@ export interface SpawnOptions {
   // Branch mode (Spec 609): use an existing remote branch
   branch?: string;        // --branch <name>: checkout existing remote branch instead of creating new one
   remote?: string;        // --remote <name>: specify which remote to fetch the branch from (for fork PRs)
+
+  // Agent selection (Issue #2): the (harness, model) pair, per spawn.
+  // Both optional; omitting them resolves exactly what workspace config used to.
+  harness?: string;       // --harness <name>: override .codev/config.json's default for this spawn
+  model?: string;         // --model <id>: pin the model, resolved into argv by the harness
 
   // General options
   noRole?: boolean;

@@ -64,6 +64,30 @@ export interface HarnessProvider {
   buildScriptPromptArg?(promptFileReadExpr: string): string;
 
   /**
+   * For Node spawn() call sites: how this agent's CLI pins a MODEL.
+   *
+   * Optional, and absence is meaningful: it declares "this harness exposes no
+   * model selector". `assertHarnessAcceptsModel` turns that into a loud error
+   * rather than letting `--model` be silently dropped — the exact
+   * registered-documented-inert failure `--model-id` shipped with once already
+   * (see commands/consult/cli-options.ts, spec 1286).
+   *
+   * Follows the `buildScriptPromptArg` precedent from Issue #4: a small optional
+   * method here beats special-casing a harness at the call site.
+   */
+  buildModelArgs?(modelId: string): string[];
+
+  /**
+   * For bash script generation: the shell fragment that pins the model.
+   *
+   * The dual-form counterpart of buildModelArgs, mirroring the
+   * buildRoleInjection / buildScriptRoleInjection convention. Implementations
+   * must shell-escape `modelId` themselves (via shellEscapeSingleQuote) — it is
+   * a raw CLI value, not a pre-quoted expression like `promptFileReadExpr`.
+   */
+  buildScriptModelArg?(modelId: string): string;
+
+  /**
    * Whether this harness can clear its conversation context in-session, without
    * restarting the process (Spec 1273 — `afx refresh`).
    *
@@ -160,6 +184,20 @@ export interface CustomHarnessConfig {
   roleEnv?: Record<string, string>;
   roleScriptFragment: string;
   roleScriptEnv?: Record<string, string>;
+  /**
+   * Optional model selection, expanding `${MODEL}` (Issue #2). Both are optional
+   * and omitting them declares "no model selector", so every config written
+   * before this existed keeps validating and behaving identically.
+   */
+  modelArgs?: string[];
+  modelScriptFragment?: string;
+  /**
+   * Optional binary/command that runs this harness, for a per-spawn
+   * `--harness <name>` (Issue #2). Without it a per-spawn selection falls back
+   * to the workspace's configured builder command (when that command already is
+   * this harness) and then to the bare name — see resolveHarnessCommand.
+   */
+  command?: string;
 }
 
 // =============================================================================
@@ -179,6 +217,10 @@ export const CLAUDE_HARNESS: HarnessProvider = {
     fragment: `--append-system-prompt "$(cat '${shellEscapeSingleQuote(filePath)}')"`,
     env: {},
   }),
+  // Issue #2. Verified against the installed CLI: `--model <model>` takes an alias
+  // ('opus', 'sonnet') or a full id ('claude-fable-5').
+  buildModelArgs: (modelId) => ['--model', modelId],
+  buildScriptModelArg: (modelId) => `--model '${shellEscapeSingleQuote(modelId)}'`,
   buildResume: (absolutePath, opts) => {
     const sessionId = findLatestSessionId(absolutePath, opts);
     if (!sessionId) return null;
@@ -216,6 +258,10 @@ export const CODEX_HARNESS: HarnessProvider = {
     fragment: `-c model_instructions_file='${shellEscapeSingleQuote(filePath)}'`,
     env: {},
   }),
+  // Issue #2. Verified against codex-cli 0.148.0: `-m, --model <MODEL>`. Spelled
+  // out as `--model` rather than `-m` so a generated launch script stays readable.
+  buildModelArgs: (modelId) => ['--model', modelId],
+  buildScriptModelArg: (modelId) => `--model '${shellEscapeSingleQuote(modelId)}'`,
 };
 
 export const OPENCODE_HARNESS: HarnessProvider = {
@@ -235,6 +281,11 @@ export const OPENCODE_HARNESS: HarnessProvider = {
   // the docs previously recommended — does not: that form answers once and exits, so the
   // builder would die after a single turn. Verified against opencode 1.18.18.
   buildScriptPromptArg: (promptFileReadExpr) => `--prompt ${promptFileReadExpr}`,
+  // Issue #2. Verified against opencode 1.18.18: `-m, --model`, taking the value in
+  // `provider/model` form (e.g. `x-ai/grok-4.6`). MODEL_ID_RE already permits "/",
+  // so that form validates without loosening the shared pattern.
+  buildModelArgs: (modelId) => ['--model', modelId],
+  buildScriptModelArg: (modelId) => `--model '${shellEscapeSingleQuote(modelId)}'`,
   getWorktreeFiles: () => ([{
     relativePath: 'opencode.json',
     content: JSON.stringify({ instructions: ['.builder-role.md'] }, null, 2) + '\n',
@@ -357,6 +408,18 @@ function expandTemplateVars(template: string, roleContent: string, roleFilePath:
 }
 
 /**
+ * Expand `${MODEL}` in a custom harness's model template (Issue #2).
+ *
+ * Kept separate from `expandTemplateVars` rather than folded into it: the role
+ * templates are expanded at a call site that has no model in hand, so a shared
+ * signature would force a meaningless placeholder through every role expansion.
+ * Unknown `${...}` variables are left unexpanded here too, so a typo stays visible.
+ */
+function expandModelVar(template: string, modelId: string): string {
+  return template.replace(/\$\{MODEL\}/g, () => modelId);
+}
+
+/**
  * Escape a string for safe inclusion inside single quotes in bash.
  * Replaces ' with '\'' (end quote, escaped quote, start quote).
  */
@@ -373,7 +436,21 @@ export function shellEscapeSingleQuote(value: string): string {
  * Template variables (${ROLE_FILE}, ${ROLE_CONTENT}) are expanded at call time.
  */
 export function buildCustomHarnessProvider(config: CustomHarnessConfig): HarnessProvider {
+  // Attached only when configured, so an unconfigured custom harness keeps the
+  // meaningful `undefined` that `assertHarnessAcceptsModel` reads as "no model
+  // selector" — rather than silently accepting `--model` and dropping it.
+  const modelHooks: Pick<HarnessProvider, 'buildModelArgs' | 'buildScriptModelArg'> = {};
+  if (config.modelArgs) {
+    const modelArgs = config.modelArgs;
+    modelHooks.buildModelArgs = (modelId) => modelArgs.map(arg => expandModelVar(arg, modelId));
+  }
+  if (config.modelScriptFragment !== undefined) {
+    const fragment = config.modelScriptFragment;
+    modelHooks.buildScriptModelArg = (modelId) => expandModelVar(fragment, modelId);
+  }
+
   return {
+    ...modelHooks,
     buildRoleInjection: (content, filePath) => ({
       args: config.roleArgs.map(arg => expandTemplateVars(arg, content, filePath)),
       env: Object.fromEntries(
@@ -441,7 +518,78 @@ export function validateCustomHarnessConfig(name: string, config: unknown): Cust
     }
   }
 
+  if (obj.modelArgs !== undefined) {
+    if (!Array.isArray(obj.modelArgs)) {
+      throw new Error(`Harness "${name}": "modelArgs" must be a string array if provided`);
+    }
+    if (!obj.modelArgs.every((a: unknown) => typeof a === 'string')) {
+      throw new Error(`Harness "${name}": "modelArgs" must contain only strings`);
+    }
+  }
+
+  if (obj.command !== undefined && typeof obj.command !== 'string') {
+    throw new Error(`Harness "${name}": "command" must be a string, got ${typeof obj.command}`);
+  }
+
+  if (obj.modelScriptFragment !== undefined && typeof obj.modelScriptFragment !== 'string') {
+    throw new Error(
+      `Harness "${name}": "modelScriptFragment" must be a string, got ${typeof obj.modelScriptFragment}`,
+    );
+  }
+
   return obj as unknown as CustomHarnessConfig;
+}
+
+// =============================================================================
+// Model support
+// =============================================================================
+
+/**
+ * Error thrown when a model is requested for a harness that has no model selector.
+ *
+ * A distinct type so a caller can scope a `catch` to this case, matching the
+ * `RetiredHarnessError` precedent. `harnessName` is the harness that cannot
+ * honour the model.
+ */
+export class ModelUnsupportedError extends Error {
+  constructor(public readonly harnessName: string, message: string) {
+    super(message);
+    this.name = 'ModelUnsupportedError';
+  }
+}
+
+/**
+ * Reject a model selection for a harness that cannot honour it (Issue #2).
+ *
+ * Modelled on `assertLaneAcceptsModelOverride` in lib/consult-lanes.ts, and here
+ * for the same reason spec 1286 needed it there: without this, `--model` against
+ * a selector-less harness parses, appears in `--help`, and does exactly nothing.
+ * That "registered, documented, inert" outcome is the failure `--model-id` shipped
+ * with once already. A flag that cannot take effect must say so.
+ *
+ * `harnessNames` is the set of names the caller could resolve, so the message can
+ * name the alternatives rather than just refusing.
+ */
+export function assertHarnessAcceptsModel(
+  harnessName: string,
+  provider: HarnessProvider,
+  harnessNames: readonly string[] = Object.keys(BUILTIN_HARNESSES),
+  flag = '--model',
+): void {
+  if (provider.buildScriptModelArg && provider.buildModelArgs) return;
+
+  const accepting = harnessNames.filter((n) => {
+    const p = getBuiltinHarness(n);
+    return p?.buildScriptModelArg !== undefined;
+  });
+
+  throw new ModelUnsupportedError(
+    harnessName,
+    `${flag} is not supported for the "${harnessName}" harness — it exposes no model selector.\n` +
+    `Harnesses that accept a model: ${accepting.join(', ') || '(none)'}.\n` +
+    `A custom harness can declare one by setting "modelArgs" and "modelScriptFragment" ` +
+    `(both expanding \${MODEL}) in .codev/config.json under the "harness" section.`,
+  );
 }
 
 // =============================================================================

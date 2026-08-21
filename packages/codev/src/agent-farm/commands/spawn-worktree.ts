@@ -27,7 +27,7 @@ import {
 import { globSync } from 'glob';
 import type { Config, ProtocolDefinition } from '../types.js';
 import { logger, fatal } from '../utils/logger.js';
-import { getBuilderHarness, getWorktreeConfig } from '../utils/config.js';
+import { getBuilderHarness, getWorktreeConfig, type AgentSelection } from '../utils/config.js';
 import { shellEscapeSingleQuote, type HarnessProvider } from '../utils/harness.js';
 import { defaultSessionOptions } from '../../terminal/index.js';
 import { run, runStreaming, commandExists } from '../utils/shell.js';
@@ -1043,6 +1043,7 @@ export async function startBuilderSession(
   roleContent: string | null,
   roleSource: string | null,
   resume?: { sessionId: string; scriptFragment: string },
+  selection?: AgentSelection,
 ): Promise<{ terminalId: string }> {
   logger.info('Creating terminal session...');
 
@@ -1066,7 +1067,20 @@ export async function startBuilderSession(
   // `buildWorktreeLaunchScript` and never reach here.
   if (!resume) writeFileSync(promptFile, prompt);
 
-  const harness = getBuilderHarness(config.workspaceRoot);
+  // Issue #2: with a per-spawn selection, the harness comes from it rather than
+  // workspace config — `--harness` would otherwise resolve the config default here
+  // and silently mismatch the command the caller chose. No selection keeps the
+  // historical config resolution, so every existing call site is unchanged.
+  const harness = selection?.provider ?? getBuilderHarness(config.workspaceRoot);
+
+  // Fold the model flag into the base command ONCE. Every launch form below
+  // derives from `agentCmd` — the role-injected fresh launch, the session-pinned
+  // launch, and the crash-resume relaunch — so pinning it here is what makes a
+  // model survive a crash restart instead of only applying to the first launch.
+  // Empty fragment (no model requested) leaves the command byte-identical.
+  const agentCmd = selection?.modelScriptFragment
+    ? `${baseCmd} ${selection.modelScriptFragment}`
+    : baseCmd;
   let envBlock = '';
   let roleFragment = '';
 
@@ -1097,7 +1111,7 @@ export async function startBuilderSession(
   // With a role, the fragment is appended even when empty (gemini injects via
   // env only, fragment '') — preserving the historical command text exactly,
   // double space included, so session-less scripts stay byte-identical.
-  const withRole = roleContent ? `${baseCmd} ${roleFragment}` : baseCmd;
+  const withRole = roleContent ? `${agentCmd} ${roleFragment}` : agentCmd;
   // Issue #4: how the initial prompt is passed is harness-specific. Omitting the hook
   // keeps the historical bare positional (claude/codex/custom), so their generated
   // scripts are byte-identical; opencode overrides it because its positional slot is a
@@ -1122,15 +1136,15 @@ export async function startBuilderSession(
     const sessionId = resume ? resume.sessionId : randomUUID();
     loop = buildSessionLaunchLoop({
       sessionId,
-      initial: resume ? `${baseCmd} ${resume.scriptFragment}` : undefined,
+      initial: resume ? `${agentCmd} ${resume.scriptFragment}` : undefined,
       pinnedFresh: `${withRole} ${sessionForms.newSessionScriptFragment(SESSION_ID_EXPR)} ${promptArg}`,
       unpinnedFresh: freshCommand,
-      resume: `${baseCmd} ${sessionForms.resumeScriptFragment(SESSION_ID_EXPR)} '${shellEscapeSingleQuote(CRASH_RESUME_NUDGE)}'`,
+      resume: `${agentCmd} ${sessionForms.resumeScriptFragment(SESSION_ID_EXPR)} '${shellEscapeSingleQuote(CRASH_RESUME_NUDGE)}'`,
     });
   } else {
     // Session-less harness (codex/gemini/opencode/custom): historical loop,
     // byte for byte. Resume entry via the pre-escaped harness fragment.
-    const initialCommand = resume ? `${baseCmd} ${resume.scriptFragment}` : freshCommand;
+    const initialCommand = resume ? `${agentCmd} ${resume.scriptFragment}` : freshCommand;
     loop = buildLaunchLoop(initialCommand, freshCommand);
   }
 
@@ -1183,10 +1197,17 @@ export function buildWorktreeLaunchScript(
   baseCmd: string,
   role: { content: string; source: string } | null,
   workspaceRoot?: string,
+  selection?: AgentSelection,
 ): string {
-  const harness = getBuilderHarness(workspaceRoot);
+  // Issue #2: same treatment as startBuilderSession. Worktree mode is threaded too
+  // rather than left out, because a `--harness`/`--model` that silently does nothing
+  // in one spawn mode is precisely the inert-flag failure this change exists to end.
+  const harness = selection?.provider ?? getBuilderHarness(workspaceRoot);
+  const agentCmd = selection?.modelScriptFragment
+    ? `${baseCmd} ${selection.modelScriptFragment}`
+    : baseCmd;
   let envBlock = '';
-  let command = baseCmd;
+  let command = agentCmd;
 
   if (role) {
     const roleFile = resolve(worktreePath, '.builder-role.md');
@@ -1204,7 +1225,7 @@ export function buildWorktreeLaunchScript(
     // the write-guard hook for Claude — Issue #1018)
     installHarnessWorktreeFiles(harness, roleWithPort, roleFile, worktreePath);
 
-    command = `${baseCmd} ${fragment}`;
+    command = `${agentCmd} ${fragment}`;
   } else {
     // Install harness worktree files even without a role, so the write-guard
     // (Issue #1018) is deterministic across all Claude spawn modes.
@@ -1221,7 +1242,7 @@ export function buildWorktreeLaunchScript(
       sessionId: randomUUID(),
       pinnedFresh: `${command} ${sessionForms.newSessionScriptFragment(SESSION_ID_EXPR)}`,
       unpinnedFresh: command,
-      resume: `${baseCmd} ${sessionForms.resumeScriptFragment(SESSION_ID_EXPR)} '${shellEscapeSingleQuote(CRASH_RESUME_NUDGE)}'`,
+      resume: `${agentCmd} ${sessionForms.resumeScriptFragment(SESSION_ID_EXPR)} '${shellEscapeSingleQuote(CRASH_RESUME_NUDGE)}'`,
     })
     : buildLaunchLoop(command, command);
 

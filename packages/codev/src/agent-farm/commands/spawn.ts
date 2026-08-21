@@ -17,13 +17,22 @@
 import { resolve, basename } from 'node:path';
 import { existsSync, writeFileSync, readdirSync } from 'node:fs';
 import type { SpawnOptions, BuilderType, Config } from '../types.js';
-import { getConfig, ensureDirectories, getResolvedCommands, getBuilderHarness, assertBuilderHarnessNotRetired } from '../utils/index.js';
+import {
+  getConfig,
+  ensureDirectories,
+  getResolvedCommands,
+  getBuilderHarness,
+  assertBuilderHarnessNotRetired,
+  resolveBuilderSelection,
+  assertHarnessCommandAgrees,
+  type AgentSelection,
+} from '../utils/index.js';
 import { hasGateProfile } from '../servers/gate-profiles.js';
 import type { HarnessProvider } from '../utils/harness.js';
 import { logger, fatal } from '../utils/logger.js';
 import { run } from '../utils/shell.js';
 import { hasUncommittedTrackedChanges } from '../utils/git.js';
-import { upsertBuilder } from '../state.js';
+import { upsertBuilder, getBuilder } from '../state.js';
 import { DEFAULT_ARCHITECT_NAME } from '../utils/architect-name.js';
 
 /**
@@ -312,7 +321,7 @@ function inferProtocolFromWorktree(config: Config, issueNumber: number | string)
 /**
  * Spawn builder for a spec (SPIR, ASPIR, AIR, and other non-bugfix protocols)
  */
-async function spawnSpec(options: SpawnOptions, config: Config): Promise<void> {
+async function spawnSpec(options: SpawnOptions, config: Config, selection: AgentSelection): Promise<void> {
   const issueNumber = options.issueNumber!;
   const projectId = String(issueNumber);
   const strippedId = stripLeadingZeros(projectId);
@@ -469,7 +478,10 @@ async function spawnSpec(options: SpawnOptions, config: Config): Promise<void> {
     templateContext.existing_branch = options.branch;
   }
 
-  const resume = discoverResumeSession(worktreePath, options.resume, getBuilderHarness(config.workspaceRoot));
+  const effective = selectionForResume(options, config, builderId, selection);
+  // Issue #2: discovery must use the SELECTION's harness. Reading the config
+  // harness here would look for a claude session under a codex builder.
+  const resume = discoverResumeSession(worktreePath, options.resume, effective.provider);
 
   const initialPrompt = buildPromptFromTemplate(config, protocol, templateContext);
   const resumeNotice = options.resume ? `\n${buildResumeNotice(projectId)}\n` : '';
@@ -479,17 +491,19 @@ async function spawnSpec(options: SpawnOptions, config: Config): Promise<void> {
   const builderPrompt = `You are a Builder. Read codev/roles/builder.md for your full role definition.\n${resumeNotice}${branchNotice}\n${initialPrompt}`;
 
   const role = options.noRole ? null : loadRolePrompt(config, 'builder');
-  const commands = getResolvedCommands();
+
   const { terminalId } = await startBuilderSession(
-    config, builderId, worktreePath, commands.builder,
+    config, builderId, worktreePath, effective.command,
     builderPrompt, role?.content ?? null, role?.source ?? null,
-    resume,
+    resume, effective,
   );
 
   upsertBuilder({
     id: builderId, name: specName, status: 'implementing', phase: 'init',
     worktree: worktreePath, branch: branchName, type: 'spec', issueNumber, terminalId,
     spawnedByArchitect: SPAWNING_ARCHITECT_NAME,
+    harness: effective.harnessName,
+    model: effective.modelId,
   });
 
   logSpawnSuccess(`Builder ${builderId}`, terminalId, mode);
@@ -498,7 +512,7 @@ async function spawnSpec(options: SpawnOptions, config: Config): Promise<void> {
 /**
  * Spawn builder for an ad-hoc task
  */
-async function spawnTask(options: SpawnOptions, config: Config): Promise<void> {
+async function spawnTask(options: SpawnOptions, config: Config, selection: AgentSelection): Promise<void> {
   const taskText = options.task!;
   const shortId = generateShortId();
   const builderId = buildAgentName('task', shortId);
@@ -553,10 +567,12 @@ async function spawnTask(options: SpawnOptions, config: Config): Promise<void> {
   }
 
   const role = options.noRole ? null : loadRolePrompt(config, 'builder');
-  const commands = getResolvedCommands();
+  const effective = selectionForResume(options, config, builderId, selection);
+
   const { terminalId } = await startBuilderSession(
-    config, builderId, worktreePath, commands.builder,
+    config, builderId, worktreePath, effective.command,
     builderPrompt, role?.content ?? null, role?.source ?? null,
+    undefined, effective,
   );
 
   upsertBuilder({
@@ -565,6 +581,8 @@ async function spawnTask(options: SpawnOptions, config: Config): Promise<void> {
     status: 'implementing', phase: 'init',
     worktree: worktreePath, branch: branchName, type: 'task', taskText, terminalId,
     spawnedByArchitect: SPAWNING_ARCHITECT_NAME,
+    harness: effective.harnessName,
+    model: effective.modelId,
   });
 
   logSpawnSuccess(`Builder ${builderId}`, terminalId);
@@ -573,7 +591,7 @@ async function spawnTask(options: SpawnOptions, config: Config): Promise<void> {
 /**
  * Spawn builder to run a protocol (no issue number)
  */
-async function spawnProtocol(options: SpawnOptions, config: Config): Promise<void> {
+async function spawnProtocol(options: SpawnOptions, config: Config, selection: AgentSelection): Promise<void> {
   const protocolName = options.protocol!;
   validateProtocol(config, protocolName);
 
@@ -612,10 +630,12 @@ async function spawnProtocol(options: SpawnOptions, config: Config): Promise<voi
   const prompt = resumeNotice ? `${resumeNotice}\n${promptContent}` : promptContent;
 
   const role = options.noRole ? null : loadProtocolRole(config, protocolName);
-  const commands = getResolvedCommands();
+  const effective = selectionForResume(options, config, builderId, selection);
+
   const { terminalId } = await startBuilderSession(
-    config, builderId, worktreePath, commands.builder,
+    config, builderId, worktreePath, effective.command,
     prompt, role?.content ?? null, role?.source ?? null,
+    undefined, effective,
   );
 
   upsertBuilder({
@@ -623,6 +643,8 @@ async function spawnProtocol(options: SpawnOptions, config: Config): Promise<voi
     status: 'implementing', phase: 'init',
     worktree: worktreePath, branch: branchName, type: 'protocol', protocolName, terminalId,
     spawnedByArchitect: SPAWNING_ARCHITECT_NAME,
+    harness: effective.harnessName,
+    model: effective.modelId,
   });
 
   logSpawnSuccess(`Builder ${builderId}`, terminalId);
@@ -631,7 +653,7 @@ async function spawnProtocol(options: SpawnOptions, config: Config): Promise<voi
 /**
  * Spawn a bare shell session (no worktree, no prompt)
  */
-async function spawnShell(options: SpawnOptions, config: Config): Promise<void> {
+async function spawnShell(options: SpawnOptions, config: Config, selection: AgentSelection): Promise<void> {
   const shortId = generateShortId();
   const shellId = `shell-${shortId}`;
 
@@ -640,14 +662,22 @@ async function spawnShell(options: SpawnOptions, config: Config): Promise<void> 
   await ensureDirectories(config);
   await checkDependencies();
 
-  const commands = getResolvedCommands();
-  const { terminalId } = await startShellSession(config, shortId, commands.builder);
+  // Issue #2: shell mode has no launch script, so the model fragment is folded onto
+  // the raw command here rather than in startBuilderSession.
+  const shellCmd = selection.modelScriptFragment
+    ? `${selection.command} ${selection.modelScriptFragment}`
+    : selection.command;
+  const { terminalId } = await startShellSession(config, shortId, shellCmd);
 
   upsertBuilder({
     id: shellId, name: 'Shell session',
     status: 'implementing', phase: 'interactive',
     worktree: '', branch: '', type: 'shell', terminalId,
     spawnedByArchitect: SPAWNING_ARCHITECT_NAME,
+    // Shell mode has no worktree, so nothing to resume into — the spawn-time
+    // selection is the only one there is.
+    harness: selection.harnessName,
+    model: selection.modelId,
   });
 
   logSpawnSuccess(`Shell ${shellId}`, terminalId);
@@ -656,7 +686,7 @@ async function spawnShell(options: SpawnOptions, config: Config): Promise<void> 
 /**
  * Spawn a worktree session (has worktree/branch, but no initial prompt)
  */
-async function spawnWorktree(options: SpawnOptions, config: Config): Promise<void> {
+async function spawnWorktree(options: SpawnOptions, config: Config, selection: AgentSelection): Promise<void> {
   const shortId = generateShortId();
   const builderId = `worktree-${shortId}`;
   const branchName = `builder/worktree-${shortId}`;
@@ -676,10 +706,10 @@ async function spawnWorktree(options: SpawnOptions, config: Config): Promise<voi
   }
 
   const role = options.noRole ? null : loadRolePrompt(config, 'builder');
-  const commands = getResolvedCommands();
 
   logger.info('Creating terminal session...');
-  const scriptContent = buildWorktreeLaunchScript(worktreePath, commands.builder, role, config.workspaceRoot);
+  const effective = selectionForResume(options, config, builderId, selection);
+  const scriptContent = buildWorktreeLaunchScript(worktreePath, effective.command, role, config.workspaceRoot, effective);
   const scriptPath = resolve(worktreePath, '.builder-start.sh');
   writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
 
@@ -699,6 +729,8 @@ async function spawnWorktree(options: SpawnOptions, config: Config): Promise<voi
     worktree: worktreePath, branch: branchName, type: 'worktree',
     terminalId: worktreeTerminalId,
     spawnedByArchitect: SPAWNING_ARCHITECT_NAME,
+    harness: effective.harnessName,
+    model: effective.modelId,
   });
 
   logSpawnSuccess(`Worktree ${builderId}`, worktreeTerminalId);
@@ -720,6 +752,7 @@ async function spawnIssueDrivenBuilder(
   options: SpawnOptions,
   config: Config,
   prefix: 'bugfix' | 'pir',
+  selection: AgentSelection,
 ): Promise<void> {
   const protocolLabel = prefix === 'pir' ? 'PIR' : 'Bugfix';
   const issueNumber = options.issueNumber!;
@@ -848,13 +881,16 @@ async function spawnIssueDrivenBuilder(
     : '';
   const builderPrompt = `You are a Builder. Read codev/roles/builder.md for your full role definition.\n${resumeNotice}${branchNotice}\n${prompt}`;
 
-  const resume = discoverResumeSession(worktreePath, options.resume, getBuilderHarness(config.workspaceRoot));
+  const effective = selectionForResume(options, config, builderId, selection);
+  // Issue #2: discovery must use the SELECTION's harness. Reading the config
+  // harness here would look for a claude session under a codex builder.
+  const resume = discoverResumeSession(worktreePath, options.resume, effective.provider);
   const role = options.noRole ? null : loadRolePrompt(config, 'builder');
-  const commands = getResolvedCommands();
+
   const { terminalId } = await startBuilderSession(
-    config, builderId, worktreePath, commands.builder,
+    config, builderId, worktreePath, effective.command,
     builderPrompt, role?.content ?? null, role?.source ?? null,
-    resume,
+    resume, effective,
   );
 
   upsertBuilder({
@@ -863,19 +899,21 @@ async function spawnIssueDrivenBuilder(
     status: 'implementing', phase: 'init',
     worktree: worktreePath, branch: branchName, type: prefix, issueNumber, terminalId,
     spawnedByArchitect: SPAWNING_ARCHITECT_NAME,
+    harness: effective.harnessName,
+    model: effective.modelId,
   });
 
   logSpawnSuccess(`${protocolLabel} builder for issue #${issueNumber}`, terminalId, mode);
 }
 
 /** Spawn a BUGFIX builder via the shared issue-driven helper. */
-async function spawnBugfix(options: SpawnOptions, config: Config): Promise<void> {
-  return spawnIssueDrivenBuilder(options, config, 'bugfix');
+async function spawnBugfix(options: SpawnOptions, config: Config, selection: AgentSelection): Promise<void> {
+  return spawnIssueDrivenBuilder(options, config, 'bugfix', selection);
 }
 
 /** Spawn a PIR builder via the shared issue-driven helper. */
-async function spawnPir(options: SpawnOptions, config: Config): Promise<void> {
-  return spawnIssueDrivenBuilder(options, config, 'pir');
+async function spawnPir(options: SpawnOptions, config: Config, selection: AgentSelection): Promise<void> {
+  return spawnIssueDrivenBuilder(options, config, 'pir', selection);
 }
 
 // =============================================================================
@@ -903,8 +941,11 @@ async function spawnPir(options: SpawnOptions, config: Config): Promise<void> {
  * flag, matching the fail-closed precedent `assertBuilderHarnessNotRetired` set — the
  * fix is to measure a profile, not to skip the check.
  */
-function assertBuilderHarnessHasGateProfile(workspaceRoot?: string): void {
-  const builderCmd = getResolvedCommands(workspaceRoot).builder;
+function assertBuilderHarnessHasGateProfile(selection: AgentSelection): void {
+  // Issue #2: checked against THIS SPAWN's command. Reading the workspace default
+  // here instead would let `--harness opencode` in a claude-configured workspace
+  // pass a check on the wrong binary entirely.
+  const builderCmd = selection.command;
   if (hasGateProfile(builderCmd)) return;
   fatal(
     `Builder harness "${builderCmd}" has no render-gate profile.\n\n` +
@@ -915,6 +956,49 @@ function assertBuilderHarnessHasGateProfile(workspaceRoot?: string): void {
     '  Builder harnesses with a measured profile: claude, codex, opencode.\n\n' +
     '  Aborting before any worktree, terminal or builder state is created.'
   );
+}
+
+/**
+ * Recover the (harness, model) a builder was spawned with, for `--resume` (Issue #2).
+ *
+ * Every spawn path recomputes its agent command from workspace config, including
+ * the resume path. That was harmless while the agent WAS the config value, but
+ * once the pair is chosen per spawn a resume would silently drop it and relaunch
+ * the builder on the workspace default — no error, no warning, just a different
+ * model than the one it has been working with. A flag that quietly stops applying
+ * is worse than no flag, so the pair is read back from the row written at spawn.
+ *
+ * An explicit `--harness`/`--model` on the resume command still wins: that is how
+ * you deliberately move a builder onto a different pair. A row with neither value
+ * (spawned before this existed, or spawned with no flags) keeps today's behaviour.
+ *
+ * The recovered pair is re-validated, not trusted: the stored harness may since
+ * have been retired, or lost its model selector. Failing loudly on relaunch beats
+ * resurrecting a builder onto an agent that no longer resolves.
+ */
+function selectionForResume(
+  options: SpawnOptions,
+  config: Config,
+  builderId: string,
+  selection: AgentSelection,
+): AgentSelection {
+  if (!options.resume) return selection;
+  if (options.harness || options.model) return selection;
+
+  const stored = getBuilder(builderId, config.workspaceRoot);
+  if (!stored || (!stored.harness && !stored.model)) return selection;
+
+  const recovered = resolveBuilderSelection(
+    { harness: stored.harness, model: stored.model },
+    config.workspaceRoot,
+  );
+  assertHarnessCommandAgrees(recovered);
+  assertBuilderHarnessHasGateProfile(recovered);
+  logger.info(
+    `Resuming on the recorded harness/model: ${recovered.harnessName}` +
+    `${recovered.modelId ? ` / ${recovered.modelId}` : ''}`,
+  );
+  return recovered;
 }
 
 /**
@@ -969,21 +1053,34 @@ export async function spawn(options: SpawnOptions): Promise<void> {
   // behavior is unchanged for every supported harness and every mode.
   assertBuilderHarnessNotRetired(config.workspaceRoot);
 
+  // Issue #2: resolve the (harness, model) pair for THIS spawn — an explicit
+  // --harness/--model, else exactly what workspace config resolved before. Done
+  // here, above the mode dispatch, so every pre-flight below judges the agent that
+  // will actually launch, and so a bad pair (unknown harness, retired harness,
+  // malformed model id, or a model for a harness with no model selector) throws
+  // before any worktree, terminal, porch or db state exists. There is no bypass,
+  // matching the fail-closed precedent of the two asserts around it.
+  const selection = resolveBuilderSelection(
+    { harness: options.harness, model: options.model },
+    config.workspaceRoot,
+  );
+  assertHarnessCommandAgrees(selection);
+
   // Issue #4: and fail closed on a builder harness the render gate cannot classify,
   // at the same point and for the same reason. Without a profile, `afx send` holds
   // every message forever with reason `no-profile`, so the spawn would otherwise
   // succeed into a builder that runs, looks healthy, and can never be messaged —
   // a silent failure discovered only when someone tries to talk to it.
-  assertBuilderHarnessHasGateProfile(config.workspaceRoot);
+  assertBuilderHarnessHasGateProfile(selection);
 
   const handlers: Record<BuilderType, () => Promise<void>> = {
-    spec: () => spawnSpec(options, config),
-    bugfix: () => spawnBugfix(options, config),
-    pir: () => spawnPir(options, config),
-    task: () => spawnTask(options, config),
-    protocol: () => spawnProtocol(options, config),
-    shell: () => spawnShell(options, config),
-    worktree: () => spawnWorktree(options, config),
+    spec: () => spawnSpec(options, config, selection),
+    bugfix: () => spawnBugfix(options, config, selection),
+    pir: () => spawnPir(options, config, selection),
+    task: () => spawnTask(options, config, selection),
+    protocol: () => spawnProtocol(options, config, selection),
+    shell: () => spawnShell(options, config, selection),
+    worktree: () => spawnWorktree(options, config, selection),
   };
   await handlers[mode]();
 }

@@ -11,7 +11,17 @@ import type { Config, UserConfig, ResolvedCommands } from '../types.js';
 import { getSkeletonDir } from '../../lib/skeleton.js';
 import { loadConfig } from '../../lib/config.js';
 import type { CodevConfig } from '../../lib/config.js';
-import { resolveHarness, RetiredHarnessError, type HarnessProvider, type CustomHarnessConfig } from './harness.js';
+import {
+  resolveHarness,
+  RetiredHarnessError,
+  assertHarnessAcceptsModel,
+  detectHarnessFromCommand,
+  getBuiltinHarness,
+  BUILTIN_HARNESSES,
+  type HarnessProvider,
+  type CustomHarnessConfig,
+} from './harness.js';
+import { validateModelId } from '../../lib/consult-lanes.js';
 import { logger } from './logger.js';
 import type { ResolvedWorktreeConfig, WorktreeDevUrl, ResolvedActivityHooks, ActivityHook, ActivityEvent } from '@cluesmith/codev-types';
 
@@ -286,6 +296,141 @@ export function getBuilderHarness(workspaceRoot?: string): HarnessProvider {
     userConfig?.shell?.builderHarness,
     userConfig?.harness as Record<string, CustomHarnessConfig> | undefined,
     builderCmd,
+  );
+}
+
+/**
+ * A fully resolved builder agent selection: which harness, which command runs it,
+ * and which model it is pinned to (Issue #2).
+ *
+ * Exists because `(harness, model)` was previously not a value at all — the harness
+ * came from workspace config and the model was baked into a command path, so no
+ * caller could pass a pair. Resolving both in one place means the spawn pre-flight,
+ * the launch-script generation, and the persisted builder row cannot disagree
+ * about which agent is being started.
+ */
+export interface AgentSelection {
+  /** The harness name — an explicit `--harness`, else the one config resolves. */
+  harnessName: string;
+  /** The agent command. Does NOT include the model flag; see `modelScriptFragment`. */
+  command: string;
+  provider: HarnessProvider;
+  /** The requested model id, or undefined when none was requested. */
+  modelId?: string;
+  /** Shell fragment pinning the model, or '' when no model was requested. */
+  modelScriptFragment: string;
+}
+
+/**
+ * The command that runs `harnessName`, for a per-spawn `--harness` (Issue #2).
+ *
+ * Order matters, and each step exists for a reason:
+ *   1. An explicit `harness.<name>.command` in .codev/config.json — the only way
+ *      a custom harness can name its own binary.
+ *   2. The workspace's configured builder command, when that command already IS
+ *      this harness. This is what keeps `--harness claude` on a workspace whose
+ *      `shell.builder` is `/Users/…/.local/bin/claude` using that exact path
+ *      rather than a bare `claude` off PATH — the config value stays the
+ *      fallback, as Issue #2 requires.
+ *   3. The bare binary name. For a built-in this is self-consistent by
+ *      construction: `detectHarnessFromCommand('opencode') === 'opencode'`.
+ */
+function resolveHarnessCommand(
+  harnessName: string,
+  workspaceRoot: string | undefined,
+  customHarnesses: Record<string, CustomHarnessConfig> | undefined,
+): string {
+  const explicit = customHarnesses?.[harnessName]?.command;
+  if (explicit) return explicit;
+
+  const configured = getResolvedCommands(workspaceRoot).builder;
+  if (detectHarnessFromCommand(configured) === harnessName) return configured;
+
+  return harnessName;
+}
+
+/**
+ * Resolve `(harness, model)` for one spawn (Issue #2).
+ *
+ * With neither flag this returns exactly what the workspace config would have
+ * produced on its own — same command, same provider — so every existing spawn
+ * path is unchanged.
+ *
+ * Throws (never exits) on an unknown harness, a retired harness, a
+ * syntactically invalid model id, or a model requested for a harness with no
+ * model selector. Callers run this BEFORE creating worktree/terminal/db state,
+ * so a bad pair fails with nothing left behind.
+ */
+export function resolveBuilderSelection(
+  opts: { harness?: string; model?: string },
+  workspaceRoot?: string,
+): AgentSelection {
+  const root = workspaceRoot || findWorkspaceRoot();
+  const userConfig = loadUserConfig(root);
+  const customHarnesses = userConfig?.harness as Record<string, CustomHarnessConfig> | undefined;
+
+  let harnessName: string;
+  let command: string;
+  if (opts.harness) {
+    harnessName = opts.harness;
+    command = resolveHarnessCommand(harnessName, root, customHarnesses);
+  } else {
+    command = getResolvedCommands(root).builder;
+    // Mirror getBuilderHarness's own resolution order so the name we record
+    // matches the provider it resolves — explicit config first, then the
+    // command's own basename, then the claude default.
+    harnessName = userConfig?.shell?.builderHarness
+      || detectHarnessFromCommand(command)
+      || 'claude';
+  }
+
+  // resolveHarness owns retirement and unknown-name errors; do not duplicate them.
+  const provider = resolveHarness(harnessName, customHarnesses, command);
+
+  let modelId: string | undefined;
+  let modelScriptFragment = '';
+  if (opts.model !== undefined) {
+    // Syntax only — whether the model exists is the provider's call, failing
+    // loudly with no fallback. Same rule, same validator, as spec 1286's
+    // `--model-id`.
+    validateModelId(opts.model, '--model');
+    const selectable = [...Object.keys(BUILTIN_HARNESSES), ...Object.keys(customHarnesses ?? {})];
+    assertHarnessAcceptsModel(harnessName, provider, selectable);
+    modelId = opts.model;
+    modelScriptFragment = provider.buildScriptModelArg!(modelId);
+  }
+
+  return { harnessName, command, provider, modelId, modelScriptFragment };
+}
+
+/**
+ * Refuse an explicit `--harness X` whose command is not actually X (Issue #2).
+ *
+ * The render gate resolves an agent's profile from its command BASENAME
+ * (`gate-profiles.ts` resolveProfile), while `--harness` names the harness
+ * directly. A `harness.X.command` pointing at a differently-named binary splits
+ * those two: the spawn-time gate-profile check passes against one identity while
+ * the running gate classifies another. That is the unmessageable-builder failure
+ * Issue #4's pre-flight exists to prevent, re-entering through a side door — and
+ * in the milder case it silently launches a different agent than the one asked for.
+ *
+ * Scoped to BUILT-IN names on purpose. A custom harness legitimately wraps some
+ * other binary (that is what makes it custom), so its name will not match a
+ * detected basename; an unmeasured custom agent is refused by the gate-profile
+ * check instead, which is the check that actually governs deliverability.
+ */
+export function assertHarnessCommandAgrees(selection: AgentSelection): void {
+  if (!getBuiltinHarness(selection.harnessName)) return;
+  const detected = detectHarnessFromCommand(selection.command);
+  if (detected === selection.harnessName) return;
+  throw new Error(
+    `Harness "${selection.harnessName}" resolves to command "${selection.command}", ` +
+    `which looks like ${detected ? `the "${detected}" harness` : 'no known harness'}.\n\n` +
+    `  The render gate identifies a running agent by its command basename, so a\n` +
+    `  mismatch here means the spawn-time checks and the live gate would disagree\n` +
+    `  about what is running — a builder that starts but cannot be messaged.\n\n` +
+    `  Fix "harness.${selection.harnessName}.command" in .codev/config.json, or drop it\n` +
+    `  so the harness resolves its own binary.`,
   );
 }
 
