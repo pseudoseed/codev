@@ -1,7 +1,7 @@
 id: '2'
 title: make-harness-model-a-first-cla
 protocol: pir
-phase: implement
+phase: review
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -19,4 +19,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-21T15:16:28.755Z'
-updated_at: '2026-08-21T16:34:33.582Z'
+updated_at: '2026-08-21T16:35:14.608Z'
