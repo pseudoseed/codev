@@ -24,9 +24,20 @@
 # The open-pulls list is paginated (Gitea caps a page at max_response_items,
 # default 50), so tea_api_paged walks every page rather than silently truncating
 # at ~50 open PRs (see _lib.sh).
+#
+# A truncated list of open PRs is not a shorter list of open PRs — it is a wrong
+# one, and it looks identical. tea_api_paged reports that with exit status 3, so
+# the walk is run on its own and its status inspected rather than piped straight
+# into jq, where it would be discarded.
 . "$(dirname "$0")/_lib.sh"
 REPO="$(gitea_repo)" || exit 1
-tea_api_paged "repos/${REPO}/pulls" "state=open" \
+PULLS="$(tea_api_paged "repos/${REPO}/pulls" "state=open")"
+case $? in
+  0) ;;
+  3) echo "pr-list: the open-PR list was truncated; refusing to report a partial list as complete" >&2; exit 3 ;;
+  *) exit 1 ;;
+esac
+printf '%s' "$PULLS" \
   | jq '[.[] | {
       number,
       title,
