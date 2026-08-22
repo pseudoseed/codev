@@ -119,6 +119,18 @@ describe('#31: --dry-run must not write', () => {
     expect(fs.existsSync(path.join(target, 'AGENTS.md'))).toBe(false);
   });
 
+  it('does not write on a dry run through the FORCE branch either', () => {
+    // The force branch was missed the first time: `copyRootFiles` was called
+    // with no options at all, so `--dry-run --force` announced "no files will
+    // be changed" and then created the file. Both are real CLI flags.
+    writeTemplate('AGENTS.md', 'fresh\n');
+
+    const r = copyRootFiles(target, skeleton, 'proj', { dryRun: true });
+
+    expect(r.copied).toContain('AGENTS.md');
+    expect(fs.existsSync(path.join(target, 'AGENTS.md'))).toBe(false);
+  });
+
   it('a dry run followed by a real run produces the same reported outcome', () => {
     // The point of a dry run is that it predicts the real one.
     writeTemplate('CLAUDE.md', 'new\n');
@@ -229,5 +241,139 @@ describe('#29: skills must be refreshable, and customizations must survive', () 
     expect(r.skipped).toContain('.claude/skills/afx/');
     expect(r.refreshed).toHaveLength(0);
     expect(fs.readFileSync(path.join(target, '.claude/skills/afx/SKILL.md'), 'utf-8')).toBe('v1\n');
+  });
+});
+
+describe('#29 follow-up: a file deleted from the skeleton must not freeze the skill', () => {
+  it('removes a file the skeleton dropped, instead of leaving it behind', () => {
+    // copyDirRecursive is additive. Overlaying leaves the deleted file in the
+    // vendored skill — the exact stale-doc symptom #29 exists to fix, surviving
+    // the fix that was supposed to remove it.
+    writeSkill(skeleton, 'claude', 'afx', { 'SKILL.md': 'v1\n', 'references/old.md': 'removed in v2\n' });
+    copySkills(target, skeleton, { skipExisting: true, refreshUnmodified: true });
+
+    writeSkill(skeleton, 'claude', 'afx', { 'SKILL.md': 'v2\n' });
+    fs.rmSync(path.join(skeleton, '.claude/skills/afx/references'), { recursive: true, force: true });
+    copySkills(target, skeleton, { skipExisting: true, refreshUnmodified: true });
+
+    expect(fs.existsSync(path.join(target, '.claude/skills/afx/references/old.md'))).toBe(false);
+  });
+
+  it('stays refreshable on the NEXT update after a skeleton deletion', () => {
+    // The compounding half. An overlay records the skeleton's hash while the
+    // destination hashes to src+leftover, so the following update reads
+    // destHash !== installedHash, calls it customized, and freezes it forever
+    // with zero local edits. Silent and unrecoverable without deleting the dir.
+    writeSkill(skeleton, 'claude', 'afx', { 'SKILL.md': 'v1\n', 'references/old.md': 'gone in v2\n' });
+    copySkills(target, skeleton, { skipExisting: true, refreshUnmodified: true });
+
+    writeSkill(skeleton, 'claude', 'afx', { 'SKILL.md': 'v2\n' });
+    fs.rmSync(path.join(skeleton, '.claude/skills/afx/references'), { recursive: true, force: true });
+    copySkills(target, skeleton, { skipExisting: true, refreshUnmodified: true });
+
+    writeSkill(skeleton, 'claude', 'afx', { 'SKILL.md': 'v3\n' });
+    const third = copySkills(target, skeleton, { skipExisting: true, refreshUnmodified: true });
+
+    expect(third.customized).toHaveLength(0);
+    expect(third.refreshed).toContain('.claude/skills/afx/');
+    expect(fs.readFileSync(path.join(target, '.claude/skills/afx/SKILL.md'), 'utf-8')).toBe('v3\n');
+  });
+
+  it('a local edit still survives a skeleton deletion', () => {
+    // The removal is scoped to the branch that already proved the copy is
+    // unmodified. A customized skill must never reach it.
+    writeSkill(skeleton, 'claude', 'afx', { 'SKILL.md': 'v1\n', 'references/old.md': 'a\n' });
+    copySkills(target, skeleton, { skipExisting: true, refreshUnmodified: true });
+    fs.writeFileSync(path.join(target, '.claude/skills/afx/SKILL.md'), 'MY NOTES\n');
+
+    writeSkill(skeleton, 'claude', 'afx', { 'SKILL.md': 'v2\n' });
+    fs.rmSync(path.join(skeleton, '.claude/skills/afx/references'), { recursive: true, force: true });
+    const r = copySkills(target, skeleton, { skipExisting: true, refreshUnmodified: true });
+
+    expect(r.customized).toContain('.claude/skills/afx/');
+    expect(fs.readFileSync(path.join(target, '.claude/skills/afx/SKILL.md'), 'utf-8')).toBe('MY NOTES\n');
+    expect(fs.existsSync(path.join(target, '.claude/skills/afx/references/old.md'))).toBe(true);
+  });
+});
+
+describe('#29 follow-up: init/adopt must leave provenance behind', () => {
+  it('recordManifest writes a manifest WITHOUT refreshing anything', () => {
+    // adopt's shape: it must never rewrite an existing project's skills, but it
+    // should still leave enough behind for a later update to tell stale from
+    // customized.
+    writeSkill(target, 'claude', 'afx', { 'SKILL.md': 'pre-existing\n' });
+    writeSkill(skeleton, 'claude', 'afx', { 'SKILL.md': 'v2\n' });
+
+    const r = copySkills(target, skeleton, { skipExisting: true, recordManifest: true });
+
+    expect(r.refreshed).toHaveLength(0);
+    expect(fs.readFileSync(path.join(target, '.claude/skills/afx/SKILL.md'), 'utf-8'))
+      .toBe('pre-existing\n');
+  });
+
+  it('a skill installed with recordManifest is refreshable on the next update', () => {
+    // The whole reason this option exists. Installed at v1 via init, never
+    // updated at v1 — under the original fix that project would be classified
+    // unknown-provenance and frozen out of every future refresh.
+    writeSkill(skeleton, 'claude', 'afx', { 'SKILL.md': 'v1\n' });
+    copySkills(target, skeleton, { recordManifest: true });
+
+    writeSkill(skeleton, 'claude', 'afx', { 'SKILL.md': 'v2\n' });
+    const r = copySkills(target, skeleton, { skipExisting: true, refreshUnmodified: true });
+
+    expect(r.refreshed).toContain('.claude/skills/afx/');
+    expect(r.customized).toHaveLength(0);
+  });
+
+  it('recordManifest still respects a local edit made after install', () => {
+    writeSkill(skeleton, 'claude', 'afx', { 'SKILL.md': 'v1\n' });
+    copySkills(target, skeleton, { recordManifest: true });
+    fs.writeFileSync(path.join(target, '.claude/skills/afx/SKILL.md'), 'MINE\n');
+
+    writeSkill(skeleton, 'claude', 'afx', { 'SKILL.md': 'v2\n' });
+    const r = copySkills(target, skeleton, { skipExisting: true, refreshUnmodified: true });
+
+    expect(r.customized).toContain('.claude/skills/afx/');
+    expect(fs.readFileSync(path.join(target, '.claude/skills/afx/SKILL.md'), 'utf-8')).toBe('MINE\n');
+  });
+});
+
+describe('#29 follow-up: hashing raw bytes', () => {
+  const BYTES_A = Buffer.from([0xff, 0xfe, 0x01]);
+  const BYTES_B = Buffer.from([0xff, 0xfe, 0x02]);
+
+  function installBinarySkill(bytes: Buffer): void {
+    writeSkill(skeleton, 'claude', 'assets', { 'SKILL.md': 'v1\n' });
+    fs.writeFileSync(path.join(skeleton, '.claude/skills/assets/asset.bin'), bytes);
+  }
+
+  it('sees a one-byte binary change that utf-8 decoding would flatten', () => {
+    // Both byte strings decode to the same U+FFFD sequence, so a utf-8 hash
+    // rated them identical — a locally modified binary would have read as
+    // unmodified and been silently overwritten.
+    installBinarySkill(BYTES_A);
+    copySkills(target, skeleton, { recordManifest: true });
+
+    // Local edit: same length, one byte different, invalid utf-8 either way.
+    fs.writeFileSync(path.join(target, '.claude/skills/assets/asset.bin'), BYTES_B);
+    writeSkill(skeleton, 'claude', 'assets', { 'SKILL.md': 'v2\n' });
+    fs.writeFileSync(path.join(skeleton, '.claude/skills/assets/asset.bin'), BYTES_A);
+
+    const r = copySkills(target, skeleton, { skipExisting: true, refreshUnmodified: true });
+
+    expect(r.customized).toContain('.claude/skills/assets/');
+    expect(fs.readFileSync(path.join(target, '.claude/skills/assets/asset.bin'))).toEqual(BYTES_B);
+  });
+
+  it('still refreshes when the binary is untouched and only text moved', () => {
+    installBinarySkill(BYTES_A);
+    copySkills(target, skeleton, { recordManifest: true });
+
+    writeSkill(skeleton, 'claude', 'assets', { 'SKILL.md': 'v2\n' });
+    fs.writeFileSync(path.join(skeleton, '.claude/skills/assets/asset.bin'), BYTES_A);
+
+    const r = copySkills(target, skeleton, { skipExisting: true, refreshUnmodified: true });
+
+    expect(r.refreshed).toContain('.claude/skills/assets/');
   });
 });

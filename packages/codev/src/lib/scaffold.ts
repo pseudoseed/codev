@@ -399,6 +399,18 @@ interface CopySkillsOptions {
    * agents burning turns on flags that were removed releases ago.
    */
   refreshUnmodified?: boolean;
+  /**
+   * Record provenance for every skill installed, without enabling refresh.
+   *
+   * For init/adopt. Without it, a project initialized at v1 that never happens
+   * to run `update` at v1 reaches v2 with no manifest, is classified "unknown
+   * provenance", and is held back permanently -- so the #29 fix would never
+   * reach the projects that need it most. Init knows exactly what it installed,
+   * so the provenance is free there.
+   *
+   * Implied by `refreshUnmodified`.
+   */
+  recordManifest?: boolean;
 }
 
 interface CopySkillsResult {
@@ -431,13 +443,24 @@ export const SKILL_MANIFEST_FILENAME = '.codev-skill-manifest.json';
  * tell", never as "unchanged".
  */
 function hashSkillDir(dir: string): string | null {
-  const files: string[] = [];
+  const parts: Buffer[] = [];
   const visit = (d: string, prefix: string): void => {
     for (const entry of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
       const abs = path.join(d, entry.name);
       if (entry.isDirectory()) visit(abs, rel);
-      else if (entry.isFile()) files.push(`${rel} ${fs.readFileSync(abs, 'utf-8')}`);
+      else if (entry.isFile()) {
+        // Raw bytes, length-framed. Reading as utf-8 collapses invalid bytes to
+        // U+FFFD, so two different binary assets can hash identically and a
+        // modified one would read as unmodified and be overwritten. Framing each
+        // field by length also stops a+bc colliding with ab+c.
+        const name = Buffer.from(rel, 'utf-8');
+        const content = fs.readFileSync(abs);
+        const header = Buffer.alloc(8);
+        header.writeUInt32BE(name.length, 0);
+        header.writeUInt32BE(content.length, 4);
+        parts.push(header, name, content);
+      }
     }
   };
   try {
@@ -445,7 +468,9 @@ function hashSkillDir(dir: string): string | null {
   } catch {
     return null;
   }
-  return createHash('sha256').update(files.join('')).digest('hex');
+  const hash = createHash('sha256');
+  for (const part of parts) hash.update(part);
+  return hash.digest('hex');
 }
 
 /**
@@ -488,6 +513,7 @@ export function copySkills(
   options: CopySkillsOptions = {}
 ): CopySkillsResult {
   const { skipExisting = false, refreshUnmodified = false } = options;
+  const recordManifest = options.recordManifest ?? refreshUnmodified;
   const copied: string[] = [];
   const skipped: string[] = [];
   const refreshed: string[] = [];
@@ -508,7 +534,7 @@ export function copySkills(
     if (!fs.existsSync(srcDir)) continue;
 
     // Issue #29: provenance for "is this vendored copy modified, or just old?"
-    const manifest = refreshUnmodified ? readSkillManifest(skillsDir) : {};
+    const manifest = recordManifest ? readSkillManifest(skillsDir) : {};
     let manifestChanged = false;
 
     for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
@@ -551,6 +577,17 @@ export function copySkills(
 
           // Vendored copy still matches what we installed, and the skeleton has
           // moved: it is stale, not customized. Refresh it.
+          //
+          // REPLACE, don't overlay. `copyDirRecursive` is additive — it never
+          // removes destination files absent from the source. Overlaying leaves
+          // a file the skeleton deleted sitting in the vendored skill (exactly
+          // the stale-doc symptom #29 exists to fix), AND poisons provenance:
+          // the recorded hash is the skeleton's, but the destination now hashes
+          // to src+leftover, so the NEXT update reads `destHash !== installed`,
+          // calls the skill customized, and freezes it forever with zero local
+          // edits. Safe to remove here and only here, because `destHash ===
+          // installedHash` was just proven: nothing local is being discarded.
+          fs.rmSync(destSkillDir, { recursive: true, force: true });
           copyDirRecursive(srcSkillDir, destSkillDir);
           refreshed.push(relativeSkillDir);
           if (srcHash !== null) {
@@ -563,7 +600,7 @@ export function copySkills(
 
       copyDirRecursive(srcSkillDir, destSkillDir);
       copied.push(relativeSkillDir);
-      if (refreshUnmodified) {
+      if (recordManifest) {
         const srcHash = hashSkillDir(srcSkillDir);
         if (srcHash !== null) {
           manifest[entry.name] = srcHash;
@@ -572,7 +609,7 @@ export function copySkills(
       }
     }
 
-    if (refreshUnmodified && manifestChanged) {
+    if (recordManifest && manifestChanged) {
       writeSkillManifest(skillsDir, manifest);
     }
   }

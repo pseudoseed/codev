@@ -242,12 +242,21 @@ export async function update(options: UpdateOptions = {}): Promise<UpdateResult>
       for (const skill of skillsResult.customized) {
         log(chalk.yellow('  ! (local edits, not refreshed)'), skill);
       }
+      // Naming the state without the remedy is half an answer, and `--force`
+      // does not reach skills. Say how to take the shipped version.
+      if (skillsResult.customized.length > 0) {
+        log(chalk.dim('    To take the shipped version of one, delete its directory and re-run.'));
+      }
     }
 
     // Update root files (CLAUDE.md, AGENTS.md)
     const projectName = path.basename(targetDir);
     if (force) {
-      const rootResult = copyRootFiles(targetDir, templatesDir, projectName);
+      // #31 again: this branch was missed the first time, so
+      // `codev update --dry-run --force` printed "no files will be changed"
+      // and then created a missing CLAUDE.md / AGENTS.md. Both are real CLI
+      // flags and combining them is an obvious thing to do.
+      const rootResult = copyRootFiles(targetDir, templatesDir, projectName, { dryRun });
       for (const file of rootResult.copied) {
         result.updated.push(file);
         log(chalk.blue('  ~ (updated)'), file);
