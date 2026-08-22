@@ -15,6 +15,27 @@ hand-run consultations it would run, advance plan phases yourself, or skip the 3
 
 Never hand-edit `status.yaml` — only porch commands modify project state.
 
+## A phase handoff is not a stopping point
+
+When porch hands you a phase, **begin it in the same turn**. Receiving work is not a milestone,
+and neither is finishing the previous phase. Do not end your turn to announce that you got the
+phase, to summarize what you just did, or to ask whether to proceed with the thing you were
+just told to do.
+
+Porch's `DO NOT start <phase> until you run porch again` is narrow: it forbids skipping *ahead*
+to a later phase. It has never meant stop and wait. Read it as a fence on the far side of your
+current phase, not a gate in front of it.
+
+There are exactly three reasons to end a turn mid-project:
+
+1. A **human gate** — porch says `WAITING FOR HUMAN APPROVAL`, or your phase prompt says stop.
+2. A **blocker you cannot resolve** — say what it is and what you tried, in the same message.
+3. A **question whose answer changes the work** — ask it; don't ask permission to continue.
+
+"I finished a phase and thought I should check in" is none of these. An idle builder is
+invisible: nobody is watching your pane, so a turn you end for courtesy can sit untouched for
+hours. Reporting is what `afx send` is for, and it does not require ending your turn.
+
 ## Gates
 
 Porch stops at human approval gates (`spec-approval`, `plan-approval`, `pr`). When it does:

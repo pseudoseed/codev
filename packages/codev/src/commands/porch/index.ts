@@ -66,6 +66,76 @@ function section(title: string, content: string): string {
   return `\n${chalk.bold(title)}:\n${content}`;
 }
 
+/** Interior width of the CRITICAL RULES box, excluding the two `║` edges. */
+const RULES_BOX_WIDTH = 62;
+
+/**
+ * Render the CRITICAL RULES box.
+ *
+ * The rules read as a numbered list and wrap at the box width, so a rule can be
+ * a sentence instead of whatever fits in one hand-padded line. The old call
+ * sites padded each line themselves, which capped every rule at what fit and is
+ * why the box held only prohibitions.
+ *
+ * The first rule MUST be the affirmative one. A builder that reads a box whose
+ * every line is a "do not" has been told what not to do and nothing to do, and
+ * the safest-looking reading of that is to stop and ask. That misreading costs
+ * hours per occurrence, so the box now opens by naming the work to start.
+ */
+function criticalRulesBox(rules: string[]): string {
+  const edge = '═'.repeat(RULES_BOX_WIDTH);
+  const lines: string[] = [`╔${edge}╗`, `║  🛑 CRITICAL RULES`.padEnd(RULES_BOX_WIDTH + 1) + '║'];
+
+  rules.forEach((rule, i) => {
+    // 2 leading spaces + "N. " marker; continuation lines align under the text.
+    const marker = `${i + 1}. `;
+    const indent = ' '.repeat(2 + marker.length);
+    const avail = RULES_BOX_WIDTH - indent.length;
+    const words = rule.split(/\s+/);
+    const wrapped: string[] = [];
+    let cur = '';
+    for (const w of words) {
+      if (cur && (cur + ' ' + w).length > avail) {
+        wrapped.push(cur);
+        cur = w;
+      } else {
+        cur = cur ? `${cur} ${w}` : w;
+      }
+    }
+    if (cur) wrapped.push(cur);
+    wrapped.forEach((text, j) => {
+      const prefix = j === 0 ? `  ${marker}` : indent;
+      lines.push(`║${(prefix + text).padEnd(RULES_BOX_WIDTH)}║`);
+    });
+  });
+
+  lines.push(`╚${edge}╝`);
+  return lines.map(l => chalk.red.bold(l)).join('\n');
+}
+
+/**
+ * The rules shown when porch hands a builder a plan phase.
+ *
+ * `currentPhaseId` is the phase to begin NOW; `nextPhaseId` is the one to stay
+ * off until porch is run again. Keeping both named in the same box is the point
+ * — the prohibition used to appear alone, and "DO NOT start the next phase"
+ * with no next phase named reads as a general stop-and-wait.
+ */
+function phaseHandoffRules(
+  projectId: string,
+  currentPhaseId: string,
+  nextPhaseId: string | undefined,
+): string {
+  return criticalRulesBox([
+    `START ${currentPhaseId} NOW — a phase handoff is not a stopping point. Do not end your turn to report that you received it.`,
+    nextPhaseId
+      ? `DO NOT start ${nextPhaseId} until you run porch again!`
+      : 'DO NOT start the next phase until you run porch again!',
+    `When ${currentPhaseId} is complete, run: porch done ${projectId}`,
+    'Stop only for a human gate, a blocker you cannot resolve, or a question whose answer changes the work.',
+  ]);
+}
+
 /**
  * Return a resolver scoped to `artifactRoot` when it differs from the caller's
  * cwd-rooted resolver. The incoming `resolver` is typically built from
@@ -287,16 +357,7 @@ export async function status(
       const nextPlanPhase = state.plan_phases[currentIdx + 1];
 
       console.log('');
-      console.log(chalk.red.bold('╔══════════════════════════════════════════════════════════════╗'));
-      console.log(chalk.red.bold('║  🛑 CRITICAL RULES                                           ║'));
-      if (nextPlanPhase) {
-        console.log(chalk.red.bold(`║  1. DO NOT start ${nextPlanPhase.id} until you run porch again!`.padEnd(63) + '║'));
-      } else {
-        console.log(chalk.red.bold('║  1. DO NOT start the next phase until you run porch again!   ║'));
-      }
-      console.log(chalk.red.bold('║  2. Run /compact before starting each new phase              ║'));
-      console.log(chalk.red.bold('║  3. After completing this phase, run: porch done ' + state.id.padEnd(12) + '║'));
-      console.log(chalk.red.bold('╚══════════════════════════════════════════════════════════════╝'));
+      console.log(phaseHandoffRules(state.id, currentPlanPhase.id, nextPlanPhase?.id));
     }
   }
 
@@ -631,16 +692,7 @@ async function advanceProtocolPhase(workspaceRoot: string, state: ProjectState, 
     }
 
     console.log('');
-    console.log(chalk.red.bold('╔══════════════════════════════════════════════════════════════╗'));
-    console.log(chalk.red.bold('║  🛑 CRITICAL RULES                                           ║'));
-    if (nextPlanPhase) {
-      console.log(chalk.red.bold(`║  1. DO NOT start ${nextPlanPhase.id} until you run porch again!`.padEnd(63) + '║'));
-    } else {
-      console.log(chalk.red.bold('║  1. DO NOT start the next phase until you run porch again!   ║'));
-    }
-    console.log(chalk.red.bold('║  2. Run /compact before starting each new phase              ║'));
-    console.log(chalk.red.bold('║  3. When phase complete, run: porch done ' + state.id.padEnd(20) + '║'));
-    console.log(chalk.red.bold('╚══════════════════════════════════════════════════════════════╝'));
+    console.log(phaseHandoffRules(state.id, firstPhase.id, nextPlanPhase?.id));
   }
 
   console.log(`\n  Run: porch status ${state.id}`);
