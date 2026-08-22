@@ -977,7 +977,11 @@ export function resolveAgyBin(): string | null {
 export function agyRemedy(reason: string, outputTail = ''): string {
   const haystack = `${reason}\n${outputTail}`.toLowerCase();
 
-  if (haystack.includes('not found') || haystack.includes('enoent')) {
+  // Scoped to the REASON, not the combined haystack: agy stderr containing
+  // "model not found" or "404 not found" would otherwise yield "install the
+  // CLI" — the exact class of wrong remedy this function exists to remove. The
+  // lane passes `--model-id`, so a model-not-found is a live possibility.
+  if (/agy cli not found|enoent/.test(reason.toLowerCase())) {
     return 'Install the CLI: https://antigravity.google/cli/install.sh';
   }
   if (/quota|rate.?limit|resource.?exhausted|too many requests|429|usage limit/.test(haystack)) {
@@ -1039,6 +1043,8 @@ function agySkipContent(reason: string, outputTail = ''): string {
  * write with mode 0o600 / flag 'wx' to defeat symlink/clobber races.
  */
 let _consultSandboxDir: string | null = null;
+/** Test seam: the per-process sandbox dir, created on demand. */
+export function _consultSandboxDirForTest(): string { return consultSandboxDir(); }
 function consultSandboxDir(): string {
   if (!_consultSandboxDir) {
     _consultSandboxDir = fs.mkdtempSync(path.join(tmpdir(), 'codev-consult-'));
@@ -1444,6 +1450,34 @@ export function opencodeReviewHeader(choice: LaneModelChoice): string {
 }
 
 /**
+ * The argv for `opencode run`.
+ *
+ * Extracted so it can be tested. It shipped broken precisely because nothing
+ * covered it: `opencode run` is yargs-based and `-f/--file` is declared
+ * `[array]`, so it GREEDILY swallows following positionals. Without a `--`
+ * separator the prompt is consumed as another filename and the lane dies with
+ * `Error: File not found: <the entire prompt>` on every review that has an
+ * attachment — which, after #44, is every PR review.
+ *
+ * Verified live against the installed CLI: with two attachments the model read
+ * both, and with none the separator is harmless. So it is emitted
+ * unconditionally rather than as one more branch to get wrong.
+ */
+export function buildOpencodeArgs(
+  modelId: string,
+  attachments: string[],
+  promptArg: string,
+): string[] {
+  return [
+    ...MODEL_CONFIGS.opencode.args,
+    '-m', modelId,
+    ...attachments.flatMap(f => ['-f', f]),
+    '--',
+    promptArg,
+  ];
+}
+
+/**
  * Run the `opencode` consult lane (`opencode run -m <id> <prompt>`).
  *
  * ## Why this lane hard-fails where the agy lane skips
@@ -1546,12 +1580,7 @@ export async function runOpencodeConsultation(
     if (!attachments.includes(diffPath)) attachments.push(diffPath);
   }
 
-  const args = [
-    ...MODEL_CONFIGS.opencode.args,
-    '-m', choice.id,
-    ...attachments.flatMap(f => ['-f', f]),
-    promptArg,
-  ];
+  const args = buildOpencodeArgs(choice.id, attachments, promptArg);
 
   const cleanup = () => {
     if (tempFile && fs.existsSync(tempFile)) {
