@@ -38,9 +38,11 @@ Execute the MAINTAIN protocol to ensure:
 - Documentation is current (arch.md, lessons-learned.md)
 - CLAUDE.md and AGENTS.md are in sync
 
+Spawn a MAINTAIN builder. The protocol content is delivered inline by the spawn
+prompt, so there is nothing to read from disk first:
+
 ```bash
-# Review what MAINTAIN will do
-cat codev/protocols/maintain/protocol.md
+afx spawn --protocol maintain
 ```
 
 ### 3. Run E2E Tests
