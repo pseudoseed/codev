@@ -2,7 +2,7 @@
 
 **Status:** Decided — Option 2, multi-machine in v1, built as an additive fork-owned app.
 Not a spec. No implementation authorized; spikes in the appendix come first.
-**Date:** 2026-08-21 (rev. 4, fork constraint recorded)
+**Date:** 2026-08-21 (rev. 5, design language approved)
 **Author:** Architect (main)
 **Reviewed by:** Claude Opus 5, Grok 4.6 (Codex unavailable, Gemini unauthenticated)
 **Decided by:** the human, 2026-08-21 — **multi-machine ships in v1**, and **this is a
@@ -406,17 +406,25 @@ cheap. **LATER** = explicitly deferred. Requirements changed in rev. 2 are marke
 
 ### Structure and navigation
 
-- **FR-1 ⟳ (MUST)** One window shows a tree: **machine → workspace → architect →
-  builder**, all four levels navigable without a page load. *Rev. 2 made the machine
-  level conditional on the v1-scope decision; that decision has since been made in
-  favour of multi-machine, so it is unconditional again.*
+- **FR-1 ⟳ (MUST)** One window shows the whole hierarchy — **machine → workspace →
+  architect → builder** — all four levels navigable without a page load. **Containment,
+  not an outline.** *Rev. 5 strikes the word "tree": the approved design shows hierarchy
+  as nested space (machine lot → workspace plot → architect header → builder row), and
+  an indented list with disclosure triangles is the thing being replaced. See
+  `v2-mockups/design-language.md`.*
 - **FR-2 (MUST)** Selecting any node opens its view in the work area. Navigating
   between nodes MUST NOT tear down or reconnect any already-open terminal.
 - **FR-3 (MUST)** A builder appears nested under the architect that spawned it, and
   under the workspace it belongs to.
-- **FR-4 (MUST)** The tree shows live status per node — running / idle / needs-attention /
+- **FR-4 ⟳ (MUST)** Every node shows live status — running / idle / needs-attention /
   held mail / gate-waiting — updated by push, never by timer refetch. **This has no
   server implementation today (see Option 0); cost it separately.**
+- **FR-41 ⟳ (MUST)** Every builder carries an **activity trace**: a sparkline of output
+  volume over time, so working and stalled are distinguishable at a glance without
+  reading. *New in rev. 5, from the approved design. No agent tool currently shows this.*
+- **FR-42 ⟳ (MUST)** A builder producing no output for a threshold period is shown as
+  **stalled** (`NO OUTPUT 6 MIN`), distinct from idle and from gate-waiting. Stalled is
+  derived server-side, not inferred by each client.
 - **FR-5 (SHOULD)** A global command palette (⌘K) jumps to any node by name.
 - **FR-6 (LATER)** A board view over builders/issues, in the BridgeSpace vein.
 
@@ -449,6 +457,25 @@ cheap. **LATER** = explicitly deferred. Requirements changed in rev. 2 are marke
 - **FR-17 (SHOULD)** Pairing offers a QR code so a phone can join by scanning.
 - **FR-18 (LATER)** Discovery of machines on the LAN without typing an address.
 
+### Gates (new in rev. 5)
+
+The approved design makes gates the emotional centre of the product, and rev. 4 had no
+requirements for them beyond a node status.
+
+- **FR-43 (MUST)** Gates appear in a **persistent queue**, not as a badge on a list item.
+  Each entry carries the builder's actual question, how long it has been held, and where
+  it lives. The longest wait is marked.
+- **FR-44 (MUST)** A gate view shows: the question verbatim, the terminal output that led
+  to it, the worktree, branch and commit count, and how long work has been stopped.
+- **FR-45 (MUST)** **The consequences of each ruling are shown before the human rules** —
+  what the builder will do next under each choice.
+- **FR-46 (MUST)** Gate actions are **named for their consequence** (`KEEP FOR AUDIT` /
+  `APPROVE DROP`), never generic `Approve` / `Reject`. *FR-45 and FR-46 together serve the
+  standing rule that a gate is never approved without an explicit human decision: a
+  human who cannot see what a button does has not made one.*
+- **FR-47 (SHOULD)** A gate accepts an optional note back to the builder.
+- **FR-48 (SHOULD)** Ruling on a gate advances to the next queued gate automatically.
+
 ### Multi-client (new in rev. 2)
 
 - **FR-38 ⟳ (MUST)** Two clients attached to the same terminal MUST NOT fight over
@@ -463,6 +490,12 @@ cheap. **LATER** = explicitly deferred. Requirements changed in rev. 2 are marke
 ### Mobile and tablet
 
 Governed by the universal mobile rules (iOS HIG / Material 3 / WCAG 2.2 AA).
+
+**iPad is the primary away-from-desk target, and the phone is secondary** (human,
+rev. 5). The iPad tiles two panes and usually has a hardware keyboard. The phone is a
+**consolidated** surface: one pane at a time, hierarchy chosen through a breadcrumb
+picker rather than a tree, and a bottom bar for destinations. A phone is for ruling on a
+gate and glancing at output, not for driving work.
 
 - **FR-19 ⟳ (MUST, split)** Rev. 1 said "full function on iPad Safari and on a phone,
   over LAN, with no native app install" — which forbids the notification path,
@@ -610,6 +643,29 @@ Reviewer positions shown where they converged.
 7. **Mobile reach:** ⧗ open. *Both: browser-only. PWA now, Capacitor as a door not walked
    through, never SwiftUI. Do not extract a new client-runtime package —
    `packages/sdk` already is one.*
+
+---
+
+## Part 6b — Approved design language (rev. 5)
+
+The visual direction is settled and lives in **`codev/research/v2-mockups/`**:
+`design-language.md` (the rules), `tokens.css` (palette, type, patterns),
+`01-site.html` and `02-gate.html` (real markup), plus PNGs.
+
+The identity comes from Codev's own vocabulary — Tower, Porch, Farm, Architect, Builder,
+Gate, Worktree — rather than from another product. The app is a **site**; the user is its
+**foreman**. Two earlier attempts were rejected: bare IDE chrome, and a
+Linear/Vercel/PostHog pastiche.
+
+Colour discipline is the load-bearing rule: **rust means a human is needed** and is used
+for gates and nothing else; ochre means something may be wrong but nobody is blocked;
+moss means healthy; ink is everything else. There is no fifth colour and rust is never
+decoration.
+
+Two open items recorded there: Space Grotesk should be swapped (it is on the standard
+AI-generated-design tell list, and carries almost no weight here), and there is no dark
+mode — the terminal panes are already ink-on-chalk inversions, so a dark theme would need
+designing rather than deriving.
 
 ---
 
