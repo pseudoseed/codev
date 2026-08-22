@@ -13,9 +13,11 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-22T19:27:21.594Z'
-updated_at: '2026-08-22T19:46:31.699Z'
+updated_at: '2026-08-22T19:47:36.428Z'
 pr_history:
   - phase: verified
     pr_number: 45
     branch: builder/experiment-38
     created_at: '2026-08-22T19:46:31.698Z'
+    merged: true
+    merged_at: '2026-08-22T19:47:36.426Z'
