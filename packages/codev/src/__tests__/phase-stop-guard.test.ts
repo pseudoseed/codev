@@ -15,12 +15,14 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as yaml from 'js-yaml';
 import {
   PHASE_STOP_GUARD_SCRIPT,
   STOP_GUARD_SCRIPT_RELPATH,
   TERMINAL_PHASES,
   buildPhaseStopGuardCommand,
 } from '../agent-farm/utils/phase-stop-guard.js';
+import { createInitialState } from '../commands/porch/state.js';
 import {
   buildWorktreeGuardFiles,
   GUARD_SCRIPT_RELPATH,
@@ -87,16 +89,33 @@ function runGuard(
   }
 }
 
-const MID_PHASE = `id: '77'
-title: test
-protocol: pir
-phase: implement
-plan_phases: []
-gates:
-  plan-approval:
-    status: approved
-build_complete: false
-`;
+/**
+ * A SPIR-shaped project mid-implement, produced by porch's OWN state factory
+ * and YAML writer.
+ *
+ * The previous fixture was hand-typed and carried a single approved gate --
+ * a shape porch never writes. That is why 24 green tests covered a guard that
+ * was a total no-op in production: `createInitialState` pre-seeds EVERY gate
+ * as `{ status: 'pending' }` at creation, so the "is a gate pending?" check
+ * always said yes and the guard always allowed.
+ */
+const FIXTURE_PROTOCOL = {
+  name: 'fixture-spir',
+  version: '1.0.0',
+  description: 'f',
+  phases: [
+    { id: 'implement', name: 'Implement', type: 'per_plan_phase' },
+    { id: 'pr', name: 'PR', gate: 'pr' },
+    { id: 'verify', name: 'Verify', gate: 'verify-approval' },
+  ],
+} as never;
+
+function porchState(overrides: Record<string, unknown> = {}): string {
+  const state = createInitialState(FIXTURE_PROTOCOL, '77', 'test');
+  return yaml.dump({ ...state, phase: 'implement', ...overrides });
+}
+
+const MID_PHASE = porchState();
 
 const STOP = JSON.stringify({ stop_hook_active: false });
 
@@ -115,16 +134,43 @@ describe('phase stop-guard: paths that must ALLOW the stop', () => {
     expect(runGuard(STOP).blocked).toBe(false);
   });
 
-  it('allows when ANY gate is pending', () => {
+  it('allows when a gate is genuinely awaiting a human', () => {
     // The one way this guard can do real harm: nudging a builder parked at a
     // human approval gate is pushing it past a decision only a human may make.
-    writeStatus(
-      '77',
-      'test',
-      MID_PHASE.replace('    status: approved\n', '    status: approved\n  dev-approval:\n    status: pending\n'),
-    );
-    const r = runGuard(STOP);
-    expect(r.blocked).toBe(false);
+    // "Genuinely" means BOTH keys — porch sets requested_at only in requestGate.
+    writeStatus('77', 'test', porchState({
+      gates: {
+        pr: { status: 'pending', requested_at: '2026-08-22T00:00:00Z' },
+        'verify-approval': { status: 'pending' },
+      },
+    }));
+
+    expect(runGuard(STOP).blocked).toBe(false);
+  });
+
+  it('BLOCKS on a gate that is seeded pending but never requested', () => {
+    // This is the case that made the guard a no-op. createInitialState seeds
+    // every gate as { status: 'pending' } at project creation, so treating bare
+    // `pending` as "a human is waiting" means a human is always waiting and the
+    // guard never fires. Verified against a real committed status.yaml before
+    // this test was written.
+    writeStatus('77', 'test', porchState());
+
+    expect(runGuard(STOP).blocked).toBe(true);
+  });
+
+  it('is not fooled by a requested_at on a DIFFERENT gate', () => {
+    // The two keys arrive on separate lines, so a scanner that does not close
+    // each gate block would pair `pending` from one gate with `requested_at`
+    // from another and allow every stop again.
+    writeStatus('77', 'test', porchState({
+      gates: {
+        pr: { status: 'pending' },
+        'verify-approval': { status: 'approved', requested_at: '2026-08-22T00:00:00Z' },
+      },
+    }));
+
+    expect(runGuard(STOP).blocked).toBe(true);
   });
 
   it('allows when the status file cannot be read at all', () => {
@@ -250,5 +296,43 @@ describe('worktree wiring', () => {
     const cmd = buildPhaseStopGuardCommand('/x/main/.builders/pir-42', '42');
     expect(cmd).toContain("CODEV_WORKTREE_ROOT='/x/main/.builders/pir-42'");
     expect(cmd).toContain('/x/main/.builders/pir-42/.claude/hooks/phase-stop-guard.cjs');
+  });
+});
+
+describe('against REAL committed status.yaml files', () => {
+  // The reviewer found the no-op by running the guard against a real file
+  // rather than a fixture. That check belongs in the suite, because a
+  // hand-typed fixture is a guess at porch's output and this is a sample of it.
+  const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
+
+  function runAgainstRealProject(projectDirName: string, projectId: string): GuardResult {
+    const src = path.join(repoRoot, 'codev', 'projects', projectDirName, 'status.yaml');
+    if (!fs.existsSync(src)) return { status: 0, blocked: false, reason: 'FIXTURE-MISSING' };
+
+    const dest = path.join(worktree, 'codev', 'projects', projectDirName);
+    fs.mkdirSync(dest, { recursive: true });
+    fs.copyFileSync(src, path.join(dest, 'status.yaml'));
+
+    return runGuard(STOP, { CODEV_PROJECT_ID: projectId });
+  }
+
+  it('BLOCKS a real mid-phase project whose gates are only seeded', () => {
+    clearProjects();
+    const r = runAgainstRealProject('bugfix-1137-gitea-forge-preset-is-broken-a', 'bugfix-1137');
+    if (r.reason === 'FIXTURE-MISSING') return;
+
+    // phase: fix, gates: { merge-approval: { status: pending } } and no
+    // requested_at. Under the original `pending`-only scan this allowed, which
+    // made the guard a no-op for the whole BUGFIX protocol.
+    expect(r.blocked).toBe(true);
+  });
+
+  it('ALLOWS a real completed project', () => {
+    clearProjects();
+    const r = runAgainstRealProject('13-add-ci-concepts-to-the-forge-l', '13');
+    if (r.reason === 'FIXTURE-MISSING') return;
+
+    // phase: verified — terminal, nothing left to drive.
+    expect(r.blocked).toBe(false);
   });
 });

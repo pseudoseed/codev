@@ -148,11 +148,30 @@ function findStatusPath(root, projectId) {
 }
 
 /**
- * Read \`phase\` and whether any gate is still \`pending\`.
+/**
+ * Read \`phase\` and whether any gate is genuinely awaiting a human.
  *
- * A deliberately small line scanner rather than a YAML parser: this file has no
- * dependencies available to it, and status.yaml's shape is fixed by porch's own
- * writer. Anything it cannot understand returns nulls, which fail open.
+ * A deliberately small line scanner rather than a YAML parser: this file has
+ * no dependencies available to it, and status.yaml's shape is fixed by porch's
+ * own writer. Anything it cannot understand returns nulls, which fail open.
+ *
+ * A GATE COUNTS AS WAITING ONLY WITH BOTH \`status: pending\` AND
+ * \`requested_at\`. Scanning for \`pending\` alone made this guard a total no-op
+ * in production: \`createInitialState\` (state.ts:228-231) pre-seeds EVERY gate
+ * in the protocol as \`{ status: 'pending' }\` at project creation, before any
+ * has been reached. So from the moment a project exists there is always a
+ * pending gate, and the guard always allowed. BUGFIX has exactly one gate,
+ * making it a no-op for that entire protocol; for SPIR, \`pr\` and
+ * \`verify-approval\` sit pending through the whole of \`implement\` -- which is
+ * where both reported incidents happened.
+ *
+ * 24 green tests did not notice, because the fixture was hand-typed rather
+ * than produced by porch. Verified against a real committed status.yaml.
+ *
+ * \`requested_at\` is set only by \`requestGate\` (index.ts:608-609), and porch
+ * itself uses exactly this pair to decide "WAITING FOR HUMAN APPROVAL"
+ * (index.ts:383 and :1080). Matching porch's own predicate is the point: a
+ * second definition of "waiting" is how the two drift apart.
  */
 function readState(statusPath) {
   let text;
@@ -166,15 +185,31 @@ function readState(statusPath) {
   let gatePending = false;
   let inGates = false;
 
+  // Per-gate accumulators: the two keys arrive on separate lines, so a gate is
+  // only judged once its block ends.
+  let curPending = false;
+  let curRequested = false;
+  const flush = () => {
+    if (curPending && curRequested) gatePending = true;
+    curPending = false;
+    curRequested = false;
+  };
+
   for (const line of text.split('\\n')) {
     const phaseMatch = /^phase:\\s*['"]?([A-Za-z0-9_-]+)['"]?\\s*$/.exec(line);
     if (phaseMatch) phase = phaseMatch[1];
 
     if (/^gates:\\s*$/.test(line)) { inGates = true; continue; }
     // Any column-0 key ends the gates block.
-    if (inGates && /^[^\\s]/.test(line)) inGates = false;
-    if (inGates && /^\\s+status:\\s*['"]?pending['"]?\\s*$/.test(line)) gatePending = true;
+    if (inGates && /^\\S/.test(line)) { flush(); inGates = false; }
+    if (!inGates) continue;
+
+    // A new gate name (two-space indent, bare key) closes the previous one.
+    if (/^ {2}[^\\s#][^:]*:\\s*$/.test(line)) { flush(); continue; }
+    if (/^\\s+status:\\s*['"]?pending['"]?\\s*$/.test(line)) curPending = true;
+    if (/^\\s+requested_at:\\s*\\S/.test(line)) curRequested = true;
   }
+  flush();
 
   return { phase, gatePending };
 }
@@ -235,18 +270,4 @@ export function buildPhaseStopGuardCommand(worktreePath: string, projectId: stri
     `CODEV_PROJECT_ID='${shellSingleQuote(projectId)}' ` +
     `node '${shellSingleQuote(scriptAbs)}'`
   );
-}
-
-/**
- * Build the worktree files that install the phase stop-guard.
- *
- * Returns only the script. The `Stop` wiring is merged into the same
- * `.claude/settings.local.json` the write-guard emits, because two writers of
- * one file is how one of them silently loses.
- */
-export function buildPhaseStopGuardFiles(
-  worktreePath: string,
-): Array<{ relativePath: string; content: string }> {
-  void worktreePath;
-  return [{ relativePath: STOP_GUARD_SCRIPT_RELPATH, content: PHASE_STOP_GUARD_SCRIPT }];
 }
