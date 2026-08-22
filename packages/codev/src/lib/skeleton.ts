@@ -224,6 +224,40 @@ function protocolDirs(workspaceRoot?: string): string[] {
   return dirs;
 }
 
+/**
+ * Which protocols ship a given consult-type template (e.g. `pr-review.md`).
+ *
+ * Issue #43: five of the six review types exist only under
+ * `protocols/<name>/consult-types/`, never at the bare `codev/consult-types/`.
+ * A bare `--type pr` therefore fails against a path that has never shipped, and
+ * the fix is `--protocol`. This turns that dead end into an actionable list.
+ *
+ * Union across all four tiers, matching `listProtocolNames`. Returns an empty
+ * list when nothing can be read — the caller falls back to the plain
+ * not-found error rather than inventing a second wrong remedy.
+ */
+export function protocolsProvidingConsultType(
+  templateName: string,
+  workspaceRoot?: string,
+): string[] {
+  const found = new Set<string>();
+  for (const dir of protocolDirs(workspaceRoot)) {
+    if (!fs.existsSync(dir)) continue;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory());
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (fs.existsSync(path.join(dir, entry.name, 'consult-types', templateName))) {
+        found.add(entry.name);
+      }
+    }
+  }
+  return [...found].sort();
+}
+
 function readProtocolJson(filePath: string): Record<string, unknown> | null {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;

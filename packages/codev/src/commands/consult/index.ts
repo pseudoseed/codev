@@ -14,7 +14,8 @@ import { tmpdir, homedir } from 'node:os';
 import chalk from 'chalk';
 import { query as claudeQuery } from '@anthropic-ai/claude-agent-sdk';
 import { Codex } from '@openai/codex-sdk';
-import { readCodevFile, findWorkspaceRoot } from '../../lib/skeleton.js';
+import { readCodevFile, findWorkspaceRoot, protocolsProvidingConsultType } from '../../lib/skeleton.js';
+import { NO_REVIEW_MARKER } from '../porch/verdict.js';
 import { resolveDefaultBranch } from '../../lib/default-branch.js';
 import { loadConfig, findConfigSource } from '../../lib/config.js';
 import {
@@ -204,11 +205,29 @@ function resolveProtocolPrompt(workspaceRoot: string, protocol: string | undefin
     const location = protocol
       ? `codev/protocols/${protocol}/consult-types/${templateName}`
       : `codev/consult-types/${templateName}`;
+
+    // Issue #43: naming the missing path is a remedy only if creating that file
+    // is the fix. For a bare `--type pr` it is not — `pr-review.md` has never
+    // shipped at `codev/consult-types/`, only under `protocols/<name>/`, so the
+    // old message pointed at a file that has never existed in any release and
+    // read as "create this". The actual fix is `--protocol`, and nothing said so.
+    if (!protocol) {
+      const owners = protocolsProvidingConsultType(templateName, workspaceRoot);
+      if (owners.length > 0) {
+        throw new Error(
+          `No bare template for --type ${type}. This review type is protocol-scoped; ` +
+          `pass --protocol with one of: ${owners.join(', ')}\n` +
+          `  e.g. consult -m <model> -t ${type} --protocol ${owners[0]} --issue <N>`,
+        );
+      }
+    }
+
     throw new Error(`Prompt template not found: ${location}`);
   }
 
   return content;
 }
+
 
 /**
  * Load .env file if it exists
@@ -944,20 +963,69 @@ export function resolveAgyBin(): string | null {
   return null;
 }
 
+/**
+ * The remedy that actually applies to a given agy failure (#25).
+ *
+ * The skip artifact used to end with "install the CLI and run `agy` once to
+ * sign in" no matter what went wrong. For a quota-exhausted lane that is two
+ * wrong instructions at once: the CLI is installed, and signing in again does
+ * not refill a quota. An error that names a remedy which does not apply costs
+ * more than one that names none, because the reader acts on it.
+ *
+ * Anything unrecognised gets no remedy at all rather than a guessed one.
+ */
+export function agyRemedy(reason: string, outputTail = ''): string {
+  const haystack = `${reason}\n${outputTail}`.toLowerCase();
+
+  if (haystack.includes('not found') || haystack.includes('enoent')) {
+    return 'Install the CLI: https://antigravity.google/cli/install.sh';
+  }
+  if (/quota|rate.?limit|resource.?exhausted|too many requests|429|usage limit/.test(haystack)) {
+    return (
+      'This is a quota/rate limit, not a configuration problem — the CLI is installed and ' +
+      'signed in. Wait for the window to reset, or run this lane with a different model ' +
+      '(`--model-id`), or drop "gemini" from porch.consultation in .codev/config.json for now.'
+    );
+  }
+  if (/auth|login|sign.?in|credential|unauthorized|401|403|permission denied/.test(haystack)) {
+    return 'Run `agy` once interactively to sign in.';
+  }
+  if (haystack.includes('timed out')) {
+    return 'The lane exceeded its time budget. Re-run, or reduce the review scope.';
+  }
+  return '';
+}
+
 /** Non-blocking skip artifact: porch's verdict parser treats COMMENT as non-blocking. */
-function agySkipContent(reason: string): string {
-  return [
+function agySkipContent(reason: string, outputTail = ''): string {
+  const remedy = agyRemedy(reason, outputTail);
+  const lines = [
     '---',
     'VERDICT: COMMENT',
+    // #20: the machine-readable half. This artifact is WELL-FORMED — it states a
+    // real verdict — so nothing downstream could distinguish it from a review
+    // that concluded COMMENT, and `allApprove` counted it toward unanimity. A
+    // missing verdict cannot signal this; the lane has to declare it.
+    NO_REVIEW_MARKER,
     `SUMMARY: Gemini lane skipped — ${reason}`,
     'CONFIDENCE: LOW',
     '---',
     '',
     `The Gemini (Antigravity \`agy\`) reviewer was skipped: ${reason}.`,
-    'This is a non-blocking skip; the remaining reviewers still apply. To enable the',
-    'Gemini lane, install the CLI (https://antigravity.google/cli/install.sh) and run',
-    '`agy` once to sign in.',
-  ].join('\n');
+    '',
+    'THIS LANE DID NOT REVIEW ANYTHING. It is recorded as a non-blocking skip so the',
+    'run can continue on the remaining reviewers — that is not the same as an approval,',
+    'and it should not be read as one (see issue #20).',
+  ];
+  if (remedy) {
+    lines.push('', remedy);
+  }
+  // Without a recognised cause, show what agy actually said rather than
+  // inventing a fix. A raw tail is a lead; a wrong remedy is a detour.
+  if (!remedy && outputTail.trim()) {
+    lines.push('', `agy output (tail):`, '```', outputTail.trim(), '```');
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -976,6 +1044,33 @@ function consultSandboxDir(): string {
     _consultSandboxDir = fs.mkdtempSync(path.join(tmpdir(), 'codev-consult-'));
   }
   return _consultSandboxDir;
+}
+
+/**
+ * Sandbox-dir file paths a composed query text points at (#44).
+ *
+ * `composePRQueryText` embeds the diff path as `**Diff file**: \`<path>\``.
+ * Rather than re-deriving that path (a second source of truth that drifts from
+ * the first), this reads back what the prompt actually told the model to open,
+ * keeping only paths inside this run's sandbox that exist on disk.
+ *
+ * Used by the opencode lane, which cannot read the sandbox and must have those
+ * files ATTACHED instead.
+ */
+export function extractSandboxPaths(queryText: string): string[] {
+  const sandbox = _consultSandboxDir;
+  if (!sandbox) return [];
+  const found = new Set<string>();
+  const re = /`([^`\n]+)`/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(queryText)) !== null) {
+    const candidate = m[1].trim();
+    if (!candidate.startsWith(sandbox + path.sep)) continue;
+    try {
+      if (fs.statSync(candidate).isFile()) found.add(candidate);
+    } catch { /* named but absent — nothing to attach */ }
+  }
+  return [...found];
 }
 
 function writeConsultOutput(outputPath: string | undefined, content: string): void {
@@ -1249,7 +1344,10 @@ async function runAgyConsultation(
           : raw.includes(AGY_NONRESPONSE_MARKER)
             ? 'agy timed out producing the review'
             : 'agy produced no review output';
-        const content = agySkipContent(reason);
+        // #25: pass the tail so the remedy is chosen from what agy actually
+        // said. "exited with code 1" alone cannot distinguish a quota wall from
+        // a missing login, and the old fixed advice assumed the latter.
+        const content = agySkipContent(reason, outputTail);
         process.stdout.write(content);
         writeConsultOutput(outputPath, content);
         recordAgyMetrics(metricsCtx, startTime, code ?? 1, reason, choice?.id ?? null);
@@ -1405,18 +1503,55 @@ export async function runOpencodeConsultation(
   const prompt = `${role}\n\n---\n\n${queryText}`;
   let tempFile: string | null = null;
   let promptArg = prompt;
-  // Large inline argv can exceed ARG_MAX (E2BIG) — write it out and point opencode at the file.
-  // The temp file lands in the consult sandbox dir, the same one the agy lane uses.
+  // Files handed to opencode via `-f`, which ATTACHES their content to the
+  // message rather than asking the model to go read a path (#44).
+  //
+  // opencode auto-rejects reads outside its working directory. The consult
+  // sandbox is an `mkdtemp` dir under the OS temp root, granted to the `agy`
+  // lane through `--add-dir`; opencode has no equivalent flag and got no
+  // equivalent grant, so every artifact placed there was unreachable to it.
+  // Observed live:
+  //
+  //   ! permission requested: external_directory (/var/.../codev-consult-XXXX/*); auto-rejecting
+  //   ✗ Read /var/.../codev-consult-XXXX/pr-42.diff failed
+  //
+  // Two things landed in that dir. The PR diff — so an opencode PR review
+  // silently read the working tree instead of the PR's head→base changes. And,
+  // above CLI_PROMPT_INLINE_MAX_CHARS, the ENTIRE PROMPT: the lane then held
+  // nothing but an instruction pointing at an unreadable path, and still
+  // produced output and a verdict. That is precisely the failure this lane's
+  // own header says it hard-fails to prevent ("a lane that quietly emits a skip
+  // is a lane that quietly lowers the bar"). Its guards all catch a process that
+  // failed; none caught a process that exited 0 with a verdict formed from
+  // nothing.
+  //
+  // Attaching sidesteps the permission system instead of negotiating with it.
+  const attachments: string[] = [];
+
   if (prompt.length > CLI_PROMPT_INLINE_MAX_CHARS) {
     tempFile = path.join(consultSandboxDir(), `codev-consult-prompt-${Date.now()}.md`);
     fs.writeFileSync(tempFile, prompt);
+    attachments.push(tempFile);
     promptArg = [
-      `Read the full consultation prompt from this file: ${tempFile}`,
-      'You have file access. Read files directly from disk to review code.',
-    ].join('\n\n');
+      'The full consultation prompt is ATTACHED to this message. Read the attachment and',
+      'follow it exactly. Do not proceed on the summary below alone.',
+      '',
+      'You also have filesystem access to the repository for surrounding context.',
+    ].join('\n');
   }
 
-  const args = [...MODEL_CONFIGS.opencode.args, '-m', choice.id, promptArg];
+  // Attach the PR diff too, when this review has one. `queryText` names the
+  // path; without the attachment the model can see the name and not the bytes.
+  for (const diffPath of extractSandboxPaths(queryText)) {
+    if (!attachments.includes(diffPath)) attachments.push(diffPath);
+  }
+
+  const args = [
+    ...MODEL_CONFIGS.opencode.args,
+    '-m', choice.id,
+    ...attachments.flatMap(f => ['-f', f]),
+    promptArg,
+  ];
 
   const cleanup = () => {
     if (tempFile && fs.existsSync(tempFile)) {
@@ -2018,6 +2153,32 @@ function buildPRQuery(prId: string, localDiff?: { diff: string; changedFiles: st
 
   const diffBytes = Buffer.byteLength(diff, 'utf-8');
   const diffLines = diff ? diff.split('\n').length : 0;
+
+  // Issue #35: a PR review with no diff must be an error, never a prompt.
+  //
+  // On a Gitea/Forgejo repo the forge config failed to resolve, `gh` was invoked
+  // against a host it could not reach, and the diff came back empty with nothing
+  // on stderr. The prompt then said `Changed Files (0)` and three lanes returned
+  // a confident APPROVE (HIGH) on nothing. That is the dangerous shape: the
+  // review appears to have run, the lanes report, and the record reads as a
+  // clean multi-model approval of a change no model ever saw.
+  //
+  // There is no legitimate caller here. An empty PR is not reviewable, and a
+  // genuinely empty diff is indistinguishable from a fetch that failed silently
+  // — so both stop, and both say which they might be.
+  if (diffBytes === 0) {
+    throw new Error(
+      `PR #${prId} produced a 0-byte diff — refusing to run a review on nothing.\n` +
+      `A reviewer cannot tell an empty diff from a failed fetch, and neither can you ` +
+      `once three lanes have returned APPROVE.\n` +
+      `Likely causes:\n` +
+      `  - the forge config did not resolve, so 'gh' ran against a non-GitHub host ` +
+      `(check .codev/config.json "forge", and see issue #35)\n` +
+      `  - the PR genuinely has no changes\n` +
+      `  - the branch was already merged and the head/base diff is empty\n` +
+      `Verify with your forge's own diff command before re-running.`,
+    );
+  }
 
   return composePRQueryText({
     prId,
