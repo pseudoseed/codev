@@ -1,0 +1,15 @@
+date: 2026-08-22T19:34:29.564Z
+PTY_SESSION_MODULE: /Users/chris/dev/codev-1455/packages/codev/src/terminal/pty-session.ts
+method: PtySession.resize (last writer wins)
+
+spawn: ok (/bin/bash)
+clients attached: 2
+initial session.info: cols=80 rows=24
+after client A resize(80, 24): cols=80 rows=24
+after client B resize(40, 12): cols=40 rows=12
+session.info last-writer-wins: YES
+stty size after B won (raw): "A:stty size\nB:stty size\nA:\nThe default interactive shell is now zsh.\nTo update your account to use zsh, please run `chsh -s /bin/zsh`.\nFor more details, please visit https://support.apple.com/kb/HT208050.\n\u001b[?1034hstty size\n12 40\nB:\nThe default interactive shell is now zsh.\nTo update your account to use zsh, please run `chsh -s /bin/zsh`.\nFor more details, please visit https://support.apple.com/kb/HT208050.\n\u001b[?1034hstty size\n12 40\n"
+stty parsed: rows=12 cols=40
+
+conclusion:
+Two sequential resize() calls from two attached clients leave session.info at the later writer.
