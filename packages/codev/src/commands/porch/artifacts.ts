@@ -127,9 +127,61 @@ export function findByProjectId(
   projectId: string,
   filter: (name: string) => boolean = () => true,
 ): string | undefined {
+  return findByProjectIdDetailed(names, projectId, filter).name;
+}
+
+/** How confidently an artifact name was matched to a project id. */
+export interface ArtifactMatch {
+  /** The resolved name, or undefined when nothing matched at all. */
+  name?: string;
+  /**
+   * True when the leading digits equal `projectId` literally.
+   *
+   * False means the match came from the zero-stripping fallback, which cannot
+   * distinguish a legacy zero-padded artifact of THIS project from a different
+   * project's artifact that merely collides on the number.
+   */
+  exact: boolean;
+  /** Every lenient candidate, when the match was not exact. For disclosure. */
+  ambiguousWith: string[];
+}
+
+/**
+ * {@link findByProjectId}, plus how sure it is (#28).
+ *
+ * The lenient fallback exists "so genuinely zero-padded legacy projects still
+ * resolve when nothing canonical exists", and on its own it cannot tell apart:
+ *
+ *   (a) `0364-terminal-refresh-button` IS project 364, just zero-padded.
+ *   (b) `0013-document-os-dependencies` is NOT project 13 (CI forge concepts);
+ *       it is an unrelated 2025 document that collides on the number 13.
+ *
+ * Project 13 runs PIR, which has no spec phase — it has no spec at all. Asked
+ * for "spec 13", the fallback handed the consultation someone else's spec, and
+ * the reviewer started reviewing against "Document OS Dependencies".
+ *
+ * Neither the id nor the project title can settle which case applies: a
+ * status.yaml title (`add-ci-concepts-to-the-forge-l`) is derived from the issue
+ * and does not match the artifact slug (`13-ci-forge-concepts`), so comparing
+ * them would reject correct artifacts. What CAN be done is refuse to hide the
+ * ambiguity: the resolution is returned along with the fact that it was a
+ * guess, so callers can disclose it. Per the issue, that is the durable half —
+ * the only reason this was ever caught is that a reviewer happened to say so.
+ */
+export function findByProjectIdDetailed(
+  names: string[],
+  projectId: string,
+  filter: (name: string) => boolean = () => true,
+): ArtifactMatch {
   const candidates = names.filter(filter);
-  return candidates.find(n => matchesProjectIdExact(n, projectId))
-    ?? candidates.find(n => matchesProjectId(n, projectId));
+
+  const exact = candidates.find(n => matchesProjectIdExact(n, projectId));
+  if (exact) return { name: exact, exact: true, ambiguousWith: [] };
+
+  const lenient = candidates.filter(n => matchesProjectId(n, projectId));
+  if (lenient.length === 0) return { exact: false, ambiguousWith: [] };
+
+  return { name: lenient[0], exact: false, ambiguousWith: lenient };
 }
 
 /**

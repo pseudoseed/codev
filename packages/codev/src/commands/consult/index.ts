@@ -38,6 +38,46 @@ import { assertAgyLaneAllowedUnderTest, assertOpencodeLaneAllowedUnderTest } fro
 interface ContentRef {
   content: string;
   label: string;
+  /**
+   * The project id this artifact was looked up FOR (#28).
+   *
+   * Carried on the ref rather than threaded through every query builder: the
+   * ref is what crosses into the prompt, so provenance belongs with it. Without
+   * it, a builder function has the document and no way to say which project
+   * asked for it.
+   */
+  requestedId?: string;
+}
+
+/**
+ * Header for an artifact injected as review context (#28).
+ *
+ * `--type spec` and `--type plan` put the artifact name in the query title, so
+ * a mis-resolved document is at least visible. `--type impl`, `--type phase`
+ * and `--type pr` injected the spec and plan under a bare `## Specification`
+ * with no filename at all — which is how project 13 (CI forge concepts, PIR, no
+ * spec) was reviewed against a 2025 document called "Document OS Dependencies"
+ * and nothing in the output said so.
+ *
+ * Naming the file is most of the fix. The warning covers the case that actually
+ * happened: the resolver fell back to zero-stripped matching, so the leading
+ * digits of the file it found are not the id that was asked for.
+ */
+function artifactHeading(kind: string, ref: ContentRef): string {
+  const projectId = ref.requestedId ?? '';
+  const leading = /^(\d+)/.exec(ref.label);
+  const inexact = leading !== null && /^\d+$/.test(projectId) && leading[1] !== projectId;
+
+  let heading = `## ${kind}: \`${ref.label}\`\n\n`;
+  if (inexact) {
+    heading +=
+      `> **WARNING — this may not be project ${projectId}'s ${kind.toLowerCase()}.** It was resolved by ` +
+      `zero-stripped id matching: \`${ref.label}\` begins with \`${leading[1]}\`, not \`${projectId}\`. ` +
+      `That fallback cannot tell a legacy zero-padded artifact of this project from a different ` +
+      `project's artifact that collides on the number. If this document is not about the change ` +
+      `you are reviewing, say so plainly and do not review against it (see issue #28).\n\n`;
+  }
+  return heading;
 }
 
 // Model configuration
@@ -254,7 +294,7 @@ function findSpecContent(workspaceRoot: string, id: string, resolver?: ArtifactR
   const content = r.getSpecContent(id, '');
   if (!content) return null;
   const label = r.findSpecBaseName(id, '') ?? id;
-  return { content, label };
+  return { content, label, requestedId: id };
 }
 
 /**
@@ -269,7 +309,7 @@ function findPlanContent(workspaceRoot: string, id: string, resolver?: ArtifactR
   const content = r.getPlanContent(id, '');
   if (!content) return null;
   const baseName = r.findSpecBaseName(id, '') ?? id;
-  return { content, label: baseName };
+  return { content, label: baseName, requestedId: id };
 }
 
 /**
@@ -2102,11 +2142,12 @@ function buildImplQuery(
 
   query += '\n\n';
 
+  // #28: name the artifact, and warn when the id did not match exactly.
   if (spec) {
-    query += `## Specification\n\n${spec.content}\n\n`;
+    query += artifactHeading('Specification', spec) + `${spec.content}\n\n`;
   }
   if (plan) {
-    query += `## Plan\n\n${plan.content}\n\n`;
+    query += artifactHeading('Plan', plan) + `${plan.content}\n\n`;
   }
 
   if (planPhase) {
@@ -2218,8 +2259,9 @@ function buildPhaseQuery(
 
   let query = `Review Phase Implementation: "${planPhase}"\n\n`;
 
-  if (spec) query += `## Specification\n\n${spec.content}\n\n`;
-  if (plan) query += `## Plan\n\n${plan.content}\n\n`;
+  // #28: name the artifact, and warn when the id did not match exactly.
+  if (spec) query += artifactHeading('Specification', spec) + `${spec.content}\n\n`;
+  if (plan) query += artifactHeading('Plan', plan) + `${plan.content}\n\n`;
 
   query += `
 ## REVIEW SCOPE — CURRENT PLAN PHASE ONLY
