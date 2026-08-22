@@ -74,7 +74,8 @@ a human decision.
 
 Two human approval gates plus the PR gate. Only a human transitions
 `conceived → specified` and `committed → integrated`. Stop and wait at each; do not infer
-approval from silence.
+approval from silence. PIR adds a third: `dev-approval`, where the human reviews the *running*
+worktree via `afx dev` before a PR exists.
 
 **Approved specs and plans need frontmatter and must be committed to `main` before spawning.**
 Porch runs the full protocol from `specify`, but treats an artifact carrying this as done:
@@ -181,6 +182,16 @@ Agents message each other with `afx send`:
 
 `afx send` requires the workspace active in Tower (`afx workspace start`).
 
+**Every send reports `delivered` or `held`.** `delivered` means the message landed on the
+recipient's prompt after a clean render-gate pass. `held` means the prompt wasn't clear, so the
+message sits in Tower's durable mailbox with a reason (`busy`, `no-profile`, `no-live-pty`) and
+delivers itself once the prompt clears — it is never force-injected onto a half-typed line, and
+it survives a Tower restart. `afx inbox` lists held messages, `afx inbox show <id>` reads one,
+`afx inbox dismiss <id>` clears it. `afx send --interrupt` is the explicit bypass.
+
+A workspace can host several architects (`afx workspace add-architect --name <name>`); siblings
+address each other with `architect:<name>`. `afx status` lists architects alongside builders.
+
 Each builder keeps a narrative log at `codev/state/<builder-id>_thread.md` — in-flight at
 `.builders/<id>/codev/state/`, and on `main` after the PR merges.
 
@@ -197,7 +208,9 @@ worktrees runnable), `update-arch-docs`.
 **Run anything slower than ~5s in the background** (`run_in_background: true`, not a trailing
 `&`): tests, consultations, installs, e2e suites.
 
-Configuration lives in `.codev/config.json`.
+Configuration lives in `.codev/config.json`, created by `codev init` / `codev adopt`. The
+`shell` block picks the architect, builder and shell commands; `--architect-cmd`,
+`--builder-cmd` and `--shell-cmd` override them per invocation.
 
 ## Testing
 

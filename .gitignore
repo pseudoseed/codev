@@ -73,3 +73,6 @@ packages/codev/coverage/
 # Local MCP config and channel state
 .mcp.json
 .claude/channels/ci/
+
+# Codev (added by codev update 2026-08-22)
+codev/.update-hashes.json
