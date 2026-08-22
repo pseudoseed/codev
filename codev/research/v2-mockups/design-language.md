@@ -88,3 +88,44 @@ The phone version of that path is still undrawn.
 
 Phone and tablet layouts (FR-19 to FR-26), which are a different composition entirely under
 FR-21's no-tiling rule. Desktop tiling interactions — drag between groups, split, resize.
+
+---
+
+## iPad (added 2026-08-21)
+
+iPad is the primary away-from-desk target; the phone is secondary and consolidated
+(human's call). Five screens: `ipad-01-site.png` through `ipad-05-soft-keyboard.png`.
+
+**What the iPad changes from desktop:**
+
+- **Two panes maximum, never four.** With `SWAP PANES` and a `LAYOUT` control, and a
+  fullscreen affordance per pane.
+- **The gate rail collapses.** No permanent 280px rail at this width — a rust gate
+  counter in the top bar opens the queue as a sheet over the content.
+- **Lots run across the top**, terminal panes fill below. Containment survives the
+  narrower width: `MACHINE LOT` tab, workspace plots inside, architect header, builder
+  rows with stakes.
+- **A soft-keyboard state.** A modifier row docks above the system keyboard carrying
+  `CTRL ESC TAB ← ↑ ↓ → C-C C-D C-L PASTE` plus a dismiss key. This is FR-24's answer,
+  and it is the screen the phone layout should inherit from.
+
+**Two inventions worth keeping:**
+
+- **`NUDGE`** on a stalled builder's pane footer. An action for a stuck agent, which
+  nothing in the FRD asked for and which the stalled state (FR-42) implies the need for.
+- **An architect-grouped pane** — one pane showing all builders under a single architect,
+  stacked, rather than one pane per builder. A denser use of two panes than two terminals.
+
+**Known drift, corrected on the second pass:** the first iPad attempt replaced the lots
+with an indented outline and folder icons — exactly the pattern FR-1 forbids — and also
+lost the blueprint grid, renamed the machines, swapped the compass mark for a house, and
+rendered pane headers dark-on-dark. Restating the containment rule explicitly fixed it.
+**The lesson for anyone regenerating these: the outline is the default the model falls
+back to, so the containment rule has to be restated every time.**
+
+**Still lost:** builder rows on iPad dropped the activity sparklines that FR-41 requires.
+Add them when building; do not treat the mockup as complete on that point.
+
+**Note on regeneration:** passing an existing `pageId` lets the agent *edit* screens
+already on that page. The first iPad run silently overwrote the approved desktop Site and
+Gate. The committed copies here are the source of truth, not the uxpilot page.
