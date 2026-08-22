@@ -12,6 +12,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ProjectState, Protocol, PlanPhase } from './types.js';
 import type { ArtifactResolver } from './artifacts.js';
+import { detectProjectIdFromCwd } from './project-id.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -357,24 +358,14 @@ export function listAllProjects(
  * Works from any subdirectory within the worktree.
  * Returns the porch project ID (e.g. "bugfix-237", "1298", or "0073"), or null if not in a recognized worktree.
  */
-export function detectProjectIdFromCwd(cwd: string): string | null {
-  const normalized = path.resolve(cwd).split(path.sep).join('/');
-  // bugfix worktrees: .builders/bugfix-{N}-{slug} (slug optional)
-  //   porch project ID is "bugfix-{N}" — historical convention, kept untouched.
-  // PIR / SPIR / ASPIR / AIR worktrees: .builders/{prefix}-{N}-{slug} (slug optional)
-  //   porch project ID is the bare numeric ID.
-  // Spec worktrees (legacy): .builders/{NNNN} (bare 4-digit ID, no slug)
-  const match = normalized.match(
-    /\/\.builders\/(bugfix-(\d+)(?:-[^/]*)?|(?:aspir|spir|air|pir)-(\d+)(?:-[^/]*)?|(\d{4}))(\/|$)/,
-  );
-  if (!match) return null;
-  // bugfix uses "bugfix-N" as the porch project ID
-  if (match[2]) return `bugfix-${match[2]}`;
-  // Protocol worktrees (aspir, spir, air, pir) use the bare numeric ID
-  if (match[3]) return match[3];
-  // Spec worktrees use zero-padded numeric IDs
-  return match[4];
-}
+// Moved to ./project-id.ts (issue #41) and re-exported here so existing
+// importers are unaffected. It lives in a leaf module now because importing
+// THIS file pulls in `execFile` via `writeStateAndCommit`, which is more than a
+// pure path-to-id rule should cost a caller.
+//
+// Imported as well as re-exported: `export { x } from` does NOT bind the name
+// in this module's scope, and `resolveProjectId` below calls it directly.
+export { detectProjectIdFromCwd };
 
 export type ResolvedProjectId = { id: string; source: 'explicit' | 'cwd' | 'filesystem' };
 
