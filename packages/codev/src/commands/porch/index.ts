@@ -91,7 +91,16 @@ function criticalRulesBox(rules: string[]): string {
     const marker = `${i + 1}. `;
     const indent = ' '.repeat(2 + marker.length);
     const avail = RULES_BOX_WIDTH - indent.length;
-    const words = rule.split(/\s+/);
+    // Hard-break anything wider than the box before wrapping. Phase ids come
+    // from plan headings via `extractPlanPhases`, so a long slug is a single
+    // unbreakable word — and a word wider than `avail` would otherwise run
+    // straight through the border and break the frame it is rendered in.
+    const words = rule.split(/\s+/).flatMap(w => {
+      if (w.length <= avail) return [w];
+      const parts: string[] = [];
+      for (let k = 0; k < w.length; k += avail) parts.push(w.slice(k, k + avail));
+      return parts;
+    });
     const wrapped: string[] = [];
     let cur = '';
     for (const w of words) {

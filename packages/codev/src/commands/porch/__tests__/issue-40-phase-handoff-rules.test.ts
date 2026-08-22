@@ -131,7 +131,10 @@ describe('issue #40: phase-handoff CRITICAL RULES', () => {
 
     await status(root, '9040');
 
-    const text = out();
+    // Scoped to the box, not the whole status output: asserting on `out()`
+    // happens to work only because "DO NOT start" appears nowhere else, and
+    // that is a fact about today's output, not about this rule's order.
+    const text = boxText();
     expect(text.indexOf('START phase_1_a NOW')).toBeGreaterThan(-1);
     expect(text.indexOf('START phase_1_a NOW')).toBeLessThan(text.indexOf('DO NOT start'));
   });
@@ -188,6 +191,26 @@ describe('issue #40: phase-handoff CRITICAL RULES', () => {
     await status(root, '9040');
 
     expect(out()).not.toMatch(/\/compact/);
+  });
+
+  it('keeps the border intact when a phase id is wider than the box', async () => {
+    // Phase ids come from plan headings, so a long slug arrives as one
+    // unbreakable word. Without a hard break it runs through the frame.
+    const longId = 'phase_1_' + 'x'.repeat(120);
+    writeProject([
+      { id: longId, title: 'A', status: 'in_progress' },
+      { id: 'phase_2_b', title: 'B', status: 'pending' },
+    ]);
+
+    await status(root, '9040');
+
+    // eslint-disable-next-line no-control-regex
+    const plain = out().replace(/\[[0-9;]*m/g, '');
+    const boxLines = plain.split('\n').filter(l => l.startsWith('║'));
+    expect(boxLines.length).toBeGreaterThan(4);
+    for (const line of boxLines) {
+      expect(line.endsWith('║')).toBe(true);
+    }
   });
 
   it('keeps the box legible: every line closes its border', async () => {
