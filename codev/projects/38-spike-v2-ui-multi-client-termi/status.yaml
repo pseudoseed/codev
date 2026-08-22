@@ -1,7 +1,7 @@
 id: '38'
 title: spike-v2-ui-multi-client-termi
 protocol: experiment
-phase: hypothesis
+phase: design
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-22T19:27:21.594Z'
-updated_at: '2026-08-22T19:27:21.594Z'
+updated_at: '2026-08-22T19:30:19.217Z'
