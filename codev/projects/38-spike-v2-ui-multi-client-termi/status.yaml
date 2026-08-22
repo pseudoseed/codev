@@ -1,0 +1,21 @@
+id: '38'
+title: spike-v2-ui-multi-client-termi
+protocol: experiment
+phase: verified
+plan_phases: []
+current_plan_phase: null
+gates:
+  experiment-complete:
+    status: approved
+    requested_at: '2026-08-22T19:35:48.445Z'
+    approved_at: '2026-08-22T19:45:18.658Z'
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-22T19:27:21.594Z'
+updated_at: '2026-08-22T19:46:31.699Z'
+pr_history:
+  - phase: verified
+    pr_number: 45
+    branch: builder/experiment-38
+    created_at: '2026-08-22T19:46:31.698Z'

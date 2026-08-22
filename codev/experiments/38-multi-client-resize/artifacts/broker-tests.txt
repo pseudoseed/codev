@@ -1,0 +1,15 @@
+ok  follow-focused: two visible clients, only focused size applies
+ok  follow-focused: focused disconnect promotes remaining visible viewer
+ok  follow-focused: both hidden, resize ignored, last size holds
+ok  follow-focused: iOS reconnect nudge does not steal focused size
+ok  follow-focused: sole reconnector applies its size
+ok  ignore-hidden: two visible clients still last-writer-wins (fails FR-38)
+ok  ignore-hidden: hidden resize is ignored
+ok  ignore-hidden: both hidden, last size holds
+ok  ignore-hidden: iOS reconnect nudge wins if visible (fails FR-38)
+ok  per-viewer-reflow: two visible different sizes is unsupported
+ok  per-viewer-reflow: matching sizes are allowed
+ok  per-viewer-reflow: both hidden holds last size
+ok  per-viewer-reflow: iOS reconnect with other viewer stays unsupported
+
+13 passed, 0 failed, 13 total
