@@ -1,7 +1,7 @@
 id: '77'
 title: measure-tower-cpu-and-event-lo
 protocol: experiment
-phase: hypothesis
+phase: design
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-23T23:18:10.781Z'
-updated_at: '2026-08-23T23:18:10.782Z'
+updated_at: '2026-08-23T23:25:17.798Z'
