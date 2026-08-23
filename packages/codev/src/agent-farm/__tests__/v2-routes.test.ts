@@ -220,4 +220,41 @@ describe('handleV2Route', () => {
     );
     void body;
   });
+
+  it('does not double-decode a scope path that contains %', async () => {
+    const pathWithPct = '/tmp/ws%20a';
+    setV2RouteDeps({
+      listWorkspaces: () => [pathWithPct],
+      project: () => ({ nodes: [builderNode(pathWithPct, 'spir-52')], counts }),
+      now: () => 1_000,
+      isReadable: () => true,
+    });
+    const q = `/v2/events?scope=${encodeURIComponent(pathWithPct)}`;
+    const out = makeRes();
+    await handleV2Route(makeReq('GET', q), out.res, urlFor(q));
+    const parsed = frames(out.body());
+    expect(parsed[0].type).toBe('snapshot');
+    expect((parsed[0].nodes as V2Node[])[0].id).toBe(builderId(pathWithPct, 'spir-52'));
+  });
+
+  it('rehydrate emit is written once after the snapshot', async () => {
+    const q = `/v2/events?scope=${encodeURIComponent(WS_A)}`;
+    setV2RouteDeps({
+      listWorkspaces: () => [WS_A],
+      project: () => ({ nodes: [builderNode(WS_A, 'spir-52')], counts }),
+      now: () => 1_000,
+      isReadable: () => true,
+      rehydrate: async () => {
+        getV2Bus().emit(scopeKey([WS_A]), { type: 'gone', id: 'during-rehydrate' });
+      },
+    });
+    const out = makeRes();
+    await handleV2Route(makeReq('GET', q), out.res, urlFor(q));
+    const parsed = frames(out.body());
+    const gones = parsed.filter((f) => f.type === 'gone' && f.id === 'during-rehydrate');
+    expect(gones).toHaveLength(1);
+    expect(parsed[0].type).toBe('snapshot');
+    expect(parsed[0].seq).toBe(0);
+    expect(gones[0].seq).toBe(1);
+  });
 });

@@ -42,7 +42,16 @@ Builder for Issue #52 / Spec 52. STRICT mode. SPIR.
 - Tests verified: v2-events + v2-routes 17 passed. Existing `GET /api/events` 8 passed. `git diff` on tower-routes is import + one if.
 - Context refresh at phase_2 refused: opencode has no in-session clear. architect:uiv2 said continue. Push at every phase boundary from here.
 - Phase 2 review: Claude + opencode REQUEST_CHANGES on snapshot seq. Fixed: pin snapshot/dark to subscribe-time seq; monotonic client ids; cleanup on subscribe.
-- Next: porch done → re-review or phase 3.
+- Iter 2: Claude + opencode APPROVE. porch advanced to phase_3.
+
+### 2026-08-23 — Phase 3: Change sampler and live deltas
+
+- Context refresh at phase_3 refused again (opencode has no in-session clear). Reported to architect:uiv2. Continued.
+- `v2-sampler.ts`: 100ms compare, never pauses, fs.watch wake, not_before timer, 30s tick into rings (no fan with zero subscribers).
+- Production `V2Deps` bound on first `/v2/events` (not tower-server.ts). `setV2RouteDeps` still wins in tests.
+- Connect path: `lastWrittenSeq` flush; single-decode `parseScope`; optional `rehydrate` per already-known in-scope path.
+- Tests: 22 sampler + extra route cases. Last local run: 53 v2 tests + 101 tower-routes. `npm run build` passed.
+- Next: porch done → consult.
 
 ### Standing orders still in force
 

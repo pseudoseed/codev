@@ -119,6 +119,10 @@ export class ScopeBus {
     return () => { s.subscribers.delete(sub); };
   }
 
+  subscriberCount(key: string): number {
+    return this.scopes.get(key)?.subscribers.size ?? 0;
+  }
+
   private trim(s: ScopeState, now: number): void {
     const cutoff = now - V2_BUFFER_MAX_AGE_MS;
     while (s.buffer.length > 0 && (s.buffer.length > V2_BUFFER_MAX_FRAMES || s.buffer[0].at < cutoff)) {
