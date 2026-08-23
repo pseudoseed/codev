@@ -42,3 +42,19 @@ iPad. Gate rail collapsed to a rust `GATES 3` chip; queue opens as a sheet. Bear
 | ID | Title (from preview) | Preview | HTML | FRs |
 |---|---|---|---|---|
 | `YjOhy7S3Pz06oilXMo6R` | GATES 3 — queue sheet | `gate-queue-sheet/YjOhy7S3Pz06oilXMo6R.png` | not pulled | FR-43, FR-44, FR-48, FR-19, FR-20, FR-21 |
+
+---
+
+## Porch Gate Interaction Design
+
+Phone. One gate view in five states (scroll position and note-field focus), not five different screens. This is the phone composition of **FR-43..48**. Also **FR-26** (KEEP FOR AUDIT / APPROVE DROP sit in the lower third) and **FR-19/20** (375-class phone).
+
+The FRD listed this group as having no requirements. That is wrong if FRs name surfaces: FR-43..48 already describe this view. What they lack is a phone-composition clause (queue is a `GATES N` chip, not a permanent rail).
+
+| ID | Title (from preview) | Preview | HTML | FRs |
+|---|---|---|---|---|
+| `3sOUJgaqK6CgFX4eb1Sb` | Gate — question, branches, both actions | `porch-gate-interaction-design/3sOUJgaqK6CgFX4eb1Sb.png` | not pulled | FR-43, FR-44, FR-45, FR-46, FR-47, FR-48, FR-26, FR-19, FR-20 |
+| `c6PfQn1i22G2IcFejzaZ` | Gate — KEEP FOR AUDIT highlighted | `porch-gate-interaction-design/c6PfQn1i22G2IcFejzaZ.png` | not pulled | FR-44, FR-45, FR-46, FR-26 |
+| `wtSunFZw8rCeadZpqDW8` | Gate — APPROVE DROP highlighted | `porch-gate-interaction-design/wtSunFZw8rCeadZpqDW8.png` | not pulled | FR-44, FR-45, FR-46, FR-26 |
+| `cI0vQS8yxrTmLcD5gokz` | Gate — note field focused | `porch-gate-interaction-design/cI0vQS8yxrTmLcD5gokz.png` | not pulled | FR-47, FR-25 |
+| `EdGJMIYxdc5nlaj5fyxX` | Gate — note typed | `porch-gate-interaction-design/EdGJMIYxdc5nlaj5fyxX.png` | not pulled | FR-47, FR-25 |
