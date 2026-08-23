@@ -1,6 +1,6 @@
 # Experiment 62: Can a finger drag a dockview split on a real iPad
 
-**Status**: Complete (arm A device-scored; arm B built and DOM-scored) · **Date**: 2026-08-23
+**Status**: Complete · **Date**: 2026-08-23 · **Decision**: dockview + group-level close
 
 Spawn prompt named `codev/specs/0062-secure-remote-access.md` (already shipped, then `--remote` was removed in spec 99). Issue #62 and porch project `62-spike-v2-ui-can-a-finger-drag-` are the work. Same template-fill collision as experiments 38 and 39.
 
@@ -225,6 +225,38 @@ His words on arm A: gestures and selection working, tab-close mis-tap the only f
 
 Arm B: FR-22 and detach measured in Chromium. Finger and VoiceOver on B are unscored.
 
+## Decision (architect, 2026-08-23)
+
+**Dockview, with hideClose and a group-level close.** Recorded. Not re-tested as a product choice.
+
+Arm B's gaps are most of a tiling engine: no edge-split drag, no cross-group drag, no sash resize, no float, no popout, no `toJSON` layout. Sash resize is FR-7. Layout persistence is FR-9. Both MUST. Closing those gaps means writing a tiling library. That is the opposite of known, proven tooling.
+
+Arm A fails one MUST, FR-22. The override is bounded. We take the group-level close rather than a `Tab` fork. Removing the per-tab X deletes the mis-tap hazard. That is the FR-49 case the human hit on first contact.
+
+### Override, built and measured
+
+Page: `http://10.10.50.186:4112/a-fr22.html`. Source: `artifacts/a-fr22-override.json` at `2026-08-23T22:13:21.528Z`.
+
+| File | Lines | Role |
+|---|---|---|
+| `src/Fr22Tab.jsx` | 5 | Title only. No close. |
+| `src/Fr22Close.jsx` | 13 | `rightHeaderActionsComponent`. Group-level close. |
+| `src/a-fr22.css` | 43 | Tab bar height 44. Sash `::before` ±20 px. |
+
+`defaultTabComponent` alone does not get there. It still mounts inside `.dv-tab`. Close inside that tab is still gap 0.
+
+Sash does not need a fork. Layout hardcodes `sashWidth = 4` in dockview-core. Changing the element width would fight that. Inflating `::before` by 20 px each side makes hit travel 44. Measured: sash box still 4 px, `beforeLeft/Right` `-20px`, `hitTravel` 44.
+
+Live DOM after override:
+
+- Tab 106×44. Close 67×44. `closeInsideTab` false. Gap 266–340 pt.
+- Tab bar height 44 px.
+- Sash hit 44. No dockview file edited.
+
+### Gate, not a caveat
+
+Dockview is unscored for VoiceOver, Dynamic Type at large sizes, both orientations, and finger scroll on device. That must be validated before the client shell ships.
+
 ## Next steps
 
-Two cost lists. Stop.
+Decision is recorded. Gate stands. Stop.

@@ -1,0 +1,76 @@
+{
+  "at": "2026-08-23T22:13:21.528Z",
+  "pairs": [
+    {
+      "tab": {
+        "w": 105.9,
+        "h": 44
+      },
+      "close": {
+        "w": 66.9,
+        "h": 44
+      },
+      "closeInsideTab": false,
+      "gapTabToClose": 339.2
+    },
+    {
+      "tab": {
+        "w": 73.1,
+        "h": 44
+      },
+      "close": {
+        "w": 66.9,
+        "h": 44
+      },
+      "closeInsideTab": false,
+      "gapTabToClose": 266.1
+    },
+    {
+      "tab": {
+        "w": 105.4,
+        "h": 44
+      },
+      "close": {
+        "w": 66.9,
+        "h": 44
+      },
+      "closeInsideTab": false,
+      "gapTabToClose": 339.7
+    },
+    {
+      "tab": {
+        "w": 105.1,
+        "h": 44
+      },
+      "close": {
+        "w": 66.9,
+        "h": 44
+      },
+      "closeInsideTab": false,
+      "gapTabToClose": 340
+    }
+  ],
+  "sashBoxes": [
+    {
+      "w": 4,
+      "h": 768,
+      "beforeContent": "\"\"",
+      "beforeLeft": "-20px",
+      "beforeRight": "-20px",
+      "beforeTop": "0px",
+      "beforeBottom": "0px",
+      "hitTravel": 44
+    },
+    {
+      "w": 512,
+      "h": 4,
+      "beforeContent": "\"\"",
+      "beforeLeft": "0px",
+      "beforeRight": "0px",
+      "beforeTop": "-20px",
+      "beforeBottom": "-20px",
+      "hitTravel": 44
+    }
+  ],
+  "tabBarHeight": "44px"
+}
