@@ -2,6 +2,8 @@
 
 **Specification**: [codev/specs/52-v2-server-events.md](../specs/52-v2-server-events.md)
 
+**Approval:** 2026-08-23 by architect:uiv2 under the human's standing delegation of protocol gates, recorded as such rather than as a human reading it. Plan review had **2 genuine lanes, not 4**: Claude and opencode both REQUEST_CHANGES (addressed). Gemini artifact carries `LANE_DID_NOT_REVIEW` (agy quota). Codex is quota-exhausted.
+
 ## Executive Summary
 
 Approach A from the spec: one scoped SSE stream, snapshot then deltas, consumed via `fetch` + `ReadableStream`.
@@ -132,7 +134,7 @@ A pure function turns the existing read APIs into the spec's `Node[]` + `Counts`
 - [ ] Scenario 4b's status cases (completed-and-live-and-stale, live-and-never-spoken, worktree-present-with-no-session, gate-blocked-while-stale) each resolve to exactly one status
 - [ ] Scenario 7b: two workspaces, same local builder dir name, two distinct ids
 - [ ] Scenario 9e: worktree with no session is `offline`, not absent
-- [ ] A builder whose `getBuilders` row has non-null `spawnedByArchitect` matching an architect in the projection parents to that architect. This must fail if the join is skipped — 9f alone cannot catch it
+- [ ] A builder whose `getBuilders` row has non-null `spawnedByArchitect` matching an architect **in the projection** has `parentId` equal to that architect's id, **not** the workspace id. Assert the parent is the architect node. 9f (null → workspace) still cannot catch a skipped join
 - [ ] Scenario 9f: null `spawnedByArchitect`, and an architect not in the projection, both parent to the workspace
 - [ ] Scenario 9g (projection form): architect/workspace with no session is present as `offline`
 - [ ] Scenario 5c (projection form): eligible held row → `heldMail: true`; future `not_before` → false

@@ -21,3 +21,9 @@ Builder for Issue #52 / Spec 52. STRICT mode. SPIR.
 - Gemini skipped (agy exit 1). Codex quota-exhausted until 2026-08-27. Claude + opencode REQUEST_CHANGES HIGH.
 - Both caught the same silent hole: `discoverBuilders` hardcodes `spawnedByArchitect: null`; plan had no `getBuilders` join. Also: do not pause the sampler, `dark` is a handshake, subscribe-then-snapshot-then-flush.
 - Fixes landed in the plan. Rebuttal agrees with every point.
+
+### 2026-08-23 — Plan approved, entering implement
+
+- architect:uiv2 approved under standing delegation. Recorded as 2 genuine review lanes (claude + opencode), not 4.
+- Tightened Phase 1 AC: parentId must equal the architect id, not merely "not fail". 9f still cannot catch a skipped join.
+- Phase 4: no silent production fixes. If a phase-3 hole surfaces, say so in the commit body.
