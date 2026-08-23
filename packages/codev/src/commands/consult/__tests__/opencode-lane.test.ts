@@ -387,15 +387,32 @@ describe('a protocol-mode review must state a verdict', () => {
 // --- large prompts ----------------------------------------------------------------------
 
 describe('a prompt too large for argv', () => {
-  it('goes to a temp file that opencode is pointed at', async () => {
+  it('goes to a temp file ATTACHED to the message, not a path to read (#44)', async () => {
     const huge = 'x'.repeat(150_000);
     await _runOpencodeConsultation(huge, 'role', dir);
-    const promptArg = opencodeArgv().at(-1)!;
+    const argv = opencodeArgv();
+    const promptArg = argv.at(-1)!;
+
     // ARG_MAX: the prompt must NOT be inline.
     expect(promptArg.length).toBeLessThan(1000);
-    expect(promptArg).toMatch(/Read the full consultation prompt from this file: .*\.md/);
 
-    const tempFile = promptArg.match(/from this file: (\S+\.md)/)![1];
+    // It used to say "Read the full consultation prompt from this file: <path>".
+    // opencode auto-rejects reads outside its working directory, and the consult
+    // sandbox is an mkdtemp dir under the OS temp root — so the lane received an
+    // instruction pointing at a path it could not open, held NO prompt at all,
+    // and still produced a verdict. The file is attached instead.
+    expect(promptArg).not.toMatch(/Read the full consultation prompt from this file/);
+    expect(promptArg).toMatch(/ATTACHED/);
+
+    const fileFlag = argv.indexOf('-f');
+    expect(fileFlag).toBeGreaterThan(-1);
+    const tempFile = argv[fileFlag + 1];
+    expect(tempFile).toMatch(/\.md$/);
+
+    // `--` sits immediately before the prompt: `-f` is a yargs [array] and
+    // would otherwise swallow the positional as another filename.
+    expect(argv.at(-2)).toBe('--');
+
     // Cleaned up after the run — the file existed only for opencode to read.
     expect(fs.existsSync(tempFile)).toBe(false);
   });
