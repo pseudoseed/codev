@@ -2,7 +2,7 @@
 
 **Status:** Decided — Option 2, multi-machine in v1, built as an additive fork-owned app.
 Not a spec. No implementation authorized; spikes in the appendix come first.
-**Date:** 2026-08-23 (rev. 7 — FR-49 added; design of record corrected to UX Pilot;
+**Date:** 2026-08-23 (rev. 8 — rev. 7's coverage claim disproved; FR-21 rewritten;
 dark mode and tablet tiling decided; both spikes run; Option 0 shipped)
 **Author:** Architect (main)
 **Reviewed by:** Claude Opus 5, Grok 4.6 (Codex unavailable, Gemini unauthenticated)
@@ -536,9 +536,22 @@ gate and glancing at output, not for driving work.
     chrome. "No native app" still holds; "no install step at all" does not.
   - **(c) MUST** No App Store, no native binary.
 - **FR-20 (MUST)** Breakpoints tested at 375 / 414 / 768 / 1024 px.
-- **FR-21 (MUST)** Below 768px the UI **does not tile**. One pane at a time, with the
-  tree reachable as a drawer and panes switched by a bottom tab bar or segmented
-  control. Tiling on a phone is an anti-pattern; do not ship it.
+- **FR-21 ⟳ (MUST)** Below 768px the UI **does not tile**. One pane at a time, with the
+  hierarchy reachable through a **picker sheet** and panes switched by a bottom tab bar,
+  segmented control, or a `LIVE PANES` sheet. Tiling on a phone is an anti-pattern; do not
+  ship it.
+
+  *Rev. 8 rewrote this. It previously said "the tree reachable as a drawer", which
+  contradicted FR-1 in the same document: FR-1 strikes the word "tree" and requires
+  containment rather than an outline, and a drawer tree is exactly the outline it forbids.
+  The designs resolved it in FR-1's favour with a picker sheet, so the wording was the
+  defect. Found in #74 by scoring the requirements against the 27 designs.*
+
+  **Open conflict, unresolved:** the phone `OPEN IN` sheet
+  (Site Mobile `pcuGTxWBv4S195IB7nXO`) offers `LEFT PANE` and `RIGHT PANE`, which this
+  requirement forbids below 768px. Either that sheet is wrong on a phone, or FR-21 needs a
+  clause permitting a phone to *place* content into an existing iPad split it is not itself
+  rendering. Do not resolve this by quietly shipping either side.
 - **FR-22 (MUST)** Touch targets ≥ 44pt with ≥ 8pt separation. This applies to terminal
   chrome, tab close buttons and tree disclosure triangles — the usual offenders.
 - **FR-23 (MUST)** Respect `safe-area-inset-*`. Any sticky bottom bar adds
@@ -688,13 +701,38 @@ Flow (5), Porch Gate Interaction Design (5), Add Machine To Porch (5), Gate Queu
 Split Terminals (1), Terminal Soft Keyboard (1), and the parent bespoke-control-surface group.
 
 **`codev/research/v2-mockups/` is a partial extraction of that page, carrying 2 of the 27.**
-`tokens.css` says so in its own header. Rev. 5 wrote FR-1 through FR-48 against those 2
-screens, so five groups — the mobile redesign, the node-finding flow, the gate interaction
-set, add-machine, and the soft keyboard — currently carry **no requirements at all**.
+`tokens.css` says so in its own header.
 
-Closing that gap is tracked under #37: the full set is being pulled into
-`codev/research/v2-mockups/uxpilot/` with a manifest mapping each design to the FR numbers
-it bears on, which is what makes the missing coverage visible rather than inferred.
+**Rev. 7 claimed five groups carried no requirements at all. That was wrong.** All 27
+previews were pulled and scored in #74, and every group that has designs already has FRs
+naming its surface. The claim was inferred from the extraction gap rather than checked
+against the designs, and checking disproved it.
+
+The real gaps are narrower and more specific:
+
+**Designs with no requirement:** `NUDGE` on a stalled pane (FR-42 defines stalled, not an
+action on it), the hierarchy picker sheet, `LIVE PANES` as a bottom sheet, and the
+`OPEN IN` destination list (FR-2 says selecting a node opens its view; it does not say the
+human chooses which pane).
+
+**Requirements with no design in the 27:** FR-6, FR-7's desktop drag, FR-9, FR-10, FR-11,
+FR-14, FR-18, FR-37's detector, and FR-41 on iPad. Desktop is covered by `01-site.html`
+and `02-gate.html`, which sit outside that set, so some of these are scope artifacts rather
+than true gaps.
+
+**Requirements whose wording fights a shipped screen:** FR-5 specifies a ⌘K palette; the
+design is a `FIND A NODE` sheet doing the same job with different chrome. FR-43 specifies
+a persistent queue; on phone and iPad it is a `GATES N` chip plus a sheet, not a permanent
+column.
+
+**And one internal contradiction, in this document rather than in the designs:** FR-21 says
+the tree is reachable as a drawer, while FR-1 strikes the word "tree" and requires
+containment rather than an outline. A drawer tree is precisely the outline FR-1 forbids. The
+design resolved it in FR-1's favour with a picker sheet. FR-21's wording is the defect.
+
+Full scoring: `codev/experiments/74-v2-ui-pull-all-27-ux-pilot-des/artifacts/coverage-gap.md`.
+The 27 previews are in the repo; their HTML is not, because the UX Pilot MCP session is not
+available to builders (#74 stays open for it).
 
 The extraction in the repo remains useful for what it is — `design-language.md` (the rules),
 `tokens.css` and `tokens-dark.css` (palettes, type, patterns), `01-site.html`, `02-gate.html`
