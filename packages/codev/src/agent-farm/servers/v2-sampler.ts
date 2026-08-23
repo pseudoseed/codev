@@ -235,9 +235,15 @@ export class V2Sampler {
     }
 
     const at = new Date(now).toISOString();
-    for (const key of this.scopes.keys()) {
+    for (const [key, paths] of this.scopes) {
       if (this.bus.subscriberCount(key) === 0) continue;
-      this.bus.emit(key, { type: 'tick', at, buckets: deltas }, now);
+      const allowed = new Set(paths);
+      const scoped: { [builderId: string]: number } = {};
+      for (const [id, delta] of Object.entries(deltas)) {
+        const ws = workspacePathFromId(id);
+        if (ws && allowed.has(ws)) scoped[id] = delta;
+      }
+      this.bus.emit(key, { type: 'tick', at, buckets: scoped }, now);
     }
 
     this.compare();

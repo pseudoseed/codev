@@ -537,6 +537,28 @@ describe('V2Sampler', () => {
     unsub();
   });
 
+  it('tick buckets stay in-scope', () => {
+    const world = new World();
+    world.workspaces = [WS_A, WS_B];
+    world.builders[WS_B] = [];
+    const a = world.addLiveBuilder('local');
+    const b = world.addLiveBuilder('other', WS_B);
+    const bus = new ScopeBus();
+    const sampler = makeSampler(world, bus);
+    const snap = world.projection();
+    sampler.seedScope([WS_A], scopeFilter(snap.nodes, [WS_A]), snap.counts);
+    sampler.tick();
+    if (a.roleId) world.bytes[`${WS_A}|${a.roleId}`] = 5;
+    if (b.roleId) world.bytes[`${WS_B}|${b.roleId}`] = 9;
+    const { frames, unsub } = collect(bus, [WS_A]);
+    sampler.tick();
+    const tick = frames.find((f) => f.type === 'tick');
+    expect(tick && tick.type === 'tick' ? tick.buckets : {}).toEqual({
+      [builderId(WS_A, 'local')]: 5,
+    });
+    unsub();
+  });
+
   it('lastDataAt alone does not emit node', () => {
     const world = new World();
     const builder = world.addLiveBuilder('spir-52');

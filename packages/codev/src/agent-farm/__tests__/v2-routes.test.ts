@@ -6,10 +6,14 @@ import {
   handleV2Route,
   resetV2RoutesForTests,
   setV2RouteDeps,
+  setV2SamplerForTests,
   getV2Bus,
+  lookupBuilderTerminal,
   V2_MAX_CLIENTS,
   BUCKET_SLOTS,
 } from '../servers/v2-routes.js';
+import { V2Sampler } from '../servers/v2-sampler.js';
+import { projectHierarchy, type V2Deps } from '../servers/v2-projection.js';
 import { scopeKey } from '../servers/v2-events.js';
 import { builderId, workspaceId } from '../servers/v2-ids.js';
 
@@ -256,5 +260,62 @@ describe('handleV2Route', () => {
     expect(parsed[0].type).toBe('snapshot');
     expect(parsed[0].seq).toBe(0);
     expect(gones[0].seq).toBe(1);
+  });
+
+  it('lookupBuilderTerminal matches role ids case-insensitively', () => {
+    const builders = new Map([['Builder-SPIR-52', 'term-1']]);
+    expect(lookupBuilderTerminal(builders, 'builder-spir-52')).toBe('term-1');
+    expect(lookupBuilderTerminal(builders, 'missing')).toBeUndefined();
+  });
+
+  it('snapshot buckets come from the attached sampler', async () => {
+    const deps: V2Deps = {
+      listWorkspaces: () => [WS_A],
+      discoverBuilders: () => [{
+        worktreePath: `${WS_A}/.builders/spir-52`,
+        roleId: 'builder-spir-52',
+        blockedGate: null,
+      }],
+      getBuilders: () => [],
+      getArchitects: () => [],
+      heldByAgent: () => false,
+      sessionForRole: () => true,
+      sessionForTerminal: () => false,
+      terminalsForWorkspace: () => 1,
+      lastDataAt: () => 1_000,
+      bytesWritten: () => 0,
+    };
+    const sampler = new V2Sampler({
+      bus: getV2Bus(),
+      deps,
+      timers: {
+        now: () => 1_000,
+        setTimeout: () => 0,
+        clearTimeout: () => {},
+        setInterval: () => 0,
+        clearInterval: () => {},
+      },
+    });
+    const snap = projectHierarchy(1_000, deps);
+    sampler.seedScope([WS_A], snap.nodes, snap.counts);
+    sampler.tick();
+    deps.bytesWritten = () => 7;
+    sampler.tick();
+    setV2SamplerForTests(sampler);
+    setV2RouteDeps({
+      listWorkspaces: () => [WS_A],
+      project: () => projectHierarchy(1_000, deps),
+      now: () => 1_000,
+      isReadable: () => true,
+    });
+    const q = `/v2/events?scope=${encodeURIComponent(WS_A)}`;
+    const out = makeRes();
+    await handleV2Route(makeReq('GET', q), out.res, urlFor(q));
+    const parsed = frames(out.body());
+    const nodes = parsed[0].nodes as V2Node[];
+    const builder = nodes.find((n) => n.id === builderId(WS_A, 'spir-52'));
+    expect(builder?.buckets).toHaveLength(BUCKET_SLOTS);
+    expect(builder?.buckets?.at(-1)).toBe(7);
+    sampler.stop();
   });
 });

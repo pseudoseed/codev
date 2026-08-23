@@ -103,7 +103,27 @@ function withBuckets(nodes: V2Node[]): V2Node[] {
   });
 }
 
+export function lookupBuilderTerminal(
+  builders: Map<string, string>,
+  roleId: string,
+): string | undefined {
+  const direct = builders.get(roleId);
+  if (direct) return direct;
+  const lower = roleId.toLowerCase();
+  for (const [key, id] of builders) {
+    if (key.toLowerCase() === lower) return id;
+  }
+  return undefined;
+}
+
+function builderTerminalId(ws: string, roleId: string): string | undefined {
+  const entry = getWorkspaceTerminals().get(ws);
+  if (!entry) return undefined;
+  return lookupBuilderTerminal(entry.builders, roleId);
+}
+
 function createProductionV2Deps(): V2Deps {
+  const heldCache = new Map<string, { now: number; agents: Set<string> }>();
   return {
     listWorkspaces: () => getKnownWorkspacePaths().filter((p) => !p.includes('/.builders/')),
     discoverBuilders: (ws) =>
@@ -121,15 +141,22 @@ function createProductionV2Deps(): V2Deps {
       getArchitects(ws).map((a) => ({ name: a.name, terminalId: a.terminalId ?? null })),
     heldByAgent: (ws, toAgent, now) => {
       try {
-        const summary = heldSummaryForWorkspace(getGlobalDb(), ws, now);
-        const key = toAgent.toLowerCase();
-        return summary.byAgent.some((a) => a.toAgent.toLowerCase() === key);
+        let cached = heldCache.get(ws);
+        if (!cached || cached.now !== now) {
+          const summary = heldSummaryForWorkspace(getGlobalDb(), ws, now);
+          cached = {
+            now,
+            agents: new Set(summary.byAgent.map((a) => a.toAgent.toLowerCase())),
+          };
+          heldCache.set(ws, cached);
+        }
+        return cached.agents.has(toAgent.toLowerCase());
       } catch {
         return false;
       }
     },
     sessionForRole: (ws, roleId) => {
-      const id = getWorkspaceTerminals().get(ws)?.builders.get(roleId);
+      const id = builderTerminalId(ws, roleId);
       return Boolean(id && getTerminalManager().getSession(id));
     },
     sessionForTerminal: (id) => Boolean(getTerminalManager().getSession(id)),
@@ -139,12 +166,12 @@ function createProductionV2Deps(): V2Deps {
       return entry.architects.size + entry.builders.size + entry.shells.size;
     },
     lastDataAt: (ws, roleId) => {
-      const id = getWorkspaceTerminals().get(ws)?.builders.get(roleId);
+      const id = builderTerminalId(ws, roleId);
       const session = id ? getTerminalManager().getSession(id) : undefined;
       return session ? session.lastDataAt : null;
     },
     bytesWritten: (ws, roleId) => {
-      const id = getWorkspaceTerminals().get(ws)?.builders.get(roleId);
+      const id = builderTerminalId(ws, roleId);
       const session = id ? getTerminalManager().getSession(id) : undefined;
       return session ? session.bytesWritten : 0;
     },
