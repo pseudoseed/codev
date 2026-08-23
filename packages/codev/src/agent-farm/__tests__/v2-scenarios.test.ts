@@ -300,6 +300,24 @@ describe('v2 scenarios (phase 4)', () => {
     expect(source.match(/pathname\.startsWith\('\/v2\/'\)/g)).toHaveLength(1);
   });
 
+  it('a dark second connect does not emit gone to the live client', async () => {
+    const world = new World();
+    world.addBuilder('b1');
+    const sampler = attach(world);
+    const a = await connect();
+    setV2RouteDeps({
+      listWorkspaces: () => world.workspaces,
+      project: (now) => projectHierarchy(now, world.deps()),
+      now: () => world.now,
+      isReadable: () => false,
+    });
+    const before = a.frames().filter((f) => f.type === 'gone').length;
+    await connect();
+    sampler.compare();
+    const gones = a.frames().filter((f) => f.type === 'gone');
+    expect(gones.length).toBe(before);
+  });
+
   it('snapshot builders still carry 20 buckets', async () => {
     const world = new World();
     world.addBuilder('spir-52');

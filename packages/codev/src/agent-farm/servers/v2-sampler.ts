@@ -154,7 +154,8 @@ export class V2Sampler {
   seedScope(paths: string[], nodes: V2Node[], counts: V2Counts, filterPaths: string[] = paths): void {
     const key = scopeKey(paths);
     this.scopes.set(key, [...paths]);
-    this.filterByScope.set(key, [...filterPaths]);
+    const prev = this.filterByScope.get(key) ?? [];
+    this.filterByScope.set(key, [...new Set([...prev, ...filterPaths])]);
     if (!this.lastByScope.has(key)) {
       this.lastByScope.set(key, new Map(nodes.map((n) => [n.id, n])));
     }
