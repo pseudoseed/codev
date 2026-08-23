@@ -1,6 +1,8 @@
 # Experiment 39: HTTPS on a phone via Tailscale, through to one delivered push
 
-**Status**: In Progress · **Date**: 2026-08-23 · **Hostname live**: `ade.pseudoseed.com`. Cloudflare work still off for us. Gate 2 out of scope. Device handoff next.
+**Status**: Complete · **Date**: 2026-08-23 · **Host**: `ade.pseudoseed.com`
+
+**Headline.** Cloudflare Access does not break Add to Home Screen or service worker registration on the device we used. Outcome **A**. The Access session carried into the standalone PWA even though every path, including `/sw.js`, is challenged when unauthenticated. **B** would have forced a rewrite of FR-36. It did not happen. One device, one iOS version. Not a general guarantee.
 
 Spawn prompt named `codev/specs/0039-codev-cli.md` (already shipped). Issue #39 and porch project `39-spike-v2-ui-https-on-a-phone-v` are the work. Same template-fill collision as experiment 38.
 
@@ -160,12 +162,12 @@ Local preview ran. Gate 1 did not. Criteria were not rewritten after the run.
 | Root PWA assets on :4111 | **Pass** | `/`, `/manifest.webmanifest` (`scope` `/`), `/sw.js` with `Service-Worker-Allowed: /`, `/app.js`, both PNGs. |
 | Root SW register in Chromium | **Pass** | Scope `http://127.0.0.1:4111/`, `active: true`. |
 | Root subscribe prints JSON | **Pass** | Click Subscribe. Page log contains a subscription with endpoint host `fcm.googleapis.com` and p256dh/auth keys. No `POST /subscribe`. Public key only, 87 chars. This is Chromium/FCM, not iOS. |
-| 1. Trusted HTTPS | **Pass on curl** | `https://ade.pseudoseed.com/` 2026-08-23T04:22:24Z. Issuer `C=US, O=Google Trust Services, CN=WE1`. SAN `pseudoseed.com` and `*.pseudoseed.com`. `ssl_verify_result=0`. Phone Safari "no warning" still needs the device. |
-| 1b. Access enforced | **Pass** | Unauthenticated GET `/`, `/sw.js`, `/manifest.webmanifest`, `/vapid-public.json` all **302** to `https://pseudoseed.cloudflareaccess.com/cdn-cgi/access/login/ade.pseudoseed.com?...`. Body is Cloudflare's 302 page, not the PWA. |
+| 1. Trusted HTTPS | **Pass** | Issuer `C=US, O=Google Trust Services, CN=WE1`. SAN `pseudoseed.com` and `*.pseudoseed.com`. `ssl_verify_result=0`. Human: no warning on the device. |
+| 1b. Access enforced | **Pass** | Unauthenticated GET of every path, including `/sw.js`, **302** to `pseudoseed.cloudflareaccess.com`. Not the PWA. |
 | 2. WebSocket through trusted HTTPS | **Out of scope** | Human decision, LAN-only approvals. Not a gap. |
-| 3. PWA install | **Not run** | Needs the phone after a hostname exists. |
-| 4. Push permission | **Not run** | Needs the installed PWA. |
-| 5. Delivered push | **Not run** | Needs the locked device. |
+| 3. PWA install | **Pass** | `standalone` true, `secureContext` true, service worker registered at `https://ade.pseudoseed.com/`. |
+| 4. Push permission | **Pass** | Permission granted inside the installed PWA. |
+| 5. Delivered push | **Pass** | Subscription against `web.push.apple.com`. First send 403 BadJwtToken. Second send 201 after VAPID subject change. Human confirmed the notification arrived. |
 
 Source: `artifacts/local-probes.json` at `2026-08-22T20:13:32.508Z`. Root: `artifacts/root-probes.json` at `2026-08-22T22:49:31.206Z`.
 
@@ -175,65 +177,43 @@ Source: `artifacts/local-probes.json` at `2026-08-22T20:13:32.508Z`. Root: `arti
 
 ## What worked / what didn't
 
-**Worked.** The additive ingress gets a foreign `Host` past Tower without touching Tower or restarting it. A real terminal WebSocket echoes through that rewrite on loopback. PWA files, VAPID, subscribe, and the web-push send path run locally.
+**Worked.** Additive Host rewrite on :4110. Root-scoped static PWA on a dedicated hostname. Access in front. A2HS + SW + push on one iOS device. Push itself never hit the origin.
 
-**Did not run.** Gate 1 needs a trusted hostname this spike is not allowed to create. Phone gates wait on that.
+**Did not run.** Gate 2, by decision.
 
-**Not tried, on purpose.** Setting `CODEV_TOWER_ALLOWED_ORIGINS` on the live Tower. Recreating any Cloudflare tunnel, DNS record, Access app, or identity provider.
+**Failed once, then fixed.** First APNs send 403 `BadJwtToken`. Cause below.
 
-## Access cookies, reasoned, not scored
+## Finding: Access and Add to Home Screen (outcome A)
 
-No Access app exists. Nothing below was run. Sources are Cloudflare's authorization-cookie page (updated 2026-08-03) and Apple's Home Screen web-app posts (Feb and Mar 2023).
+On this device, Cloudflare Access did not break Add to Home Screen or service worker registration.
 
-**What Access puts on the wire.** Every HTTP request to the protected host needs a `CF_Authorization` cookie or Access blocks it. There are two JWTs. One lives on `*.cloudflareaccess.com` (HttpOnly, SameSite None). One lives on the app host. The app-host table says HttpOnly and SameSite are admin choices, default None. A later section on the same page says the HttpOnly toggle is on by default. I did not resolve that contradiction.
+Unauthenticated every path, including `/sw.js`, 302s to `pseudoseed.cloudflareaccess.com`. After login, the standalone PWA opened the app page. Session carried. `standalone` true. SW registered at `https://ade.pseudoseed.com/`. Permission granted inside that PWA. Push arrived.
 
-**Service worker.** Our `sw.js` has no `fetch` handler. It cannot cache an Access login page and it cannot strip cookies from page or API requests. Registration is a GET of `sw.js`. Access will challenge that GET if the cookie is missing. After login, same-origin SW registration should see the app-host cookie. That is the documented cookie rule applied to a GET. It is not a measured iOS result.
+**B** was the outcome that would have forced FR-36 to be rewritten. It did not happen.
 
-**WebSocket.** A `wss://` upgrade is still an HTTP request. Access will check `CF_Authorization` on it. Same-origin `wss` sends first-party cookies unless SameSite is Strict, which Cloudflare warns causes `ERR_TOO_MANY_REDIRECTS`. Reasoned pass if SameSite stays None or Lax. Not scored.
+Caveat: one device, one iOS version. Not a general guarantee.
 
-**Add to Home Screen vs Access login. This is the question the spike is for.**
+## Finding: VAPID subject cannot be localhost
 
-Apple (Feb 2023): a Home Screen web app "opens like any other app... separate from Safari." Access login is on `*.cloudflareaccess.com`, a different site from the PWA host. The app-host `CF_Authorization` cookie is set after that redirect. The standalone app may or may not see it.
+First push to `web.push.apple.com` failed with **403 BadJwtToken**. `vapid.json` had `subject: mailto:exp39@localhost`. Apple rejects a VAPID subject on a non-real domain. The error names nothing useful.
 
-Our SW has no `fetch` handler. If the icon opens a login page, that is Access or WebKit, not a cached document we served.
+Changing the subject to `https://ade.pseudoseed.com` made the same keys and the same subscription send **201**. Keys and subscription were unchanged.
 
-**What to observe on the device, in order. Write down the letter.**
+**Requirement.** The VAPID subject must be a real `https` origin or a real `mailto`. Never localhost. This would have bitten in production.
 
-1. Safari tab to `https://<hostname>/`. Finish Access login. Confirm the PWA page, not the login form. Note the address bar host.
-2. Share, Add to Home Screen. Do this while the app page is showing, after login.
-3. Swipe Safari away so it is not sitting in the app switcher.
-4. Tap the icon. Pick one:
-   - **A.** Standalone chrome. App page. No login. Session carried.
-   - **B.** Standalone chrome. Cloudflare Access login. Session did not carry. Try to finish the PIN inside the icon. Does it return to the app, bounce to Safari, or loop?
-   - **C.** Opens Safari instead of standalone.
-   - **D.** Blank, error, or redirect loop.
-5. Read the on-page `standalone:` line. Gates 3 to 5 need it `true`.
-6. If A or a completed B: Ask notification permission, Subscribe, Send test push, lock the device.
+`artifacts/vapid.json` subject is now `https://ade.pseudoseed.com`. That file is not committed. Server defaults that create a new file use the same subject.
 
-B is the finding that changes FR-36 and FR-16. A means Access and A2HS can live together. Do not guess from a Safari tab.
+## Access cookies, now scored on one device
 
-**Push delivery.** Apple: iOS Web Push uses the Apple Push Notification service. `web-push` posts to the subscription endpoint (`*.push.apple.com` on a real iOS sub), not to our origin. Access never sees that POST. Our local send already left the box toward the subscription URL (`ENOTFOUND exp39.invalid`). Architecture says push delivery does not go through the hostname. A locked-device arrival is still unscored.
+The reasoned section above was written before the device run. Outcome **A** is the score. SW still has no `fetch` handler. Push still goes device-to-APNs, not through Access.
 
-## Next steps
+iOS would not let the human select text out of a `<pre>`. `public-root/` log is now a readonly textarea with a Copy log button. Not yet deployed to the origin.
 
-**Hostname exists.** `ade.pseudoseed.com` resolves to Cloudflare (`172.67.207.128`, `104.21.45.14`). Access is in front. I did not create this DNS or Access app. I probed it.
+## Conclusions
 
-I have no Access token. `cloudflared access token` has no login. I cannot see whether the origin is serving `public-root/` until someone logs in.
+**Q4.** Tailscale is not a hard MUST. A one-level hostname on Cloudflare Universal SSL (issuer Google Trust Services WE1, SAN `*.pseudoseed.com`) is a cert iOS trusted with zero device configuration. Cloudflare Access is the auth layer in front of it. Notifications can land off-LAN. Reading the terminal and approving stays LAN-only, by decision.
 
-**Device, now:**
+Tower sources were not edited. `git diff` on `tower-server.ts` and `tower-routes.ts` stayed empty.
 
-1. Safari to `https://ade.pseudoseed.com/`. Finish Access login. Confirm the PWA page (Experiment 39 root), not a 404 or the nested `/v2/spike/` tree.
-2. Share, Add to Home Screen. Swipe Safari away. Tap the icon. Score **A / B / C / D** from the Access section.
-3. If A or a completed B: Ask notification permission. Subscribe. Copy the printed JSON off the phone.
-4. Lock the device. I send with `node scripts/send-push.mjs <that.json>`. Tell me if it arrived.
-
-When a name is handed over, serve `public-root/` at `/` on that host. Do not ship the `/v2/spike/` tree there. A nested SW scope on a root host fails registration and looks like an iOS bug.
-
-The dedicated host is static. `public-root/` has `vapid-public.json` (public key only). Subscribe prints JSON on the page. Copy it off the phone. Send the push from this machine with that JSON and the private key. The private key does not go in notes, committed artifacts, or messages.
-
-**Device handoff, only after gate 1 passes.** Follow the A/B/C/D list in the Access section. Use `https://<hostname>/`, not `/v2/spike/`. After subscribe, copy the printed JSON. I send the push from here.
-
-Do not use Playwright WebKit. Do not use a Safari tab for permission, subscribe, or the locked-device push.
-
-**Q4.** No verdict yet. The local half is not the question. The question is still which trusted cert sits in front, and this spike is not allowed to put one there.
+**Next.** Production mount is a later spec. This spike is done.
 

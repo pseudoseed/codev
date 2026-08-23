@@ -2,4 +2,6 @@ node_modules/
 artifacts/vapid.json
 artifacts/subscriptions.json
 artifacts/subscriptions-root.json
+artifacts/last-push-send.json
+artifacts/last-push-root.json
 artifacts/chrome-*/

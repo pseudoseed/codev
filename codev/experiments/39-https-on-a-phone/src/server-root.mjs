@@ -71,7 +71,7 @@ function loadOrCreateVapid() {
   }
   const webpush = require('web-push');
   const keys = webpush.generateVAPIDKeys();
-  const vapid = { publicKey: keys.publicKey, privateKey: keys.privateKey, subject: 'mailto:exp39@localhost' };
+  const vapid = { publicKey: keys.publicKey, privateKey: keys.privateKey, subject: 'https://ade.pseudoseed.com' };
   fs.mkdirSync(ARTIFACTS, { recursive: true });
   fs.writeFileSync(VAPID_PATH, JSON.stringify(vapid, null, 2));
   return vapid;

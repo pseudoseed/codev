@@ -60,4 +60,10 @@ Re-proved 22:49Z: SW active at `/`, subscribe printed FCM endpoint + keys to the
 
 Infra owner has the eight root-scoped files and is unblocking a stale branch in their repo. Outside our control. Not a spike finding.
 
-2026-08-23T04:22Z: stopped waiting. `ade.pseudoseed.com` resolves. Cert GTS WE1, SAN `*.pseudoseed.com`, verify 0. Access 302 on every path. No token here. Device handoff is `https://ade.pseudoseed.com/`. send-push.mjs ready.
+Device run complete. Gates 1, 1b, 3, 4, 5 PASS. Gate 2 out of scope by decision.
+
+Headline: Access + A2HS is **A**. Session carried. SW registered. Push arrived. One device, one iOS version.
+
+VAPID subject `mailto:exp39@localhost` got 403 BadJwtToken from Apple. Subject `https://ade.pseudoseed.com` got 201. Same keys, same subscription.
+
+public-root log is now a textarea + Copy. Origin still serves the old pre. Notes written. Opening PR.

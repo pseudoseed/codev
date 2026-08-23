@@ -2,8 +2,22 @@ const logEl = document.getElementById('log');
 const ctxEl = document.getElementById('ctx');
 
 function log(line) {
-  logEl.textContent += line + '\n';
+  logEl.value += line + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
 }
+
+// iOS will not let you select text inside a <pre> reliably, and the
+// subscription is the one thing that has to leave the device by hand.
+document.getElementById('copy').addEventListener('click', async () => {
+  logEl.focus();
+  logEl.setSelectionRange(0, logEl.value.length);
+  try {
+    await navigator.clipboard.writeText(logEl.value);
+    log('copied to clipboard');
+  } catch {
+    log('clipboard blocked - text is selected, use Copy from the menu');
+  }
+});
 
 const standalone = window.matchMedia('(display-mode: standalone)').matches
   || window.navigator.standalone === true;
