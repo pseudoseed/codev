@@ -1,0 +1,64 @@
+{
+  "generatedAt": "2026-08-23T21:15:15.087Z",
+  "tower": "http://127.0.0.1:4100",
+  "keyPresent": true,
+  "daemon": {
+    "ok": true,
+    "status": 200,
+    "body": {
+      "status": "healthy",
+      "ready": true,
+      "uptime": 56226.346331833,
+      "activeWorkspaces": 4,
+      "totalWorkspaces": 19,
+      "memoryUsage": 130758560,
+      "fleetRssKb": 3488912,
+      "unregisteredShellperCount": 0,
+      "timestamp": "2026-08-23T21:15:15.393Z"
+    }
+  },
+  "createEmpty": {
+    "status": 400,
+    "body": {
+      "success": false,
+      "error": "Missing parent or name"
+    }
+  },
+  "updateMissing": {
+    "status": 404,
+    "body": "Not found"
+  },
+  "browse": {
+    "status": 200,
+    "suggestionCount": 0
+  },
+  "pty": {
+    "created": true,
+    "id": "94a7703d-a782-44bb-a4e1-e4f9447c733a",
+    "persistent": false,
+    "wsPath": "/ws/terminal/94a7703d-a782-44bb-a4e1-e4f9447c733a",
+    "wsKind": "/Users/chris/dev/codev-1455/packages/codev/node_modules/ws",
+    "data": "hello-0063\r\ndone\r\n",
+    "sawHello": true,
+    "controlTypes": [
+      "seq"
+    ],
+    "controlHasExit": false,
+    "polled": {
+      "id": "94a7703d-a782-44bb-a4e1-e4f9447c733a",
+      "pid": 72301,
+      "cols": 80,
+      "rows": 24,
+      "label": "exp-63-oneshot",
+      "status": "exited",
+      "createdAt": "2026-08-23T21:15:15.409Z",
+      "exitCode": 7,
+      "persistent": false,
+      "lastDataAt": 1787519715638,
+      "writable": false
+    },
+    "exitCode": 7,
+    "status": "exited",
+    "deleted": 204
+  }
+}

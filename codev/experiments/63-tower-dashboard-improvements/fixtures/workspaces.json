@@ -1,0 +1,34 @@
+{
+  "workspaces": [
+    {
+      "workspaceName": "codev",
+      "workspacePath": "/Users/chris/dev/codev",
+      "running": true,
+      "lastUsed": "2026-08-23T12:00:00.000Z",
+      "terminals": [
+        { "label": "Architect", "active": true },
+        { "label": "builder/experiment-63", "active": true }
+      ]
+    },
+    {
+      "workspaceName": "notes",
+      "workspacePath": "/Users/chris/dev/notes",
+      "running": true,
+      "lastUsed": "2026-08-22T18:00:00.000Z",
+      "terminals": [
+        { "label": "Architect", "active": true },
+        { "label": "shell-1", "active": false }
+      ]
+    },
+    {
+      "workspaceName": "robot",
+      "workspacePath": "/Users/chris/dev/robot",
+      "running": true,
+      "lastUsed": "2026-08-21T09:00:00.000Z",
+      "terminals": [
+        { "label": "Architect", "active": false },
+        { "label": "builder/air-14", "active": true }
+      ]
+    }
+  ]
+}

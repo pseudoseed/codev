@@ -1,0 +1,136 @@
+{
+  "generatedAt": "2026-08-23T21:15:15.086Z",
+  "startGone": true,
+  "remoteGone": true,
+  "probes": [
+    {
+      "label": "spec: afx start",
+      "argv": [
+        "afx",
+        "start"
+      ],
+      "status": 1,
+      "error": null,
+      "firstLine": "error: unknown command 'start'",
+      "knownMissing": true
+    },
+    {
+      "label": "spec: afx start --help",
+      "argv": [
+        "afx",
+        "start",
+        "--help"
+      ],
+      "status": 0,
+      "error": null,
+      "firstLine": "Usage: afx [options] [command]",
+      "knownMissing": false
+    },
+    {
+      "label": "spec: afx start --remote",
+      "argv": [
+        "afx",
+        "start",
+        "--remote"
+      ],
+      "status": 1,
+      "error": null,
+      "firstLine": "error: unknown command 'start'",
+      "knownMissing": true
+    },
+    {
+      "label": "current: afx workspace start --help",
+      "argv": [
+        "afx",
+        "workspace",
+        "start",
+        "--help"
+      ],
+      "status": 0,
+      "error": null,
+      "firstLine": "Usage: afx workspace start [options]",
+      "knownMissing": false
+    },
+    {
+      "label": "current: afx tower connect --help",
+      "argv": [
+        "afx",
+        "tower",
+        "connect",
+        "--help"
+      ],
+      "status": 0,
+      "error": null,
+      "firstLine": "Usage: afx tower connect [options]",
+      "knownMissing": false
+    },
+    {
+      "label": "current: codev init --help",
+      "argv": [
+        "codev",
+        "init",
+        "--help"
+      ],
+      "status": 0,
+      "error": null,
+      "firstLine": "Usage: codev init [options] [project-name]",
+      "knownMissing": false
+    },
+    {
+      "label": "current: codev adopt --help",
+      "argv": [
+        "codev",
+        "adopt",
+        "--help"
+      ],
+      "status": 0,
+      "error": null,
+      "firstLine": "Usage: codev adopt [options]",
+      "knownMissing": false
+    },
+    {
+      "label": "current: codev update --help",
+      "argv": [
+        "codev",
+        "update",
+        "--help"
+      ],
+      "status": 0,
+      "error": null,
+      "firstLine": "Usage: codev update [options]",
+      "knownMissing": false
+    }
+  ],
+  "buttons": [
+    {
+      "button": "Open Dashboard (Local)",
+      "specCommand": "afx start",
+      "current": "POST /api/launch { workspacePath } (same as afx workspace start)",
+      "verdict": "maps-to-different-command"
+    },
+    {
+      "button": "Open Dashboard (Remote)",
+      "specCommand": "afx start --remote user@host:/path",
+      "current": "gone. afx tower connect is Codev Cloud, not SSH start",
+      "verdict": "missing"
+    },
+    {
+      "button": "Create New Repo",
+      "specCommand": "codev init",
+      "current": "POST /api/create { parent, name } runs codev init --yes, then launch",
+      "verdict": "maps"
+    },
+    {
+      "button": "Adopt Existing Repo",
+      "specCommand": "codev adopt",
+      "current": "implicit inside launchInstance when codev/ is absent",
+      "verdict": "maps-implicit"
+    },
+    {
+      "button": "Update Existing Repo",
+      "specCommand": "codev update",
+      "current": "CLI only. no /api/update",
+      "verdict": "missing"
+    }
+  ]
+}
