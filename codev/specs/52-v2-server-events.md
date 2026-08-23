@@ -3,7 +3,11 @@
 - **Issue:** #52
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 3
+- **Status:** Draft, rev. 4
+- **Rev. 4 changes:** builder ids qualified by workspace, because `builders` is keyed
+  `PRIMARY KEY (workspace_path, id)` and the unqualified form collides across the spec's
+  own two-workspace example; `since` bound to a `streamId` so a scope change cannot
+  replay the wrong deltas; `dark` given a target.
 - **Rev. 3 changes:** `seq` made a per-scope process-wide cursor, because a per-connection
   counter cannot support `since` resume at all; every `Status` value defined as a predicate
   for all three node kinds; `done` moved above `offline` so it stays reachable; `Counts`,
@@ -43,10 +47,12 @@ This is the deliverable. D2 says the schema is the contract; here it is.
 ### Endpoint
 
 ```
-GET /v2/events?scope=<scope>&since=<seq>
+GET /v2/events?scope=<scope>[&since=<seq>&stream=<streamId>]
 Header: codev-tower-key: <key>
 Accept: text/event-stream
 ```
+
+`since` and `stream` are resume parameters and travel together. Neither is valid alone.
 
 **Transport is SSE consumed via `fetch` + `ReadableStream`.** Not `EventSource`: it cannot set the auth header and will 401. This mirrors `useSSE.ts` exactly.
 
@@ -56,15 +62,15 @@ FR-32 eventually wants one multiplexed control socket per environment. That is a
 
 Every frame is `{ seq, type, ... }`.
 
-**`seq` is a per-scope cursor held by the Tower process, not a per-connection counter.** Rev. 2 said per-connection, which cannot work: after an eviction the old connection is gone and the server has no way to know which sequence space a client's `since` belongs to. One cursor per scope, shared by every connection watching that scope, is what makes `since` meaningful. It resets only when Tower restarts, which is exactly the case that returns a flagged snapshot.
+**`seq` is a per-scope cursor held by the Tower process, not a per-connection counter, and it is only meaningful together with the `streamId` that identifies the scope it counts.** Rev. 2 said per-connection, which cannot work: after an eviction the old connection is gone and the server has no way to know which sequence space a client's `since` belongs to. One cursor per scope, shared by every connection watching that scope, is what makes `since` meaningful. It resets only when Tower restarts, which is exactly the case that returns a flagged snapshot.
 
 ```
-{ seq, type: "snapshot", resumed: false, scope, nodes: Node[], counts: Counts }
+{ seq, type: "snapshot", streamId, resumed: false, scope, nodes: Node[], counts: Counts }
 { seq, type: "node",     node: Node }              // upsert
 { seq, type: "gone",     id: string }
 { seq, type: "counts",   counts: Counts }          // out-of-scope rollup
 { seq, type: "tick",     at: iso, buckets: { [builderId]: number } }
-{ seq, type: "dark",     reason: string }          // this machine cannot be read
+{ seq, type: "dark",     id: string, reason: string }   // this scope path cannot be read
 ```
 
 `snapshot` is **always** flagged as such and always carries `resumed`. A resume that cannot be honoured returns `snapshot` with `resumed: false`. **It never returns an empty delta list**, because "nothing changed" and "I could not tell you" must not be spelled the same way.
@@ -97,10 +103,14 @@ Ids must be stable across reconnects, or `gone` frames cannot be matched to anyt
 ```
 workspace:<workspace_path>
 architect:<workspace_path>#<name>
-builder:<builder_id>
+builder:<workspace_path>#<builder_id>
 ```
 
-These are the natural keys already in `global.db`: `architect` and `builders` are keyed by `workspace_path`, and builder ids are unique. No new identifier is minted, so nothing has to be persisted to keep them stable.
+**Every id is qualified by `workspace_path`, builders included.** Rev. 3 used a bare `builder:<builder_id>` on the assumption that builder ids are globally unique. They are not: `builders` is declared `PRIMARY KEY (workspace_path, id)` (`db/schema.ts:46`), so the id is unique only within a workspace. Two workspaces each running `experiment-39` would collide, and the scope example in this very spec is a two-workspace one. The collision would have surfaced as builders overwriting each other in the tree, blamed on the client.
+
+The same qualification applies to `tick` bucket keys, which are node ids and not bare builder ids.
+
+These remain the natural keys already in `global.db`. No new identifier is minted, so nothing has to be persisted to keep them stable.
 
 ### Status, with precedence
 
@@ -171,7 +181,7 @@ Each case gets its own answer, because a request that could not be honoured must
 | Case | Response |
 |---|---|
 | `scope` missing | 400. There is no safe default; a silent full-hierarchy subscription would violate FR-31 invisibly |
-| `scope` names an unknown path | 200, stream opens, that path appears as a `dark` frame with a reason. Other in-scope paths are unaffected (C3) |
+| `scope` names an unknown path | 200, stream opens, that path gets a `dark` frame carrying **its own id** and a reason. Other in-scope paths are unaffected (C3) |
 | `since` malformed | 400 |
 | `since` valid but outside the buffer | 200, `snapshot` with `resumed: false` |
 | `since` from a previous Tower process | 200, `snapshot` with `resumed: false` |
@@ -187,11 +197,20 @@ Rev. 2 said the resume path would be "exercised constantly" by inherited evictio
 
 ### Resume
 
-Deltas are buffered in memory, bounded at **500 frames or 5 minutes, whichever comes first**.
+Deltas are buffered in memory per scope, bounded at **500 frames or 5 minutes, whichever comes first**.
 
-- `since` within the buffer: deltas from `since+1`.
-- `since` outside it: `snapshot` with `resumed: false`.
-- **After a Tower restart the buffer is gone** (C2 forbids persisting it), so every resume returns `snapshot` with `resumed: false`. This is the case a client must not mistake for "nothing changed."
+**`since` is meaningless without the `streamId` it belongs to.** The server mints a `streamId` per scope per process and returns it on every `snapshot`. A client resumes by sending both. This closes a hole rev. 3 left open: a per-scope counter with no scope binding lets a client that changed scope send a `since` that is a valid integer in a *different* sequence space, and be served deltas describing nodes it is not watching. The corruption would be silent and would look like a client bug.
+
+| Case | Response |
+|---|---|
+| No `since` (first connect) | `snapshot`, `resumed: false`, with a fresh `streamId` |
+| `since` + matching `streamId`, inside the buffer | deltas from `since+1` |
+| `since` + matching `streamId`, outside the buffer | `snapshot`, `resumed: false`, same `streamId` |
+| `since` + `streamId` from a different scope | `snapshot`, `resumed: false`, new `streamId` |
+| `since` + `streamId` from a previous Tower process | `snapshot`, `resumed: false`, new `streamId` |
+| `since` without `stream`, or `stream` without `since` | 400 |
+
+**After a Tower restart every buffer and every `streamId` is gone** (C2 forbids persisting them), so every resume returns a flagged snapshot. This is the case a client must not mistake for "nothing changed."
 
 The existing SSE layer evicts every 4–6 minutes. If the v2 stream inherits that, **the iOS story is frequent reconnect, not a long-lived socket**, and the resume path is exercised constantly rather than being a rare edge. That is a feature: a rarely-exercised resume path is a broken one.
 
@@ -206,7 +225,7 @@ The existing SSE layer evicts every 4–6 minutes. If the v2 stream inherits tha
 7. Two clients on the same scope converge to identical state.
 8. **Idle under 1 KB/s per connection measured with 20 silent builders in scope**, over 60 seconds.
 9. Delta latency p95 under 200ms from state change to frame written.
-10. An unreadable machine emits `dark`; it does not emit an empty snapshot.
+10. An unreadable scope path emits `dark` **naming that path**, while the rest of the scope keeps streaming. It does not emit an empty snapshot, and a multi-path scope can always tell which path failed.
 11. `GET /api/events`, `broadcastNotification` and VS Code behaviour unchanged, proven by the existing suite passing untouched.
 12. `git diff --stat` shows no modification to `tower-server.ts`, `pty-session.ts`, or any existing `tower-routes.ts` handler beyond the single mount block.
 
@@ -254,7 +273,8 @@ Ranked, most consequential first.
 4. **Resume inside the window.** Disconnect, reconnect with `since`, assert deltas from `since+1` and no snapshot.
 5. **Resume outside the window.** Exceed the buffer, reconnect, assert `snapshot` with `resumed: false`.
 6. **Tower restart.** Restart, reconnect with a valid `since`, assert `snapshot` with `resumed: false` rather than an empty delta list.
-7. **Dark vs empty.** Make the state source unreadable, assert a `dark` frame rather than a snapshot with no nodes.
+7. **Dark vs empty, and which one.** With a two-path scope, make one path unreadable. Assert a `dark` frame naming that path, assert the other path still streams, and assert no empty snapshot.
+7b. **Id collision.** Two workspaces each with a builder of the same local id. Assert both appear as distinct nodes and that neither `gone` nor a `tick` bucket key matches the wrong one.
 8. **Two-client convergence.** Drive 100 random state changes, assert both clients end identical.
 9. **Scope isolation.** Change an out-of-scope workspace, assert a `counts` frame and no `node` frame.
 10. **Non-regression.** Existing SSE suite passes untouched.
@@ -270,6 +290,8 @@ Ranked, most consequential first.
 | Upstream merge conflict | Low | High — the fork constraint is the whole design | One mount block beside the existing `/api/tunnel/` prefix; criterion 12 makes it falsifiable |
 | v2 clients starve VS Code clients | Low | Medium | C4: separate cap accounting, 50 v2 clients against the existing 200 |
 | Ids unstable across reconnect, `gone` unmatchable | Low | High — silent leaks in the tree | Ids derive from existing natural keys; nothing new is minted or persisted |
+| Builder id collision across workspaces | High if unqualified | High — builders overwrite each other, blamed on the client | Every id qualified by `workspace_path` per `schema.ts:46`; scenario 7b tests it |
+| Resumed deltas served into the wrong scope | Medium | High — silent corruption | `since` only valid with a matching `streamId`; mismatch returns a flagged snapshot |
 
 ## References
 
@@ -280,4 +302,5 @@ Ranked, most consequential first.
 - `apps/web/src/hooks/useSSE.ts` — why `fetch`+stream rather than `EventSource`
 - `packages/codev/src/agent-farm/servers/tower-server.ts:259,283-308,364`
 - `packages/codev/src/terminal/pty-session.ts:783` — `bytesWritten`
+- `packages/codev/src/agent-farm/db/schema.ts:46` — `PRIMARY KEY (workspace_path, id)` on `builders`
 - `packages/codev/src/agent-farm/servers/tower-routes.ts:192,256,1139,1425,1443`
