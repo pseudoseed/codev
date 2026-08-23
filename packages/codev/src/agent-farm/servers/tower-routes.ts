@@ -48,6 +48,7 @@ import { hasTeam, loadTeamMembers, loadMessages, type TeamMember, type TeamMessa
 import { fetchTeamGitHubData, type TeamMemberGitHubData } from '../../lib/team-github.js';
 import { resolveTarget, resolveAgentInRegistry, broadcastMessage, isResolveError, type ResolveResult } from './tower-messages.js';
 import { handleCommandRoute, COMMAND_ROUTE } from './command-relay.js';
+import { handleV2Route } from './v2-routes.js';
 import { handleCanvasRoute, CANVAS_ROUTE_PREFIX } from './canvas-relay.js';
 import { formatArchitectMessage, formatBuilderMessage, formatUserViaVsCodeMessage } from '../utils/message-format.js';
 import type { PtySession } from '../../terminal/pty-session.js';
@@ -276,6 +277,11 @@ export async function handleRequest(
     }
 
     // Pattern-based routes (require regex or prefix matching)
+
+    // v2 events: /v2/* (Spec 52). One prefix branch; the module owns the rest.
+    if (url.pathname.startsWith('/v2/')) {
+      return await handleV2Route(req, res, url);
+    }
 
     // Tunnel endpoints: /api/tunnel/* (Spec 0097 Phase 4)
     if (url.pathname.startsWith('/api/tunnel/')) {
