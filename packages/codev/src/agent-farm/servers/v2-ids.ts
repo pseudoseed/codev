@@ -19,3 +19,18 @@ export function worktreeDirName(worktreePath: string): string {
 export function workspaceName(workspacePath: string): string {
   return path.basename(workspacePath);
 }
+
+export function workspacePathFromId(id: string): string | null {
+  if (id.startsWith('workspace:')) return id.slice('workspace:'.length);
+  if (id.startsWith('architect:')) {
+    const rest = id.slice('architect:'.length);
+    const hash = rest.lastIndexOf('#');
+    return hash >= 0 ? rest.slice(0, hash) : rest;
+  }
+  if (id.startsWith('builder:')) {
+    const rest = id.slice('builder:'.length);
+    const hash = rest.lastIndexOf('#');
+    return hash >= 0 ? rest.slice(0, hash) : rest;
+  }
+  return null;
+}

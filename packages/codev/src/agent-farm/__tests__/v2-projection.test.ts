@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { IDLE_WAITING_THRESHOLD_MS } from '@cluesmith/codev-sdk/builder-helpers';
 import type { V2Node } from '@cluesmith/codev-types';
-import { architectId, builderId, workspaceId } from '../servers/v2-ids.js';
+import { architectId, builderId, workspaceId, workspacePathFromId } from '../servers/v2-ids.js';
 import { statusForArchitect, statusForBuilder, statusForWorkspace } from '../servers/v2-status.js';
 import {
   projectHierarchy,
@@ -120,6 +120,9 @@ describe('v2-ids', () => {
     expect(builderId(WS_A, 'experiment-39')).toBe(`builder:${WS_A}#experiment-39`);
     expect(builderId(WS_B, 'experiment-39')).toBe(`builder:${WS_B}#experiment-39`);
     expect(builderId(WS_A, 'experiment-39')).not.toBe(builderId(WS_B, 'experiment-39'));
+    expect(workspacePathFromId(builderId(WS_A, 'experiment-39'))).toBe(WS_A);
+    expect(workspacePathFromId(architectId(WS_A, 'main'))).toBe(WS_A);
+    expect(workspacePathFromId(workspaceId(WS_A))).toBe(WS_A);
   });
 });
 

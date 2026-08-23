@@ -1,6 +1,6 @@
 import type * as http from 'node:http';
 import type { V2Counts, V2Frame, V2Node } from '@cluesmith/codev-types';
-import { workspaceId } from './v2-ids.js';
+import { workspaceId, workspacePathFromId } from './v2-ids.js';
 import { ScopeBus, scopeKey } from './v2-events.js';
 import type { V2Projection } from './v2-projection.js';
 
@@ -31,6 +31,7 @@ const defaultDeps: V2RouteDeps = {
 let deps: V2RouteDeps = defaultDeps;
 let bus = new ScopeBus();
 const clients = new Set<string>();
+let nextClient = 0;
 
 export function setV2RouteDeps(next: V2RouteDeps | null): void {
   deps = next ?? defaultDeps;
@@ -44,26 +45,35 @@ export function resetV2RoutesForTests(): void {
   deps = defaultDeps;
   bus = new ScopeBus();
   clients.clear();
+  nextClient = 0;
 }
 
 function writeSse(res: http.ServerResponse, frame: V2Frame): void {
+  if (res.writableEnded || res.destroyed) return;
   res.write(`data: ${JSON.stringify(frame)}\n\n`);
 }
 
 function parseScope(raw: string | null): string[] | null {
   if (raw === null || raw === '') return null;
-  return raw.split(',').map((part) => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(',')) {
+    let decoded: string;
     try {
-      return decodeURIComponent(part);
+      decoded = decodeURIComponent(part);
     } catch {
-      return part;
+      decoded = part;
     }
-  });
+    if (decoded === '' || seen.has(decoded)) continue;
+    seen.add(decoded);
+    out.push(decoded);
+  }
+  return out.length === 0 ? null : out;
 }
 
 function parseSince(raw: string | null): { ok: true; value: number | null } | { ok: false } {
   if (raw === null || raw === '') return { ok: true, value: null };
-  if (!/^-?\d+$/.test(raw)) return { ok: false };
+  if (!/^\d+$/.test(raw)) return { ok: false };
   return { ok: true, value: Number(raw) };
 }
 
@@ -74,12 +84,7 @@ function withBuckets(nodes: V2Node[]): V2Node[] {
   });
 }
 
-function nodeWorkspace(id: string): string | null {
-  if (id.startsWith('workspace:')) return id.slice('workspace:'.length);
-  const rest = id.includes(':') ? id.slice(id.indexOf(':') + 1) : id;
-  const hash = rest.lastIndexOf('#');
-  return hash >= 0 ? rest.slice(0, hash) : rest;
-}
+
 
 export async function handleV2Route(
   req: http.IncomingMessage,
@@ -126,7 +131,7 @@ export async function handleV2Route(
     return;
   }
 
-  const clientId = `${Date.now()}-${clients.size}`;
+  const clientId = String(++nextClient);
   clients.add(clientId);
 
   res.writeHead(200, {
@@ -154,10 +159,20 @@ export async function handleV2Route(
 
   const pending: V2Frame[] = [];
   let live = false;
+  let cleaned = false;
   const unsub = bus.subscribe(key, (frame) => {
     if (live) writeSse(res, frame);
     else pending.push(frame);
   });
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    unsub();
+    clients.delete(clientId);
+  };
+  req.on('close', cleanup);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
 
   const snapSeq = bus.cursor(key);
   const since = sinceParsed.value;
@@ -170,7 +185,7 @@ export async function handleV2Route(
     } else {
       const projection = deps.project(deps.now());
       const nodes = withBuckets(projection.nodes.filter((n) => {
-        const ws = nodeWorkspace(n.id);
+        const ws = workspacePathFromId(n.id);
         return ws !== null && inScopeSet.has(ws);
       }));
       writeSse(res, bus.snapshotFrame(key, {
@@ -178,12 +193,13 @@ export async function handleV2Route(
         nodes,
         counts: projection.counts,
         resumed: false,
+        seq: snapSeq,
       }));
     }
   } else {
     const projection = deps.project(deps.now());
     const nodes = withBuckets(projection.nodes.filter((n) => {
-      const ws = nodeWorkspace(n.id);
+      const ws = workspacePathFromId(n.id);
       return ws !== null && inScopeSet.has(ws);
     }));
     writeSse(res, bus.snapshotFrame(key, {
@@ -191,26 +207,16 @@ export async function handleV2Route(
       nodes,
       counts: projection.counts,
       resumed: false,
+      seq: snapSeq,
     }));
   }
 
   for (const d of darkPaths) {
-    writeSse(res, bus.darkFrame(key, workspaceId(d.path), d.reason));
+    writeSse(res, bus.darkFrame(key, workspaceId(d.path), d.reason, snapSeq));
   }
 
   for (const frame of pending) {
     if (frame.seq > snapSeq) writeSse(res, frame);
   }
   live = true;
-
-  let cleaned = false;
-  const cleanup = () => {
-    if (cleaned) return;
-    cleaned = true;
-    unsub();
-    clients.delete(clientId);
-  };
-  req.on('close', cleanup);
-  res.on('close', cleanup);
-  res.on('error', cleanup);
 }

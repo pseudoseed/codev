@@ -41,7 +41,8 @@ Builder for Issue #52 / Spec 52. STRICT mode. SPIR.
 - Commit `e06812956`. porch done; build passed.
 - Tests verified: v2-events + v2-routes 17 passed. Existing `GET /api/events` 8 passed. `git diff` on tower-routes is import + one if.
 - Context refresh at phase_2 refused: opencode has no in-session clear. architect:uiv2 said continue. Push at every phase boundary from here.
-- Next: porch next → phase 2 impl review, then phase 3 sampler.
+- Phase 2 review: Claude + opencode REQUEST_CHANGES on snapshot seq. Fixed: pin snapshot/dark to subscribe-time seq; monotonic client ids; cleanup on subscribe.
+- Next: porch done → re-review or phase 3.
 
 ### Standing orders still in force
 

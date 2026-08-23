@@ -58,6 +58,8 @@ function makeRes(): {
     }),
     write: vi.fn((data: string) => { chunks.push(data); }),
     on: vi.fn(),
+    writableEnded: false,
+    destroyed: false,
   } as any;
   return { res, body: () => chunks.join(''), statusCode: () => code, headers: () => hdrs };
 }
@@ -101,6 +103,13 @@ describe('handleV2Route', () => {
       res,
       urlFor(`/v2/events?scope=${encodeURIComponent(WS_A)}&since=0`),
     );
+    expect(statusCode()).toBe(400);
+  });
+
+  it('400 when since is negative', async () => {
+    const { res, statusCode } = makeRes();
+    const q = `/v2/events?scope=${encodeURIComponent(WS_A)}&since=-5&stream=abc`;
+    await handleV2Route(makeReq('GET', q), res, urlFor(q));
     expect(statusCode()).toBe(400);
   });
 
@@ -202,7 +211,10 @@ describe('handleV2Route', () => {
     await handleV2Route(makeReq('GET', q), out.res, urlFor(q));
     const parsed = frames(out.body());
     expect(parsed[0].type).toBe('snapshot');
-    expect(parsed.some((f) => f.type === 'gone' && f.id === 'during-snap')).toBe(true);
+    expect(parsed[0].seq).toBe(0);
+    const gone = parsed.find((f) => f.type === 'gone' && f.id === 'during-snap');
+    expect(gone).toBeDefined();
+    expect(gone!.seq).toBe(1);
     expect(parsed.findIndex((f) => f.type === 'gone')).toBeGreaterThan(
       parsed.findIndex((f) => f.type === 'snapshot'),
     );

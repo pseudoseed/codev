@@ -66,11 +66,11 @@ export class ScopeBus {
 
   snapshotFrame(
     key: string,
-    input: { scope: string[]; nodes: V2Node[]; counts: V2Counts; resumed: boolean },
+    input: { scope: string[]; nodes: V2Node[]; counts: V2Counts; resumed: boolean; seq?: number },
   ): V2SnapshotFrame {
     const s = this.state(key);
     return {
-      seq: s.cursor,
+      seq: input.seq ?? s.cursor,
       type: 'snapshot',
       streamId: s.streamId,
       resumed: input.resumed,
@@ -80,8 +80,8 @@ export class ScopeBus {
     };
   }
 
-  darkFrame(key: string, id: string, reason: string): V2DarkFrame {
-    return { seq: this.state(key).cursor, type: 'dark', id, reason };
+  darkFrame(key: string, id: string, reason: string, seq?: number): V2DarkFrame {
+    return { seq: seq ?? this.state(key).cursor, type: 'dark', id, reason };
   }
 
   emit(key: string, input: V2DeltaInput, now: number = Date.now()): V2Frame {
@@ -90,7 +90,9 @@ export class ScopeBus {
     const frame = { seq: s.cursor, ...input } as V2Frame;
     s.buffer.push({ seq: s.cursor, at: now, frame });
     this.trim(s, now);
-    for (const sub of s.subscribers) sub(frame);
+    for (const sub of s.subscribers) {
+      try { sub(frame); } catch { /* one bad socket must not abort the scope */ }
+    }
     return frame;
   }
 
