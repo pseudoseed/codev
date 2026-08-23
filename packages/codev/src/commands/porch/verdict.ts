@@ -64,9 +64,107 @@ export function parseVerdict(output: string): Verdict {
  * Returns true only if ALL reviewers explicitly APPROVE.
  * COMMENT counts as approve (non-blocking feedback).
  * CONSULT_ERROR and REQUEST_CHANGES block approval.
+ *
+ * Issue #20: a skipped lane stays NON-BLOCKING here on purpose. A lane that is
+ * unauthenticated, quota-exhausted, or absent must not wedge a project — that
+ * was the explicit design call. What was wrong was calling it an approval in
+ * the record. Use `laneSummary` for anything a human or a review file will
+ * read, so "3 reviewers approved" is never printed over a run where one of them
+ * never looked at the code.
  */
 export function allApprove(reviews: ReviewResult[]): boolean {
   if (reviews.length === 0) return true; // No verification = auto-approve
   return reviews.every(r => r.verdict === 'APPROVE' || r.verdict === 'COMMENT');
+}
+
+/**
+ * Marker a lane writes to declare that it produced no review (#20).
+ *
+ * A skipped lane's artifact is WELL-FORMED — `agySkipContent` writes a real
+ * `VERDICT: COMMENT` line — so the absence of a verdict cannot detect it. The
+ * lane has to say so itself. This is a contract between codev's own skip
+ * writers and this parser, not an inference from prose.
+ */
+export const NO_REVIEW_MARKER = 'LANE_DID_NOT_REVIEW: true';
+
+/**
+ * Did this review actually state a verdict, or did porch default one for it?
+ *
+ * `parseVerdict` collapses "the reviewer wrote COMMENT" and "the reviewer wrote
+ * no verdict line" into the same COMMENT, and `allApprove` counts COMMENT as an
+ * approval. That is how a lane that never ran becomes part of a unanimous
+ * approval. `findVerdict` is the distinction; this carries it to callers.
+ */
+export function statedVerdict(output: string): boolean {
+  return findVerdict(output) !== null;
+}
+
+/**
+ * Did this lane actually review the code?
+ *
+ * Two ways it did not, and they look nothing alike:
+ *   - it stated no verdict at all (crashed, truncated, produced only prose)
+ *   - it stated a verdict on an artifact that declares itself a skip
+ *
+ * The second is the one that mattered in practice: a skipped agy lane writes a
+ * perfectly well-formed `VERDICT: COMMENT`, which `allApprove` counts as an
+ * approval. Checking only for a missing verdict misses it entirely.
+ */
+export function laneReviewed(output: string): boolean {
+  if (output.includes(NO_REVIEW_MARKER)) return false;
+  return statedVerdict(output);
+}
+
+/** How many lanes actually produced a verdict, out of how many were asked. */
+export interface LaneSummary {
+  /** Lanes that stated a verdict of their own. */
+  ran: number;
+  /** Lanes asked for. */
+  total: number;
+  /** Lanes that produced no verdict of their own (skipped, crashed, empty). */
+  silent: string[];
+  /** One line stating exactly what happened, safe to print or commit. */
+  sentence: string;
+}
+
+/**
+ * Describe the lane outcome honestly (#20).
+ *
+ * "All reviewers approved!" is false whenever a lane was skipped, and it is the
+ * sentence a human reads before merging. This produces the sentence that is
+ * actually true, naming the silent lanes so the gap is visible in the record
+ * rather than inferred from a missing file.
+ */
+export function laneSummary(reviews: ReviewResult[]): LaneSummary {
+  const silent = reviews.filter(r => r.stated === false).map(r => r.model);
+  const ran = reviews.length - silent.length;
+
+  // Only say "approved" when the lanes that ran actually said APPROVE. The
+  // first version counted `stated` and never looked at a verdict, so it
+  // asserted approval on the FORCE-ADVANCE path — reached only after
+  // REQUEST_CHANGES persisted to the iteration ceiling — and on a run where
+  // every lane returned COMMENT. This sentence is the one a human reads before
+  // approving a gate; it must not be the last thing in the system still saying
+  // "approved" about a run nobody approved.
+  const notApproved = reviews
+    .filter(r => r.stated !== false && r.verdict !== 'APPROVE')
+    .map(r => `${r.model}: ${r.verdict}`);
+
+  const parts: string[] = [];
+  if (silent.length === 0 && notApproved.length === 0) {
+    parts.push(`${ran} of ${reviews.length} lanes reviewed and approved.`);
+  } else {
+    parts.push(`${ran} of ${reviews.length} lanes actually reviewed.`);
+    if (notApproved.length > 0) {
+      parts.push(`Did not approve: ${notApproved.join(', ')}.`);
+    }
+    if (silent.length > 0) {
+      parts.push(
+        `Did not review: ${silent.join(', ')} — recorded as non-blocking, NOT as approval.`,
+      );
+    }
+  }
+
+  return { ran, total: reviews.length, silent, sentence: parts.join(' ') };
 }
 
