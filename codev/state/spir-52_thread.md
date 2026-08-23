@@ -59,6 +59,11 @@ Builder for Issue #52 / Spec 52. STRICT mode. SPIR.
 - Context refresh refused again (opencode). Continuing.
 - `v2-scenarios.test.ts`: scenarios 3, 8, 8b, 6, 12. tower-routes 101 still pass.
 - Phase-3 hole named: `watchScope` now gets `inScope` only, so a dark path does not keep receiving `node` deltas.
+- Iter 1–3 Claude REQUEST_CHANGES: C1 git cwd, filter overwrite, vacuous scenario 8. All fixed. Porch force-advanced to review at the 3-iter ceiling.
+
+### 2026-08-23 — Review
+
+- Review at `codev/reviews/52-v2-server-events.md`. Opening PR.
 
 ### Standing orders still in force
 

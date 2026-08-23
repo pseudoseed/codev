@@ -311,6 +311,7 @@ just its inputs.
 
 ## Testing
 
+- [From #52] Vitest in `packages/codev` has cwd `packages/codev`. A test that runs `git diff` with a repo-root pathspec (`packages/codev/src/...`) matches nothing and exits 0. Pass `cwd: git rev-parse --show-toplevel` and assert the expected diff is non-empty, or the test is a false green.
 - [From #4] **A fixture asserted only at its capture geometry is not a regression test.** Five
   real captured TUI frames all classified correctly at their 110-column capture width, and one
   of them — a frame with a live draft in the composer — classified as an *empty prompt* at 43
