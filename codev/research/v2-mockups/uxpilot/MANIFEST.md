@@ -74,3 +74,15 @@ The FRD listed this group as having no requirements. Wrong: FR-16 and FR-17 are 
 | `51b1CgYzLv0iRRqgh4G3` | QR PAIRING sheet | `add-machine-to-porch/51b1CgYzLv0iRRqgh4G3.png` | not pulled | FR-17 |
 | `F9qlq0WzIomyZX3y7L6G` | PAIRING — waiting on token | `add-machine-to-porch/F9qlq0WzIomyZX3y7L6G.png` | not pulled | FR-16 |
 | `cKttggjpN8Xa2xL5RXD7` | CONNECTED | `add-machine-to-porch/cKttggjpN8Xa2xL5RXD7.png` | not pulled | FR-12, FR-16 |
+
+---
+
+## Group with Porch - Terminal Soft Keyboard
+
+iPad. Modifier row above the system keyboard. This is **FR-24**. Also **FR-22** (44pt-class keys) and **FR-23** (row sits above the home indicator / keyboard).
+
+The FRD listed this group as having no requirements. Wrong: FR-24 is this screen.
+
+| ID | Title (from preview) | Preview | HTML | FRs |
+|---|---|---|---|---|
+| `TiCebhzPvbU1AeCZqj5z` | Soft keyboard — CTRL ESC TAB arrows | `terminal-soft-keyboard/TiCebhzPvbU1AeCZqj5z.png` | not pulled | FR-24, FR-22, FR-23 |
