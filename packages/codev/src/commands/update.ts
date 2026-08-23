@@ -220,28 +220,64 @@ export async function update(options: UpdateOptions = {}): Promise<UpdateResult>
 
     const templatesDir = getTemplatesDir();
 
-    // Add missing provider-native skills without replacing customizations.
+    // Add missing provider-native skills, refresh stale ones, and leave local
+    // edits alone (#29). `skipExisting` on its own tested only whether the skill
+    // DIRECTORY existed, so a vendored skill was frozen at install time forever
+    // — it could not tell a customization from rot, and preserved both.
     if (!dryRun) {
-      const skillsResult = copySkills(targetDir, templatesDir, { skipExisting: true });
+      const skillsResult = copySkills(targetDir, templatesDir, {
+        skipExisting: true,
+        refreshUnmodified: true,
+      });
       for (const skill of skillsResult.copied) {
         result.newFiles.push(skill);
         log(chalk.green('  + (new)'), skill);
+      }
+      for (const skill of skillsResult.refreshed) {
+        result.updated.push(skill);
+        log(chalk.blue('  ~ (refreshed)'), skill);
+      }
+      // Say which skills were held back and why. Silently skipping a customized
+      // skill is how one drifts a year behind without anyone noticing.
+      for (const skill of skillsResult.customized) {
+        log(chalk.yellow('  ! (local edits, not refreshed)'), skill);
+      }
+      // Naming the state without the remedy is half an answer, and `--force`
+      // does not reach skills. Say how to take the shipped version.
+      if (skillsResult.customized.length > 0) {
+        log(chalk.dim('    To take the shipped version of one, delete its directory and re-run.'));
       }
     }
 
     // Update root files (CLAUDE.md, AGENTS.md)
     const projectName = path.basename(targetDir);
     if (force) {
-      const rootResult = copyRootFiles(targetDir, templatesDir, projectName);
+      // #31 again: this branch was missed the first time, so
+      // `codev update --dry-run --force` printed "no files will be changed"
+      // and then created a missing CLAUDE.md / AGENTS.md. Both are real CLI
+      // flags and combining them is an obvious thing to do.
+      const rootResult = copyRootFiles(targetDir, templatesDir, projectName, { dryRun });
       for (const file of rootResult.copied) {
         result.updated.push(file);
         log(chalk.blue('  ~ (updated)'), file);
       }
     } else {
-      const rootResult = copyRootFiles(targetDir, templatesDir, projectName, { handleConflicts: true });
+      // #31: pass dryRun through. This call was previously unguarded, so
+      // `--dry-run` printed "no files will be changed" and then wrote
+      // `CLAUDE.md.codev-new` and `AGENTS.md.codev-new` to disk.
+      const rootResult = copyRootFiles(targetDir, templatesDir, projectName, {
+        handleConflicts: true,
+        dryRun,
+      });
       for (const file of rootResult.copied) {
         result.newFiles.push(file);
-        log(chalk.green('  + (new)'), file);
+        log(dryRun ? chalk.dim('  + (would create)') : chalk.green('  + (new)'), file);
+      }
+      // #30: `unchanged` exists because these used to be reported as conflicts
+      // with the reason "Content differs from template" — while nothing had
+      // compared any content. Most updates handed over a no-op merge task.
+      for (const file of rootResult.unchanged) {
+        log(chalk.dim('  = (unchanged)'), file);
       }
       for (const file of rootResult.conflicts) {
         result.rootConflicts.push({
@@ -250,7 +286,10 @@ export async function update(options: UpdateOptions = {}): Promise<UpdateResult>
           reason: 'Content differs from template',
         });
         log(chalk.yellow('  ! (conflict)'), file);
-        log(chalk.dim('    New version saved as:'), `${file}.codev-new`);
+        log(
+          chalk.dim(dryRun ? '    New version would be saved as:' : '    New version saved as:'),
+          `${file}.codev-new`,
+        );
       }
     }
 

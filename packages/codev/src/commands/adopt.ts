@@ -133,7 +133,10 @@ export async function adopt(options: AdoptOptions = {}): Promise<void> {
   // Existing local copies in codev/ are left in place — they take precedence via the resolution chain.
 
   // Copy provider-native skills, preserving existing skill directories.
-  const skillsResult = copySkills(targetDir, skeletonDir, { skipExisting: true });
+  // #29: recordManifest, not refreshUnmodified -- adopt must not rewrite an
+  // existing project's skills. It only leaves provenance for the ones it
+  // installs, so a later `update` can tell stale from customized.
+  const skillsResult = copySkills(targetDir, skeletonDir, { skipExisting: true, recordManifest: true });
   for (const directory of skillsResult.directoriesCreated) {
     console.log(chalk.green('  +'), directory);
     fileCount++;

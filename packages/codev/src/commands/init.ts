@@ -97,7 +97,11 @@ export async function init(projectName?: string, options: InitOptions = {}): Pro
   // They resolve at runtime from the installed npm package via the unified file resolver.
 
   // Copy provider-native skills (must exist on disk for tool discovery).
-  const skillsResult = copySkills(targetDir, skeletonDir);
+  // #29: record provenance for what we install. Without it, a project that
+  // never happens to run `update` at this version reaches the next one with
+  // no manifest, is classified "unknown provenance", and is held back from
+  // every future skill refresh permanently.
+  const skillsResult = copySkills(targetDir, skeletonDir, { recordManifest: true });
   for (const directory of skillsResult.directoriesCreated) {
     console.log(chalk.green('  +'), directory);
     fileCount++;
