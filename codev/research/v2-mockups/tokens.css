@@ -137,8 +137,7 @@
  *   ink   = everything else.
  * There is no fifth colour, and rust is never used for emphasis.
  *
- * DARK MODE does not exist in these mockups. The terminal panes are already
- * ink-on-chalk inversions, so the page reads as a lit workspace holding dark
- * screens. Inverting the whole page would destroy that. If a dark theme is
- * wanted later it needs designing, not deriving.
+ * DARK MODE is tokens-dark.css. Designed, not derived. The light terminals
+ * are already ink-on-chalk inversions; inverting the whole page destroys
+ * that. The dark file keeps the room and adds --well for the screens.
  */

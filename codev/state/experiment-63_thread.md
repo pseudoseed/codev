@@ -1,25 +1,23 @@
 # experiment-63 thread
 
-Soft-mode EXPERIMENT for spec 0063 (Tower dashboard improvements).
+Soft-mode EXPERIMENT. Spawn-path collision (issue #65) produced spec 0063 work first. GitHub issue #63 is the v2 dark palette.
 
-## 2026-08-23 hypothesis
+## 2026-08-23 spec 0063
 
-Spec 0063 is still Conceived. The landing is `packages/codev/templates/tower.html`, a card grid. Recents are already one row. Five named buttons are missing. ttyd is gone. `afx start` and `afx start --remote` are gone.
+Spec 0063 is Conceived. The landing is `packages/codev/templates/tower.html`. Recents are already one row. Five named buttons are missing. ttyd is gone. `afx start` and `afx start --remote` are gone.
 
-Locked the hypothesis in `codev/experiments/63-tower-dashboard-improvements/notes.md` before the prototype. Production files stay untouched.
+Hypothesis holds. `/api/create` exists and is unused. `/api/update` is 404. One-shot PTY streamed `hello-0063` and GET reported `exitCode=7`. WebSocket sent `seq` only.
 
-Question: can one-row + five buttons + a closeable command terminal be met on today's landing without ttyd and without restoring SSH start.
+Do not implement 0063 as written. The landing is the surface v2 replaces. SSH remote and ttyd are decisions v2 already made differently.
 
-## 2026-08-23 execute + analyze
+Notes: `codev/experiments/63-tower-dashboard-improvements/notes.md`
+PR #67, merged.
 
-Hypothesis holds. `afx start` and `--remote` are gone. `/api/create` exists and is unused. `/api/update` is 404. One-shot PTY streamed `hello-0063` and GET reported `exitCode=7`. WebSocket sent `seq` only, no exit frame.
+## 2026-08-23 issue #63 dark palette
 
-Production files untouched.
+Night-workshop tokens. `--well` is the hole. `--ink` is the mark. Invert control fails as predicted.
 
-Recommend against implementing 0063 as written. The landing is the surface v2 replaces. SSH remote and ttyd are decisions v2 already made differently.
-
-Prototype: `codev/experiments/63-tower-dashboard-improvements/prototype/index.html`
-
-## 2026-08-23 provenance
-
-Spawn-path collision, issue #65. These notes answer spec 0063 (Conceived, never built). They are not GitHub issue #63. Kept because the spec is a genuinely open question.
+`codev/research/v2-mockups/tokens-dark.css`
+`01-site-dark.html` / `02-gate-dark.html`
+Contrast: `codev/experiments/63-v2-dark-palette/artifacts/contrast.md`
+PR #68.
