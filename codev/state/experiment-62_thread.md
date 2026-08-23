@@ -44,4 +44,6 @@ Notes restated: A-on-device vs B-in-Chromium is not comparable evidence. His wor
 
 Architect: dockview, hideClose, group-level close. B drag cancelled.
 
-Override built and measured. `a-fr22.html`. Tab 44, close 44, not nested, sash hit 44 via ::before. 3 files we own, 0 dockview files. Gate: VoiceOver, Dynamic Type, orientations, finger scroll still unscored.
+Override built and measured. `a-fr22.html`. Tab 44, close 44, not nested, sash hit 44 via ::before. 3 files we own, 61 lines. Gate: VoiceOver, Dynamic Type, orientations, finger scroll still unscored.
+
+PR #72 merged 71385173. Notes: sashWidth stays 4 in JS while CSS hit is 44. Watch for late drag start or a pane that will not shrink. Done. #62 close and cleanup are the architect's.

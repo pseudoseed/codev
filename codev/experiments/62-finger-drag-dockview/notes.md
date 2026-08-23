@@ -2,6 +2,8 @@
 
 **Status**: Complete · **Date**: 2026-08-23 · **Decision**: dockview + group-level close
 
+61 lines across 3 files is the override cost that made dockview defensible.
+
 Spawn prompt named `codev/specs/0062-secure-remote-access.md` (already shipped, then `--remote` was removed in spec 99). Issue #62 and porch project `62-spike-v2-ui-can-a-finger-drag-` are the work. Same template-fill collision as experiments 38 and 39.
 
 ## Goal
@@ -246,6 +248,8 @@ Page: `http://10.10.50.186:4112/a-fr22.html`. Source: `artifacts/a-fr22-override
 `defaultTabComponent` alone does not get there. It still mounts inside `.dv-tab`. Close inside that tab is still gap 0.
 
 Sash does not need a fork. Layout hardcodes `sashWidth = 4` in dockview-core. Changing the element width would fight that. Inflating `::before` by 20 px each side makes hit travel 44. Measured: sash box still 4 px, `beforeLeft/Right` `-20px`, `hitTravel` 44.
+
+**Known divergence.** `sashWidth` stays 4 in dockview's JS. The hit region is 44 in CSS. The `::before` inflation changes what a finger can touch, not what the library believes. Anything dockview computes from `sashWidth` (drag thresholds, snap distances, minimum pane sizes, internal hit-testing) still uses 4. Symptom to watch: a drag that feels like it starts late, or a pane that refuses to shrink past a boundary that looks wrong.
 
 Live DOM after override:
 
