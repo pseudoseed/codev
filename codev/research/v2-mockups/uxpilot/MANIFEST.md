@@ -98,3 +98,31 @@ iPad. Two panes, `SWAP PANES` + `LAYOUT`. This is **FR-7**'s tablet clause (two-
 | ID | Title (from preview) | Preview | HTML | FRs |
 |---|---|---|---|---|
 | `GyhcwHplwDsZ0ENiyTnI` | Split terminals — two panes + NUDGE | `split-terminals/GyhcwHplwDsZ0ENiyTnI.png` | not pulled | FR-7, FR-8, FR-19, FR-42, FR-49 |
+
+---
+
+## Porch Site Mobile Redesign
+
+Phone site. Nine files, four surfaces: one-machine lot, two-machine lot with an offline machine, a hierarchy picker sheet, an OPEN IN sheet, a LIVE PANES sheet. Several files are near-duplicates of the two-machine lot.
+
+This is **FR-1** (containment, not an outline), **FR-3**, **FR-4**, **FR-12**, **FR-13**, **FR-15**, **FR-19**, **FR-21**, **FR-41**, **FR-42**. Sparklines are present on the phone site (they are missing on the iPad split).
+
+The FRD listed this group as having no requirements. Wrong if FRs name surfaces. Two composition clashes: FR-21 says the tree is a drawer, the design uses a picker sheet; OPEN IN offers LEFT PANE / RIGHT PANE on a phone, which fights FR-21's no-tile rule.
+
+| ID | Title (from preview) | Preview | HTML | FRs |
+|---|---|---|---|---|
+| `PXL1ch4T5kjMO4LYGdN9` | Site — one machine lot | `porch-site-mobile-redesign/PXL1ch4T5kjMO4LYGdN9.png` | not pulled | FR-1, FR-3, FR-4, FR-12, FR-19, FR-21, FR-41 |
+| `lxhbQ26SZ1QzUt8vTpUK` | Site — two machines, one offline | `porch-site-mobile-redesign/lxhbQ26SZ1QzUt8vTpUK.png` | not pulled | FR-1, FR-13, FR-15, FR-4, FR-41, FR-42 |
+| `GnWkqflXk3dHyEAyMkCe` | Picker — machine/workspace/architect/builder | `porch-site-mobile-redesign/GnWkqflXk3dHyEAyMkCe.png` | not pulled | FR-1, FR-2, FR-21 |
+| `9GvvtY66cZ9o588S1ZG6` | Site — two machines (near-duplicate) | `porch-site-mobile-redesign/9GvvtY66cZ9o588S1ZG6.png` | not pulled | FR-1, FR-13, FR-15 |
+| `pcuGTxWBv4S195IB7nXO` | OPEN IN — left/right/replace | `porch-site-mobile-redesign/pcuGTxWBv4S195IB7nXO.png` | not pulled | FR-2, FR-7, FR-21 |
+| `JVQ55vBl3KuTQK6MKEnn` | Site — two machines (near-duplicate) | `porch-site-mobile-redesign/JVQ55vBl3KuTQK6MKEnn.png` | not pulled | FR-1, FR-13, FR-15 |
+| `da25kSWpzRdJUZGp4dFB` | Site — two machines (near-duplicate) | `porch-site-mobile-redesign/da25kSWpzRdJUZGp4dFB.png` | not pulled | FR-1, FR-13, FR-15 |
+| `alggCr6fYS7YFpxmiGWt` | Site — two machines (near-duplicate) | `porch-site-mobile-redesign/alggCr6fYS7YFpxmiGWt.png` | not pulled | FR-1, FR-13, FR-15 |
+| `jClfsPTbpz9rne4YAGBh` | LIVE PANES sheet | `porch-site-mobile-redesign/jClfsPTbpz9rne4YAGBh.png` | not pulled | FR-8, FR-21, FR-2 |
+
+---
+
+## Design a bespoke control surfa (parent)
+
+0 designs. No files. Not a coverage gap; it is a container.
