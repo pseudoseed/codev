@@ -1638,6 +1638,8 @@ interface DelayedSendParams {
   to: string;
   workspace: string | undefined;
   from: string | undefined;
+  /** #47: the sender's identity, where `from` carries only its kind. */
+  fromName: string | undefined;
   message: string;
   raw: boolean;
   noEnter: boolean;
@@ -1678,7 +1680,7 @@ function handleDelayedSend(
   db: ReturnType<typeof getGlobalDb>,
   params: DelayedSendParams,
 ): void {
-  const { to, workspace, from, message, raw, noEnter, interrupt, deliverAfter, senderWorkspace } = params;
+  const { to, workspace, from, fromName, message, raw, noEnter, interrupt, deliverAfter, senderWorkspace } = params;
   const now = Date.now();
   const notBefore = now + deliverAfter * 1000;
 
@@ -1723,6 +1725,9 @@ function handleDelayedSend(
     body: message,
     formattedMessage,
     fromAgent: from ?? null,
+    // #47: identity, not just kind; and the target as TYPED, not as resolved.
+    fromAgentName: fromName ?? null,
+    requestedTo: to,
     fromWorkspace: senderWorkspace,
     noEnter,
     terminalId,
@@ -1811,6 +1816,9 @@ async function handleSend(
 
   // Optional fields
   const from = typeof body.from === 'string' ? body.from : undefined;
+  // #47: sender IDENTITY, where `from` is only its KIND. Optional, so an older
+  // CLI records nothing here rather than failing.
+  const fromName = typeof body.fromName === 'string' ? body.fromName : undefined;
   const workspace = typeof body.workspace === 'string' ? body.workspace : undefined;
   const fromWorkspace = typeof body.fromWorkspace === 'string' ? body.fromWorkspace : undefined;
   const options = typeof body.options === 'object' && body.options !== null
@@ -1857,7 +1865,7 @@ async function handleSend(
   // makes the delay durable across a Tower restart.
   if (deliverAfter !== undefined) {
     handleDelayedSend(res, ctx, db, {
-      to, workspace, from, message, raw, noEnter, interrupt, deliverAfter, senderWorkspace,
+      to, workspace, from, fromName, message, raw, noEnter, interrupt, deliverAfter, senderWorkspace,
     });
     return;
   }
@@ -1885,6 +1893,9 @@ async function handleSend(
             body: message,
             formattedMessage: formatMessageForTarget(reg.kind === 'architect', from, message, raw),
             fromAgent: from ?? null,
+            // #47: identity, not just kind; and the target as TYPED, not as resolved.
+            fromAgentName: fromName ?? null,
+            requestedTo: to,
             fromWorkspace: senderWorkspace,
             noEnter,
             terminalId: null,
@@ -1930,6 +1941,9 @@ async function handleSend(
         body: message,
         formattedMessage: formatMessageForTarget(isArchitectTarget, from, message, raw),
         fromAgent: from ?? null,
+        // #47: identity, not just kind; and the target as TYPED, not as resolved.
+        fromAgentName: fromName ?? null,
+        requestedTo: to,
         fromWorkspace: senderWorkspace,
         noEnter,
         terminalId: result.terminalId,
@@ -1961,6 +1975,9 @@ async function handleSend(
         body: message,
         formattedMessage: formatMessageForTarget(isArchitectTarget, from, message, raw),
         fromAgent: from ?? null,
+        // #47: identity, not just kind; and the target as TYPED, not as resolved.
+        fromAgentName: fromName ?? null,
+        requestedTo: to,
         fromWorkspace: senderWorkspace,
         noEnter,
         terminalId: result.terminalId,
@@ -2009,6 +2026,9 @@ async function handleSend(
       body: message,
       formattedMessage,
       fromAgent: from ?? null,
+      // #47: identity, not just kind; and the target as TYPED, not as resolved.
+      fromAgentName: fromName ?? null,
+      requestedTo: to,
       fromWorkspace: senderWorkspace,
       noEnter,
       terminalId: result.terminalId,
@@ -2075,6 +2095,9 @@ async function handleSend(
     body: message,
     formattedMessage,
     fromAgent: from ?? null,
+    // #47: identity, not just kind; and the target as TYPED, not as resolved.
+    fromAgentName: fromName ?? null,
+    requestedTo: to,
     fromWorkspace: senderWorkspace,
     noEnter,
     terminalId: result.terminalId,

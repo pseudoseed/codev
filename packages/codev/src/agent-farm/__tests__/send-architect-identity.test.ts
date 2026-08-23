@@ -234,7 +234,7 @@ describe('Spec 1313 — migration + self-heal source guards', () => {
     // and the v16 block only converges on a later open (the omission #23 flagged).
     // It now sits at 18 (Issue #2 added the builders harness/model migration);
     // v16, v17 and v18 must all be registered under it.
-    expect(dbSrc).toContain('GLOBAL_CURRENT_VERSION = 18');
+    expect(dbSrc).toContain('GLOBAL_CURRENT_VERSION = 19');
     expect(dbSrc).toContain('Migration v16');
     expect(dbSrc).toContain('Migration v17');
     expect(dbSrc).toContain('Migration v18');

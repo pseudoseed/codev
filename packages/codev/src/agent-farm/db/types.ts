@@ -109,6 +109,10 @@ export interface DbMailbox {
   to_agent: string;
   terminal_id: string | null;
   from_agent: string | null;
+  /** Sender identity, not just kind (#47). Architect name, or the builder id. */
+  from_agent_name: string | null;
+  /** The target string the caller typed, before resolution (#47). */
+  requested_to: string | null;
   from_workspace: string | null;
   body: string;
   formatted_message: string;

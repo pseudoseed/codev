@@ -142,7 +142,7 @@ function ensureGlobalDatabase(): Database.Database {
   configurePragmas(db);
 
   // Current migration version — bump when adding new migrations
-  const GLOBAL_CURRENT_VERSION = 18;
+  const GLOBAL_CURRENT_VERSION = 19;
 
   // Detect fresh vs existing database by checking if content tables exist.
   // On existing databases, GLOBAL_SCHEMA must NOT run because it references column names
@@ -636,6 +636,32 @@ function ensureGlobalDatabase(): Database.Database {
     }
     db.prepare('INSERT INTO _migrations (version) VALUES (18)').run();
     console.log('[info] Added harness/model columns to builders (Issue #2 per-spawn agent selection)');
+  }
+
+  // v19 (#47): record WHO sent and WHAT they asked for.
+  //
+  // `from_agent` stores the literal string 'architect' for every architect, so
+  // six distinct architects in this database (main, uiv2, entries, org-ui,
+  // main2, ade) are indistinguishable as senders. The requested target is not
+  // stored either, only the resolved one. That combination made a 13-occurrence
+  // misroute report unfalsifiable: "a builder lost its identity and was
+  // reclassified" and "an architect sent this deliberately" produce byte-for-byte
+  // identical rows.
+  //
+  // Nullable and additive, so existing rows stay valid and the columns simply
+  // read as "not recorded" for anything sent before this migration.
+  const v19 = db.prepare('SELECT version FROM _migrations WHERE version = 19').get();
+  if (!v19) {
+    const mailboxCols = (db.prepare(`PRAGMA table_info(mailbox)`).all() as Array<{ name: string }>)
+      .map((c) => c.name);
+    if (!mailboxCols.includes('from_agent_name')) {
+      db.exec(`ALTER TABLE mailbox ADD COLUMN from_agent_name TEXT`);
+    }
+    if (!mailboxCols.includes('requested_to')) {
+      db.exec(`ALTER TABLE mailbox ADD COLUMN requested_to TEXT`);
+    }
+    db.prepare('INSERT INTO _migrations (version) VALUES (19)').run();
+    console.log('[info] Added mailbox sender/target provenance columns (#47)');
   }
 
   return db;

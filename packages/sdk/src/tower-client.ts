@@ -776,6 +776,19 @@ export class TowerClient {
     message: string,
     options?: {
       from?: string;
+      /**
+       * The sender's IDENTITY, where `from` carries only its KIND (#47).
+       *
+       * `from` is a builder id or the literal 'architect', so every architect in
+       * a workspace collapses to one string. With six architects in one database
+       * and no way to tell which had sent, a 13-occurrence misroute report could
+       * not be attributed: "a builder lost its identity and was reclassified" and
+       * "an architect sent this deliberately" produce identical rows.
+       *
+       * Optional, so an older CLI against a newer Tower simply records nothing
+       * rather than failing.
+       */
+      fromName?: string;
       workspace?: string;
       fromWorkspace?: string;
       raw?: boolean;
@@ -846,6 +859,7 @@ export class TowerClient {
           to,
           message,
           from: options?.from,
+          fromName: options?.fromName,
           workspace: options?.workspace,
           fromWorkspace: options?.fromWorkspace,
           options: {
