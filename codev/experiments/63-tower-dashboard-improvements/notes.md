@@ -2,7 +2,9 @@
 
 **Status**: Complete · **Date**: 2026-08-23
 
-Spawn prompt named `codev/specs/0063-tower-dashboard-improvements.md`. Builder id `experiment-63`. Directory number matches the spec, not the 38/39 spike sequence.
+**Provenance.** Produced by a spawn-path collision (issue #65), not by assignment. `afx spawn 63` named `codev/specs/0063-tower-dashboard-improvements.md` because afx zero-pads the issue number. Spec 0063 is Status: Conceived. It was never approved, never planned, never built. It has sat in the tree since v1.6.0. This experiment answers that spec. It is not the work GitHub issue #63 asked for.
+
+Same collision as experiments 38 and 39. Those builders noticed. This one did not.
 
 ## Goal
 
@@ -169,18 +171,22 @@ I did not call `/api/launch` or `/api/stop`. Those start and kill real workspace
 
 ## Next steps
 
-Do not implement spec 0063 as written. Write a SPIR that names today's commands.
+Do not implement spec 0063 as written.
 
-The SPIR should:
+The Tower landing is the surface v2 replaces. Building the five buttons onto `tower.html` invests in a UI that is being retired. The two parts that are not additive, SSH remote and ttyd, are decisions v2 has already made differently: multi-machine as paired environments, and terminals over the existing PTY path. Shipping 0063 as written would also re-solve remote access in a way that already has a different answer.
 
-- Flatten running cards to the recent-item row. Overview and per-terminal links already live in the workspace SPA. A disclosure is optional. Default is one row.
-- Rename today's Launch control to Open dashboard (local). It already is that button.
+One-row layout and a Create button that calls `POST /api/create` are still cheap if someone wants them on the current landing before v2 ships. They are paint on a wall that is coming down.
+
+If a short-lived patch is wanted anyway:
+
+- Flatten running cards to the recent-item row. Overview and per-terminal links already live in the workspace SPA.
+- Rename Launch to Open dashboard (local). It already is that button.
 - Wire Create to `POST /api/create`.
-- Leave Adopt as launch-on-a-bare-directory, or label Launch as Adopt when `codev/` is missing. Do not add a second adopt route.
-- Add `POST /api/update` that runs `codev update --agent` in the chosen directory. If the page must show output, spawn it as a non-persistent PTY and poll `GET /api/terminals/:id` until `status=exited`. An `exit` control frame is nicer and is a types change. Not required for v1.
-- Drop Open dashboard (remote) as SSH. Cloud connect is already in the header. If remote start comes back, it is a new spec.
+- Leave Adopt as launch-on-a-bare-directory.
+- Add `POST /api/update` only if update has to live on this page. One-shot PTY plus GET poll is enough. An `exit` control frame is a types change.
+- Do not restore `afx start --remote`. Do not add ttyd.
 
-Issue / spec 0063 can stay open for that SPIR. This experiment answers the approach. Use `Refs #63` if a notes-only PR is opened.
+Spec 0063 can stay Conceived. Close it or fold the additive scraps into v2. Use `Refs #65` for the collision that produced these notes.
 
 Open the prototype:
 

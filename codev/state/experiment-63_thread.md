@@ -16,6 +16,10 @@ Hypothesis holds. `afx start` and `--remote` are gone. `/api/create` exists and 
 
 Production files untouched.
 
-Recommend a SPIR that flattens the card, wires Create, adds update-as-PTY-or-exec, and drops SSH remote. Do not implement 0063 as written.
+Recommend against implementing 0063 as written. The landing is the surface v2 replaces. SSH remote and ttyd are decisions v2 already made differently.
 
 Prototype: `codev/experiments/63-tower-dashboard-improvements/prototype/index.html`
+
+## 2026-08-23 provenance
+
+Spawn-path collision, issue #65. These notes answer spec 0063 (Conceived, never built). They are not GitHub issue #63. Kept because the spec is a genuinely open question.
