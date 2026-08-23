@@ -3,7 +3,10 @@
 - **Issue:** #52
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 7
+- **Status:** Draft, rev. 8
+- **Rev. 8 changes:** `snapshot.seq` defined as the current cursor rather than a new frame
+  in the buffer; `builder_id` in the id scheme pinned to `builders.id` with a stated
+  fallback.
 - **Rev. 7 changes:** deleted a stale rev.-2 block that still said `stalled == isIdleWaiting`
   and contradicted rev. 6's table; `gone` and `offline` separated by a single rule that
   applies to all three node kinds; architect nodes given a source that can actually produce
@@ -67,6 +70,14 @@ Accept: text/event-stream
 
 `since` and `stream` are resume parameters and travel together. Neither is valid alone.
 
+### `snapshot` and the cursor
+
+**`snapshot.seq` is the current value of the scope's cursor. It does not increment it, and the snapshot is never written into the delta buffer.**
+
+A snapshot is a statement about the state *at* a cursor position, not an event that happened *at* one. If it consumed a sequence number, two clients connecting at different moments would receive different cursor values for identical state, and a client resuming from a snapshot's `seq` would skip the first real delta after it. If it entered the buffer, a resuming client would be served a full snapshot as though it were a delta.
+
+A client that receives `snapshot` with `seq: N` and later resumes with `since: N` must receive every delta from `N+1`, with none skipped and none replayed.
+
 **Transport is SSE consumed via `fetch` + `ReadableStream`.** Not `EventSource`: it cannot set the auth header and will 401. This mirrors `useSSE.ts` exactly.
 
 FR-32 eventually wants one multiplexed control socket per environment. That is a later spec and it **subsumes** this stream rather than discarding it: the frames below are the contract, and moving them onto a WebSocket changes the plumbing, not the schema. That is the point of D2.
@@ -116,9 +127,17 @@ Ids must be stable across reconnects, or `gone` frames cannot be matched to anyt
 
 ```
 workspace:<workspace_path>
-architect:<workspace_path>#<name>
+architect:<workspace_path>#<architect_id>
 builder:<workspace_path>#<builder_id>
 ```
+
+**`builder_id` is `builders.id`** — the `id TEXT` column of the `builders` table (`db/schema.ts:51`), for example `builder-experiment-39`. **When no row exists** (a worktree present in `.builders/` that was never registered, which `discoverBuilders` will still return) **it is the worktree directory name.**
+
+It is **not** `OverviewBuilder.roleId`, which is derived from the worktree basename, lowercased, and **nullable** for soft-mode builders whose worktree does not match a protocol pattern — a null there would collapse every such builder onto one id. It is also not any other identifier the overview payload happens to expose.
+
+**`architect_id` is `architect.id`** — the `id TEXT` column of the `architect` table, which is the architect's name (`main`, `uiv2`).
+
+Getting this wrong does not fail loudly. It produces `gone` frames that match nothing and builders that overwrite each other, both of which surface as a confusing tree rather than an error.
 
 **Every id is qualified by `workspace_path`, builders included.** Rev. 3 used a bare `builder:<builder_id>` on the assumption that builder ids are globally unique. They are not: `builders` is declared `PRIMARY KEY (workspace_path, id)` (`db/schema.ts:46`), so the id is unique only within a workspace. Two workspaces each running `experiment-39` would collide, and the scope example in this very spec is a two-workspace one. The collision would have surfaced as builders overwriting each other in the tree, blamed on the client.
 
@@ -299,6 +318,7 @@ The v2 stream does not evict; see **v2 capacity and eviction** below. Rev. 2 arg
 4b. **Every builder resolves to exactly one status.** Exercised against the cases that broke earlier revisions: completed-and-live-and-stale, live-and-never-spoken, worktree-present-with-no-session, and gate-blocked-while-stale. No input produces two matches or none.
 5. Every in-scope builder carries `buckets` sufficient to render FR-41.
 6. Reconnect with `since` either resumes from `since+1` or returns `snapshot` with `resumed: false`. Never an empty delta list.
+6b. A client that snapshots at `seq: N`, then resumes with `since: N`, receives every delta from `N+1` with none skipped and none replayed. Two clients snapshotting at different moments against unchanged state receive the same `seq`.
 7. Two clients on the same scope converge to identical state.
 8. **Idle under 1 KB/s per connection measured with 20 silent builders in scope**, over 60 seconds.
 9. Delta latency p95 under 200ms from state change to frame written.
@@ -350,6 +370,7 @@ Ranked, most consequential first.
 2. **Stalled transition.** Builder silent past `IDLE_WAITING_THRESHOLD_MS` transitions to `stalled`; a gate-blocked builder does not, proving precedence.
 3. **Idle cost.** 20 silent in-scope builders, 60 seconds, measure bytes. Assert under 1 KB/s. This is the real idle case; zero builders is the easy one and does not test the tick rule.
 4. **Resume inside the window.** Disconnect, reconnect with `since`, assert deltas from `since+1` and no snapshot.
+4b. **Snapshot does not consume a sequence number.** Snapshot twice against unchanged state, assert an identical `seq`. Then change state once and assert the next delta is `seq+1`, not `seq+2`.
 5. **Resume outside the window.** Exceed the buffer, reconnect, assert `snapshot` with `resumed: false`.
 6. **Tower restart.** Restart, reconnect with a valid `since`, assert `snapshot` with `resumed: false` rather than an empty delta list.
 7. **Dark vs empty, and which one.** With a two-path scope, make one path unreadable. Assert a `dark` frame naming that path, assert the other path still streams, and assert no empty snapshot.
@@ -379,6 +400,8 @@ Ranked, most consequential first.
 | Implementation copies the filtered `getOverview` call site | High — it is the obvious one to copy | High — `offline` silently never fires and finished builders vanish | Called out on the source, and scenario 9e fails loudly if it happens |
 | Same trap for architects via `liveArchitects` | High — also the obvious helper | High — architects vanish instead of going offline | Named on the architect source; scenario 9g fails loudly |
 | Builder id collision across workspaces | High if unqualified | High — builders overwrite each other, blamed on the client | Every id qualified by `workspace_path` per `schema.ts:46`; scenario 7b tests it |
+| `roleId` used as the id, nulls collapse together | Medium — it is the field liveness uses | High — soft-mode builders merge into one node | `builders.id` named explicitly, with the worktree-name fallback |
+| Snapshot consumes a sequence number | Medium | High — silent skipped or replayed deltas on every resume | Stated on the contract; scenario 4b asserts it directly |
 | Resumed deltas served into the wrong scope | Medium | High — silent corruption | `since` only valid with a matching `streamId`; mismatch returns a flagged snapshot |
 
 ## References
