@@ -34,7 +34,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-23T07:21:36.575Z'
-updated_at: '2026-08-23T19:09:50.160Z'
+updated_at: '2026-08-23T19:09:51.754Z'
 context_refreshes:
   - boundary: plan-phase:phase_2
     at: '2026-08-23T17:47:34.397Z'
@@ -60,3 +60,5 @@ pr_history:
     pr_number: 61
     branch: builder/spir-52
     created_at: '2026-08-23T19:09:50.158Z'
+    merged: true
+    merged_at: '2026-08-23T19:09:51.753Z'
