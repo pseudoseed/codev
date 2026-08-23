@@ -87,6 +87,13 @@ describe('v2-status', () => {
 
     expect(statusForBuilder({
       blockedGate: null,
+      live: true,
+      lastDataAt: null,
+      now: NOW,
+    })).toBe('running');
+
+    expect(statusForBuilder({
+      blockedGate: null,
       live: false,
       lastDataAt: null,
       now: NOW,
@@ -201,11 +208,13 @@ describe('projectHierarchy', () => {
       lastDataAt: { [`${WS_A}|builder-spir-52`]: FRESH },
       terminalCounts: { [WS_A]: 1 },
       builders: { [WS_A]: [discovered('spir-52'), discovered('quiet')] },
-      held: new Set([`${WS_A}|builder-spir-52`]),
+      held: new Set([`${WS_A}|builder-spir-52`, `${WS_A}|main`]),
     }));
     const map = byId(nodes);
     expect(map.get(builderId(WS_A, 'spir-52'))!.flags.heldMail).toBe(true);
     expect(map.get(builderId(WS_A, 'quiet'))!.flags.heldMail).toBe(false);
+    expect(map.get(architectId(WS_A, 'main'))!.flags.heldMail).toBe(true);
+    expect(map.get(builderId(WS_A, 'spir-52'))!.lastDataAt).toBe(new Date(FRESH).toISOString());
   });
 
   it('does not put buckets on projected nodes', () => {
