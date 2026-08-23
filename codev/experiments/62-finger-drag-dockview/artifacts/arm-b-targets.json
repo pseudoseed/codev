@@ -1,0 +1,90 @@
+{
+  "at": "2026-08-23T22:07:48.822Z",
+  "arm": "B",
+  "viewport": {
+    "width": 1024,
+    "height": 768,
+    "dppx": 1
+  },
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/147.0.7727.15 Safari/537.36",
+  "fontSize": "16px",
+  "safeArea": {
+    "top": "0px",
+    "right": "0px",
+    "bottom": "0px",
+    "left": "0px"
+  },
+  "pairs": [
+    {
+      "tab": {
+        "w": 88.3,
+        "h": 44,
+        "x": 8,
+        "y": 131.4
+      },
+      "close": {
+        "w": 66.9,
+        "h": 44,
+        "x": 104.3,
+        "y": 131.4
+      },
+      "closeInsideTab": false,
+      "gapTabToClose": {
+        "horizontal": 8,
+        "vertical": -44
+      }
+    },
+    {
+      "tab": {
+        "w": 90,
+        "h": 44,
+        "x": 520,
+        "y": 131.4
+      },
+      "close": {
+        "w": 66.9,
+        "h": 44,
+        "x": 618,
+        "y": 131.4
+      },
+      "closeInsideTab": false,
+      "gapTabToClose": {
+        "horizontal": 8,
+        "vertical": -44
+      }
+    }
+  ],
+  "toolbar": [
+    {
+      "w": 113.2,
+      "h": 44,
+      "x": 12,
+      "y": 68.4
+    },
+    {
+      "w": 66,
+      "h": 44,
+      "x": 133.2,
+      "y": 68.4
+    },
+    {
+      "w": 141.6,
+      "h": 44,
+      "x": 207.2,
+      "y": 68.4
+    },
+    {
+      "w": 70.7,
+      "h": 44,
+      "x": 356.8,
+      "y": 68.4
+    }
+  ],
+  "fr22": {
+    "floorPt": 44,
+    "sepPt": 8,
+    "sizePass": true,
+    "sepPass": true,
+    "pass": true
+  }
+}

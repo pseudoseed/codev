@@ -1,6 +1,6 @@
 # Experiment 62: Can a finger drag a dockview split on a real iPad
 
-**Status**: Complete (arm A scored; arm B not built) · **Date**: 2026-08-23
+**Status**: Complete (arm A device-scored; arm B built and DOM-scored) · **Date**: 2026-08-23
 
 Spawn prompt named `codev/specs/0062-secure-remote-access.md` (already shipped, then `--remote` was removed in spec 99). Issue #62 and porch project `62-spike-v2-ui-can-a-finger-drag-` are the work. Same template-fill collision as experiments 38 and 39.
 
@@ -110,6 +110,7 @@ git diff --stat -- apps/web
 | `src/main.jsx` | Vite entry. |
 | `src/App.jsx` | Dockview 8.2.0 page, 2×2 start layout, on-page score sheet. |
 | `src/measure.js` | DOM probe for sash and tab-close sizes. |
+| `b.html` `src/b.css` `src/b.js` | Arm B. No library. Grid split, sibling close, native scroll. |
 | `scripts/probe-package.mjs` | Grep the installed package for the pointer backend. |
 | `artifacts/` | Probe output and (later) device scores. |
 
@@ -165,7 +166,10 @@ That is the default chrome of every pane, not an edge widget. One React tab comp
 | Text selection and copy inside a pane | **Pass** | Human: "Text selection and copy INSIDE a pane: WORKS." This was the biggest risk on the widened list. |
 | Gesture 1–5, keyboard attached | **Not separately scored** | He did not call this out. Not treated as a fail. |
 | VoiceOver, Dynamic Type, both orientations, momentum scroll | **Not separately scored** | Covered only by "everything else worked." Not named. |
-| Arm B (native primitives) | **Not run** | Never built. Issue comments added the second arm after spawn. I shipped only A. No device score exists. I will not invent one. |
+| Arm B FR-22 size + separation | **Pass** | Live DOM, Chromium 1024×768. Tab 88.3×44, close 66.9×44, gap 8 pt, `closeInsideTab: false`. `artifacts/arm-b-targets.json`. |
+| Arm B selection (Chromium) | **Pass** | `user-select: text`. Range select of the `<pre>` contained `DOM`. Close hides the pane, node stays, restore keeps the text. `artifacts/arm-b-behavior.json`. |
+| Arm B split | **Menu only** | Side-by-side / stack buttons. No drag-to-rearrange. By design. |
+| Arm B VoiceOver, Dynamic Type at large sizes, both orientations, finger scroll | **Not run** | Needs the iPad. CSS uses `font-size: 100%` and rem, and `env(safe-area-inset-*)`. Computed insets are 0 on this desktop. |
 | `apps/web` untouched | **Pass** | `git diff --stat -- apps/web` empty. |
 
 **v8 package split, verified.** `dockview@8.2.0` is a thin re-export of `dockview-core` and has no `DockviewReact`. React bindings are `dockview-react@8.2.0`. The page uses that. The FRD's "React bindings" line is stale against v8 names. The pointer backend lives in core either way.
@@ -174,42 +178,53 @@ That is the default chrome of every pane, not an edge widget. One React tab comp
 
 ## Verdict
 
-**Arm A, dockview 8.2.0, real iPad.** Gestures and selection pass. Touch targets fail FR-22 on both clauses: size (sash 4 px, 24 px coarse) and separation (X nested inside the tab, 0 pt).
+These arms were not scored the same way. That is a limitation. It is not a footnote.
 
-Do not read the target failure as "dockview failed." Selection and copy work. That was the biggest risk we were carrying.
+**Arm A was scored on a real iPad by the human.** Arm B has been scored in Chromium and in the live DOM only. Those are not comparable evidence. Testing A on a device and B in a desktop browser repeats, in reverse, the error this spike exists to prevent.
 
-Do not soften the target failure because the gestures passed. A learned gesture is not a destructive mis-tap.
+His observation, attributed: he tested arm A and reported gestures and selection working, with the tab-close mis-tap as the only failure. That is the strongest single data point in this spike.
 
-**Arm B was not on the device.** The issue comments required a native-primitives arm so a dockview miss could not be mistaken for a verdict on the web. Without B, the bake-off table cannot be filled. In particular the row "both fail → the web layer cannot meet the bar" is unevidenced.
+What can be stated without a device:
+
+- Arm B passes FR-22 in the live DOM: tab 88×44, close 67×44, gap 8 pt, `closeInsideTab` false. Arm A fails both clauses: sash 4 px / 24 px coarse, close nested at 0 pt.
+- Arm B satisfies FR-49 by construction: close detaches, restore keeps the DOM text. Arm A's close is destructive and its own control is nested inside the most common target.
+- Arm A needs a custom `defaultTabComponent` plus a raised tab bar to reach FR-22. The number is below.
+- Arm B's cost is what it cannot do. Enumerated below. Not "does less."
+
+**Unscored for arm B:** VoiceOver traversal. Dynamic Type at large sizes. Both orientations. Real-finger scroll and momentum. Safe areas on device.
+
+No winner.
 
 ## Costs, not a winner
 
-No pick. The human decides.
+**Arm A, dockview 8.2.0**
 
-| | Dockview (A), scored | Native primitives (B), not scored |
-|---|---|---|
-| Gestures (split, drag, resize) | Pass on device | Unknown. By design B has no drag-to-rearrange. Split is fixed or menu-driven. That cost is the point of B, not a surprise. |
-| Selection and copy in a pane | Pass on device | Unknown. B was specified as a DOM terminal so this would exist. Not proven. |
-| FR-22 size | Fail. Custom CSS on every sash, or accept 4/24. | Unknown. A 44 pt sash is a few rules if we own the chrome. |
-| FR-22 separation | Fail. Needs a custom `defaultTabComponent` and `--dv-tabs-and-actions-container-height` raised from 35. Nested X cannot be padded apart. | Unknown. We would own the tab chrome, so 8 pt gaps are ours to put in. Not proven. |
-| What you give up | Stock close is a mis-tap. Session teardown is #66, not this library. | Drag-to-rearrange, edge-split, dockview serialization. Simpler tiling is the price. |
+- To reach FR-22 without a fork: 2 new files we own, 0 dockview files edited. A title-only `defaultTabComponent` (the published `DockviewDefaultTab` is ~45 lines and renders the close *inside* the tab). Plus a `rightHeaderActionsComponent` close, because `Tab` mounts that renderer inside `.dv-tab`, which is the drag source. A custom tab that still contains close still has gap 0. `hideClose` plus a group-level close is the documented way out. One CSS variable, `--dv-tabs-and-actions-container-height`, today 35 px. Sash size is ~5 rules in our stylesheet (4 px box + coarse `::before`).
+- Per-tab close with an 8 pt gap requires changing `Tab` itself (`tab.d.ts` is 46 lines; the body lives in dockview-core). That is a fork. Not counted as "a theme tweak."
+- Session teardown on close is #66. Not this library.
 
-#66 takes the destructive-close question off this spike. Close must detach a viewer, never destroy a session. Library-independent. This spike surfaced it. It is not this spike's to solve.
+**Arm B, native primitives**
+
+Lost, exactly:
+
+- Drag a tab to an edge to split.
+- Drag a pane from one group into another.
+- Drag the sash to resize.
+- Floating groups.
+- Popout windows.
+- Layout serialization (`api.toJSON` / `fromJSON`).
+- Tab overflow, pinned tabs, tab groups.
+
+What it has: a fixed two-pane grid. Buttons flip side-by-side vs stack. Close detaches. Targets are 44 pt with 8 pt gaps and are not nested.
+
+#66 takes destructive close off this spike. Close must detach a viewer. Library-independent.
 
 ## What worked / what didn't
 
-Worked: finger split, drag, resize. Selection and copy inside a pane. Pointer backend in 8.2.0.
+His words on arm A: gestures and selection working, tab-close mis-tap the only failure.
 
-Did not work: FR-22, both clauses. First contact closed a tab.
-
-Did not run: arm B. That is a miss in this spike, not a score.
+Arm B: FR-22 and detach measured in Chromium. Finger and VoiceOver on B are unscored.
 
 ## Next steps
 
-Human chooses on the cost table. I do not.
-
-If they want the bake-off finished, arm B is still the missing page: CSS grid two-pane, native scroll, DOM text, safe-area insets, no library. Same device, same list. Until that run, do not treat a dockview target fail as a verdict on the web.
-
-Production path for A, if chosen: custom tab plus taller bar. Do not restyle this spike to pretend stock dockview passes.
-
-`apps/web` stays untouched.
+Two cost lists. Stop.
