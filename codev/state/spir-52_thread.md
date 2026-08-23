@@ -33,3 +33,20 @@ Builder for Issue #52 / Spec 52. STRICT mode. SPIR.
 - Types in `packages/types/src/v2-events.ts`. Ids, status, `projectHierarchy` with injected `V2Deps`.
 - `getBuilders` join is `row.worktree === discovered.worktreePath`. Test asserts parentId is the architect id, not the workspace.
 - 11 tests pass (`v2-projection.test.ts`). Does not import `isIdleWaiting`.
+- Commits: `0d23f69db` projection, `1cca7216b` extra assertions.
+
+### 2026-08-23 — Phase 2: Scoped event bus and SSE route
+
+- `v2-events.ts` ScopeBus. `v2-routes.ts` GET `/v2/events`. One `/v2/` mount in `tower-routes.ts` after ROUTES, before `/api/tunnel/`.
+- Commit `e06812956`. porch done; build passed.
+- Tests verified: v2-events + v2-routes 17 passed. Existing `GET /api/events` 8 passed. `git diff` on tower-routes is import + one if.
+- Context refresh at phase_2 refused: opencode has no in-session clear. architect:uiv2 said continue. Push at every phase boundary from here.
+- Next: porch next → phase 2 impl review, then phase 3 sampler.
+
+### Standing orders still in force
+
+- `afx send architect:uiv2` only (not bare architect).
+- Phase 4: no silent production edits; name any phase-3 hole in the commit body.
+- Phase 2 must re-apply workspace parentId fallback if scope filtering drops an architect (projection is scope-blind; scope is workspace paths so this is usually a no-op).
+- Phase 3 `heldByAgent` must lowercase both sides of `to_agent`.
+- Do not invent unregister. Do not pause the compare loop. dark is a handshake.
