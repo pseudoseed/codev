@@ -3,7 +3,12 @@
 - **Issue:** #52
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 4
+- **Status:** Draft, rev. 5
+- **Rev. 5 changes:** the eviction self-contradiction removed; `done` dropped because no
+  field on the wire carries it; every remaining `Status` defined against a real
+  `OverviewBuilder` field and made mutually exclusive by construction; `counts` emission
+  rule fixed so in-scope changes update rollups; `gone` given an emission rule; `buckets`
+  confined to `snapshot` so `tick` is the only thing that advances a sparkline.
 - **Rev. 4 changes:** builder ids qualified by workspace, because `builders` is keyed
   `PRIMARY KEY (workspace_path, id)` and the unqualified form collides across the spec's
   own two-workspace example; `since` bound to a `streamId` so a scope change cannot
@@ -68,7 +73,7 @@ Every frame is `{ seq, type, ... }`.
 { seq, type: "snapshot", streamId, resumed: false, scope, nodes: Node[], counts: Counts }
 { seq, type: "node",     node: Node }              // upsert
 { seq, type: "gone",     id: string }
-{ seq, type: "counts",   counts: Counts }          // out-of-scope rollup
+{ seq, type: "counts",   counts: Counts }          // whenever any count changes
 { seq, type: "tick",     at: iso, buckets: { [builderId]: number } }
 { seq, type: "dark",     id: string, reason: string }   // this scope path cannot be read
 ```
@@ -86,7 +91,8 @@ Node {
   status: Status,
   flags: { heldMail: boolean },
   lastDataAt: iso | null,
-  buckets: number[]        // builders only, oldest first, 20 entries
+  buckets?: number[]       // builders only, oldest first, 20 entries.
+                           // PRESENT ONLY IN `snapshot`. Never on a `node` upsert.
 }
 
 Counts {
@@ -115,33 +121,40 @@ These remain the natural keys already in `global.db`. No new identifier is minte
 ### Status, with precedence
 
 ```
-Status = "gate-waiting" | "done" | "stalled" | "running" | "idle" | "offline"
+Status = "gate-waiting" | "stalled" | "running" | "idle" | "offline"
 ```
 
 Computed server-side, once (D4). Clients render what they are told and never re-derive.
 
-**Precedence, highest first: `gate-waiting`, `done`, `stalled`, `running`, `idle`, `offline`.**
+**Evaluated in this order; the first match wins, and the list is exhaustive.** Ordering them this way makes the values mutually exclusive by construction rather than by a separate precedence rule that can drift from the predicates.
 
-Rev. 2 put `offline` at the top. That is wrong: a completed builder whose session has been cleaned up has no live process, so it would paint `offline` and **`done` would be unreachable**. Terminal states outrank liveness.
+### Every value, against a real field
 
-### Every value, as a predicate
+Source is the existing overview payload (`packages/types/src/api.ts:147` `OverviewBuilder`), which is already assembled server-side and needs no new plumbing.
 
-**Builder** (`kind: "builder"`):
+**Builder** (`kind: "builder"`), in order:
 
-| Status | Predicate |
-|---|---|
-| `gate-waiting` | `blocked` is set — the builder is stopped at a gate |
-| `done` | `phase` is a terminal phase (`verified` / complete) |
-| `stalled` | `isIdleWaiting(builder)` — silent past `IDLE_WAITING_THRESHOLD_MS`, not blocked, not completed |
-| `running` | live session and `lastDataAt` within `IDLE_WAITING_THRESHOLD_MS` |
-| `idle` | live session, no `lastDataAt` yet, or output within the threshold but no progress signal |
-| `offline` | no live session and not terminal — the row is known but nothing is attached |
+| # | Status | Predicate |
+|---|---|---|
+| 1 | `gate-waiting` | `blockedGate !== null`. **Uses `blockedGate`, not `blocked`** — `blocked` is a display label and does not match porch's gate keys |
+| 2 | `stalled` | `isIdleWaiting(builder)` — silent past `IDLE_WAITING_THRESHOLD_MS`, not gate-blocked, `lastDataAt` present |
+| 3 | `running` | live session **and** `lastDataAt !== null` **and** `now - lastDataAt <= IDLE_WAITING_THRESHOLD_MS` |
+| 4 | `idle` | live session **and** `lastDataAt === null` — attached but has never produced output |
+| 5 | `offline` | no live session. `lastDataAt` is `null` in this case by definition |
 
-**Architect** (`kind: "architect"`): `running` when a live session exists, `offline` when the row exists with no live session. `gate-waiting`, `stalled` and `done` do not apply and are never emitted for this kind.
+Rev. 4's `idle` said "output within the threshold but no progress signal." **"Progress signal" named nothing that exists**, and it overlapped `running`. Removed rather than defined, because the distinction it gestured at is not on the wire.
+
+**Architect** (`kind: "architect"`): `running` with a live session, `offline` without. `gate-waiting`, `stalled` and `idle` are never emitted for this kind.
 
 **Workspace** (`kind: "workspace"`): `running` when Tower reports it active, `offline` otherwise. No other value is emitted for this kind.
 
-**FR-4's `needs-attention` is `stalled`.** It is not a sixth value. FR-4 names a UI concept; `stalled` is its server-side spelling, and adding both would give two names for one condition.
+### Why there is no `done`
+
+Rev. 3 and 4 carried a `done` status. **Nothing on the wire carries completion.** `OverviewBuilder.phase` is the display sub-phase, `protocolPhase` is the coarse protocol phase (`verify` is a phase a builder is *in*, not a statement that it finished), and `global.db` has no completion column. `done` was a predicate against a field that does not exist, and rev. 3 spent a whole revision fixing its precedence against `offline` without noticing neither could be computed.
+
+**A finished builder reads `offline`**, which is true: nothing is attached to it.
+
+The cost is real and stated rather than hidden: **a completed builder and a crashed builder look identical.** Closing that needs a completion signal added to the overview payload, which is an upstream file and therefore a C1 decision, not a free one. Open question 3.
 
 `heldMail` is a **flag, not a status**, because a builder can be running and have held mail at the same time. FR-4 lists it alongside statuses; that is a UI grouping, not an enum member.
 
@@ -165,9 +178,19 @@ One `tick` frame per bucket interval per connection. **Builders with zero output
 
 The client advances the trace on `tick` and renders absent builders as zero. That is rendering an explicit signal, not deriving state, so it does not violate D4.
 
+**`buckets` appears only in `snapshot`; `tick` is the sole thing that advances a sparkline afterwards.** Rev. 4 put `buckets` on `Node`, which meant every `node` upsert also carried a trace — so a client that received an upsert between ticks would advance its sparkline differently from one that did not, and criterion 7 would fail intermittently. Two writers to one piece of state is one too many.
+
 ### Scope (FR-31), reconciled rather than deferred
 
 FR-31 requires scoped subscriptions, not full-state broadcast. Rev. 1's full-hierarchy snapshot contradicted it silently.
+
+**`counts` covers the whole hierarchy, in scope and out.** Rev. 4 described it as an out-of-scope rollup, which leaves the rollup stale whenever an in-scope builder spawns or enters a gate — and two clients with different scopes would then disagree about `gateWaiting`, breaking criterion 7. A `counts` frame is emitted whenever any count changes, whatever the scope of the node that caused it.
+
+### `gone`
+
+Emitted for an **in-scope** node that disappears from the source: a builder row removed by `afx cleanup`, a workspace deactivated, an architect exiting. Out-of-scope disappearances move `counts` instead.
+
+Without this rule and with no eviction to paper over it, a cleaned-up builder would sit in the tree forever on every connected client. Rev. 4 declared `gone` in the frame list and never said when it fires.
 
 `scope` is a comma-separated list of URL-encoded workspace paths, for example
 `?scope=%2FUsers%2Fchris%2Fdev%2Fcodev-1455,%2FUsers%2Fchris%2Fdev%2Fpseudoapps`. The snapshot carries **full `Node` detail for in-scope nodes** and a **`Counts` rollup for everything else**. Deltas are emitted for in-scope nodes only; out-of-scope changes move counts.
@@ -212,14 +235,15 @@ Deltas are buffered in memory per scope, bounded at **500 frames or 5 minutes, w
 
 **After a Tower restart every buffer and every `streamId` is gone** (C2 forbids persisting them), so every resume returns a flagged snapshot. This is the case a client must not mistake for "nothing changed."
 
-The existing SSE layer evicts every 4–6 minutes. If the v2 stream inherits that, **the iOS story is frequent reconnect, not a long-lived socket**, and the resume path is exercised constantly rather than being a rare edge. That is a feature: a rarely-exercised resume path is a broken one.
+The v2 stream does not evict; see **v2 capacity and eviction** below. Rev. 2 argued that inherited eviction would exercise the resume path for free. That was wrong on both counts — the eviction lives on a list C4 forbids sharing, and a correctness mechanism tested by accident is not tested. Scenarios 4 to 6 are what exercise resume.
 
 ## Success Criteria
 
 1. Snapshot on connect carries every in-scope node with status, and a counts rollup for the rest.
 2. Spawning a builder emits a `node` frame to every connected in-scope client within **500ms**, no client timer involved.
 3. Entering gate-waiting emits a `node` frame carrying that status.
-4. A builder silent past `IDLE_WAITING_THRESHOLD_MS`, not gate-blocked and not completed, reports `stalled`.
+4. A builder silent past `IDLE_WAITING_THRESHOLD_MS` and not gate-blocked reports `stalled`. A gate-blocked builder silent for the same period reports `gate-waiting`, proving evaluation order.
+4b. Every builder resolves to exactly one status. No input produces two matches or none.
 5. Every in-scope builder carries `buckets` sufficient to render FR-41.
 6. Reconnect with `since` either resumes from `since+1` or returns `snapshot` with `resumed: false`. Never an empty delta list.
 7. Two clients on the same scope converge to identical state.
@@ -263,7 +287,9 @@ Ranked, most consequential first.
 1. **Does the VS Code extension eventually want this stream instead of `broadcastNotification`?** Out of scope here, but if yes, C1's "never touch it" becomes cheaper to revisit and this stream's audience doubles. Does not block the build.
 2. **Is a 50-client v2 cap right?** Chosen as a quarter of the existing 200 on the reasoning that v2 clients are few and long-lived. Cheap to change, so not worth blocking on.
 
-**Closed in this revision:** whether `done` builders drop out of scope. **They stay** until the client changes scope. Disappearing rows are worse than stale ones, and this is what keeps `done` reachable now that it outranks `offline`.
+3. **Should a completion signal be added to the overview payload?** Without one, a finished builder and a crashed builder are both `offline`. Adding it means touching an upstream file, so it is a C1 decision with a real cost. Recommend shipping without it and revisiting once the tree is rendering and the confusion is observable rather than theoretical.
+
+**Closed in this revision:** whether finished builders drop out of scope. The question dissolved with `done` — a finished builder is `offline` and stays in the tree until it is actually removed, at which point `gone` fires.
 
 ## Test Scenarios
 
@@ -277,6 +303,9 @@ Ranked, most consequential first.
 7b. **Id collision.** Two workspaces each with a builder of the same local id. Assert both appear as distinct nodes and that neither `gone` nor a `tick` bucket key matches the wrong one.
 8. **Two-client convergence.** Drive 100 random state changes, assert both clients end identical.
 9. **Scope isolation.** Change an out-of-scope workspace, assert a `counts` frame and no `node` frame.
+9b. **Counts follow in-scope changes too.** Spawn an **in-scope** builder, assert both a `node` frame and an updated `counts`. Two clients with different scopes must report the same `gateWaiting`.
+9c. **`gone` on cleanup.** Remove an in-scope builder, assert a `gone` frame carrying its qualified id, and assert it leaves both connected clients' trees.
+9d. **Sparkline single-writer.** Drive `node` upserts between ticks on one client and not the other; assert both sparklines are identical after the next `tick`.
 10. **Non-regression.** Existing SSE suite passes untouched.
 
 ## Risks and Mitigation
@@ -290,6 +319,7 @@ Ranked, most consequential first.
 | Upstream merge conflict | Low | High — the fork constraint is the whole design | One mount block beside the existing `/api/tunnel/` prefix; criterion 12 makes it falsifiable |
 | v2 clients starve VS Code clients | Low | Medium | C4: separate cap accounting, 50 v2 clients against the existing 200 |
 | Ids unstable across reconnect, `gone` unmatchable | Low | High — silent leaks in the tree | Ids derive from existing natural keys; nothing new is minted or persisted |
+| Finished and crashed builders indistinguishable | Certain | Low — both are correctly "nothing attached" | Stated, not hidden. Open question 3 carries the upstream cost of fixing it |
 | Builder id collision across workspaces | High if unqualified | High — builders overwrite each other, blamed on the client | Every id qualified by `workspace_path` per `schema.ts:46`; scenario 7b tests it |
 | Resumed deltas served into the wrong scope | Medium | High — silent corruption | `since` only valid with a matching `streamId`; mismatch returns a flagged snapshot |
 
@@ -303,4 +333,5 @@ Ranked, most consequential first.
 - `packages/codev/src/agent-farm/servers/tower-server.ts:259,283-308,364`
 - `packages/codev/src/terminal/pty-session.ts:783` — `bytesWritten`
 - `packages/codev/src/agent-farm/db/schema.ts:46` — `PRIMARY KEY (workspace_path, id)` on `builders`
+- `packages/types/src/api.ts:147` — `OverviewBuilder`: `blockedGate`, `lastDataAt`, `protocolPhase`, `roleId`
 - `packages/codev/src/agent-farm/servers/tower-routes.ts:192,256,1139,1425,1443`
