@@ -28,8 +28,8 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 2
-build_complete: true
+iteration: 3
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_2
@@ -103,8 +103,32 @@ history:
         file: >-
           /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter1-opencode.txt
         stated: false
+  - iteration: 2
+    plan_phase: phase_4
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter2-gemini.txt
+        stated: false
+      - model: codex
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter2-codex.txt
+        stated: false
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter2-claude.txt
+        stated: true
+      - model: opencode
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter2-opencode.txt
+        stated: true
 started_at: '2026-08-23T07:21:36.575Z'
-updated_at: '2026-08-23T18:42:31.753Z'
+updated_at: '2026-08-23T18:48:24.701Z'
 context_refreshes:
   - boundary: plan-phase:phase_2
     at: '2026-08-23T17:47:34.397Z'
