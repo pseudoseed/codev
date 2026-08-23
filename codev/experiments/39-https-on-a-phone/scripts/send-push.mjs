@@ -27,9 +27,10 @@ async function main() {
   }
   const vapid = JSON.parse(fs.readFileSync(VAPID_PATH, 'utf8'));
   if (!vapid.publicKey || !vapid.privateKey) throw new Error('vapid.json missing keys');
+  if (!vapid.subject) throw new Error('vapid.json missing subject; must be a real https origin or a real mailto, never localhost');
   const sub = loadSub(src);
   const webpush = require('web-push');
-  webpush.setVapidDetails(vapid.subject || 'mailto:exp39@localhost', vapid.publicKey, vapid.privateKey);
+  webpush.setVapidDetails(vapid.subject, vapid.publicKey, vapid.privateKey);
   const payload = JSON.stringify({
     title: 'Builder is gate-waiting',
     body: 'exp-39 test push',
