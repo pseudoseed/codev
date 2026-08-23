@@ -7,8 +7,9 @@ current_plan_phase: null
 gates:
   experiment-complete:
     status: pending
+    requested_at: '2026-08-23T22:15:39.267Z'
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-23T21:02:08.906Z'
-updated_at: '2026-08-23T22:14:53.388Z'
+updated_at: '2026-08-23T22:15:39.268Z'
