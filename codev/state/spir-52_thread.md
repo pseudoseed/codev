@@ -15,3 +15,9 @@ Builder for Issue #52 / Spec 52. STRICT mode. SPIR.
   - `heldSummaryForWorkspace` already applies the `not_before` eligibility the spec wants.
   - Mount point: after the `ROUTES` table, before `/api/tunnel/`.
 - Four phases: projection → bus+route → sampler → idle/convergence proof.
+
+### 2026-08-23 — Plan review iteration 1
+
+- Gemini skipped (agy exit 1). Codex quota-exhausted until 2026-08-27. Claude + opencode REQUEST_CHANGES HIGH.
+- Both caught the same silent hole: `discoverBuilders` hardcodes `spawnedByArchitect: null`; plan had no `getBuilders` join. Also: do not pause the sampler, `dark` is a handshake, subscribe-then-snapshot-then-flush.
+- Fixes landed in the plan. Rebuttal agrees with every point.
