@@ -1,0 +1,369 @@
+{
+  "generatedAt": "2026-08-23T21:29:19.286Z",
+  "designed": {
+    "tokens": {
+      "bone": "#2A251E",
+      "chalk": "#353027",
+      "concrete": "#8A8070",
+      "ink": "#EDE4D4",
+      "graphite": "#C4B8A4",
+      "well": "#0A0908",
+      "rust": "#ED7C48",
+      "rustdark": "#D26432",
+      "ochre": "#D9A84C",
+      "moss": "#9AAA86"
+    },
+    "wellOnBone": 1.31,
+    "wellOnChalk": 1.52,
+    "wellDarkerThanBone": true,
+    "chroma": {
+      "rust": 119.3,
+      "ochre": 101.2,
+      "moss": 25.5
+    },
+    "rustLoudest": true,
+    "rows": [
+      {
+        "name": "ink on bone (body)",
+        "fg": "#EDE4D4",
+        "bg": "#2A251E",
+        "kind": "text",
+        "ratio": 12.05,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "ink on chalk (header, tickets, plots)",
+        "fg": "#EDE4D4",
+        "bg": "#353027",
+        "kind": "text",
+        "ratio": 10.38,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "graphite on bone (machine meta)",
+        "fg": "#C4B8A4",
+        "bg": "#2A251E",
+        "kind": "text",
+        "ratio": 7.77,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "graphite on chalk (ticket body, footer)",
+        "fg": "#C4B8A4",
+        "bg": "#353027",
+        "kind": "text",
+        "ratio": 6.7,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "graphite on chalk, no fade (held time)",
+        "fg": "#C4B8A4",
+        "bg": "#353027",
+        "kind": "text",
+        "ratio": 6.7,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "ink on well (terminal, rail chrome)",
+        "fg": "#EDE4D4",
+        "bg": "#0A0908",
+        "kind": "text",
+        "ratio": 15.77,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "ink/85 on well (terminal body)",
+        "fg": "#cbc3b5",
+        "bg": "#0A0908",
+        "kind": "text",
+        "ratio": 11.38,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "ink/70 on well (GATE QUEUE)",
+        "fg": "#a9a297",
+        "bg": "#0A0908",
+        "kind": "text",
+        "ratio": 7.87,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "ink/65 on well (rail footer)",
+        "fg": "#9e978d",
+        "bg": "#0A0908",
+        "kind": "text",
+        "ratio": 6.88,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "rust on bone (footer 3 gates)",
+        "fg": "#ED7C48",
+        "bg": "#2A251E",
+        "kind": "text",
+        "ratio": 5.48,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "rust on chalk (GATE stamp)",
+        "fg": "#ED7C48",
+        "bg": "#353027",
+        "kind": "text",
+        "ratio": 4.73,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "rust on chalk large (held 24:07)",
+        "fg": "#ED7C48",
+        "bg": "#353027",
+        "kind": "large",
+        "ratio": 4.73,
+        "need": 3,
+        "pass": true
+      },
+      {
+        "name": "rust on well (3 waiting, awaiting gate)",
+        "fg": "#ED7C48",
+        "bg": "#0A0908",
+        "kind": "text",
+        "ratio": 7.18,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "ochre on chalk (STUCK?)",
+        "fg": "#D9A84C",
+        "bg": "#353027",
+        "kind": "text",
+        "ratio": 6.02,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "ochre on well (terminal warning)",
+        "fg": "#D9A84C",
+        "bg": "#0A0908",
+        "kind": "text",
+        "ratio": 9.15,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "moss on bone (online badge)",
+        "fg": "#9AAA86",
+        "bg": "#2A251E",
+        "kind": "text",
+        "ratio": 6.13,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "moss on chalk (spark is graphic; badge-on-plot)",
+        "fg": "#9AAA86",
+        "bg": "#353027",
+        "kind": "ui",
+        "ratio": 5.28,
+        "need": 3,
+        "pass": true
+      },
+      {
+        "name": "well on rust (badge glyph, Approve drop)",
+        "fg": "#0A0908",
+        "bg": "#ED7C48",
+        "kind": "text",
+        "ratio": 7.18,
+        "need": 4.5,
+        "pass": true
+      },
+      {
+        "name": "ink border on bone (plot, workspace)",
+        "fg": "#EDE4D4",
+        "bg": "#2A251E",
+        "kind": "ui",
+        "ratio": 12.05,
+        "need": 3,
+        "pass": true
+      },
+      {
+        "name": "ink border on chalk (header, ticket)",
+        "fg": "#EDE4D4",
+        "bg": "#353027",
+        "kind": "ui",
+        "ratio": 10.38,
+        "need": 3,
+        "pass": true
+      },
+      {
+        "name": "concrete on bone (grid, divider)",
+        "fg": "#8A8070",
+        "bg": "#2A251E",
+        "kind": "ui",
+        "ratio": 3.91,
+        "need": 3,
+        "pass": true
+      },
+      {
+        "name": "rust border on chalk (needs-attn ticket)",
+        "fg": "#ED7C48",
+        "bg": "#353027",
+        "kind": "ui",
+        "ratio": 4.73,
+        "need": 3,
+        "pass": true
+      },
+      {
+        "name": "ochre border on chalk (stuck row)",
+        "fg": "#D9A84C",
+        "bg": "#353027",
+        "kind": "ui",
+        "ratio": 6.02,
+        "need": 3,
+        "pass": true
+      },
+      {
+        "name": "moss on bone (online pip)",
+        "fg": "#9AAA86",
+        "bg": "#2A251E",
+        "kind": "ui",
+        "ratio": 6.13,
+        "need": 3,
+        "pass": true
+      },
+      {
+        "name": "ink border of a well on bone (terminal edge)",
+        "fg": "#EDE4D4",
+        "bg": "#2A251E",
+        "kind": "ui",
+        "ratio": 12.05,
+        "need": 3,
+        "pass": true
+      },
+      {
+        "name": "rust border of a well on bone (gate terminal)",
+        "fg": "#ED7C48",
+        "bg": "#2A251E",
+        "kind": "ui",
+        "ratio": 5.48,
+        "need": 3,
+        "pass": true
+      }
+    ],
+    "failed": []
+  },
+  "invertControl": {
+    "tokens": {
+      "bone": "#121721",
+      "chalk": "#090c14",
+      "concrete": "#252c3b",
+      "ink": "#dde0e5",
+      "graphite": "#b5b9c2",
+      "well": "#dde0e5",
+      "rust": "#4aafd5",
+      "rustdark": "#73c2e0",
+      "ochre": "#3f75d1",
+      "moss": "#a394b0"
+    },
+    "wellOnBone": 13.56,
+    "wellDarkerThanBone": false,
+    "rustLoudest": false,
+    "chroma": {
+      "rust": 101.6,
+      "ochre": 104.4,
+      "moss": 19.8
+    },
+    "failed": [
+      {
+        "name": "ink on well (terminal, rail chrome)",
+        "fg": "#dde0e5",
+        "bg": "#dde0e5",
+        "kind": "text",
+        "ratio": 1,
+        "need": 4.5,
+        "pass": false
+      },
+      {
+        "name": "ink/85 on well (terminal body)",
+        "fg": "#dde0e5",
+        "bg": "#dde0e5",
+        "kind": "text",
+        "ratio": 1,
+        "need": 4.5,
+        "pass": false
+      },
+      {
+        "name": "ink/70 on well (GATE QUEUE)",
+        "fg": "#dde0e5",
+        "bg": "#dde0e5",
+        "kind": "text",
+        "ratio": 1,
+        "need": 4.5,
+        "pass": false
+      },
+      {
+        "name": "ink/65 on well (rail footer)",
+        "fg": "#dde0e5",
+        "bg": "#dde0e5",
+        "kind": "text",
+        "ratio": 1,
+        "need": 4.5,
+        "pass": false
+      },
+      {
+        "name": "rust on well (3 waiting, awaiting gate)",
+        "fg": "#4aafd5",
+        "bg": "#dde0e5",
+        "kind": "text",
+        "ratio": 1.89,
+        "need": 4.5,
+        "pass": false
+      },
+      {
+        "name": "ochre on chalk (STUCK?)",
+        "fg": "#3f75d1",
+        "bg": "#090c14",
+        "kind": "text",
+        "ratio": 4.35,
+        "need": 4.5,
+        "pass": false
+      },
+      {
+        "name": "ochre on well (terminal warning)",
+        "fg": "#3f75d1",
+        "bg": "#dde0e5",
+        "kind": "text",
+        "ratio": 3.39,
+        "need": 4.5,
+        "pass": false
+      },
+      {
+        "name": "well on rust (badge glyph, Approve drop)",
+        "fg": "#dde0e5",
+        "bg": "#4aafd5",
+        "kind": "text",
+        "ratio": 1.89,
+        "need": 4.5,
+        "pass": false
+      },
+      {
+        "name": "concrete on bone (grid, divider)",
+        "fg": "#252c3b",
+        "bg": "#121721",
+        "kind": "ui",
+        "ratio": 1.28,
+        "need": 3,
+        "pass": false
+      }
+    ],
+    "note": "Mechanical invert of the light palette. well is inverted ink. Expected to flatten."
+  }
+}
