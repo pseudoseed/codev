@@ -6,10 +6,11 @@ plan_phases: []
 current_plan_phase: null
 gates:
   experiment-complete:
-    status: pending
+    status: approved
     requested_at: '2026-08-23T22:15:39.267Z'
+    approved_at: '2026-08-23T22:21:03.506Z'
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-23T21:02:08.906Z'
-updated_at: '2026-08-23T22:15:39.268Z'
+updated_at: '2026-08-23T22:21:03.507Z'
