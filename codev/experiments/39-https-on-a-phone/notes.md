@@ -1,6 +1,6 @@
 # Experiment 39: HTTPS on a phone via Tailscale, through to one delivered push
 
-**Status**: In Progress · **Date**: 2026-08-22 · **Hold**: no external hostname. Cloudflare work is off. Gate 1 waits on GitOps. Gate 2 is out of scope.
+**Status**: In Progress · **Date**: 2026-08-23 · **Hostname live**: `ade.pseudoseed.com`. Cloudflare work still off for us. Gate 2 out of scope. Device handoff next.
 
 Spawn prompt named `codev/specs/0039-codev-cli.md` (already shipped). Issue #39 and porch project `39-spike-v2-ui-https-on-a-phone-v` are the work. Same template-fill collision as experiment 38.
 
@@ -137,7 +137,8 @@ git diff --stat -- packages/codev/src/agent-farm/servers/tower-server.ts package
 | `src/server-root.mjs` | Dedicated-host preview on 127.0.0.1:4111. Serves `public-root/` at `/`. No Tower proxy. |
 | `public-root/` | Root-scoped PWA for the GitOps hostname. `start_url` `/`, `scope` `/`, SW `/sw.js` scope `/`, `notificationclick` opens `/`. |
 | `scripts/probe-local.mjs` | Nested variant on :4110. |
-| `scripts/probe-root.mjs` | Root variant on :4111. Assets, echo, push plumbing, Chromium SW register + subscribe. Writes `artifacts/root-probes.json`. |
+| `scripts/probe-root.mjs` | Root variant on :4111. SW register + subscribe print. Writes `artifacts/root-probes.json`. |
+| `scripts/send-push.mjs` | Reads a subscription JSON and `artifacts/vapid.json`. Sends one push. Private key stays in the untracked vapid file. |
 | `artifacts/local-probes.json` | Nested local evidence. |
 | `artifacts/root-probes.json` | Root local evidence. |
 
@@ -159,8 +160,8 @@ Local preview ran. Gate 1 did not. Criteria were not rewritten after the run.
 | Root PWA assets on :4111 | **Pass** | `/`, `/manifest.webmanifest` (`scope` `/`), `/sw.js` with `Service-Worker-Allowed: /`, `/app.js`, both PNGs. |
 | Root SW register in Chromium | **Pass** | Scope `http://127.0.0.1:4111/`, `active: true`. |
 | Root subscribe prints JSON | **Pass** | Click Subscribe. Page log contains a subscription with endpoint host `fcm.googleapis.com` and p256dh/auth keys. No `POST /subscribe`. Public key only, 87 chars. This is Chromium/FCM, not iOS. |
-| 1. Trusted HTTPS on a phone | **Blocked** | External GitOps change. Not a technical failure of the ingress, the cert idea, or iOS. No hostname is ours to create. |
-| 1b. Access enforced | **Not run** | Cloudflare work is off. |
+| 1. Trusted HTTPS | **Pass on curl** | `https://ade.pseudoseed.com/` 2026-08-23T04:22:24Z. Issuer `C=US, O=Google Trust Services, CN=WE1`. SAN `pseudoseed.com` and `*.pseudoseed.com`. `ssl_verify_result=0`. Phone Safari "no warning" still needs the device. |
+| 1b. Access enforced | **Pass** | Unauthenticated GET `/`, `/sw.js`, `/manifest.webmanifest`, `/vapid-public.json` all **302** to `https://pseudoseed.cloudflareaccess.com/cdn-cgi/access/login/ade.pseudoseed.com?...`. Body is Cloudflare's 302 page, not the PWA. |
 | 2. WebSocket through trusted HTTPS | **Out of scope** | Human decision, LAN-only approvals. Not a gap. |
 | 3. PWA install | **Not run** | Needs the phone after a hostname exists. |
 | 4. Push permission | **Not run** | Needs the installed PWA. |
@@ -215,9 +216,16 @@ B is the finding that changes FR-36 and FR-16. A means Access and A2HS can live 
 
 ## Next steps
 
-**Waiting on a hostname from the GitOps owner.** Architect will say when one exists. Until then, local only. Idle, not polling.
+**Hostname exists.** `ade.pseudoseed.com` resolves to Cloudflare (`172.67.207.128`, `104.21.45.14`). Access is in front. I did not create this DNS or Access app. I probed it.
 
-**External state, 2026-08-23.** The infra owner has the eight root-scoped files, verified them, and is sorting a stale-branch problem in their own repo before they can spawn a builder to serve them. That is outside this spike. It is not a finding about our code.
+I have no Access token. `cloudflared access token` has no login. I cannot see whether the origin is serving `public-root/` until someone logs in.
+
+**Device, now:**
+
+1. Safari to `https://ade.pseudoseed.com/`. Finish Access login. Confirm the PWA page (Experiment 39 root), not a 404 or the nested `/v2/spike/` tree.
+2. Share, Add to Home Screen. Swipe Safari away. Tap the icon. Score **A / B / C / D** from the Access section.
+3. If A or a completed B: Ask notification permission. Subscribe. Copy the printed JSON off the phone.
+4. Lock the device. I send with `node scripts/send-push.mjs <that.json>`. Tell me if it arrived.
 
 When a name is handed over, serve `public-root/` at `/` on that host. Do not ship the `/v2/spike/` tree there. A nested SW scope on a root host fails registration and looks like an iOS bug.
 

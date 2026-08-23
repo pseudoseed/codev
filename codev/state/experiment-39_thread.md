@@ -60,4 +60,4 @@ Re-proved 22:49Z: SW active at `/`, subscribe printed FCM endpoint + keys to the
 
 Infra owner has the eight root-scoped files and is unblocking a stale branch in their repo. Outside our control. Not a spike finding.
 
-Committing WIP. Then idle until a hostname exists.
+2026-08-23T04:22Z: stopped waiting. `ade.pseudoseed.com` resolves. Cert GTS WE1, SAN `*.pseudoseed.com`, verify 0. Access 302 on every path. No token here. Device handoff is `https://ade.pseudoseed.com/`. send-push.mjs ready.
