@@ -1,0 +1,10 @@
+{
+  "at": "2026-08-22T20:13:35.128Z",
+  "results": [
+    {
+      "endpoint": "https://exp39.invalid/push/fake-sub",
+      "ok": false,
+      "error": "Error: getaddrinfo ENOTFOUND exp39.invalid"
+    }
+  ]
+}

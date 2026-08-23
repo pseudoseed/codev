@@ -1,0 +1,74 @@
+{
+  "at": "2026-08-22T22:49:31.206Z",
+  "variant": "root",
+  "port": 4111,
+  "gates": {
+    "pwa_assets": {
+      "pass": true,
+      "assets": [
+        {
+          "path": "/",
+          "pass": true,
+          "status": 200,
+          "type": "text/html; charset=utf-8"
+        },
+        {
+          "path": "/manifest.webmanifest",
+          "pass": true,
+          "status": 200,
+          "type": "application/manifest+json; charset=utf-8"
+        },
+        {
+          "path": "/sw.js",
+          "pass": true,
+          "status": 200,
+          "type": "text/javascript; charset=utf-8",
+          "swAllowed": "/"
+        },
+        {
+          "path": "/app.js",
+          "pass": true,
+          "status": 200,
+          "type": "text/javascript; charset=utf-8"
+        },
+        {
+          "path": "/vapid-public.json",
+          "pass": true,
+          "status": 200,
+          "type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "/icon-180.png",
+          "pass": true,
+          "status": 200,
+          "type": "image/png"
+        },
+        {
+          "path": "/icon-192.png",
+          "pass": true,
+          "status": 200,
+          "type": "image/png"
+        }
+      ]
+    },
+    "no_backend_writes": {
+      "pass": true
+    },
+    "browser_sw": {
+      "pass": true,
+      "registration": {
+        "registered": true,
+        "scope": "http://127.0.0.1:4111/",
+        "active": true,
+        "installing": false,
+        "waiting": false
+      },
+      "subscribe": {
+        "printed": true,
+        "endpointHost": "fcm.googleapis.com",
+        "hasKeys": true,
+        "logHasSw": true
+      }
+    }
+  }
+}

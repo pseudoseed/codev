@@ -7,6 +7,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 
 interface CreateUserDirsOptions {
   skipExisting?: boolean;
@@ -247,11 +248,28 @@ export function copyColdTierDefaults(
 
 interface CopyRootFilesOptions {
   handleConflicts?: boolean;
+  /**
+   * Issue #31: when true, report what WOULD happen and write nothing.
+   *
+   * `codev update --dry-run` printed "no files will be changed" and then wrote
+   * `.codev-new` siblings, because only the skills call was guarded and this one
+   * was not. A dry run that writes is worse than no dry run: it is the one mode
+   * an operator trusts specifically because it promised not to touch anything.
+   */
+  dryRun?: boolean;
 }
 
 interface CopyRootFilesResult {
   copied: string[];
   conflicts: string[];
+  /**
+   * Issue #30: files that exist and are byte-identical to the template.
+   *
+   * Previously these were reported as conflicts with the reason "Content differs
+   * from template" — a claim nothing had checked, since existence was the only
+   * test. Every update handed the operator a merge task that was usually a no-op.
+   */
+  unchanged: string[];
 }
 
 /**
@@ -263,9 +281,10 @@ export function copyRootFiles(
   projectName: string,
   options: CopyRootFilesOptions = {}
 ): CopyRootFilesResult {
-  const { handleConflicts = false } = options;
+  const { handleConflicts = false, dryRun = false } = options;
   const copied: string[] = [];
   const conflicts: string[] = [];
+  const unchanged: string[] = [];
 
   const rootFiles = ['CLAUDE.md', 'AGENTS.md'];
   for (const file of rootFiles) {
@@ -280,19 +299,39 @@ export function copyRootFiles(
       .replace(/\{\{PROJECT_NAME\}\}/g, projectName);
 
     if (fs.existsSync(destPath)) {
+      // Issue #30: actually compare before claiming the content differs. An
+      // unreadable destination counts as "differs" — that is the direction that
+      // surfaces the file for a human to look at, rather than silently calling
+      // it clean.
+      let current: string | null = null;
+      try {
+        current = fs.readFileSync(destPath, 'utf-8');
+      } catch {
+        current = null;
+      }
+
+      if (current === content) {
+        unchanged.push(file);
+        continue;
+      }
+
       if (handleConflicts) {
-        // Create .codev-new for merge
-        fs.writeFileSync(destPath + '.codev-new', content);
         conflicts.push(file);
+        // Issue #31: a dry run reports the conflict but writes no sibling.
+        if (!dryRun) {
+          fs.writeFileSync(destPath + '.codev-new', content);
+        }
       }
       // Skip if exists and not handling conflicts
     } else {
-      fs.writeFileSync(destPath, content);
       copied.push(file);
+      if (!dryRun) {
+        fs.writeFileSync(destPath, content);
+      }
     }
   }
 
-  return { copied, conflicts };
+  return { copied, conflicts, unchanged };
 }
 
 interface CreateProjectsDirOptions {
@@ -346,6 +385,32 @@ function copyDirRecursive(src: string, dest: string): void {
 
 interface CopySkillsOptions {
   skipExisting?: boolean;
+  /**
+   * Issue #29: refresh a vendored skill whose content still matches an older
+   * shipped version, and leave a locally-edited one alone.
+   *
+   * `skipExisting` alone tests the skill DIRECTORY, so once a skill exists its
+   * contents are frozen at install time forever. `--force` never helped: that
+   * branch only wrapped `copyRootFiles`. The comment said "without replacing
+   * customizations", but with no comparison the code could not tell a
+   * customization from a stale copy, so it preserved both — which in practice
+   * means it preserved rot. Real cost: vendored skills stating the OPPOSITE of
+   * current behavior (the `afx` skill claiming `--branch` does not exist), and
+   * agents burning turns on flags that were removed releases ago.
+   */
+  refreshUnmodified?: boolean;
+  /**
+   * Record provenance for every skill installed, without enabling refresh.
+   *
+   * For init/adopt. Without it, a project initialized at v1 that never happens
+   * to run `update` at v1 reaches v2 with no manifest, is classified "unknown
+   * provenance", and is held back permanently -- so the #29 fix would never
+   * reach the projects that need it most. Init knows exactly what it installed,
+   * so the provenance is free there.
+   *
+   * Implied by `refreshUnmodified`.
+   */
+  recordManifest?: boolean;
 }
 
 interface CopySkillsResult {
@@ -353,8 +418,84 @@ interface CopySkillsResult {
   copied: string[];
   /** Project-relative provider-qualified paths, including a trailing slash. */
   skipped: string[];
+  /**
+   * Skills refreshed because their content was unmodified but stale (#29).
+   * Project-relative provider-qualified paths, including a trailing slash.
+   */
+  refreshed: string[];
+  /**
+   * Skills left alone because they carry local edits (#29). Reported rather
+   * than silently skipped: a customization that is now blocking an update is
+   * exactly what an operator needs told.
+   */
+  customized: string[];
   /** Project-relative provider skill roots that were created. */
   directoriesCreated: string[];
+}
+
+/** Filename of the per-provider skill manifest (#29). */
+export const SKILL_MANIFEST_FILENAME = '.codev-skill-manifest.json';
+
+/**
+ * Content hash of a skill directory: every file's relative path and bytes.
+ *
+ * Returns null when the tree cannot be read. Callers treat null as "I could not
+ * tell", never as "unchanged".
+ */
+function hashSkillDir(dir: string): string | null {
+  const parts: Buffer[] = [];
+  const visit = (d: string, prefix: string): void => {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const abs = path.join(d, entry.name);
+      if (entry.isDirectory()) visit(abs, rel);
+      else if (entry.isFile()) {
+        // Raw bytes, length-framed. Reading as utf-8 collapses invalid bytes to
+        // U+FFFD, so two different binary assets can hash identically and a
+        // modified one would read as unmodified and be overwritten. Framing each
+        // field by length also stops a+bc colliding with ab+c.
+        const name = Buffer.from(rel, 'utf-8');
+        const content = fs.readFileSync(abs);
+        const header = Buffer.alloc(8);
+        header.writeUInt32BE(name.length, 0);
+        header.writeUInt32BE(content.length, 4);
+        parts.push(header, name, content);
+      }
+    }
+  };
+  try {
+    visit(dir, '');
+  } catch {
+    return null;
+  }
+  const hash = createHash('sha256');
+  for (const part of parts) hash.update(part);
+  return hash.digest('hex');
+}
+
+/**
+ * Read the skill manifest for a provider's skills dir.
+ *
+ * Absent or unparseable manifest yields an empty map, which makes every skill
+ * "unknown provenance" rather than "unmodified" — the direction that leaves
+ * local work alone.
+ */
+function readSkillManifest(skillsDir: string): Record<string, string> {
+  try {
+    const raw = fs.readFileSync(path.join(skillsDir, SKILL_MANIFEST_FILENAME), 'utf-8');
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, string>;
+    }
+  } catch { /* absent or unreadable — treat as empty */ }
+  return {};
+}
+
+function writeSkillManifest(skillsDir: string, manifest: Record<string, string>): void {
+  fs.writeFileSync(
+    path.join(skillsDir, SKILL_MANIFEST_FILENAME),
+    JSON.stringify(manifest, null, 2) + '\n',
+  );
 }
 
 export const SKILL_PROVIDERS = ['claude', 'codex'] as const;
@@ -371,9 +512,12 @@ export function copySkills(
   skeletonDir: string,
   options: CopySkillsOptions = {}
 ): CopySkillsResult {
-  const { skipExisting = false } = options;
+  const { skipExisting = false, refreshUnmodified = false } = options;
+  const recordManifest = options.recordManifest ?? refreshUnmodified;
   const copied: string[] = [];
   const skipped: string[] = [];
+  const refreshed: string[] = [];
+  const customized: string[] = [];
   const directoriesCreated: string[] = [];
 
   for (const provider of SKILL_PROVIDERS) {
@@ -389,23 +533,88 @@ export function copySkills(
     // Older/corrupt skeletons may not provide every configured provider.
     if (!fs.existsSync(srcDir)) continue;
 
+    // Issue #29: provenance for "is this vendored copy modified, or just old?"
+    const manifest = recordManifest ? readSkillManifest(skillsDir) : {};
+    let manifestChanged = false;
+
     for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
 
+      const srcSkillDir = path.join(srcDir, entry.name);
       const destSkillDir = path.join(skillsDir, entry.name);
       const relativeSkillDir = `${relativeSkillsDir}/${entry.name}/`;
 
-      if (skipExisting && fs.existsSync(destSkillDir)) {
-        skipped.push(relativeSkillDir);
-        continue;
+      if (fs.existsSync(destSkillDir)) {
+        if (!refreshUnmodified) {
+          if (skipExisting) {
+            skipped.push(relativeSkillDir);
+            continue;
+          }
+        } else {
+          const srcHash = hashSkillDir(srcSkillDir);
+          const destHash = hashSkillDir(destSkillDir);
+          const installedHash = manifest[entry.name];
+
+          // Already current. Record the hash if we never had it, so the NEXT
+          // update can tell modified from stale without another guess.
+          if (srcHash !== null && destHash === srcHash) {
+            skipped.push(relativeSkillDir);
+            if (installedHash !== srcHash) {
+              manifest[entry.name] = srcHash;
+              manifestChanged = true;
+            }
+            continue;
+          }
+
+          // Unknown provenance (installed before manifests, or unreadable) or a
+          // local edit. Both leave the copy alone — but they are REPORTED, not
+          // silently skipped, because a customization now blocking an update is
+          // exactly what an operator needs told.
+          if (destHash === null || installedHash === undefined || destHash !== installedHash) {
+            customized.push(relativeSkillDir);
+            continue;
+          }
+
+          // Vendored copy still matches what we installed, and the skeleton has
+          // moved: it is stale, not customized. Refresh it.
+          //
+          // REPLACE, don't overlay. `copyDirRecursive` is additive — it never
+          // removes destination files absent from the source. Overlaying leaves
+          // a file the skeleton deleted sitting in the vendored skill (exactly
+          // the stale-doc symptom #29 exists to fix), AND poisons provenance:
+          // the recorded hash is the skeleton's, but the destination now hashes
+          // to src+leftover, so the NEXT update reads `destHash !== installed`,
+          // calls the skill customized, and freezes it forever with zero local
+          // edits. Safe to remove here and only here, because `destHash ===
+          // installedHash` was just proven: nothing local is being discarded.
+          fs.rmSync(destSkillDir, { recursive: true, force: true });
+          copyDirRecursive(srcSkillDir, destSkillDir);
+          refreshed.push(relativeSkillDir);
+          if (srcHash !== null) {
+            manifest[entry.name] = srcHash;
+            manifestChanged = true;
+          }
+          continue;
+        }
       }
 
-      copyDirRecursive(path.join(srcDir, entry.name), destSkillDir);
+      copyDirRecursive(srcSkillDir, destSkillDir);
       copied.push(relativeSkillDir);
+      if (recordManifest) {
+        const srcHash = hashSkillDir(srcSkillDir);
+        if (srcHash !== null) {
+          manifest[entry.name] = srcHash;
+          manifestChanged = true;
+        }
+      }
+    }
+
+    if (recordManifest && manifestChanged) {
+      writeSkillManifest(skillsDir, manifest);
     }
   }
 
-  return { copied, skipped, directoriesCreated };
+  return { copied, skipped, refreshed, customized, directoriesCreated };
 }
 
 interface CopyRolesOptions {
