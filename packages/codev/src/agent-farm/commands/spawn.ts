@@ -53,6 +53,7 @@ import {
   buildResumeNotice,
   loadProtocolRole,
   findSpecFile,
+  findSpecLookup,
   validateProtocol,
   loadProtocol,
   resolveMode,
@@ -331,8 +332,22 @@ async function spawnSpec(options: SpawnOptions, config: Config, selection: Agent
 
   const specLookupId = projectId;
 
-  // Resolve spec file (supports legacy zero-padded IDs)
-  const specFile = await findSpecFile(config.codevDir, specLookupId);
+  // Resolve the spec by EXACT id. The zero-stripped fallback was removed in #65:
+  // it handed `afx spawn 63` the unrelated `0063-tower-dashboard-improvements.md`
+  // and cost a builder-hour of well-argued work on the wrong subject.
+  const specLookup = await findSpecLookup(config.codevDir, specLookupId);
+  const specFile = specLookup.path;
+
+  // Say why a spec file that plainly exists is not being used. Without this,
+  // "no spec" looks like the lookup failed to see it.
+  if (!specFile && specLookup.nearMiss) {
+    logger.warn(
+      `Not using ${basename(specLookup.nearMiss)} — its id only matches ${specLookupId} ` +
+      `after stripping leading zeros, so it belongs to different work (#65). ` +
+      `This issue has no spec yet. To spawn the legacy project itself, name it ` +
+      `exactly: afx spawn ${basename(specLookup.nearMiss).split('-')[0]}`,
+    );
+  }
 
   // Try artifact resolver as fallback when no local spec file exists.
   // CLI backend users may store specs externally.
@@ -343,6 +358,32 @@ async function spawnSpec(options: SpawnOptions, config: Config, selection: Agent
       resolverSpecName = resolver.findSpecBaseName(specLookupId, '');
     } catch {
       // Resolver unavailable — fall through to normal error handling
+    }
+
+    // ...but don't let it hand back the twin we just declined (#65).
+    //
+    // The default backend is LocalResolver, which reads THE SAME codev/specs/
+    // through findByProjectId — and that still keeps the lenient zero-stripped
+    // fallback on purpose, because #28 chose to disclose an ambiguous artifact
+    // rather than refuse it. Disclosure is right at review time, where a
+    // reviewer can object. At spawn nobody is watching, so refusing here and
+    // re-fetching four lines later would put the original bug back in the same
+    // command run that just printed "Not using 0063-...".
+    //
+    // Verified live: LocalResolver.findSpecBaseName('63', '') returns
+    // '0063-tower-dashboard-improvements' in this repo.
+    //
+    // Two paths this closes. When the forge fetch returns null (offline, gh
+    // unauthenticated, forge misconfigured) `specName` falls through to the
+    // resolver value and the builder is handed the wrong spec again. And a
+    // truthy resolverSpecName suppresses the "Spec not found" fatal below,
+    // satisfying a required-input protocol with a file the code refused.
+    if (
+      resolverSpecName &&
+      specLookup.nearMiss &&
+      resolverSpecName === basename(specLookup.nearMiss, '.md')
+    ) {
+      resolverSpecName = null;
     }
   }
 
