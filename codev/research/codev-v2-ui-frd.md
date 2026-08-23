@@ -2,8 +2,8 @@
 
 **Status:** Decided — Option 2, multi-machine in v1, built as an additive fork-owned app.
 Not a spec. No implementation authorized; spikes in the appendix come first.
-**Date:** 2026-08-23 (rev. 6 — both spikes run, Option 0 shipped, dark mode and tablet
-tiling decided)
+**Date:** 2026-08-23 (rev. 7 — FR-49 added; design of record corrected to UX Pilot;
+dark mode and tablet tiling decided; both spikes run; Option 0 shipped)
 **Author:** Architect (main)
 **Reviewed by:** Claude Opus 5, Grok 4.6 (Codex unavailable, Gemini unauthenticated)
 **Decided by:** the human, 2026-08-21 — **multi-machine ships in v1**, and **this is a
@@ -484,6 +484,29 @@ requirements for them beyond a node status.
 - **FR-47 (SHOULD)** A gate accepts an optional note back to the builder.
 - **FR-48 (SHOULD)** Ruling on a gate advances to the next queued gate automatically.
 
+### Pane lifetime (new in rev. 7)
+
+- **FR-49 ⟳ (MUST)** Closing a pane **detaches a viewer**. It MUST NOT terminate the
+  PTY, the process, or the builder session behind it. Reopening a pane for that node
+  reattaches to the same live session with scrollback intact. Destroying a builder is a
+  separate, explicitly-named action and MUST NOT be reachable from a pane's close control.
+
+  *Tower already works this way: `PtySession` holds its clients in a `Set` and adds and
+  removes them independently of the process (`pty-session.ts:153,615,698`), and spike 1
+  (#38) confirmed attach fans out. A client that destroys a session when its pane closes
+  invents an ownership relationship the server does not have. FR-8 states the same
+  principle for hiding; this states it for closing.*
+
+  *Rejected alternatives, and why: a confirmation dialog on every close trains dismissal
+  and stops protecting anything once reflexive. Undo is worse, because a destroyed builder
+  is not restorable here — cleanup-and-respawn is forbidden, `--resume` reattaches the same
+  conversation rather than granting fresh context, and on the opencode harness (#60) there
+  is no recovery at all. An "undo" would mint a fresh builder wearing the same name with an
+  empty head and report success, which spells "I could not tell" the same way as "done".*
+
+  *Raised by the `main` architect from the #62 iPad spike, where dockview's close control
+  sits nested **inside** the tab with a 0 pt gap. Tracked as #66.*
+
 ### Multi-client (new in rev. 2)
 
 - **FR-38 ⟳ (MUST)** Two clients attached to the same terminal MUST NOT fight over
@@ -656,9 +679,26 @@ Reviewer positions shown where they converged.
 
 ## Part 6b — Approved design language (rev. 5)
 
-The visual direction is settled and lives in **`codev/research/v2-mockups/`**:
-`design-language.md` (the rules), `tokens.css` (palette, type, patterns),
-`01-site.html` and `02-gate.html` (real markup), plus PNGs.
+**The design of record is the UX Pilot page, not the repo.**
+
+> `https://uxpilot.ai/a/ui-design?page=SXl8jE8uNyYLwBsG6vsL` (page id `SXl8jE8uNyYLwBsG6vsL`)
+
+It holds **27 designs across 8 groups**: Porch Site Mobile Redesign (9), Find Node Screen
+Flow (5), Porch Gate Interaction Design (5), Add Machine To Porch (5), Gate Queue Sheet (1),
+Split Terminals (1), Terminal Soft Keyboard (1), and the parent bespoke-control-surface group.
+
+**`codev/research/v2-mockups/` is a partial extraction of that page, carrying 2 of the 27.**
+`tokens.css` says so in its own header. Rev. 5 wrote FR-1 through FR-48 against those 2
+screens, so five groups — the mobile redesign, the node-finding flow, the gate interaction
+set, add-machine, and the soft keyboard — currently carry **no requirements at all**.
+
+Closing that gap is tracked under #37: the full set is being pulled into
+`codev/research/v2-mockups/uxpilot/` with a manifest mapping each design to the FR numbers
+it bears on, which is what makes the missing coverage visible rather than inferred.
+
+The extraction in the repo remains useful for what it is — `design-language.md` (the rules),
+`tokens.css` and `tokens-dark.css` (palettes, type, patterns), `01-site.html`, `02-gate.html`
+and their dark twins (real markup), plus PNGs. It is not the design.
 
 The identity comes from Codev's own vocabulary — Tower, Porch, Farm, Architect, Builder,
 Gate, Worktree — rather than from another product. The app is a **site**; the user is its
