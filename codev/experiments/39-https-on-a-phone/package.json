@@ -1,0 +1,9 @@
+{
+  "name": "exp-39-https-on-a-phone",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "web-push": "^3.6.7",
+    "ws": "^8.18.0"
+  }
+}
