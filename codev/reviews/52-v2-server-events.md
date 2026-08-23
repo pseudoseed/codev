@@ -84,6 +84,14 @@ No blocking concerns on the projection after tests landed. Gemini/Codex skipped.
 #### Gemini / Codex / opencode
 - Skips or timeout → **N/A**. opencode APPROVE on iter 2.
 
+### Review / PR #61 (Round 1)
+
+#### Claude
+- **Concern**: scenario 12 `merge-base origin/main` fails on shallow CI and after merge → **Addressed** (`c0c8af4a8`): working-tree assertions only
+- **Concern**: `parseScope` split after decode → **Addressed**: split raw query, then decode
+- Sampler loop / scope eviction → **N/A**: already follow-ups
+- Delete stub review file → **Rebutted**: porch greps that filename for the required headings
+
 ## Lessons Learned
 
 ### What Went Well
