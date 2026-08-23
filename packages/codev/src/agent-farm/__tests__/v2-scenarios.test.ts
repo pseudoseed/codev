@@ -113,10 +113,14 @@ function apply(frames: V2Frame[]): { nodes: Map<string, V2Node>; counts: unknown
   for (const frame of frames) {
     if (frame.type === 'snapshot') {
       nodes.clear();
-      for (const n of frame.nodes) nodes.set(n.id, n);
+      for (const n of frame.nodes) {
+        const { buckets: _b, ...rest } = n;
+        nodes.set(rest.id, rest);
+      }
       counts = frame.counts;
     } else if (frame.type === 'node') {
-      nodes.set(frame.node.id, frame.node);
+      const { buckets: _b, ...rest } = frame.node;
+      nodes.set(rest.id, rest);
     } else if (frame.type === 'gone') {
       nodes.delete(frame.id);
     } else if (frame.type === 'counts') {
@@ -248,9 +252,13 @@ describe('v2 scenarios (phase 4)', () => {
       sampler.compare();
       if (i === 49) b = await connect();
     }
+    world.workspaces = [WS];
+    if (world.builders.length === 0) world.addBuilder('final');
+    sampler.compare();
     expect(b).not.toBeNull();
     const left = apply(a.frames());
     const right = apply(b!.frames());
+    expect(left.nodes.size).toBeGreaterThan(0);
     expect([...left.nodes.entries()].sort()).toEqual([...right.nodes.entries()].sort());
     expect(left.counts).toEqual(right.counts);
   });
