@@ -32,4 +32,4 @@ Arm B was never built. Issue comments added the two-arm bake-off. I shipped only
 
 #66 takes destructive close as FR-49, library-independent.
 
-Notes wrapped. PR next. Refs #62, not Closes: bake-off incomplete.
+Notes wrapped. PR #70. Refs #62, not Closes: bake-off incomplete.
