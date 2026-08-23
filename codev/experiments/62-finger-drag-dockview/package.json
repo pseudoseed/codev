@@ -1,0 +1,18 @@
+{
+  "name": "exp-62-finger-drag-dockview",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 4112",
+    "probe": "node scripts/probe-package.mjs"
+  },
+  "dependencies": {
+    "dockview-react": "8.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.0"
+  }
+}

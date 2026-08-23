@@ -1,0 +1,109 @@
+{
+  "at": "2026-08-23T21:20:10.815Z",
+  "note": "Chromium 1024x768 against the live spike. Gesture evidence this is not. Geometry of nested hit targets is.",
+  "viewport": {
+    "width": 1024,
+    "height": 768,
+    "dppx": 1
+  },
+  "pointerCoarse": true,
+  "tabBarHeight": "35px",
+  "rows": [
+    {
+      "tabClass": "dv-tab dv-inactive-tab",
+      "tab": {
+        "x": 0,
+        "y": 93.171875,
+        "w": 102.15625,
+        "h": 35
+      },
+      "close": {
+        "x": 67.15625,
+        "y": 97.171875,
+        "w": 27,
+        "h": 27
+      },
+      "title": {
+        "x": 8,
+        "y": 101.578125,
+        "w": 55.15625,
+        "h": 18.1875
+      },
+      "closeInsideTab": true,
+      "gapTabHitToCloseHitPt": 0,
+      "visualGapTitleToClosePx": 4
+    },
+    {
+      "tabClass": "dv-tab dv-active-tab",
+      "tab": {
+        "x": 102.15625,
+        "y": 93.171875,
+        "w": 74.796875,
+        "h": 35
+      },
+      "close": {
+        "x": 141.953125,
+        "y": 97.171875,
+        "w": 27,
+        "h": 27
+      },
+      "title": {
+        "x": 110.15625,
+        "y": 101.578125,
+        "w": 27.796875,
+        "h": 18.1875
+      },
+      "closeInsideTab": true,
+      "gapTabHitToCloseHitPt": 0,
+      "visualGapTitleToClosePx": 4
+    },
+    {
+      "tabClass": "dv-tab dv-active-tab",
+      "tab": {
+        "x": 512,
+        "y": 93.171875,
+        "w": 101.734375,
+        "h": 35
+      },
+      "close": {
+        "x": 578.734375,
+        "y": 97.171875,
+        "w": 27,
+        "h": 27
+      },
+      "title": {
+        "x": 520,
+        "y": 101.578125,
+        "w": 54.734375,
+        "h": 18.1875
+      },
+      "closeInsideTab": true,
+      "gapTabHitToCloseHitPt": 0,
+      "visualGapTitleToClosePx": 4
+    },
+    {
+      "tabClass": "dv-tab dv-active-tab",
+      "tab": {
+        "x": 512,
+        "y": 254.171875,
+        "w": 101.515625,
+        "h": 35
+      },
+      "close": {
+        "x": 578.515625,
+        "y": 258.171875,
+        "w": 27,
+        "h": 27
+      },
+      "title": {
+        "x": 520,
+        "y": 262.578125,
+        "w": 54.515625,
+        "h": 18.1875
+      },
+      "closeInsideTab": true,
+      "gapTabHitToCloseHitPt": 0,
+      "visualGapTitleToClosePx": 4
+    }
+  ]
+}
