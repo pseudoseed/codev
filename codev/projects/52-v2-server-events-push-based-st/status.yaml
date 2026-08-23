@@ -11,11 +11,11 @@ plan_phases:
     status: complete
   - id: phase_3
     title: Change sampler and live deltas
-    status: in_progress
+    status: complete
   - id: phase_4
     title: Idle-cost and convergence proof
-    status: pending
-current_plan_phase: phase_3
+    status: in_progress
+current_plan_phase: phase_4
 gates:
   spec-approval:
     status: approved
@@ -28,8 +28,8 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 2
-build_complete: true
+iteration: 1
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_2
@@ -80,7 +80,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_3-iter1-opencode.txt
         stated: false
 started_at: '2026-08-23T07:21:36.575Z'
-updated_at: '2026-08-23T18:26:29.722Z'
+updated_at: '2026-08-23T18:31:46.814Z'
 context_refreshes:
   - boundary: plan-phase:phase_2
     at: '2026-08-23T17:47:34.397Z'
@@ -88,3 +88,5 @@ context_refreshes:
   - boundary: plan-phase:phase_3
     at: '2026-08-23T18:04:16.945Z'
     acknowledged_at: '2026-08-23T18:06:24.389Z'
+  - boundary: plan-phase:phase_4
+    at: '2026-08-23T18:31:46.814Z'
