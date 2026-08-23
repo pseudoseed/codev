@@ -215,9 +215,9 @@ describe('v2 scenarios (phase 4)', () => {
     world.addBuilder('seed');
     const sampler = attach(world);
     const a = await connect();
-    const b = await connect();
     const rng = mulberry32(0x52);
     const kinds = ['spawn', 'cleanup', 'gate', 'hold', 'session', 'architect', 'drop'] as const;
+    let b: Awaited<ReturnType<typeof connect>> | null = null;
     for (let i = 0; i < 100; i++) {
       const kind = kinds[Math.floor(rng() * kinds.length)];
       if (kind === 'spawn') {
@@ -246,9 +246,11 @@ describe('v2 scenarios (phase 4)', () => {
         world.workspaces = world.workspaces.length === 0 ? [WS] : [];
       }
       sampler.compare();
+      if (i === 49) b = await connect();
     }
+    expect(b).not.toBeNull();
     const left = apply(a.frames());
-    const right = apply(b.frames());
+    const right = apply(b!.frames());
     expect([...left.nodes.entries()].sort()).toEqual([...right.nodes.entries()].sort());
     expect(left.counts).toEqual(right.counts);
   });
@@ -272,24 +274,28 @@ describe('v2 scenarios (phase 4)', () => {
   });
 
   it('scenario 12: C1 files stay untouched except the /v2/ mount', () => {
-    const base = execFileSync('git', ['merge-base', 'origin/main', 'HEAD'], { encoding: 'utf8' }).trim();
-    const forbidden = execFileSync(
-      'git',
-      ['diff', `${base}`, '--', 'packages/codev/src/agent-farm/servers/tower-server.ts', 'packages/codev/src/terminal/pty-session.ts'],
-      { encoding: 'utf8' },
-    );
-    expect(forbidden).toBe('');
-    const routes = execFileSync(
-      'git',
-      ['diff', `${base}`, '--', 'packages/codev/src/agent-farm/servers/tower-routes.ts'],
-      { encoding: 'utf8' },
-    );
-    if (routes.length > 0) {
-      expect(routes).toMatch(/handleV2Route/);
-      expect(routes).toMatch(/url\.pathname\.startsWith\('\/v2\/'\)/);
-      const added = routes.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-      expect(added.length).toBeLessThanOrEqual(8);
+    const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+    const git = (args: string[]) => execFileSync('git', args, { encoding: 'utf8', cwd: root });
+    let base: string;
+    try {
+      base = git(['merge-base', 'origin/main', 'HEAD']).trim();
+    } catch (err) {
+      throw new Error(`scenario 12 needs origin/main: ${err instanceof Error ? err.message : err}`);
     }
+    const forbidden = git([
+      'diff',
+      base,
+      '--',
+      'packages/codev/src/agent-farm/servers/tower-server.ts',
+      'packages/codev/src/terminal/pty-session.ts',
+    ]);
+    expect(forbidden).toBe('');
+    const routes = git(['diff', base, '--', 'packages/codev/src/agent-farm/servers/tower-routes.ts']);
+    expect(routes.length).toBeGreaterThan(0);
+    expect(routes).toMatch(/handleV2Route/);
+    expect(routes).toMatch(/url\.pathname\.startsWith\('\/v2\/'\)/);
+    const added = routes.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
+    expect(added.length).toBeLessThanOrEqual(8);
     const source = readFileSync('src/agent-farm/servers/tower-routes.ts', 'utf8');
     expect(source.match(/pathname\.startsWith\('\/v2\/'\)/g)).toHaveLength(1);
   });

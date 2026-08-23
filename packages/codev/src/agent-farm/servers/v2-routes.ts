@@ -338,7 +338,7 @@ export async function handleV2Route(
     }
   }
 
-  sampler?.watchScope(inScope);
+  sampler?.watchScope(scopePaths, inScope);
 
   let snapNodes: V2Node[] | null = null;
   let snapCounts: V2Counts | null = null;
@@ -379,7 +379,7 @@ export async function handleV2Route(
   }
 
   if (snapNodes && snapCounts) {
-    sampler?.seedScope(scopePaths, snapNodes, snapCounts);
+    sampler?.seedScope(scopePaths, snapNodes, snapCounts, inScope);
   }
 
   for (const d of darkPaths) {

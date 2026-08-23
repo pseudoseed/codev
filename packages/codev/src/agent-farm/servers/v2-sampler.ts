@@ -89,6 +89,7 @@ export class V2Sampler {
   private readonly watch: (dir: string, wake: () => void) => () => void;
   private readonly nextNotBefore: ((now: number) => number | null) | undefined;
   private readonly scopes = new Map<string, string[]>();
+  private readonly filterByScope = new Map<string, string[]>();
   private readonly lastByScope = new Map<string, Map<string, V2Node>>();
   private lastCounts: V2Counts | null = null;
   private readonly rings = new Map<string, number[]>();
@@ -142,14 +143,18 @@ export class V2Sampler {
     this.watchers.clear();
   }
 
-  watchScope(paths: string[]): void {
+  watchScope(paths: string[], filterPaths: string[] = paths): void {
     const key = scopeKey(paths);
-    if (!this.scopes.has(key)) this.scopes.set(key, [...paths]);
+    if (!this.scopes.has(key)) {
+      this.scopes.set(key, [...paths]);
+      this.filterByScope.set(key, [...filterPaths]);
+    }
   }
 
-  seedScope(paths: string[], nodes: V2Node[], counts: V2Counts): void {
+  seedScope(paths: string[], nodes: V2Node[], counts: V2Counts, filterPaths: string[] = paths): void {
     const key = scopeKey(paths);
     this.scopes.set(key, [...paths]);
+    this.filterByScope.set(key, [...filterPaths]);
     if (!this.lastByScope.has(key)) {
       this.lastByScope.set(key, new Map(nodes.map((n) => [n.id, n])));
     }
@@ -166,7 +171,7 @@ export class V2Sampler {
     const projection = projectHierarchy(now, this.deps);
 
     for (const [key, paths] of this.scopes) {
-      const scoped = scopeFilter(projection.nodes, paths);
+      const scoped = scopeFilter(projection.nodes, this.filterByScope.get(key) ?? paths);
       const scopedMap = new Map(scoped.map((n) => [n.id, n]));
       const last = this.lastByScope.get(key);
       if (!last) {
@@ -237,7 +242,7 @@ export class V2Sampler {
     const at = new Date(now).toISOString();
     for (const [key, paths] of this.scopes) {
       if (this.bus.subscriberCount(key) === 0) continue;
-      const allowed = new Set(paths);
+      const allowed = new Set(this.filterByScope.get(key) ?? paths);
       const scoped: { [builderId: string]: number } = {};
       for (const [id, delta] of Object.entries(deltas)) {
         const ws = workspacePathFromId(id);
