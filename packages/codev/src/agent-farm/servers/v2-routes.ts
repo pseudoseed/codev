@@ -338,7 +338,7 @@ export async function handleV2Route(
     }
   }
 
-  sampler?.watchScope(scopePaths);
+  sampler?.watchScope(inScope);
 
   let snapNodes: V2Node[] | null = null;
   let snapCounts: V2Counts | null = null;

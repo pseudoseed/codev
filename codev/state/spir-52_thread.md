@@ -51,7 +51,14 @@ Builder for Issue #52 / Spec 52. STRICT mode. SPIR.
 - Production `V2Deps` bound on first `/v2/events` (not tower-server.ts). `setV2RouteDeps` still wins in tests.
 - Connect path: `lastWrittenSeq` flush; single-decode `parseScope`; optional `rehydrate` per already-known in-scope path.
 - Tests: 22 sampler + extra route cases. Last local run: 53 v2 tests + 101 tower-routes. `npm run build` passed.
-- Next: porch done → consult.
+- Iter 1 Claude REQUEST_CHANGES: unscoped ticks, case-sensitive registry lookup, per-node mailbox query. Fixed in `ff134ed30`.
+- Iter 2 Claude + opencode APPROVE.
+
+### 2026-08-23 — Phase 4: Idle-cost and convergence proof
+
+- Context refresh refused again (opencode). Continuing.
+- `v2-scenarios.test.ts`: scenarios 3, 8, 8b, 6, 12. tower-routes 101 still pass.
+- Phase-3 hole named: `watchScope` now gets `inScope` only, so a dark path does not keep receiving `node` deltas.
 
 ### Standing orders still in force
 
