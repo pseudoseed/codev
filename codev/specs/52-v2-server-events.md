@@ -3,7 +3,11 @@
 - **Issue:** #52
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 9
+- **Status:** Draft, rev. 10 — **ready for human review**
+- **Rev. 10 changes:** empty in-window resume given an explicit frame; `heldMail` joined to
+  the mailbox table; workspace-active predicate named; scenario 9j softened and `stalled`
+  exempted from the delta-latency criterion, which never applied to a timer-driven
+  transition.
 - **Rev. 9 changes:** `node` upsert emission rule written, which is what stops `lastDataAt`
   churn from flooding the resume buffer; parent `gone` now reparents and cascades; builder
   id moved to the worktree directory name so it is stable from creation.
@@ -81,6 +85,12 @@ A snapshot is a statement about the state *at* a cursor position, not an event t
 
 A client that receives `snapshot` with `seq: N` and later resumes with `since: N` must receive every delta from `N+1`, with none skipped and none replayed.
 
+### The empty resume
+
+A resume that is honoured but has **no deltas to send** must still say so. `resumed` is that frame: it carries `from`, the cursor the server resumed at, and is emitted before any deltas — or alone, when nothing changed.
+
+Without it, a successful resume with an idle scope is byte-identical to a connection that opened and hung. The client cannot distinguish "you are up to date" from "I have not answered you yet," and the two demand opposite responses. `resumed` carries the same `seq` as the frame it resumed from, so it does not advance the cursor.
+
 **Transport is SSE consumed via `fetch` + `ReadableStream`.** Not `EventSource`: it cannot set the auth header and will 401. This mirrors `useSSE.ts` exactly.
 
 FR-32 eventually wants one multiplexed control socket per environment. That is a later spec and it **subsumes** this stream rather than discarding it: the frames below are the contract, and moving them onto a WebSocket changes the plumbing, not the schema. That is the point of D2.
@@ -98,6 +108,7 @@ Every frame is `{ seq, type, ... }`.
 { seq, type: "counts",   counts: Counts }          // whenever any count changes
 { seq, type: "tick",     at: iso, buckets: { [builderId]: number } }
 { seq, type: "dark",     id: string, reason: string }   // this scope path cannot be read
+{ seq, type: "resumed",  from: number }                // in-window resume honoured
 ```
 
 `snapshot` is **always** flagged as such and always carries `resumed`. A resume that cannot be honoured returns `snapshot` with `resumed: false`. **It never returns an empty delta list**, because "nothing changed" and "I could not tell you" must not be spelled the same way.
@@ -207,7 +218,7 @@ Nothing on the wire carries completion. `phase` is the display sub-phase, `proto
 
 The table row persists past the session. Liveness is resolved from the terminal registry via the row's `terminal_id`, the same way builder liveness is resolved from `roleId`.
 
-**Workspace** (`kind: "workspace"`): `running` when Tower reports it active, `offline` otherwise.
+**Workspace** (`kind: "workspace"`): `running` when the workspace has **at least one terminal**, `offline` when it has none. That is Tower's own definition of active (`tower-instances.ts:297`: `const isActive = terminals.length > 0`), reused rather than restated, so the stream and the rest of Tower cannot disagree about whether a workspace is up.
 
 **FR-4's `needs-attention` is `stalled`.** It is not a fifth value; FR-4 names a UI concept and `stalled` is its server-side spelling.
 
@@ -225,6 +236,10 @@ FR-3 requires a builder to appear under the architect that spawned it, and under
 **A builder never dangles.** Falling back to the workspace keeps the tree connected for legacy rows, soft-mode builders, and any case where the spawning architect has exited. A client rendering an orphan is worse than one rendering a builder a tier higher than ideal.
 
 `heldMail` is a **flag, not a status**, because a builder can be running and have held mail at the same time. FR-4 lists it alongside statuses; that is a UI grouping, not an enum member.
+
+**Source:** the `mailbox` table in `global.db`. `flags.heldMail` is true iff a row exists with `workspace_path` matching the node's workspace, `to_agent` matching the node's agent identity, `status = 'held'`, and the row currently deliverable — `not_before IS NULL OR not_before <= now`.
+
+The `not_before` clause matters: a delayed send that is not yet due is held in the table but is not waiting on anyone, and flagging it would show a builder as needing attention before it does. `to_agent` is the right join key rather than `terminal_id`, which the schema itself marks as a last-known hint and not the identity, and which is null for a builder between respawns.
 
 ### On the threshold
 
@@ -336,7 +351,8 @@ Deltas are buffered in memory per scope, bounded at **500 frames or 5 minutes, w
 | Case | Response |
 |---|---|
 | No `since` (first connect) | `snapshot`, `resumed: false`, with a fresh `streamId` |
-| `since` + matching `streamId`, inside the buffer | deltas from `since+1` |
+| `since` + matching `streamId`, inside the buffer, deltas exist | `resumed` frame, then deltas from `since+1` |
+| `since` + matching `streamId`, inside the buffer, **nothing changed** | `resumed` frame and nothing else |
 | `since` + matching `streamId`, outside the buffer | `snapshot`, `resumed: false`, same `streamId` |
 | `since` + `streamId` from a different scope | `snapshot`, `resumed: false`, new `streamId` |
 | `since` + `streamId` from a previous Tower process | `snapshot`, `resumed: false`, new `streamId` |
@@ -355,11 +371,14 @@ The v2 stream does not evict; see **v2 capacity and eviction** below. Rev. 2 arg
 4b. **Every builder resolves to exactly one status.** Exercised against the cases that broke earlier revisions: completed-and-live-and-stale, live-and-never-spoken, worktree-present-with-no-session, and gate-blocked-while-stale. No input produces two matches or none.
 5. Every in-scope builder carries `buckets` sufficient to render FR-41.
 6. Reconnect with `since` either resumes from `since+1` or returns `snapshot` with `resumed: false`. Never an empty delta list.
-6b. A client that snapshots at `seq: N`, then resumes with `since: N`, receives every delta from `N+1` with none skipped and none replayed. Two clients snapshotting at different moments against unchanged state receive the same `seq`.
+6b. A client that snapshots at `seq: N`, then resumes with `since: N`, receives every delta from `N+1` with none skipped and none replayed.
+6c. A resume honoured against an unchanged scope receives a `resumed` frame and nothing else. It is never silent. Two clients snapshotting at different moments against unchanged state receive the same `seq`.
 7. Two clients on the same scope converge to identical state.
 8. **Idle under 1 KB/s per connection measured with 20 silent builders in scope**, over 60 seconds.
 8b. **Under 1 KB/s with 20 builders producing continuous output and no status changes.** Output volume must not drive frame volume; only `tick` carries it.
-9. Delta latency p95 under 200ms from state change to frame written.
+9. Delta latency p95 under 200ms from state change to frame written, **for event-driven transitions only**.
+
+   **`stalled` is exempt.** It is not triggered by an event; it is the absence of one, so its latency is bounded by how often the server re-evaluates the threshold rather than by how fast it reacts. Re-evaluation happens on the same 30-second cadence as `tick`, which puts worst-case detection at `IDLE_WAITING_THRESHOLD_MS + 30s`. Holding a timer-driven transition to an event-driven latency target would either fail honestly or force a busy poll to satisfy a number that measures nothing.
 10. An unreadable scope path emits `dark` **naming that path**, while the rest of the scope keeps streaming. It does not emit an empty snapshot, and a multi-path scope can always tell which path failed.
 11. `GET /api/events`, `broadcastNotification` and VS Code behaviour unchanged, proven by the existing suite passing untouched.
 12. `git diff --stat` shows no modification to `tower-server.ts`, `pty-session.ts`, or any existing `tower-routes.ts` handler beyond the single mount block.
@@ -410,6 +429,8 @@ Ranked, most consequential first.
 4. **Resume inside the window.** Disconnect, reconnect with `since`, assert deltas from `since+1` and no snapshot.
 4b. **Snapshot does not consume a sequence number.** Snapshot twice against unchanged state, assert an identical `seq`. Then change state once and assert the next delta is `seq+1`, not `seq+2`.
 5. **Resume outside the window.** Exceed the buffer, reconnect, assert `snapshot` with `resumed: false`.
+5b. **Empty in-window resume.** Reconnect with a valid in-window `since` against a scope where nothing changed. Assert a `resumed` frame arrives and the connection is not silent.
+5c. **Held mail moves the flag.** Send a message that holds; assert `flags.heldMail` goes true on that node. Send one with a future `not_before`; assert the flag does **not** go true until it is due.
 6. **Tower restart.** Restart, reconnect with a valid `since`, assert `snapshot` with `resumed: false` rather than an empty delta list.
 7. **Dark vs empty, and which one.** With a two-path scope, make one path unreadable. Assert a `dark` frame naming that path, assert the other path still streams, and assert no empty snapshot.
 7b. **Id collision.** Two workspaces each with a builder of the same local id. Assert both appear as distinct nodes and that neither `gone` nor a `tick` bucket key matches the wrong one.
@@ -423,7 +444,7 @@ Ranked, most consequential first.
 9g. **Offline is reachable for architects and workspaces too.** Exit an architect: assert a `node` upsert with `status: "offline"`, **not** a `gone`. Then delete its row: assert `gone`. Repeat for a workspace. This fails immediately if the implementation sources architects from `liveArchitects`.
 9h. **Parent `gone` reparents.** Delete an architect row that has two in-scope builders. Assert both builders receive `node` upserts reparenting them to the workspace **before** the architect's `gone`, and that applying the frames in order never yields an orphan.
 9i. **Workspace `gone` cascades children-first.** Unregister a workspace with an architect and builders. Assert `gone` for every child before the workspace's own, and no orphan at any point in the sequence.
-9j. **Upserts are not driven by output.** Run a builder producing continuous output for 60 seconds with no status change. Assert **zero** `node` frames and that the resume buffer has not advanced. This is the flood case that makes in-window resume unreachable.
+9j. **Upserts are not driven by output.** Run a builder producing continuous output for 60 seconds. Assert `node` frames are emitted **only** for the field changes in the emission table, and that frame count does not scale with output volume. A status change during the window is legitimate and must not fail the test; what must fail it is a frame per DATA frame.
 9k. **Id is stable across the spawn window.** Spawn a builder and capture frames from before its `builders` row exists through to after. Assert one node id throughout, and no `gone`.
 10. **Non-regression.** Existing SSE suite passes untouched.
 
@@ -447,6 +468,8 @@ Ranked, most consequential first.
 | Upserts driven by `lastDataAt` flood the buffer | High — it is the natural implementation | High — in-window resume becomes unreachable and idle cost blows the Part 5 target | Emission table names the triggering fields; scenario 9j asserts zero frames under continuous output |
 | Children orphaned when a parent goes `gone` | High if unspecified | High — permanent ghost rows in every client's tree | Reparent-then-`gone` for architects, children-first cascade for workspaces; scenarios 9h and 9i |
 | Builder id flips mid-spawn | Certain under rev. 8's rule | High — one builder renders as two | Id is the worktree directory name, which exists for the node's whole life; scenario 9k |
+| Successful empty resume looks like a hung connection | High | Medium — clients reconnect in a loop against an idle scope | `resumed` frame; scenario 5b |
+| `heldMail` flags a not-yet-due delayed send | Medium | Medium — a builder shows as needing attention before it does | `not_before` clause on the join; scenario 5c |
 | Resumed deltas served into the wrong scope | Medium | High — silent corruption | `since` only valid with a matching `streamId`; mismatch returns a flagged snapshot |
 
 ## References
@@ -460,6 +483,8 @@ Ranked, most consequential first.
 - `packages/codev/src/terminal/pty-session.ts:783` — `bytesWritten`
 - `packages/codev/src/agent-farm/db/schema.ts:46` — `PRIMARY KEY (workspace_path, id)` on `builders`
 - `packages/types/src/api.ts:147` — `OverviewBuilder`: `blockedGate`, `lastDataAt`, `protocolPhase`, `roleId`, `spawnedByArchitect`
+- `packages/codev/src/agent-farm/db/schema.ts` — `mailbox`: `to_agent`, `status`, `not_before`
+- `packages/codev/src/agent-farm/servers/tower-instances.ts:297` — `isActive = terminals.length > 0`
 - `packages/codev/src/agent-farm/servers/overview.ts:862` — `getOverview`, and the `activeBuilderRoleIds` filter that must not be passed
 - `packages/codev/src/agent-farm/servers/tower-routes.ts:1149-1157` — how liveness and `lastDataAt` are resolved today
 - `packages/codev/src/terminal/pty-session.ts:155` — `_lastDataAt = Date.now()` at construction, which is why `idle` was unreachable
