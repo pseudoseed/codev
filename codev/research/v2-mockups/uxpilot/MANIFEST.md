@@ -32,3 +32,13 @@ Phone. Search a node, then pick where it opens. Bears on **FR-5** (jump to node 
 | `fNx6eGEgyV2GDY4ASzod` | OPEN IN — pane picker | `find-node-screen-flow/fNx6eGEgyV2GDY4ASzod.png` | not pulled | FR-2 |
 | `D3UEUmQeN43goRsYxUaJ` | FIND A NODE — empty state | `find-node-screen-flow/D3UEUmQeN43goRsYxUaJ.png` | not pulled | FR-5 |
 | `CsPhgzxbCUWacaa4xcfW` | FIND A NODE — no results | `find-node-screen-flow/CsPhgzxbCUWacaa4xcfW.png` | not pulled | FR-5 |
+
+---
+
+## Group with Porch - Gate Queue Sheet
+
+iPad. Gate rail collapsed to a rust `GATES 3` chip; queue opens as a sheet. Bears on **FR-43** (persistent queue with question, hold time, location, longest wait marked), **FR-44** (question + where it lives), **FR-48** (next gate implied by the list). Tablet composition: **FR-19**, **FR-20**, **FR-21** (sheet over content, not a 280px rail).
+
+| ID | Title (from preview) | Preview | HTML | FRs |
+|---|---|---|---|---|
+| `YjOhy7S3Pz06oilXMo6R` | GATES 3 — queue sheet | `gate-queue-sheet/YjOhy7S3Pz06oilXMo6R.png` | not pulled | FR-43, FR-44, FR-48, FR-19, FR-20, FR-21 |
