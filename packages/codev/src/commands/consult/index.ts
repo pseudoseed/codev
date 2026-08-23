@@ -27,7 +27,7 @@ import {
   type ConfigurableLane,
 } from '../../lib/consult-lanes.js';
 import type { ModelReasoningEffort } from '@openai/codex-sdk';
-import { getResolver, GitRefResolver, type ArtifactResolver } from '../porch/artifacts.js';
+import { getResolver, GitRefResolver, matchesProjectIdExact, type ArtifactResolver } from '../porch/artifacts.js';
 import { findVerdict } from '../porch/verdict.js';
 import { MetricsDB } from './metrics.js';
 import { extractUsage, extractReviewText, type SDKResultLike, type UsageData } from './usage-extractor.js';
@@ -39,6 +39,50 @@ import { assertAgyLaneAllowedUnderTest, assertOpencodeLaneAllowedUnderTest } fro
 interface ContentRef {
   content: string;
   label: string;
+  /**
+   * The project id this artifact was looked up FOR (#28).
+   *
+   * Carried on the ref rather than threaded through every query builder: the
+   * ref is what crosses into the prompt, so provenance belongs with it. Without
+   * it, a builder function has the document and no way to say which project
+   * asked for it.
+   */
+  requestedId?: string;
+}
+
+/**
+ * Header for an artifact injected as review context (#28).
+ *
+ * `--type spec` and `--type plan` put the artifact name in the query title, so
+ * a mis-resolved document is at least visible. `--type impl`, `--type phase`
+ * and `--type pr` injected the spec and plan under a bare `## Specification`
+ * with no filename at all — which is how project 13 (CI forge concepts, PIR, no
+ * spec) was reviewed against a 2025 document called "Document OS Dependencies"
+ * and nothing in the output said so.
+ *
+ * Naming the file is most of the fix. The warning covers the case that actually
+ * happened: the resolver fell back to zero-stripped matching, so the leading
+ * digits of the file it found are not the id that was asked for.
+ */
+export function artifactHeading(kind: string, ref: ContentRef): string {
+  const projectId = ref.requestedId ?? '';
+  const leading = /^(\d+)/.exec(ref.label);
+  // Ask the SAME predicate the resolver used, rather than re-deriving
+  // exactness here. Two implementations of "was this a guess?" drift, and the
+  // one that drifts is always the untested one.
+  const inexact =
+    projectId !== '' && leading !== null && !matchesProjectIdExact(ref.label, projectId);
+
+  let heading = `## ${kind}: \`${ref.label}\`\n\n`;
+  if (inexact) {
+    heading +=
+      `> **WARNING — this may not be project ${projectId}'s ${kind.toLowerCase()}.** It was resolved by ` +
+      `zero-stripped id matching: \`${ref.label}\` begins with \`${leading[1]}\`, not \`${projectId}\`. ` +
+      `That fallback cannot tell a legacy zero-padded artifact of this project from a different ` +
+      `project's artifact that collides on the number. If this document is not about the change ` +
+      `you are reviewing, say so plainly and do not review against it (see issue #28).\n\n`;
+  }
+  return heading;
 }
 
 // Model configuration
@@ -273,7 +317,7 @@ function findSpecContent(workspaceRoot: string, id: string, resolver?: ArtifactR
   const content = r.getSpecContent(id, '');
   if (!content) return null;
   const label = r.findSpecBaseName(id, '') ?? id;
-  return { content, label };
+  return { content, label, requestedId: id };
 }
 
 /**
@@ -287,8 +331,15 @@ function findPlanContent(workspaceRoot: string, id: string, resolver?: ArtifactR
   const r = resolver ?? getResolver(workspaceRoot);
   const content = r.getPlanContent(id, '');
   if (!content) return null;
-  const baseName = r.findSpecBaseName(id, '') ?? id;
-  return { content, label: baseName };
+  // #28: label the plan from the PLAN tree. This used findSpecBaseName, which
+  // was harmless while the label was only a query title — but this label is now
+  // a provenance claim, and the two trees disagree. Project 13 has
+  // plans/13-ci-forge-concepts.md and NO specs/13-*, so the plan was labelled
+  // `0013-document-os-dependencies` and then WARNED about, on a plan that was
+  // correct and exactly resolved. The mirror case is worse: an exact spec plus a
+  // guessed plan produced no warning at all.
+  const baseName = r.findPlanBaseName(id, '') ?? id;
+  return { content, label: baseName, requestedId: id };
 }
 
 /**
@@ -2227,20 +2278,14 @@ function buildPRQuery(prId: string, localDiff?: { diff: string; changedFiles: st
  * Build query for spec review
  */
 function buildSpecQuery(spec: ContentRef, plan: ContentRef | null): string {
-  let query = `Review Specification: ${spec.label}
-
-## Specification
-
-${spec.content}
-
-`;
+  // #28: same as above — the primary artifact gets the same disclosure as
+  // the context artifacts, rather than relying on the title alone.
+  let query = `Review Specification: ${spec.label}\n\n`
+    + artifactHeading('Specification', spec) + spec.content + '\n\n';
 
   if (plan) {
-    query += `## Plan
-
-${plan.content}
-
-`;
+    // #28: name it and warn on an inexact id, same as every other site.
+    query += artifactHeading('Plan', plan) + plan.content + '\n\n';
   }
 
   query += `Please review:
@@ -2295,11 +2340,12 @@ function buildImplQuery(
 
   query += '\n\n';
 
+  // #28: name the artifact, and warn when the id did not match exactly.
   if (spec) {
-    query += `## Specification\n\n${spec.content}\n\n`;
+    query += artifactHeading('Specification', spec) + `${spec.content}\n\n`;
   }
   if (plan) {
-    query += `## Plan\n\n${plan.content}\n\n`;
+    query += artifactHeading('Plan', plan) + `${plan.content}\n\n`;
   }
 
   if (planPhase) {
@@ -2355,20 +2401,15 @@ KEY_ISSUES: [List of critical issues if any, or "None"]`;
  * Build query for plan review
  */
 function buildPlanQuery(plan: ContentRef, spec: ContentRef | null): string {
-  let query = `Review Implementation Plan: ${plan.label}
-
-## Plan
-
-${plan.content}
-
-`;
+  // #28: the title names it, but naming is what every other site in this
+  // change treats as insufficient. Route the primary artifact through the
+  // same heading so a guessed plan warns here too.
+  let query = `Review Implementation Plan: ${plan.label}\n\n`
+    + artifactHeading('Plan', plan) + plan.content + '\n\n';
 
   if (spec) {
-    query += `## Specification (for context)
-
-${spec.content}
-
-`;
+    // #28: name it and warn on an inexact id, same as every other site.
+    query += artifactHeading('Specification (for context)', spec) + spec.content + '\n\n';
   }
 
   query += `Please review:
@@ -2411,8 +2452,9 @@ function buildPhaseQuery(
 
   let query = `Review Phase Implementation: "${planPhase}"\n\n`;
 
-  if (spec) query += `## Specification\n\n${spec.content}\n\n`;
-  if (plan) query += `## Plan\n\n${plan.content}\n\n`;
+  // #28: name the artifact, and warn when the id did not match exactly.
+  if (spec) query += artifactHeading('Specification', spec) + `${spec.content}\n\n`;
+  if (plan) query += artifactHeading('Plan', plan) + `${plan.content}\n\n`;
 
   query += `
 ## REVIEW SCOPE — CURRENT PLAN PHASE ONLY
