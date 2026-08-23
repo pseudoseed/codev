@@ -26,6 +26,30 @@ Porch's `DO NOT start <phase> until you run porch again` is narrow: it forbids s
 to a later phase. It has never meant stop and wait. Read it as a fence on the far side of your
 current phase, not a gate in front of it.
 
+### Writing a summary *is* ending the turn
+
+This is the part that catches builders who were not trying to stop at all.
+
+Your turn runs while you emit tool calls. It ends at your first response that is only prose. So
+a closing summary is not something you write *before* continuing — writing it **is** the act of
+stopping. "Report, then keep working" cannot happen in that order.
+
+A builder ended its turn with `Moving to phase 2, the seam measurement harness` and then did
+nothing for hours. It was not confused about what to do next; it named the next phase. That
+sentence became false in the act of writing it, because nothing of yours runs between user
+messages.
+
+The distinction is mechanical, and it is the whole trick:
+
+| | Ends your turn? |
+|---|---|
+| `afx send architect "..."` — a tool call | **No.** Keep working in the same turn. |
+| A summary or status paragraph in your pane | **Yes.** Immediately, whatever it says. |
+
+So report with `afx send` and keep going. Write a closing summary only when you are actually
+done or actually blocked — never as a milestone marker, and never containing a promise about
+what you will do next, because you will not be there to do it.
+
 There are exactly three reasons to end a turn mid-project:
 
 1. A **human gate** — porch says `WAITING FOR HUMAN APPROVAL`, or your phase prompt says stop.

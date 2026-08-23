@@ -25,6 +25,15 @@
  */
 
 import { isAbsolute, join, resolve } from 'node:path';
+// Imported from the leaf module, NOT from porch/state.js: state.ts promisifies
+// `execFile` at module load, and reaching it from here broke 24 doctor tests
+// (its partial `node:child_process` mock has no `execFile`). See project-id.ts.
+import { detectProjectIdFromCwd } from '../../commands/porch/project-id.js';
+import {
+  STOP_GUARD_SCRIPT_RELPATH,
+  PHASE_STOP_GUARD_SCRIPT,
+  buildPhaseStopGuardCommand,
+} from './phase-stop-guard.js';
 
 /** Worktree-relative path of the emitted guard script. */
 export const GUARD_SCRIPT_RELPATH = '.claude/hooks/worktree-write-guard.cjs';
@@ -215,7 +224,27 @@ export function buildWorktreeGuardFiles(
     `CODEV_WORKTREE_ROOT='${shellSingleQuote(root)}' ` +
     `node '${shellSingleQuote(scriptAbs)}'`;
 
-  const settings = {
+  // Issue #41: the phase stop-guard rides in the same settings file. Two
+  // writers of one file is how one of them silently loses, so this function
+  // stays the single owner of `.claude/settings.local.json`.
+  //
+  // The project id comes from the worktree path via porch's OWN detector, not a
+  // second copy of the rule. A guard that disagrees with porch about which
+  // project it is watching would nudge about the wrong one. When the path is
+  // not a recognized builder worktree the id is null and the Stop hook is
+  // simply not installed — fail open, like every other path in these guards.
+  const projectId = detectProjectIdFromCwd(root);
+
+  const files: Array<{ relativePath: string; content: string }> = [
+    { relativePath: GUARD_SCRIPT_RELPATH, content: WORKTREE_WRITE_GUARD_SCRIPT },
+  ];
+
+  const settings: {
+    hooks: {
+      PreToolUse: Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }>;
+      Stop?: Array<{ hooks: Array<{ type: string; command: string }> }>;
+    };
+  } = {
     hooks: {
       PreToolUse: [
         {
@@ -226,8 +255,19 @@ export function buildWorktreeGuardFiles(
     },
   };
 
-  return [
-    { relativePath: GUARD_SCRIPT_RELPATH, content: WORKTREE_WRITE_GUARD_SCRIPT },
-    { relativePath: GUARD_SETTINGS_RELPATH, content: JSON.stringify(settings, null, 2) + '\n' },
-  ];
+  if (projectId) {
+    settings.hooks.Stop = [
+      {
+        hooks: [{ type: 'command', command: buildPhaseStopGuardCommand(root, projectId) }],
+      },
+    ];
+    files.push({ relativePath: STOP_GUARD_SCRIPT_RELPATH, content: PHASE_STOP_GUARD_SCRIPT });
+  }
+
+  files.push({
+    relativePath: GUARD_SETTINGS_RELPATH,
+    content: JSON.stringify(settings, null, 2) + '\n',
+  });
+
+  return files;
 }
