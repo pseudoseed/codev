@@ -1,7 +1,7 @@
 id: '39'
 title: spike-v2-ui-https-on-a-phone-v
 protocol: experiment
-phase: analyze
+phase: verified
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -13,7 +13,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-22T19:28:26.131Z'
-updated_at: '2026-08-23T04:45:44.948Z'
+updated_at: '2026-08-23T04:45:50.295Z'
 pr_history:
   - phase: analyze
     pr_number: 55
