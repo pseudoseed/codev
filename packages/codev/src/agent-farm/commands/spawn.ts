@@ -359,6 +359,32 @@ async function spawnSpec(options: SpawnOptions, config: Config, selection: Agent
     } catch {
       // Resolver unavailable — fall through to normal error handling
     }
+
+    // ...but don't let it hand back the twin we just declined (#65).
+    //
+    // The default backend is LocalResolver, which reads THE SAME codev/specs/
+    // through findByProjectId — and that still keeps the lenient zero-stripped
+    // fallback on purpose, because #28 chose to disclose an ambiguous artifact
+    // rather than refuse it. Disclosure is right at review time, where a
+    // reviewer can object. At spawn nobody is watching, so refusing here and
+    // re-fetching four lines later would put the original bug back in the same
+    // command run that just printed "Not using 0063-...".
+    //
+    // Verified live: LocalResolver.findSpecBaseName('63', '') returns
+    // '0063-tower-dashboard-improvements' in this repo.
+    //
+    // Two paths this closes. When the forge fetch returns null (offline, gh
+    // unauthenticated, forge misconfigured) `specName` falls through to the
+    // resolver value and the builder is handed the wrong spec again. And a
+    // truthy resolverSpecName suppresses the "Spec not found" fatal below,
+    // satisfying a required-input protocol with a file the code refused.
+    if (
+      resolverSpecName &&
+      specLookup.nearMiss &&
+      resolverSpecName === basename(specLookup.nearMiss, '.md')
+    ) {
+      resolverSpecName = null;
+    }
   }
 
   // When no spec file exists (and resolver didn't find one), check if the protocol allows spawning without one.

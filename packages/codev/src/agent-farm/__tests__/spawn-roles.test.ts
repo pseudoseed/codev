@@ -547,3 +547,56 @@ describe('spawn-roles', () => {
     });
   });
 });
+
+// =========================================================================
+// #65: the resolver must not hand back a spec the lookup declined
+// =========================================================================
+
+describe('#65: LocalResolver still keeps the lenient fallback, on purpose', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    const os = await import('node:os');
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spawn-resolver-'));
+    fs.mkdirSync(path.join(tmpDir, 'codev', 'specs'), { recursive: true });
+  });
+
+  it('returns the zero-padded twin for an unpadded id', async () => {
+    // Pinning the behaviour spawn has to defend against, so this test fails
+    // loudly if #28's disclose-don't-refuse decision is ever reversed and the
+    // guard in spawn.ts silently becomes dead code.
+    //
+    // Disclosure is correct at REVIEW time — a reviewer sees the warning and
+    // can object. At SPAWN time nobody is watching, which is why spawn refuses
+    // instead.
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { LocalResolver } = await import('../../commands/porch/artifacts.js');
+    fs.writeFileSync(path.join(tmpDir, 'codev', 'specs', '0063-tower-dashboard.md'), '');
+
+    const resolver = new LocalResolver(tmpDir);
+
+    expect(resolver.findSpecBaseName('63', '')).toBe('0063-tower-dashboard');
+    // And findSpecLookup, which spawn actually uses, refuses it.
+    const lookup = await findSpecLookup(path.join(tmpDir, 'codev'), '63');
+    expect(lookup.path).toBeNull();
+    expect(lookup.nearMiss).toBe(path.join(tmpDir, 'codev', 'specs', '0063-tower-dashboard.md'));
+  });
+
+  it('agrees with findSpecLookup when the exact spec exists', async () => {
+    // No divergence to defend against in the normal case.
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { LocalResolver } = await import('../../commands/porch/artifacts.js');
+    fs.writeFileSync(path.join(tmpDir, 'codev', 'specs', '63-dark-palette.md'), '');
+
+    const resolver = new LocalResolver(tmpDir);
+    const lookup = await findSpecLookup(path.join(tmpDir, 'codev'), '63');
+
+    expect(resolver.findSpecBaseName('63', '')).toBe('63-dark-palette');
+    expect(lookup.path).toBe(path.join(tmpDir, 'codev', 'specs', '63-dark-palette.md'));
+    expect(lookup.nearMiss).toBeNull();
+  });
+});
