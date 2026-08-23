@@ -22,6 +22,19 @@ export interface ArtifactResolver {
   /** Find spec basename by numeric ID (e.g., "0559-porch-artifact-resolver") */
   findSpecBaseName(projectId: string, title: string): string | null;
 
+  /**
+   * Find PLAN basename by project ID (#28).
+   *
+   * Separate from `findSpecBaseName` because the two trees disagree. Project 13
+   * has `plans/13-ci-forge-concepts.md` and NO `specs/13-*` at all, so labelling
+   * the plan with the spec's basename named a file in `codev/specs/` that is not
+   * the plan — and, once the label became a provenance claim, warned that a
+   * correctly and exactly resolved plan might belong to another project. The
+   * mirror is worse: an exact spec plus a guessed plan produced no warning at
+   * all, a false negative in exactly the direction this is meant to close.
+   */
+  findPlanBaseName(projectId: string, title: string): string | null;
+
   /** Get full content of a spec by project ID */
   getSpecContent(projectId: string, title: string): string | null;
 
@@ -220,6 +233,19 @@ export class LocalResolver implements ArtifactResolver {
     }
   }
 
+  findPlanBaseName(projectId: string, _title: string): string | null {
+    const plansDir = path.join(this.workspaceRoot, 'codev', 'plans');
+    if (!fs.existsSync(plansDir)) return null;
+
+    try {
+      const files = fs.readdirSync(plansDir);
+      const planFile = findByProjectId(files, projectId, f => f.endsWith('.md'));
+      return planFile ? planFile.replace(/\.md$/, '') : null;
+    } catch {
+      return null;
+    }
+  }
+
   getSpecContent(projectId: string, title: string): string | null {
     const baseName = this.findSpecBaseName(projectId, title);
     if (!baseName) return null;
@@ -378,7 +404,7 @@ export class CliResolver implements ArtifactResolver {
   // Internal helpers
   // ---------------------------------------------------------------------------
 
-  private findPlanBaseName(projectId: string): string | null {
+  findPlanBaseName(projectId: string, _title = ''): string | null {
     const children = this.listChildren('plans');
     if (!children) return null;
     return findByProjectId(children, projectId) || null;
@@ -546,6 +572,12 @@ export class GitRefResolver implements ArtifactResolver {
     const files = this.listFiles('codev/specs');
     const specFile = findByProjectId(files, projectId, f => f.endsWith('.md'));
     return specFile ? specFile.replace(/\.md$/, '') : null;
+  }
+
+  findPlanBaseName(projectId: string, _title: string): string | null {
+    const files = this.listFiles('codev/plans');
+    const planFile = findByProjectId(files, projectId, f => f.endsWith('.md'));
+    return planFile ? planFile.replace(/\.md$/, '') : null;
   }
 
   getSpecContent(projectId: string, title: string): string | null {

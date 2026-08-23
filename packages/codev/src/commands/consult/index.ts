@@ -331,7 +331,14 @@ function findPlanContent(workspaceRoot: string, id: string, resolver?: ArtifactR
   const r = resolver ?? getResolver(workspaceRoot);
   const content = r.getPlanContent(id, '');
   if (!content) return null;
-  const baseName = r.findSpecBaseName(id, '') ?? id;
+  // #28: label the plan from the PLAN tree. This used findSpecBaseName, which
+  // was harmless while the label was only a query title — but this label is now
+  // a provenance claim, and the two trees disagree. Project 13 has
+  // plans/13-ci-forge-concepts.md and NO specs/13-*, so the plan was labelled
+  // `0013-document-os-dependencies` and then WARNED about, on a plan that was
+  // correct and exactly resolved. The mirror case is worse: an exact spec plus a
+  // guessed plan produced no warning at all.
+  const baseName = r.findPlanBaseName(id, '') ?? id;
   return { content, label: baseName, requestedId: id };
 }
 
@@ -2271,13 +2278,10 @@ function buildPRQuery(prId: string, localDiff?: { diff: string; changedFiles: st
  * Build query for spec review
  */
 function buildSpecQuery(spec: ContentRef, plan: ContentRef | null): string {
-  let query = `Review Specification: ${spec.label}
-
-## Specification
-
-${spec.content}
-
-`;
+  // #28: same as above — the primary artifact gets the same disclosure as
+  // the context artifacts, rather than relying on the title alone.
+  let query = `Review Specification: ${spec.label}\n\n`
+    + artifactHeading('Specification', spec) + spec.content + '\n\n';
 
   if (plan) {
     // #28: name it and warn on an inexact id, same as every other site.
@@ -2397,13 +2401,11 @@ KEY_ISSUES: [List of critical issues if any, or "None"]`;
  * Build query for plan review
  */
 function buildPlanQuery(plan: ContentRef, spec: ContentRef | null): string {
-  let query = `Review Implementation Plan: ${plan.label}
-
-## Plan
-
-${plan.content}
-
-`;
+  // #28: the title names it, but naming is what every other site in this
+  // change treats as insufficient. Route the primary artifact through the
+  // same heading so a guessed plan warns here too.
+  let query = `Review Implementation Plan: ${plan.label}\n\n`
+    + artifactHeading('Plan', plan) + plan.content + '\n\n';
 
   if (spec) {
     // #28: name it and warn on an inexact id, same as every other site.

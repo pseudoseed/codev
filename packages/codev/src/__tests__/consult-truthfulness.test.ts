@@ -23,6 +23,7 @@ import {
   _consultSandboxDirForTest as _consultSandboxDir,
 } from '../commands/consult/index.js';
 import { protocolsProvidingConsultType } from '../lib/skeleton.js';
+import { LocalResolver } from '../commands/porch/artifacts.js';
 
 describe('#43: a protocol-scoped review type must name the real remedy', () => {
   it('finds the protocols that actually ship pr-review.md', () => {
@@ -305,5 +306,56 @@ describe('#28: artifactHeading names the artifact and flags a guessed match', ()
     });
 
     expect(heading).not.toMatch(/WARNING/);
+  });
+});
+
+describe('#28 round 4: the plan must be labelled from the PLAN tree', () => {
+  // findPlanContent derived the plan's label from findSpecBaseName. Harmless
+  // while the label was only a query title; this change makes the label a
+  // provenance CLAIM, and the two trees disagree. Verified live against this
+  // repo: project 13 has plans/13-ci-forge-concepts.md and no specs/13-* at all.
+  const local = new LocalResolver(path.resolve(__dirname, '..', '..', '..', '..'));
+
+  it('resolves project 13 plan to the plan file, not the spec file', () => {
+    const planBase = local.findPlanBaseName('13', '');
+    const specBase = local.findSpecBaseName('13', '');
+
+    // The spec tree has only the colliding legacy document.
+    expect(specBase).toBe('0013-document-os-dependencies');
+    // The plan tree has the real thing, exactly.
+    expect(planBase).toBe('13-ci-forge-concepts');
+  });
+
+  it('so the plan heading does NOT warn about a correct, exact plan', () => {
+    // The false positive: an exactly-resolved plan was named after a spec in a
+    // different project's file and then accused of belonging to it.
+    const heading = artifactHeading('Plan', {
+      content: '',
+      label: local.findPlanBaseName('13', '') ?? '13',
+      requestedId: '13',
+    });
+
+    expect(heading).toMatch(/13-ci-forge-concepts/);
+    expect(heading).not.toMatch(/WARNING/);
+  });
+
+  it('and a genuinely guessed plan still warns', () => {
+    // The mirror case, which is the worse one: an exact spec plus a
+    // lenient-only plan previously produced NO warning — a false negative in
+    // exactly the direction this change exists to close.
+    const heading = artifactHeading('Plan', {
+      content: '',
+      label: '0013-document-os-dependencies',
+      requestedId: '13',
+    });
+
+    expect(heading).toMatch(/WARNING/);
+  });
+
+  it('every resolver implements findPlanBaseName', () => {
+    // The interface gained a method; a resolver missing it fails at the type
+    // level, but this pins that LocalResolver actually answers from plans/.
+    expect(typeof local.findPlanBaseName).toBe('function');
+    expect(local.findPlanBaseName('99999', '')).toBeNull();
   });
 });
