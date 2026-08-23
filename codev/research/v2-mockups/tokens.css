@@ -23,7 +23,7 @@
 
   /* ---- type ---- */
   --font-display: "Fraunces", Georgia, serif;
-  --font-sans:    "Space Grotesk", system-ui, sans-serif;
+  --font-sans:    "IBM Plex Sans", system-ui, sans-serif;
   --font-mono:    "IBM Plex Mono", ui-monospace, monospace;
 
   /* ---- structure ---- */
@@ -32,10 +32,12 @@
 
 /*
  * NOTE ON THE SANS FACE
- * Space Grotesk is on the standard "AI-generated design" tell list. It carries
- * almost no weight here — nearly all UI text is IBM Plex Mono (.stamp) or
- * Fraunces (display). Worth swapping for something with more character before
- * this ships. Not urgent; not load-bearing.
+ * Was Space Grotesk, which is on the standard "AI-generated design" tell list.
+ * Swapped for IBM Plex Sans: same superfamily as the mono already carrying most
+ * of the UI text, so it harmonises by construction rather than by taste, and it
+ * drops a font dependency instead of adding one. The sans carries almost no
+ * weight here anyway — nearly all UI text is IBM Plex Mono (.stamp) or Fraunces
+ * (display).
  */
 
 /* ---------- the recurring patterns ---------- */
