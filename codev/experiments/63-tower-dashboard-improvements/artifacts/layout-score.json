@@ -1,0 +1,28 @@
+{
+  "generatedAt": "2026-08-23T21:15:15.087Z",
+  "workspaceCount": 3,
+  "rows": [
+    {
+      "name": "codev",
+      "terminals": 2,
+      "currentRows": 7,
+      "flattenedRows": 1
+    },
+    {
+      "name": "notes",
+      "terminals": 2,
+      "currentRows": 7,
+      "flattenedRows": 1
+    },
+    {
+      "name": "robot",
+      "terminals": 2,
+      "currentRows": 7,
+      "flattenedRows": 1
+    }
+  ],
+  "currentTotalRows": 21,
+  "flattenedTotalRows": 3,
+  "oneRowPerWorkspace": true,
+  "currentIsOneRow": false
+}

@@ -1,0 +1,17 @@
+{
+  "generatedAt": "2026-08-23T21:15:15.087Z",
+  "browserFileFields": [
+    "name",
+    "lastModified",
+    "size",
+    "type",
+    "webkitRelativePath"
+  ],
+  "electronOnlyFields": [
+    "path"
+  ],
+  "launchInstanceRequires": "absolute filesystem path (path.isAbsolute, then fs.existsSync)",
+  "nativePickerGivesAbsolutePathInBrowser": false,
+  "workingPicker": "text input + GET /api/browse?path= (already on the landing page)",
+  "source": "HTML spec file upload state; Chromium does not expose File.path to web content. Not re-measured in a live browser this run."
+}

@@ -1,0 +1,13 @@
+{
+  "generatedAt": "2026-08-23T21:15:15.989Z",
+  "startGone": true,
+  "remoteGone": true,
+  "createEmptyStatus": 400,
+  "updateStatus": 404,
+  "ptySawHello": true,
+  "ptyExitCode": 7,
+  "ptyControlHasExit": false,
+  "oneRowPerWorkspace": true,
+  "currentIsOneRow": false,
+  "nativePickerWorks": false
+}
