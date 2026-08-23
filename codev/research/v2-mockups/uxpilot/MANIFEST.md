@@ -107,7 +107,21 @@ Phone site. Nine files, four surfaces, one-machine lot, two-machine lot with an 
 
 This is **FR-1** (containment, not an outline), **FR-3**, **FR-4**, **FR-12**, **FR-13**, **FR-15**, **FR-19**, **FR-21**, **FR-41**, **FR-42**. Sparklines are present on the phone site (they are missing on the iPad split).
 
-The FRD listed this group as having no requirements. Wrong if FRs name surfaces. Two composition clashes, FR-21 says the tree is a drawer, the design uses a picker sheet; OPEN IN offers LEFT PANE / RIGHT PANE on a phone, which fights FR-21's no-tile rule.
+The FRD listed this group as having no requirements. Wrong if FRs name surfaces. One composition clash stands: FR-21 said the tree is a drawer, the design uses a picker sheet, and FR-21 was rewritten (FRD rev. 8).
+
+**⚠️ The group name is misleading and it caused a false finding.** Despite "Mobile Redesign", measured pixel widths are:
+
+| Width | Count | Designs |
+|---|---:|---|
+| 1440 | 7 | `9GvvtY66cZ9o588S1ZG6`, `alggCr6fYS7YFpxmiGWt`, `da25kSWpzRdJUZGp4dFB`, `GnWkqflXk3dHyEAyMkCe`, `JVQ55vBl3KuTQK6MKEnn`, `lxhbQ26SZ1QzUt8vTpUK`, `pcuGTxWBv4S195IB7nXO` |
+| 1024 | 1 | `PXL1ch4T5kjMO4LYGdN9` (iPad portrait) |
+| **375** | **1** | **`jClfsPTbpz9rne4YAGBh`** — the only actual phone screen |
+
+An earlier revision of this manifest reported that `OPEN IN` offers LEFT PANE / RIGHT PANE **on a phone**, fighting FR-21's no-tile-below-768px rule. **That was wrong.** `pcuGTxWBv4S195IB7nXO` is 1440x1024, so FR-21 does not govern it. FRD rev. 9 retracts the conflict.
+
+The one genuine phone design is a single-column card stack with a segmented control and a hamburger. It satisfies FR-21 as written.
+
+**Measure a design before scoring it against a breakpoint requirement. Group names are not viewports.**
 
 | ID | Title (from preview) | Preview | HTML | FRs |
 |---|---|---|---|---|
