@@ -984,14 +984,25 @@ export function agyRemedy(reason: string, outputTail = ''): string {
   if (/agy cli not found|enoent/.test(reason.toLowerCase())) {
     return 'Install the CLI: https://antigravity.google/cli/install.sh';
   }
-  if (/quota|rate.?limit|resource.?exhausted|too many requests|429|usage limit/.test(haystack)) {
+  // Word-boundaried and context-qualified. Unanchored substrings matched
+  // ordinary review prose in the tail — `outputTail` is the last 2000 chars of
+  // stdout+stderr combined, so on a non-zero exit after partial output it holds
+  // agy's own writing. Measured: "reviewed 4293 lines" hit 429; "tokens: 4012
+  // out" hit 401; "The author of this change" hit auth. Each produced a
+  // confident, inapplicable instruction — #25 in a new shape.
+  if (/\bquota\b|\brate.?limit(ed|s)?\b|\bresource.?exhausted\b|\btoo many requests\b|\busage limit\b|(?:status|http|code|error)\D{0,4}429\b/.test(haystack)) {
     return (
       'This is a quota/rate limit, not a configuration problem — the CLI is installed and ' +
       'signed in. Wait for the window to reset, or run this lane with a different model ' +
       '(`--model-id`), or drop "gemini" from porch.consultation in .codev/config.json for now.'
     );
   }
-  if (/auth|login|sign.?in|credential|unauthorized|401|403|permission denied/.test(haystack)) {
+  // Bare "login" / "sign in" are deliberately NOT triggers: a reviewer writing
+  // "the login flow is unrelated to this diff" is discussing login, not failing
+  // at it. Every reason that genuinely reaches this branch says `authenticat*`
+  // (preflight emits "authentication required" / "agy unauthenticated") or
+  // carries a status code.
+  if (/\bauthenticat(e|ed|ion|ing)\b|\bunauthenticated\b|\bcredentials?\b|\bunauthorized\b|\bpermission denied\b|(?:status|http|code|error)\D{0,4}40[13]\b/.test(haystack)) {
     return 'Run `agy` once interactively to sign in.';
   }
   if (haystack.includes('timed out')) {
@@ -2172,30 +2183,11 @@ function buildPRQuery(prId: string, localDiff?: { diff: string; changedFiles: st
   const diff = localDiff ? localDiff.diff : fetchPRDiff(prId);
   const changedFiles = localDiff ? localDiff.changedFiles : prData.changedFiles;
 
-  // Private-per-user dir to avoid world-readable /tmp diffs + symlink/clobber
-  // races: consultSandboxDir() is a fresh mkdtempSync dir owned by us (and the
-  // only temp dir granted to the sandboxed agy reviewer); writeFileSync with
-  // flag 'wx' refuses to follow a symlink or overwrite an existing file.
-  const diffDir = consultSandboxDir();
-  const diffPath = path.join(diffDir, `pr-${prId}.diff`);
-  fs.writeFileSync(diffPath, diff, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
-
-  const diffBytes = Buffer.byteLength(diff, 'utf-8');
-  const diffLines = diff ? diff.split('\n').length : 0;
-
-  // Issue #35: a PR review with no diff must be an error, never a prompt.
-  //
-  // On a Gitea/Forgejo repo the forge config failed to resolve, `gh` was invoked
-  // against a host it could not reach, and the diff came back empty with nothing
-  // on stderr. The prompt then said `Changed Files (0)` and three lanes returned
-  // a confident APPROVE (HIGH) on nothing. That is the dangerous shape: the
-  // review appears to have run, the lanes report, and the record reads as a
-  // clean multi-model approval of a change no model ever saw.
-  //
-  // There is no legitimate caller here. An empty PR is not reviewable, and a
-  // genuinely empty diff is indistinguishable from a fetch that failed silently
-  // — so both stop, and both say which they might be.
-  if (diffBytes === 0) {
+  // Emptiness is checked BEFORE the write. `flag: 'wx'` refuses to overwrite, so
+  // checking after meant an in-process retry for the same prId died with EEXIST
+  // instead of the message that explains what actually went wrong.
+  const emptyDiffBytes = Buffer.byteLength(diff, 'utf-8');
+  if (emptyDiffBytes === 0) {
     throw new Error(
       `PR #${prId} produced a 0-byte diff — refusing to run a review on nothing.\n` +
       `A reviewer cannot tell an empty diff from a failed fetch, and neither can you ` +
@@ -2208,6 +2200,17 @@ function buildPRQuery(prId: string, localDiff?: { diff: string; changedFiles: st
       `Verify with your forge's own diff command before re-running.`,
     );
   }
+
+  // Private-per-user dir to avoid world-readable /tmp diffs + symlink/clobber
+  // races: consultSandboxDir() is a fresh mkdtempSync dir owned by us (and the
+  // only temp dir granted to the sandboxed agy reviewer); writeFileSync with
+  // flag 'wx' refuses to follow a symlink or overwrite an existing file.
+  const diffDir = consultSandboxDir();
+  const diffPath = path.join(diffDir, `pr-${prId}.diff`);
+  fs.writeFileSync(diffPath, diff, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+
+  const diffBytes = Buffer.byteLength(diff, 'utf-8');
+  const diffLines = diff ? diff.split('\n').length : 0;
 
   return composePRQueryText({
     prId,

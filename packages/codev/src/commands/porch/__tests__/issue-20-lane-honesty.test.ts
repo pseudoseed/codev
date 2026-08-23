@@ -153,3 +153,48 @@ describe('#20: the sentence a human reads before approving a gate', () => {
     expect(laneSummary(reviews).silent).toHaveLength(0);
   });
 });
+
+describe('#20 round 2: laneSummary must look at the verdicts, not just who spoke', () => {
+  it('does NOT say "approved" when a lane returned REQUEST_CHANGES', () => {
+    // Reachable on the FORCE-ADVANCE path, entered only after REQUEST_CHANGES
+    // persisted to the iteration ceiling. The gate task there read
+    // "3 of 3 lanes reviewed and approved" directly under a force-advance
+    // warning — the exact sentence this issue exists to stop being false.
+    const reviews = [
+      review('claude', 'x'.repeat(60) + '\nVERDICT: APPROVE\n'),
+      review('codex', 'x'.repeat(60) + '\nVERDICT: REQUEST_CHANGES\n'),
+    ];
+
+    const s = laneSummary(reviews);
+    expect(s.sentence).not.toMatch(/approved/);
+    expect(s.sentence).toMatch(/Did not approve: codex: REQUEST_CHANGES/);
+  });
+
+  it('does NOT say "approved" for a COMMENT-only run', () => {
+    // Every lane read the code and none of them approved it. Non-blocking is
+    // not the same as approval, which is the whole thesis.
+    const reviews = [review('claude', REAL_COMMENT), review('codex', REAL_COMMENT)];
+
+    expect(laneSummary(reviews).sentence).not.toMatch(/approved/);
+  });
+
+  it('reports both problems at once when a lane blocks AND another was silent', () => {
+    const reviews = [
+      review('claude', 'x'.repeat(60) + '\nVERDICT: REQUEST_CHANGES\n'),
+      review('gemini', NO_VERDICT),
+    ];
+
+    const s = laneSummary(reviews);
+    expect(s.sentence).toMatch(/Did not approve: claude/);
+    expect(s.sentence).toMatch(/Did not review: gemini/);
+  });
+
+  it('still says approved when every lane really did approve', () => {
+    const reviews = [
+      review('claude', 'x'.repeat(60) + '\nVERDICT: APPROVE\n'),
+      review('codex', 'x'.repeat(60) + '\nVERDICT: APPROVE\n'),
+    ];
+
+    expect(laneSummary(reviews).sentence).toMatch(/2 of 2 lanes reviewed and approved/);
+  });
+});

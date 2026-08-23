@@ -18,6 +18,7 @@ import {
   agyRemedy,
   buildOpencodeArgs,
   extractSandboxPaths,
+  _buildPRQuery,
   _consultSandboxDirForTest as _consultSandboxDir,
 } from '../commands/consult/index.js';
 import { protocolsProvidingConsultType } from '../lib/skeleton.js';
@@ -186,5 +187,58 @@ describe('#44: extractSandboxPaths', () => {
     fs.writeFileSync(p1, 'x');
 
     expect(extractSandboxPaths('`' + p1 + '` and again `' + p1 + '`')).toEqual([p1]);
+  });
+});
+
+describe('#25 round 2: ordinary review prose must not trigger a remedy', () => {
+  // `outputTail` is the last 2000 chars of stdout+stderr COMBINED, so on a
+  // non-zero exit after partial output it holds agy's own review writing.
+  // Unanchored substrings turned that prose into confident, inapplicable
+  // instructions — the same defect as #25, with a new trigger.
+  it.each([
+    ['The author of this change added a guard.', 'author contains auth'],
+    ['see src/auth/session.ts for context', 'a path segment named auth'],
+    ['reviewed 4293 lines of diff', '4293 contains 429'],
+    ['tokens: 14015 in / 4012 out', '4012 contains 401'],
+    ['the login flow is unrelated to this diff', 'discussing login, not failing it'],
+  ])('offers no remedy for %j (%s)', (tail) => {
+    expect(agyRemedy('agy exited with code 1', tail)).toBe('');
+  });
+
+  it('still catches a real rate limit stated with its status code', () => {
+    expect(agyRemedy('agy exited with code 1', 'request failed with status 429'))
+      .toMatch(/quota|rate limit/i);
+  });
+
+  it('still catches a real auth failure', () => {
+    expect(agyRemedy('agy exited with code 1', 'Error: unauthorized — no credentials found'))
+      .toMatch(/sign in/i);
+  });
+
+  it('still catches a bare quota word', () => {
+    expect(agyRemedy('agy exited with code 1', 'RESOURCE_EXHAUSTED: quota exceeded'))
+      .toMatch(/quota|rate limit/i);
+  });
+});
+
+describe('#35: an empty PR diff must throw before anything is written', () => {
+  it('refuses a 0-byte diff and explains what it could be', () => {
+    // The one issue in this set with no coverage was the one that produced
+    // three APPROVE (HIGH) verdicts against nothing.
+    expect(() => _buildPRQuery('1', { diff: '', changedFiles: [] }))
+      .toThrow(/0-byte diff/);
+  });
+
+  it('names the forge-config cause, since that is what actually happened', () => {
+    expect(() => _buildPRQuery('1', { diff: '', changedFiles: [] }))
+      .toThrow(/forge config did not resolve/);
+  });
+
+  it('throws BEFORE writing, so an in-process retry gets the message not EEXIST', () => {
+    // `flag: 'wx'` refuses to overwrite. Checking after the write meant the
+    // second attempt for the same prId died with EEXIST instead of the
+    // explanation.
+    expect(() => _buildPRQuery('77', { diff: '', changedFiles: [] })).toThrow(/0-byte diff/);
+    expect(() => _buildPRQuery('77', { diff: '', changedFiles: [] })).toThrow(/0-byte diff/);
   });
 });

@@ -138,11 +138,33 @@ export interface LaneSummary {
 export function laneSummary(reviews: ReviewResult[]): LaneSummary {
   const silent = reviews.filter(r => r.stated === false).map(r => r.model);
   const ran = reviews.length - silent.length;
-  const sentence =
-    silent.length === 0
-      ? `${ran} of ${reviews.length} lanes reviewed and approved.`
-      : `${ran} of ${reviews.length} lanes actually reviewed. ` +
-        `Did not review: ${silent.join(', ')} — recorded as non-blocking, NOT as approval.`;
-  return { ran, total: reviews.length, silent, sentence };
+
+  // Only say "approved" when the lanes that ran actually said APPROVE. The
+  // first version counted `stated` and never looked at a verdict, so it
+  // asserted approval on the FORCE-ADVANCE path — reached only after
+  // REQUEST_CHANGES persisted to the iteration ceiling — and on a run where
+  // every lane returned COMMENT. This sentence is the one a human reads before
+  // approving a gate; it must not be the last thing in the system still saying
+  // "approved" about a run nobody approved.
+  const notApproved = reviews
+    .filter(r => r.stated !== false && r.verdict !== 'APPROVE')
+    .map(r => `${r.model}: ${r.verdict}`);
+
+  const parts: string[] = [];
+  if (silent.length === 0 && notApproved.length === 0) {
+    parts.push(`${ran} of ${reviews.length} lanes reviewed and approved.`);
+  } else {
+    parts.push(`${ran} of ${reviews.length} lanes actually reviewed.`);
+    if (notApproved.length > 0) {
+      parts.push(`Did not approve: ${notApproved.join(', ')}.`);
+    }
+    if (silent.length > 0) {
+      parts.push(
+        `Did not review: ${silent.join(', ')} — recorded as non-blocking, NOT as approval.`,
+      );
+    }
+  }
+
+  return { ran, total: reviews.length, silent, sentence: parts.join(' ') };
 }
 
