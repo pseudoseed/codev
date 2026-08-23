@@ -3,7 +3,11 @@
 - **Issue:** #52
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 6
+- **Status:** Draft, rev. 7
+- **Rev. 7 changes:** deleted a stale rev.-2 block that still said `stalled == isIdleWaiting`
+  and contradicted rev. 6's table; `gone` and `offline` separated by a single rule that
+  applies to all three node kinds; architect nodes given a source that can actually produce
+  `offline`; `tick` corrected from per-connection to per-scope.
 - **Rev. 6 changes:** `idle` dropped as uncomputable; `stalled` defined against the
   threshold constant directly rather than via `isIdleWaiting`, closing a hole where a
   completed builder matched no status; the source of `offline` named precisely
@@ -173,6 +177,10 @@ Nothing on the wire carries completion. `phase` is the display sub-phase, `proto
 
 **Architect** (`kind: "architect"`): `running` with a live session, `offline` without. `gate-waiting` and `stalled` are never emitted for this kind.
 
+**Source:** the `architect` table in `global.db`, scoped by `workspace_path` — **not** `liveArchitects(entry, terminalManager)` (`tower-routes.ts:1163`). That helper returns only live architects, exactly as its name says, so an architect that exits would vanish from the payload and `offline` would be unreachable for this kind, in the same way passing `activeBuilderRoleIds` breaks it for builders.
+
+The table row persists past the session. Liveness is resolved from the terminal registry via the row's `terminal_id`, the same way builder liveness is resolved from `roleId`.
+
 **Workspace** (`kind: "workspace"`): `running` when Tower reports it active, `offline` otherwise.
 
 **FR-4's `needs-attention` is `stalled`.** It is not a fifth value; FR-4 names a UI concept and `stalled` is its server-side spelling.
@@ -192,15 +200,13 @@ FR-3 requires a builder to appear under the architect that spawned it, and under
 
 `heldMail` is a **flag, not a status**, because a builder can be running and have held mail at the same time. FR-4 lists it alongside statuses; that is a UI grouping, not an enum member.
 
-### `stalled` is the existing predicate, not a new one
+### On the threshold
 
-**`stalled` == `isIdleWaiting`**, reusing `IDLE_WAITING_THRESHOLD_MS` (5 minutes) and the predicate in `packages/sdk/src/builder-helpers.ts`.
-
-The FRD mockup shows `NO OUTPUT 6 MIN`, which is an illustrative label rather than a specified threshold. Introducing a second threshold would create exactly the drift that constant's own comment exists to prevent:
+`IDLE_WAITING_THRESHOLD_MS` (5 minutes, `packages/sdk/src/builder-helpers.ts`) is the single source. The FRD mockup's `NO OUTPUT 6 MIN` is an illustrative label, not a specified threshold, and introducing a second one would create exactly the drift that constant's own comment exists to prevent:
 
 > Co-locating both surfaces' threshold here prevents silent UI drift where one says "waiting" and the other says "active" for the same builder.
 
-**One threshold, one predicate, one place.** If six minutes is later wanted, change the constant and every surface moves together.
+**One threshold, one place.** If six minutes is later wanted, change the constant and every surface moves together. Note that `stalled` reuses the *constant* and not the `isIdleWaiting` predicate, for the reason given above.
 
 ### Buckets (FR-41)
 
@@ -208,7 +214,7 @@ Fixed **30-second** buckets, **20** retained, giving 10 minutes of trace.
 
 **The unit is the delta in `PtySession.bytesWritten`** (`pty-session.ts:783`) over the bucket window. It is already public, already monotone, and reading it touches no forbidden file. Naming the unit is not pedantry: two clients cannot converge on criterion 7 if each is free to interpret the number differently.
 
-One `tick` frame per bucket interval per connection. **Builders with zero output are absent from `buckets`**, and absence means zero. This bounds idle cost at one small frame per 30s regardless of builder count, which is the only shape that survives the idle test below.
+One `tick` frame per bucket interval **per scope**, fanned to every connection watching that scope. Per-connection ticks would give each connection its own frame ordering against a cursor that is per-scope, and two clients on one scope would then disagree about which bucket a `seq` lands in. **Builders with zero output are absent from `buckets`**, and absence means zero. This bounds idle cost at one small frame per 30s regardless of builder count, which is the only shape that survives the idle test below.
 
 The client advances the trace on `tick` and renders absent builders as zero. That is rendering an explicit signal, not deriving state, so it does not violate D4.
 
@@ -220,9 +226,22 @@ FR-31 requires scoped subscriptions, not full-state broadcast. Rev. 1's full-hie
 
 **`counts` covers the whole hierarchy, in scope and out.** Rev. 4 described it as an out-of-scope rollup, which leaves the rollup stale whenever an in-scope builder spawns or enters a gate — and two clients with different scopes would then disagree about `gateWaiting`, breaking criterion 7. A `counts` frame is emitted whenever any count changes, whatever the scope of the node that caused it.
 
-### `gone`
+### `gone` versus `offline`, one rule for all three kinds
 
-Emitted for an **in-scope** node that disappears from the source: a builder row removed by `afx cleanup`, a workspace deactivated, an architect exiting. Out-of-scope disappearances move `counts` instead.
+These two were tangled in rev. 6: it said a workspace deactivating or an architect exiting fires `gone`, while also giving both kinds an `offline` status. Both cannot be true, and as written `offline` was unreachable for anything but a builder.
+
+**The rule: liveness never fires `gone`. Only the disappearance of the underlying record does.**
+
+| Event | Frame |
+|---|---|
+| Session ends, architect exits, workspace deactivates | `node` upsert with `status: "offline"` |
+| Builder worktree removed (`afx cleanup`) | `gone` |
+| Architect row deleted from `global.db` | `gone` |
+| Workspace unregistered from Tower | `gone` |
+
+A node that still exists but has nothing attached is `offline`. A node that no longer exists is `gone`. This is what makes `offline` reachable for every kind, and it gives `gone` exactly one meaning.
+
+Emitted for **in-scope** nodes only; out-of-scope disappearances move `counts` instead.
 
 Without this rule and with no eviction to paper over it, a cleaned-up builder would sit in the tree forever on every connected client. Rev. 4 declared `gone` in the frame list and never said when it fires.
 
@@ -342,6 +361,7 @@ Ranked, most consequential first.
 9d. **Sparkline single-writer.** Drive `node` upserts between ticks on one client and not the other; assert both sparklines are identical after the next `tick`.
 9e. **Offline is reachable.** A builder whose worktree exists with no live session appears as `offline` rather than being absent. This fails immediately if the implementation copies `tower-routes.ts:1137` and passes `activeBuilderRoleIds`.
 9f. **Builders never dangle.** A builder with `spawnedByArchitect` null, and one naming an architect outside the scope, both parent to their workspace and render in the tree.
+9g. **Offline is reachable for architects and workspaces too.** Exit an architect: assert a `node` upsert with `status: "offline"`, **not** a `gone`. Then delete its row: assert `gone`. Repeat for a workspace. This fails immediately if the implementation sources architects from `liveArchitects`.
 10. **Non-regression.** Existing SSE suite passes untouched.
 
 ## Risks and Mitigation
@@ -350,13 +370,14 @@ Ranked, most consequential first.
 |---|---|---|---|
 | Idle cost scales with builder count | Medium | High — defeats the reason for building this | Absence-means-zero in `tick`; scenario 3 measures 20 silent builders, not zero |
 | Resume silently broken because it is rarely hit | Medium | High — corruption looks like a UI bug | Scenarios 4–6 test it directly rather than relying on eviction to trigger it |
-| A second stalled threshold drifts from the dashboard | High if not specified | Medium — two surfaces disagree about one builder | Reuse `IDLE_WAITING_THRESHOLD_MS` and `isIdleWaiting`; define no new threshold |
+| A second stalled threshold drifts from the dashboard | High if not specified | Medium — two surfaces disagree about one builder | Reuse the `IDLE_WAITING_THRESHOLD_MS` constant; define no new threshold |
 | `EventSource` reached for, 401s follow | High | Low — loud and fast to diagnose | Stated on the contract with the `useSSE.ts` precedent and the reason |
 | Upstream merge conflict | Low | High — the fork constraint is the whole design | One mount block beside the existing `/api/tunnel/` prefix; criterion 12 makes it falsifiable |
 | v2 clients starve VS Code clients | Low | Medium | C4: separate cap accounting, 50 v2 clients against the existing 200 |
 | Ids unstable across reconnect, `gone` unmatchable | Low | High — silent leaks in the tree | Ids derive from existing natural keys; nothing new is minted or persisted |
 | Finished and crashed builders indistinguishable | Certain | Low — both are correctly "nothing attached" | Stated, not hidden. Open question 3 carries the upstream cost of fixing it |
 | Implementation copies the filtered `getOverview` call site | High — it is the obvious one to copy | High — `offline` silently never fires and finished builders vanish | Called out on the source, and scenario 9e fails loudly if it happens |
+| Same trap for architects via `liveArchitects` | High — also the obvious helper | High — architects vanish instead of going offline | Named on the architect source; scenario 9g fails loudly |
 | Builder id collision across workspaces | High if unqualified | High — builders overwrite each other, blamed on the client | Every id qualified by `workspace_path` per `schema.ts:46`; scenario 7b tests it |
 | Resumed deltas served into the wrong scope | Medium | High — silent corruption | `since` only valid with a matching `streamId`; mismatch returns a flagged snapshot |
 
