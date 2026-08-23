@@ -1,6 +1,6 @@
 # Experiment 74: Pull all 27 UX Pilot designs and map FR coverage
 
-**Status**: In Progress · **Date**: 2026-08-23
+**Status**: Complete · **Date**: 2026-08-23
 
 Issue #74. The spawn prompt named `codev/specs/74-v2-ui-pull-all-27-ux-pilot-des.md`, which does not exist. Assignment is GitHub issue 74.
 
@@ -41,28 +41,45 @@ Intended tools: UX Pilot MCP `get_page_context`, then `get_design` with `include
 HTTP fallback found, then blocked:
 
 - Page SPA: `https://uxpilot.ai/a/ui-design?page=SXl8jE8uNyYLwBsG6vsL` (no embedded design list).
-- MCP: `https://mcp.uxpilot.net/mcp` — 401, needs `Authorization: Bearer ep_<key>`.
-- CRUD: `https://stream.uxpilot.ai/crud/getPage[/v2|/v3]/<id>` — 401, no token.
+- MCP: `https://mcp.uxpilot.net/mcp` : 401, needs `Authorization: Bearer ep_<key>`.
+- CRUD: `https://stream.uxpilot.ai/crud/getPage[/v2|/v3]/<id>` : 401, no token.
 - Firebase anonymous signup against `uxpilot-auth` is `ADMIN_ONLY_OPERATION`.
 
-No UX Pilot key in process env or `.codev/config.json`. Fetch is blocked until a key or MCP lane is provided.
+Architect wrote `manifest.json` (27 ids, titles null). Preview PNGs are public on `storage.googleapis.com`. HTML still needs the MCP session. No further HTTP fallbacks after that instruction.
 
 ## Code
 
 | File | What it is |
 |---|---|
-| `../../research/v2-mockups/uxpilot/` | Pulled designs, one directory per group |
+| `manifest.json` | 27 ids from architect:uiv2 |
+| `../../research/v2-mockups/uxpilot/<slug>/<id>.png` | 27 previews |
 | `../../research/v2-mockups/uxpilot/MANIFEST.md` | Group / title / FR map |
 | `artifacts/coverage-gap.md` | The deliverable |
 
 ## Results
 
-0 of 27 designs fetched. Hypothesis not scored. Blocked on auth.
+27 of 27 previews on disk. 0 of 27 HTML. Existing mockup HTML and tokens untouched.
+
+Hypothesis 1 is disproved: none of the 7 designed groups lack an FR that names their surface. Hypothesis 2 holds. Hypothesis 3 mostly holds; FR-5 and FR-49 are visible (Find Node, pane close X). Hypothesis 4 failed on HTML.
+
+The gap that matters is the other way: FRs with no design (FR-6, 7-desktop, 9, 10, 11, 14, 18, 37, 41-on-iPad) and designs with no FR (NUDGE, picker, LIVE PANES, OPEN IN destinations). FR-5, FR-21, FR-43 wording fights the screens.
+
+Full table: `artifacts/coverage-gap.md`.
+
+| Metric | Value | Notes |
+|---|---|---|
+| Previews on disk | 27 | Public GCS, no auth |
+| HTML on disk | 0 | MCP not on this harness |
+| Groups with no FR | 0 | FRD claimed 5 |
+| Design inventions with no FR | 4 | NUDGE, picker, LIVE PANES, OPEN IN |
+| FRs fighting a design | 3 | FR-5, FR-21, FR-43 |
 
 ## What Worked / What Didn't
 
-The page HTML is a shell. The real list lives behind `stream.uxpilot.ai` and `mcp.uxpilot.net`, both gated. Guessing design IDs would invent evidence.
+Stopping for a key instead of inventing IDs. Public preview URLs. Mapping from visible headings, not from restyled HTML.
+
+HTML fetch did not work on this harness. Five of the nine mobile-site files are near-duplicates; the group is four surfaces, not nine.
 
 ## Next Steps
 
-Need one of: a UX Pilot MCP key (`ep_…`), this session wired to the uxpilot MCP, or the 27 design IDs exported another way. Then resume one-at-a-time fetch.
+FRD rev. 8 should: drop the "five groups have no FR" claim; add NUDGE / picker / LIVE PANES / OPEN IN; rewrite FR-5, FR-21, FR-43 to match the screens. HTML can wait until someone with the MCP session pulls it. No production path from this experiment.

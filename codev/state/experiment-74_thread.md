@@ -14,4 +14,8 @@ This harness has no UX Pilot MCP tools. HTTP fallback found and blocked.
 
 Architect wrote `manifest.json` (27 ids, titles null). HTML still needs MCP; previews are public.
 
-Find Node group pulled (5 PNGs). Visible surface is FIND A NODE + OPEN IN, not a ⌘K palette. Bears on FR-5 and FR-2. HTML marked not-pulled.
+All 27 previews pulled, one group per commit, pushed. HTML not pulled.
+
+Coverage gap: 0 groups lack an FR. FRD claim of five uncovered groups is disproved. Real gap is undesigned FRs (board, desktop tile, persist, spawn chrome, Tailscale detect) and undesigned inventions (NUDGE, picker, LIVE PANES, OPEN IN). FR-5 / FR-21 / FR-43 wording fights the screens.
+
+Deliverable: `codev/experiments/74-v2-ui-pull-all-27-ux-pilot-des/artifacts/coverage-gap.md`.
