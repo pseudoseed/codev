@@ -80,14 +80,12 @@ jobs:
           # during cleanup after all tests pass (native module teardown).
           # Capture the output and check if all test files passed.
           pnpm exec vitest run --coverage 2>&1 | tee /tmp/vitest-output.txt; VITEST_EXIT=$?
-          if [ $VITEST_EXIT -ne 0 ]; then
-            # Check if all test files actually passed despite the exit code
-            if grep -q "Test Files.*passed" /tmp/vitest-output.txt && ! grep -q "failed" /tmp/vitest-output.txt; then
-              echo "::warning::Vitest worker crashed during cleanup but all tests passed"
-            else
-              exit $VITEST_EXIT
-            fi
-          fi
+          # The tolerance decision lives in a script so it can be tested against
+          # real captured output instead of only in CI (#27). The previous inline
+          # guard greped the bare word `failed` across the whole log, which matched
+          # test names (`reentry-failed`, `clear-failed`) and `git fetch ... failed`
+          # warnings — five times in a fully GREEN run — so it could never fire.
+          "$GITHUB_WORKSPACE/scripts/vitest-crash-tolerance.sh" /tmp/vitest-output.txt "$VITEST_EXIT"
 
       - name: Run web unit tests
         working-directory: apps/web

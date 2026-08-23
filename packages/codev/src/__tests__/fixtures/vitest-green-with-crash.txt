@@ -1,0 +1,10 @@
+# Excerpted verbatim from GitHub Actions run 32666076117 (Tests, main, GREEN).
+# Every 'failed' below comes from a PASSING test's own output. The old guard
+# grepped the bare word across the whole log and so could never fire.
+Context refresh ABORTED (reentry-failed).
+stdout | src/agent-farm/__tests__/spec-1470-self-refresh-command.test.ts > port bindings > reports a failed Tower send as a thrown error, not a silent success
+Context refresh ABORTED (clear-failed).
+Warning: `git fetch origin does-not-exist` failed; proceeding with any locally-cached copy. Stale refs may produce misleading diffs. Underlying: fatal: couldn't find remote ref does-not-exist
+Warning: `git fetch origin no-such-head` failed; proceeding with any locally-cached copy. Stale refs may produce misleading diffs. Underlying: fatal: couldn't find remote ref no-such-head
+ Test Files  292 passed | 3 skipped (295)
+      Tests  5803 passed | 60 skipped (5863)
