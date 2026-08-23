@@ -39,3 +39,9 @@ Notes wrapped. PR #70 merged 36de6b37.
 Built. `http://10.10.50.186:4112/b.html`. FR-22 pass in live DOM. Close detaches. Chromium selection works. No iPad score on B.
 
 Notes restated: A-on-device vs B-in-Chromium is not comparable evidence. His words on A stand as the strongest data point. Two cost lists. No winner.
+
+## 2026-08-23 decision
+
+Architect: dockview, hideClose, group-level close. B drag cancelled.
+
+Override built and measured. `a-fr22.html`. Tab 44, close 44, not nested, sash hit 44 via ::before. 3 files we own, 0 dockview files. Gate: VoiceOver, Dynamic Type, orientations, finger scroll still unscored.
