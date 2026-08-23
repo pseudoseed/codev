@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Experiment 63 — Tower landing prototype</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --bg-2: #171a21;
+      --bg-3: #1f2430;
+      --border: #2a3140;
+      --text: #e8eaed;
+      --muted: #9aa3b2;
+      --accent: #6ea8fe;
+      --ok: #3dd68c;
+      --bad: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.45 ui-sans-serif, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    h1 { font-size: 18px; margin: 0; font-weight: 600; }
+    main { padding: 24px; max-width: 1100px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+    button {
+      background: var(--bg-3);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    button.primary { background: #243656; border-color: #3a5a8c; }
+    button.danger { color: var(--bad); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .hint { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 16px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 8px;
+    }
+    .name { font-weight: 600; }
+    .path { color: var(--muted); font-size: 13px; }
+    .badge {
+      font-size: 12px;
+      color: var(--ok);
+      border: 1px solid #245c40;
+      border-radius: 999px;
+      padding: 2px 8px;
+    }
+    .row-actions { display: flex; gap: 8px; align-items: center; }
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    .overlay.open { display: flex; }
+    .dialog, .term {
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      width: min(560px, 92vw);
+    }
+    .term {
+      width: min(720px, 94vw);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    label { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 13px; }
+    input {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg-3);
+      color: var(--text);
+    }
+    .suggestions { margin-top: 8px; }
+    .suggestions button { display: block; width: 100%; text-align: left; margin-top: 4px; }
+    .term-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    pre {
+      margin: 0;
+      min-height: 180px;
+      max-height: 320px;
+      overflow: auto;
+      background: #0b0d11;
+      border-radius: 6px;
+      padding: 12px;
+      white-space: pre-wrap;
+    }
+    pre.err { color: var(--bad); }
+    .panel {
+      position: fixed;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      width: min(420px, 92vw);
+      background: var(--bg-2);
+      border-left: 1px solid var(--border);
+      padding: 16px;
+      display: none;
+    }
+    .panel.open { display: block; }
+    .toggles { display: flex; gap: 16px; margin: 0 0 20px; color: var(--muted); font-size: 13px; }
+    .note { margin-top: 28px; color: var(--muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Tower landing prototype</h1>
+    <span class="hint">Experiment 63. Static. Does not talk to Tower.</span>
+  </header>
+  <main>
+    <div class="toggles">
+      <label><input type="radio" name="host" value="modal" checked /> Modal terminal</label>
+      <label><input type="radio" name="host" value="panel" /> Sliding panel</label>
+    </div>
+    <div class="actions">
+      <button class="primary" data-action="local">Open dashboard (local)</button>
+      <button data-action="remote">Open dashboard (remote)</button>
+      <button data-action="init">Create new repo</button>
+      <button data-action="adopt">Adopt existing repo</button>
+      <button data-action="update">Update existing repo</button>
+    </div>
+    <p class="hint">One row per workspace. Terminal list lives in the workspace SPA, not on this page.</p>
+    <div id="list"></div>
+    <p class="note">
+      Remote is shown so the missing mapping is visible. The prompt rejects
+      <code>user@host:/path</code> and says SSH start is gone.
+    </p>
+  </main>
+
+  <div class="overlay" id="prompt">
+    <div class="dialog">
+      <h2 id="prompt-title">Path</h2>
+      <label for="path">Directory</label>
+      <input id="path" placeholder="~/dev/new-project" />
+      <div class="suggestions" id="suggestions"></div>
+      <div class="row-actions" style="margin-top:16px;justify-content:flex-end">
+        <button id="prompt-cancel">Cancel</button>
+        <button class="primary" id="prompt-go">Run</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="modal">
+    <div class="term">
+      <div class="term-head">
+        <strong id="modal-title">Command</strong>
+        <button id="modal-close" disabled>Close</button>
+      </div>
+      <pre id="modal-out"></pre>
+    </div>
+  </div>
+
+  <aside class="panel" id="panel">
+    <div class="term-head">
+      <strong id="panel-title">Command</strong>
+      <button id="panel-close" disabled>Close</button>
+    </div>
+    <pre id="panel-out"></pre>
+  </aside>
+
+  <script>
+    const workspaces = [
+      { name: 'codev', path: '/Users/chris/dev/codev' },
+      { name: 'notes', path: '/Users/chris/dev/notes' },
+      { name: 'robot', path: '/Users/chris/dev/robot' },
+    ];
+    const suggestions = [
+      '/Users/chris/dev/codev',
+      '/Users/chris/dev/notes',
+      '/tmp/exp-63-demo',
+    ];
+    const scripts = {
+      local: {
+        title: 'Open dashboard (local)',
+        lines: [
+          '$ POST /api/launch',
+          'registering workspace…',
+          'architect terminal ready',
+          'ok',
+        ],
+        fail: false,
+      },
+      remote: {
+        title: 'Open dashboard (remote)',
+        lines: [
+          'afx start --remote is gone.',
+          'This button has no command to run.',
+          'Current remote path is afx tower connect (Codev Cloud).',
+        ],
+        fail: true,
+        rejectSsh: true,
+      },
+      init: {
+        title: 'Create new repo',
+        lines: [
+          '$ codev init --yes demo',
+          'created /tmp/demo/codev',
+          'launching workspace…',
+          'ok',
+        ],
+        fail: false,
+      },
+      adopt: {
+        title: 'Adopt existing repo',
+        lines: [
+          '$ codev adopt --yes',
+          'codev/ already present, skip',
+          'POST /api/launch',
+          'ok',
+        ],
+        fail: false,
+      },
+      update: {
+        title: 'Update existing repo',
+        lines: [
+          '$ codev update --dry-run',
+          'error: no /api/update on this Tower',
+          'CLI exists. The landing page has nothing to call.',
+        ],
+        fail: true,
+      },
+    };
+
+    const list = document.getElementById('list');
+    list.innerHTML = workspaces.map((ws) => `
+      <div class="row">
+        <div>
+          <div class="name">${ws.name}</div>
+          <div class="path">${ws.path}</div>
+        </div>
+        <div class="row-actions">
+          <span class="badge">Running</span>
+          <button>Open</button>
+          <button class="danger">Stop</button>
+        </div>
+      </div>
+    `).join('');
+
+    let pending = null;
+    const prompt = document.getElementById('prompt');
+    const pathInput = document.getElementById('path');
+    const suggBox = document.getElementById('suggestions');
+
+    function host() {
+      return document.querySelector('input[name="host"]:checked').value;
+    }
+
+    function showSuggestions(value) {
+      const q = value.toLowerCase();
+      const hits = suggestions.filter((s) => s.toLowerCase().includes(q));
+      suggBox.innerHTML = hits.map((s) => `<button type="button" data-s="${s}">${s}</button>`).join('');
+    }
+
+    document.querySelectorAll('[data-action]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        pending = btn.dataset.action;
+        document.getElementById('prompt-title').textContent = scripts[pending].title;
+        pathInput.value = pending === 'init' ? '/tmp/exp-63-demo' : workspaces[0].path;
+        showSuggestions(pathInput.value);
+        prompt.classList.add('open');
+        pathInput.focus();
+      });
+    });
+
+    pathInput.addEventListener('input', (e) => showSuggestions(e.target.value));
+    suggBox.addEventListener('click', (e) => {
+      if (e.target.dataset.s) {
+        pathInput.value = e.target.dataset.s;
+        showSuggestions(pathInput.value);
+      }
+    });
+    document.getElementById('prompt-cancel').onclick = () => prompt.classList.remove('open');
+
+    function writeLines(pre, closeBtn, spec) {
+      pre.textContent = '';
+      pre.classList.toggle('err', spec.fail);
+      closeBtn.disabled = true;
+      let i = 0;
+      const tick = () => {
+        if (i < spec.lines.length) {
+          pre.textContent += spec.lines[i++] + '\n';
+          setTimeout(tick, 220);
+        } else {
+          closeBtn.disabled = false;
+        }
+      };
+      tick();
+    }
+
+    document.getElementById('prompt-go').onclick = () => {
+      const spec = scripts[pending];
+      const value = pathInput.value.trim();
+      prompt.classList.remove('open');
+      if (spec.rejectSsh && value.includes('@')) {
+        spec.lines = [
+          `rejected: ${value}`,
+          'SSH start was removed. Do not restore it from this page.',
+        ];
+      }
+      if (host() === 'modal') {
+        document.getElementById('modal-title').textContent = spec.title;
+        document.getElementById('modal').classList.add('open');
+        writeLines(document.getElementById('modal-out'), document.getElementById('modal-close'), spec);
+      } else {
+        document.getElementById('panel-title').textContent = spec.title;
+        document.getElementById('panel').classList.add('open');
+        writeLines(document.getElementById('panel-out'), document.getElementById('panel-close'), spec);
+      }
+    };
+
+    document.getElementById('modal-close').onclick = () => {
+      if (!document.getElementById('modal-close').disabled) {
+        document.getElementById('modal').classList.remove('open');
+      }
+    };
+    document.getElementById('panel-close').onclick = () => {
+      if (!document.getElementById('panel-close').disabled) {
+        document.getElementById('panel').classList.remove('open');
+      }
+    };
+  </script>
+</body>
+</html>
