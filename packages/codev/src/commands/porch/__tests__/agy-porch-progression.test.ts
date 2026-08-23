@@ -131,13 +131,23 @@ describe('porch progression with a skipped agy/gemini lane (drives next())', () 
 
     const res = await next(testDir, '0778');
 
-    // Porch advanced: it requested the human `pr` gate ("All reviewers approved!"),
-    // NOT a rebuttal/re-iteration. The skipped lane did not block progression.
+    // Porch advanced: it requested the human `pr` gate, NOT a rebuttal or a
+    // re-iteration. The skipped lane did not block progression — that is the
+    // deliberate behaviour and it is unchanged.
     expect(res.status).toBe('gate_pending');
     expect(res.gate).toBe('pr');
     const subjects = (res.tasks ?? []).map(t => t.subject).join(' | ');
     expect(subjects).not.toMatch(/rebuttal/i);
-    expect((res.tasks ?? []).map(t => t.description).join('\n')).toMatch(/All reviewers approved/);
+
+    // What DID change (#20): the description no longer says "All reviewers
+    // approved!" over a run where gemini never looked at the code. This is the
+    // sentence a human reads immediately before approving the gate, so it has
+    // to say what actually happened.
+    const description = (res.tasks ?? []).map(t => t.description).join('\n');
+    expect(description).not.toMatch(/All reviewers approved/);
+    expect(description).toMatch(/2 of 3 lanes actually reviewed/);
+    expect(description).toMatch(/Did not review: gemini/);
+    expect(description).toMatch(/NOT as approval/);
   });
 
   it('does NOT mask a genuine REQUEST_CHANGES (gemini skipped, codex blocks)', async () => {

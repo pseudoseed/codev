@@ -33,7 +33,7 @@ import {
   allPlanPhasesComplete,
 } from './plan.js';
 import { buildPhasePrompt } from './prompts.js';
-import { parseVerdict, allApprove } from './verdict.js';
+import { parseVerdict, allApprove, laneReviewed, laneSummary } from './verdict.js';
 import { loadCheckOverrides, resolveConsultationModels } from './config.js';
 import { getResolver, type ArtifactResolver } from './artifacts.js';
 import {
@@ -80,7 +80,9 @@ function findReviewFiles(
     if (fs.existsSync(filePath)) {
       const content = fs.readFileSync(filePath, 'utf-8');
       const verdict = parseVerdict(content);
-      results.push({ model, verdict, file: filePath });
+      // #20: record whether the lane stated this verdict or porch defaulted it,
+      // so a lane that never ran cannot read as part of a unanimous approval.
+      results.push({ model, verdict, file: filePath, stated: laneReviewed(content) });
     }
   }
 
@@ -852,7 +854,10 @@ async function handleVerifyApproved(
       tasks: [{
         subject: `Request human approval: ${gateName}`,
         activeForm: `Requesting ${gateName} approval`,
-        description: `All reviewers approved!\n\nReviewer verdicts:\n${formatVerdicts(reviews)}\n\nSTOP and wait for human approval.`,
+        // #20: never print "All reviewers approved!" over a run where a lane
+        // never looked at the code. This is the sentence a human reads right
+        // before approving a gate.
+        description: `${laneSummary(reviews).sentence}\n\nReviewer verdicts:\n${formatVerdicts(reviews)}\n\nSTOP and wait for human approval.`,
       }],
     };
   }
@@ -966,6 +971,12 @@ async function handleOncePhase(
  */
 function formatVerdicts(reviews: ReviewResult[]): string {
   return reviews
-    .map(r => `  ${r.model}: ${r.verdict}`)
+    .map(r =>
+      // #20: mark a defaulted verdict as defaulted. `parseVerdict` returns
+      // COMMENT both for a reviewer that wrote COMMENT and for one that wrote
+      // no verdict at all, and the two are not the same evidence.
+      r.stated === false
+        ? `  ${r.model}: ${r.verdict} (LANE DID NOT REVIEW — skipped or produced no verdict)`
+        : `  ${r.model}: ${r.verdict}`)
     .join('\n');
 }

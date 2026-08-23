@@ -165,6 +165,16 @@ export interface ReviewResult {
   model: string;
   verdict: Verdict;
   file: string;           // Path to review output file
+  /**
+   * Whether the reviewer stated this verdict itself (#20).
+   *
+   * `parseVerdict` returns COMMENT both when a reviewer wrote COMMENT and when
+   * it wrote no verdict line at all, and `allApprove` counts COMMENT as an
+   * approval — so a lane that never ran silently joins a unanimous approval.
+   * Optional for backward compatibility with existing status.yaml records;
+   * `undefined` means "not recorded", which is not the same as `false`.
+   */
+  stated?: boolean;
 }
 
 /**
