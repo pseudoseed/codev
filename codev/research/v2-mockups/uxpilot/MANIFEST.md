@@ -86,3 +86,15 @@ The FRD listed this group as having no requirements. Wrong: FR-24 is this screen
 | ID | Title (from preview) | Preview | HTML | FRs |
 |---|---|---|---|---|
 | `TiCebhzPvbU1AeCZqj5z` | Soft keyboard — CTRL ESC TAB arrows | `terminal-soft-keyboard/TiCebhzPvbU1AeCZqj5z.png` | not pulled | FR-24, FR-22, FR-23 |
+
+---
+
+## Group with Porch - Split Terminals
+
+iPad. Two panes, `SWAP PANES` + `LAYOUT`. This is **FR-7**'s tablet clause (two-pane tile, not four). **FR-21** does not apply: this is 1024-class, not below 768. Also **FR-8** (hidden pane stays alive is implied by swap), **FR-19**, **FR-42** (`NUDGE` on a stalled pane — an action the FRD never named). Close X on a pane is **FR-49** (detach, do not kill).
+
+`design-language.md` already notes sparklines (**FR-41**) are missing on iPad builder rows. Visible here too.
+
+| ID | Title (from preview) | Preview | HTML | FRs |
+|---|---|---|---|---|
+| `GyhcwHplwDsZ0ENiyTnI` | Split terminals — two panes + NUDGE | `split-terminals/GyhcwHplwDsZ0ENiyTnI.png` | not pulled | FR-7, FR-8, FR-19, FR-42, FR-49 |
