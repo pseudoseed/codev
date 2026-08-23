@@ -2,7 +2,8 @@
 
 **Status:** Decided — Option 2, multi-machine in v1, built as an additive fork-owned app.
 Not a spec. No implementation authorized; spikes in the appendix come first.
-**Date:** 2026-08-21 (rev. 5, design language approved)
+**Date:** 2026-08-23 (rev. 6 — both spikes run, Option 0 shipped, dark mode and tablet
+tiling decided)
 **Author:** Architect (main)
 **Reviewed by:** Claude Opus 5, Grok 4.6 (Codex unavailable, Gemini unauthenticated)
 **Decided by:** the human, 2026-08-21 — **multi-machine ships in v1**, and **this is a
@@ -430,10 +431,17 @@ cheap. **LATER** = explicitly deferred. Requirements changed in rev. 2 are marke
 
 ### Tiling and layout
 
-- **FR-7 ⟳ (MUST desktop / SHOULD tablet)** The work area tiles: split horizontally
-  and vertically, drag panes between groups, resize. **Tablet tiling stays SHOULD
-  until a real iPad has dragged a split in dockview** — rev. 1 flagged touch as
-  unproven and then made it MUST anyway.
+- **FR-7 ⟳ (MUST desktop / MUST tablet)** The work area tiles: split horizontally
+  and vertically, drag panes between groups, resize. *Rev. 6: the human promoted the
+  tablet clause to MUST on 2026-08-23.*
+
+  **This promotion makes appendix spike 5 mandatory, and it is now a gate rather than
+  an option.** Rev. 5 held tablet tiling at SHOULD precisely because rev. 1 had declared
+  it MUST while touch was unproven. Promoting it without running the spike would repeat
+  that mistake with a decision behind it. So: **a real iPad must drag a split in dockview
+  before any tiling work is specified for tablet.** If dockview's touch handling cannot do
+  it, the requirement is renegotiated — a different library, or a tablet tiling model that
+  is not drag-based — rather than quietly downgraded again.
 - **FR-8 ⟳ (MUST)** A pane hidden by tab-switching keeps its process, scrollback and
   connection alive. **Its renderer may be released and restored on show** — required
   because Safari caps live WebGL contexts and `always` mode would hold one per pane.
@@ -662,10 +670,26 @@ for gates and nothing else; ochre means something may be wrong but nobody is blo
 moss means healthy; ink is everything else. There is no fifth colour and rust is never
 decoration.
 
-Two open items recorded there: Space Grotesk should be swapped (it is on the standard
-AI-generated-design tell list, and carries almost no weight here), and there is no dark
-mode — the terminal panes are already ink-on-chalk inversions, so a dark theme would need
-designing rather than deriving.
+Both open items are now closed.
+
+**Space Grotesk is gone** (rev. 6, PR #51). Replaced by IBM Plex Sans — the same
+superfamily as the IBM Plex Mono already carrying most of the UI text, so it harmonises
+by construction rather than by taste, and it drops a font dependency instead of adding
+one.
+
+**Dark mode is in scope** — the human decided on 2026-08-23. The constraint recorded in
+`tokens.css` still governs how it gets built: **it must be designed, not derived.** The
+light palette cannot simply be inverted, because the terminal panes are already
+ink-on-chalk inversions and the page reads as a lit workspace holding dark screens.
+Inverting everything destroys that relationship: the terminals stop being the dark thing
+in the room and become the same value as their surroundings.
+
+The colour discipline is the part that must survive the port. Rust means a human is
+needed and is used for gates and nothing else; ochre means something may be wrong but
+nobody is blocked; moss means healthy; ink is everything else. A dark palette has to
+preserve those four meanings and their relative weight, and hit WCAG 2.2 AA on the new
+ground. Rust in particular has to stay the loudest thing on screen without becoming the
+only legible one.
 
 ---
 
