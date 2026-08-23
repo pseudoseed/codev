@@ -198,38 +198,88 @@ export function loadProtocolRole(config: Config, protocolName: string): { conten
 // Protocol Resolution
 // =============================================================================
 
+/** What a spec lookup found, and how sure it is (#65). */
+export interface SpecLookup {
+  /** The spec belonging to this id, or null when none does. */
+  path: string | null;
+  /**
+   * A spec whose id matches only after stripping leading zeros.
+   *
+   * NOT returned as `path`. It is reported so the caller can explain why a spec
+   * file that looks related is not being used.
+   */
+  nearMiss: string | null;
+}
+
 /**
- * Find a spec file by project ID.
- * Handles legacy zero-padded IDs: `afx spawn 76` matches `0076-feature.md`.
- * Strips leading zeros from both the input ID and spec file prefixes for comparison.
+ * Find the spec file belonging to `projectId`, by EXACT id.
+ *
+ * ## Why the zero-stripped fallback is gone (#65)
+ *
+ * It existed so `afx spawn 76` would find a legacy `0076-feature.md`. In a tree
+ * that uses one numbering convention that is a convenience. In this one it
+ * hands builders the wrong assignment, because the fork restarted issue
+ * numbering at 1 against a tree carrying legacy artifacts numbered into the
+ * 1400s — 116 of 175 specs are zero-padded, so most new issue numbers have a
+ * twin that has nothing to do with them.
+ *
+ * Measured on 2026-08-23: three spawns hit it in one day.
+ *
+ *   afx spawn 38  -> 0038-consult-pr-mode.md (a 2025 TICK)   builder noticed
+ *   afx spawn 39  -> 0039-codev-cli.md (shipped)             builder noticed
+ *   afx spawn 63  -> 0063-tower-dashboard-improvements.md    builder did NOT
+ *
+ * The third cost about an hour and produced a competent, well-argued finding
+ * about the wrong subject — which is harder to catch in review than an obvious
+ * error. Two of three caught it, and that is luck, not a safety property.
+ *
+ * Warning instead of refusing was considered and rejected: with a twin for most
+ * low issue numbers the warning would fire on nearly every spawn, and a warning
+ * that always fires is trained past within a week.
+ *
+ * Exactness costs nothing, because the two forms already express different
+ * intent: `afx spawn 63` asks for issue 63's spec, `afx spawn 0063` asks for
+ * the legacy one, and each now finds exactly what it named. And "this issue has
+ * no spec yet" is the NORMAL state at spawn — most protocols create the spec in
+ * their first phase, and `spec_missing` is already a supported template flag.
+ * An absent spec is a fact worth stating; a wrong one is not.
  */
-export async function findSpecFile(codevDir: string, projectId: string): Promise<string | null> {
+export async function findSpecLookup(codevDir: string, projectId: string): Promise<SpecLookup> {
   const specsDir = resolve(codevDir, 'specs');
 
   if (!existsSync(specsDir)) {
-    return null;
+    return { path: null, nearMiss: null };
   }
 
   const files = await readdir(specsDir);
-  const strippedId = stripLeadingZeros(projectId);
 
-  // Try exact match first (e.g., projectId="0076" matches "0076-feature.md")
   for (const file of files) {
     if (file.startsWith(projectId + '-') && file.endsWith('.md')) {
-      return resolve(specsDir, file);
+      return { path: resolve(specsDir, file), nearMiss: null };
     }
   }
 
-  // Try zero-stripped match (e.g., projectId="76" matches "0076-feature.md")
+  // Report the twin rather than using it, so "no spec" does not look like the
+  // lookup failed to see a file that is plainly sitting there.
+  const strippedId = stripLeadingZeros(projectId);
   for (const file of files) {
     if (!file.endsWith('.md')) continue;
     const filePrefix = file.split('-')[0];
     if (stripLeadingZeros(filePrefix) === strippedId) {
-      return resolve(specsDir, file);
+      return { path: null, nearMiss: resolve(specsDir, file) };
     }
   }
 
-  return null;
+  return { path: null, nearMiss: null };
+}
+
+/**
+ * Back-compat wrapper: the spec belonging to `projectId`, or null.
+ *
+ * Never returns a zero-stripped near-miss. See {@link findSpecLookup}.
+ */
+export async function findSpecFile(codevDir: string, projectId: string): Promise<string | null> {
+  return (await findSpecLookup(codevDir, projectId)).path;
 }
 
 /**

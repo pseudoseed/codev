@@ -12,6 +12,7 @@ import {
   buildResumeNotice,
   resolveMode,
   findSpecFile,
+  findSpecLookup,
   validateProtocol,
   loadProtocol,
   loadProtocolRole,
@@ -251,12 +252,70 @@ describe('spawn-roles', () => {
       expect(result).toBe(path.join(tmpDir, 'specs', '0076-feature.md'));
     });
 
-    it('matches stripped ID to zero-padded file (e.g., "76" → "0076-feature.md")', async () => {
+    it('does NOT match a stripped ID to a zero-padded file (#65)', async () => {
+      // This assertion is inverted from what it used to be, on purpose.
+      //
+      // The fallback existed so `afx spawn 76` would find a legacy
+      // `0076-feature.md`. In a tree with one numbering convention that is a
+      // convenience; in this one it hands builders the wrong assignment. The
+      // fork restarted issue numbering at 1 against legacy artifacts numbered
+      // into the 1400s — 116 of 175 specs are zero-padded — so most new issue
+      // numbers have an unrelated twin.
+      //
+      // Measured 2026-08-23: three spawns hit it in one day. `afx spawn 63`
+      // was handed `0063-tower-dashboard-improvements.md`, and that builder
+      // did not notice — an hour of competent work on the wrong subject.
       const fs = await import('node:fs');
       const path = await import('node:path');
       fs.writeFileSync(path.join(tmpDir, 'specs', '0076-feature.md'), '');
-      const result = await findSpecFile(tmpDir, '76');
-      expect(result).toBe(path.join(tmpDir, 'specs', '0076-feature.md'));
+      expect(await findSpecFile(tmpDir, '76')).toBeNull();
+    });
+
+    it('reports the zero-padded twin as a near-miss rather than using it (#65)', async () => {
+      // "No spec" must not look like the lookup failed to see a file that is
+      // plainly sitting in the directory.
+      const fs = await import('node:fs');
+      const path = await import('node:path');
+      fs.writeFileSync(path.join(tmpDir, 'specs', '0076-feature.md'), '');
+
+      const lookup = await findSpecLookup(tmpDir, '76');
+      expect(lookup.path).toBeNull();
+      expect(lookup.nearMiss).toBe(path.join(tmpDir, 'specs', '0076-feature.md'));
+    });
+
+    it('still finds the legacy spec when its id is named exactly (#65)', async () => {
+      // The two forms express different intent and each now finds what it named.
+      // This is why removing the fallback costs nothing.
+      const fs = await import('node:fs');
+      const path = await import('node:path');
+      fs.writeFileSync(path.join(tmpDir, 'specs', '0076-feature.md'), '');
+
+      const lookup = await findSpecLookup(tmpDir, '0076');
+      expect(lookup.path).toBe(path.join(tmpDir, 'specs', '0076-feature.md'));
+      expect(lookup.nearMiss).toBeNull();
+    });
+
+    it('prefers the exact match when BOTH conventions are present (#65)', async () => {
+      // The live shape: issue 63 has its own spec, and an unrelated 0063 also
+      // exists. Readdir order must not decide which one a builder is handed.
+      const fs = await import('node:fs');
+      const path = await import('node:path');
+      fs.writeFileSync(path.join(tmpDir, 'specs', '0063-tower-dashboard.md'), '');
+      fs.writeFileSync(path.join(tmpDir, 'specs', '63-dark-palette.md'), '');
+
+      const lookup = await findSpecLookup(tmpDir, '63');
+      expect(lookup.path).toBe(path.join(tmpDir, 'specs', '63-dark-palette.md'));
+      expect(lookup.nearMiss).toBeNull();
+    });
+
+    it('reports no near-miss when nothing is even close', async () => {
+      const fs = await import('node:fs');
+      const path = await import('node:path');
+      fs.writeFileSync(path.join(tmpDir, 'specs', '0099-other.md'), '');
+
+      const lookup = await findSpecLookup(tmpDir, '76');
+      expect(lookup.path).toBeNull();
+      expect(lookup.nearMiss).toBeNull();
     });
 
     it('matches non-padded ID to non-padded file (e.g., "42" → "42-bugfix.md")', async () => {

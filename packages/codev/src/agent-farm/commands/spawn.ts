@@ -53,6 +53,7 @@ import {
   buildResumeNotice,
   loadProtocolRole,
   findSpecFile,
+  findSpecLookup,
   validateProtocol,
   loadProtocol,
   resolveMode,
@@ -331,8 +332,22 @@ async function spawnSpec(options: SpawnOptions, config: Config, selection: Agent
 
   const specLookupId = projectId;
 
-  // Resolve spec file (supports legacy zero-padded IDs)
-  const specFile = await findSpecFile(config.codevDir, specLookupId);
+  // Resolve the spec by EXACT id. The zero-stripped fallback was removed in #65:
+  // it handed `afx spawn 63` the unrelated `0063-tower-dashboard-improvements.md`
+  // and cost a builder-hour of well-argued work on the wrong subject.
+  const specLookup = await findSpecLookup(config.codevDir, specLookupId);
+  const specFile = specLookup.path;
+
+  // Say why a spec file that plainly exists is not being used. Without this,
+  // "no spec" looks like the lookup failed to see it.
+  if (!specFile && specLookup.nearMiss) {
+    logger.warn(
+      `Not using ${basename(specLookup.nearMiss)} — its id only matches ${specLookupId} ` +
+      `after stripping leading zeros, so it belongs to different work (#65). ` +
+      `This issue has no spec yet. To spawn the legacy project itself, name it ` +
+      `exactly: afx spawn ${basename(specLookup.nearMiss).split('-')[0]}`,
+    );
+  }
 
   // Try artifact resolver as fallback when no local spec file exists.
   // CLI backend users may store specs externally.
