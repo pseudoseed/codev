@@ -8,14 +8,14 @@ plan_phases:
     status: complete
   - id: phase_2
     title: Scoped event bus and SSE route
-    status: in_progress
+    status: complete
   - id: phase_3
     title: Change sampler and live deltas
-    status: pending
+    status: in_progress
   - id: phase_4
     title: Idle-cost and convergence proof
     status: pending
-current_plan_phase: phase_2
+current_plan_phase: phase_3
 gates:
   spec-approval:
     status: approved
@@ -28,8 +28,8 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 2
-build_complete: true
+iteration: 1
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_2
@@ -56,8 +56,10 @@ history:
           /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_2-iter1-opencode.txt
         stated: true
 started_at: '2026-08-23T07:21:36.575Z'
-updated_at: '2026-08-23T18:00:01.672Z'
+updated_at: '2026-08-23T18:04:16.945Z'
 context_refreshes:
   - boundary: plan-phase:phase_2
     at: '2026-08-23T17:47:34.397Z'
     acknowledged_at: '2026-08-23T17:48:08.675Z'
+  - boundary: plan-phase:phase_3
+    at: '2026-08-23T18:04:16.945Z'
