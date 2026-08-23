@@ -58,3 +58,19 @@ The FRD listed this group as having no requirements. That is wrong if FRs name s
 | `wtSunFZw8rCeadZpqDW8` | Gate — APPROVE DROP highlighted | `porch-gate-interaction-design/wtSunFZw8rCeadZpqDW8.png` | not pulled | FR-44, FR-45, FR-46, FR-26 |
 | `cI0vQS8yxrTmLcD5gokz` | Gate — note field focused | `porch-gate-interaction-design/cI0vQS8yxrTmLcD5gokz.png` | not pulled | FR-47, FR-25 |
 | `EdGJMIYxdc5nlaj5fyxX` | Gate — note typed | `porch-gate-interaction-design/EdGJMIYxdc5nlaj5fyxX.png` | not pulled | FR-47, FR-25 |
+
+---
+
+## Add Machine To Porch
+
+Phone pairing flow. This is **FR-16** (one-time token, no long-lived secret) and **FR-17** (QR so a phone can join by scanning). Also **FR-12** (environment name + address). Copy on the form names LAN vs tailnet, which is **FR-36**'s exposure warning, not a designed Tailscale detector (**FR-37** is still undesigned).
+
+The FRD listed this group as having no requirements. Wrong: FR-16 and FR-17 are this flow.
+
+| ID | Title (from preview) | Preview | HTML | FRs |
+|---|---|---|---|---|
+| `HOt71AQtECabPPgK5ZNK` | Site — ADD MACHINE empty farm | `add-machine-to-porch/HOt71AQtECabPPgK5ZNK.png` | not pulled | FR-12, FR-16, FR-15 |
+| `qwYWc6topSJn0NbcLFQA` | ADD A MACHINE — address + token | `add-machine-to-porch/qwYWc6topSJn0NbcLFQA.png` | not pulled | FR-12, FR-16, FR-36 |
+| `51b1CgYzLv0iRRqgh4G3` | QR PAIRING sheet | `add-machine-to-porch/51b1CgYzLv0iRRqgh4G3.png` | not pulled | FR-17 |
+| `F9qlq0WzIomyZX3y7L6G` | PAIRING — waiting on token | `add-machine-to-porch/F9qlq0WzIomyZX3y7L6G.png` | not pulled | FR-16 |
+| `cKttggjpN8Xa2xL5RXD7` | CONNECTED | `add-machine-to-porch/cKttggjpN8Xa2xL5RXD7.png` | not pulled | FR-12, FR-16 |
