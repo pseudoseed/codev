@@ -3,10 +3,12 @@
 - **Issue:** #52
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 2
-- **Rev. 2 changes:** wire contract written out; status vocabulary reconciled with the
-  existing `IDLE_WAITING_THRESHOLD_MS`; FR-31 reconciled rather than dropped; resume
-  window and restart behaviour specified; template headings restored.
+- **Status:** Draft, rev. 3
+- **Rev. 3 changes:** `seq` made a per-scope process-wide cursor, because a per-connection
+  counter cannot support `since` resume at all; every `Status` value defined as a predicate
+  for all three node kinds; `done` moved above `offline` so it stays reachable; `Counts`,
+  the id scheme, `scope` encoding, invalid-parameter handling, the v2 cap and the v2
+  eviction interval all written out; bucket unit named.
 
 ## Problem Statement
 
@@ -52,7 +54,9 @@ FR-32 eventually wants one multiplexed control socket per environment. That is a
 
 ### Frames
 
-Every frame is `{ seq, type, ... }` with `seq` a monotonic integer per connection.
+Every frame is `{ seq, type, ... }`.
+
+**`seq` is a per-scope cursor held by the Tower process, not a per-connection counter.** Rev. 2 said per-connection, which cannot work: after an eviction the old connection is gone and the server has no way to know which sequence space a client's `since` belongs to. One cursor per scope, shared by every connection watching that scope, is what makes `since` meaningful. It resets only when Tower restarts, which is exactly the case that returns a flagged snapshot.
 
 ```
 { seq, type: "snapshot", resumed: false, scope, nodes: Node[], counts: Counts }
@@ -69,21 +73,65 @@ Every frame is `{ seq, type, ... }` with `seq` a monotonic integer per connectio
 
 ```
 Node {
-  id, kind: "workspace"|"architect"|"builder", parentId, name,
+  id: string,              // see id scheme below
+  kind: "workspace" | "architect" | "builder",
+  parentId: string | null, // null for workspace
+  name: string,
   status: Status,
   flags: { heldMail: boolean },
   lastDataAt: iso | null,
-  buckets: number[]        // builders only, oldest first
+  buckets: number[]        // builders only, oldest first, 20 entries
+}
+
+Counts {
+  workspaces: number,
+  builders: { total: number, byStatus: { [Status]: number } },
+  gateWaiting: number      // hoisted: FR-43 needs it without opening the scope
 }
 ```
+
+### Id scheme
+
+Ids must be stable across reconnects, or `gone` frames cannot be matched to anything.
+
+```
+workspace:<workspace_path>
+architect:<workspace_path>#<name>
+builder:<builder_id>
+```
+
+These are the natural keys already in `global.db`: `architect` and `builders` are keyed by `workspace_path`, and builder ids are unique. No new identifier is minted, so nothing has to be persisted to keep them stable.
 
 ### Status, with precedence
 
 ```
-Status = "gate-waiting" | "stalled" | "running" | "idle" | "done" | "offline"
+Status = "gate-waiting" | "done" | "stalled" | "running" | "idle" | "offline"
 ```
 
-Computed server-side, once (D4). **Precedence, highest first:** `offline`, `gate-waiting`, `done`, `stalled`, `running`, `idle`. Clients render what they are told and never re-derive.
+Computed server-side, once (D4). Clients render what they are told and never re-derive.
+
+**Precedence, highest first: `gate-waiting`, `done`, `stalled`, `running`, `idle`, `offline`.**
+
+Rev. 2 put `offline` at the top. That is wrong: a completed builder whose session has been cleaned up has no live process, so it would paint `offline` and **`done` would be unreachable**. Terminal states outrank liveness.
+
+### Every value, as a predicate
+
+**Builder** (`kind: "builder"`):
+
+| Status | Predicate |
+|---|---|
+| `gate-waiting` | `blocked` is set — the builder is stopped at a gate |
+| `done` | `phase` is a terminal phase (`verified` / complete) |
+| `stalled` | `isIdleWaiting(builder)` — silent past `IDLE_WAITING_THRESHOLD_MS`, not blocked, not completed |
+| `running` | live session and `lastDataAt` within `IDLE_WAITING_THRESHOLD_MS` |
+| `idle` | live session, no `lastDataAt` yet, or output within the threshold but no progress signal |
+| `offline` | no live session and not terminal — the row is known but nothing is attached |
+
+**Architect** (`kind: "architect"`): `running` when a live session exists, `offline` when the row exists with no live session. `gate-waiting`, `stalled` and `done` do not apply and are never emitted for this kind.
+
+**Workspace** (`kind: "workspace"`): `running` when Tower reports it active, `offline` otherwise. No other value is emitted for this kind.
+
+**FR-4's `needs-attention` is `stalled`.** It is not a sixth value. FR-4 names a UI concept; `stalled` is its server-side spelling, and adding both would give two names for one condition.
 
 `heldMail` is a **flag, not a status**, because a builder can be running and have held mail at the same time. FR-4 lists it alongside statuses; that is a UI grouping, not an enum member.
 
@@ -101,6 +149,8 @@ The FRD mockup shows `NO OUTPUT 6 MIN`, which is an illustrative label rather th
 
 Fixed **30-second** buckets, **20** retained, giving 10 minutes of trace.
 
+**The unit is the delta in `PtySession.bytesWritten`** (`pty-session.ts:783`) over the bucket window. It is already public, already monotone, and reading it touches no forbidden file. Naming the unit is not pedantry: two clients cannot converge on criterion 7 if each is free to interpret the number differently.
+
 One `tick` frame per bucket interval per connection. **Builders with zero output are absent from `buckets`**, and absence means zero. This bounds idle cost at one small frame per 30s regardless of builder count, which is the only shape that survives the idle test below.
 
 The client advances the trace on `tick` and renders absent builders as zero. That is rendering an explicit signal, not deriving state, so it does not violate D4.
@@ -109,9 +159,31 @@ The client advances the trace on `tick` and renders absent builders as zero. Tha
 
 FR-31 requires scoped subscriptions, not full-state broadcast. Rev. 1's full-hierarchy snapshot contradicted it silently.
 
-`scope` is a list of workspace paths the client has open. The snapshot carries **full `Node` detail for in-scope nodes** and a **`Counts` rollup for everything else**. Deltas are emitted for in-scope nodes only; out-of-scope changes move counts.
+`scope` is a comma-separated list of URL-encoded workspace paths, for example
+`?scope=%2FUsers%2Fchris%2Fdev%2Fcodev-1455,%2FUsers%2Fchris%2Fdev%2Fpseudoapps`. The snapshot carries **full `Node` detail for in-scope nodes** and a **`Counts` rollup for everything else**. Deltas are emitted for in-scope nodes only; out-of-scope changes move counts.
 
 This satisfies D1 (correct from the first frame) and FR-31 (scoped) together. Changing scope is a reconnect.
+
+### Invalid and missing parameters
+
+Each case gets its own answer, because a request that could not be honoured must never be spelled the same way as one that was.
+
+| Case | Response |
+|---|---|
+| `scope` missing | 400. There is no safe default; a silent full-hierarchy subscription would violate FR-31 invisibly |
+| `scope` names an unknown path | 200, stream opens, that path appears as a `dark` frame with a reason. Other in-scope paths are unaffected (C3) |
+| `since` malformed | 400 |
+| `since` valid but outside the buffer | 200, `snapshot` with `resumed: false` |
+| `since` from a previous Tower process | 200, `snapshot` with `resumed: false` |
+
+### v2 capacity and eviction, which are not inherited
+
+The 4–6 minute eviction lives on `sseClients` in `tower-server.ts:283-308`, and C1/C4 forbid sharing that list. **The v2 stream therefore does not inherit any of it and must state its own:**
+
+- **Cap: 50 concurrent v2 clients**, accounted separately from the existing `SSE_MAX_CLIENTS = 200` (`tower-server.ts:364`). Over cap: 503 with `Retry-After: 5`, matching the existing route's shape.
+- **Eviction: none.** v2 connections are long-lived and are closed by the client or the network, not by a server timer.
+
+Rev. 2 said the resume path would be "exercised constantly" by inherited eviction. That was wrong twice over: the eviction does not apply, and designing a correctness mechanism to be tested by accident is not a plan. **Scenarios 4 to 6 are what exercise resume.**
 
 ### Resume
 
@@ -153,7 +225,7 @@ The existing SSE layer evicts every 4–6 minutes. If the v2 stream inherits tha
 1. `lastDataAt` and byte counters are already public and sufficient for FR-41/42 without touching `pty-session.ts`. **Verified**: overview stamps `lastDataAt` at `tower-routes.ts:1139`.
 2. `/v2/` is already covered by `isRequestAllowed` (`tower-routes.ts:256`) and is not in `isPublicRoute`, so it authenticates like every other route with no new auth path. **Verified.**
 3. This spec is one Tower on one machine. Multi-machine pairing (FR-16) is a later spec, so "environment" here means **this Tower**.
-4. Output volume can be sampled without intercepting terminal data.
+4. Output volume can be sampled from `PtySession.bytesWritten` without intercepting terminal data. **Verified**: it is a public getter at `pty-session.ts:783` and is documented as monotone.
 
 ## Solution Approaches
 
@@ -167,8 +239,12 @@ The existing SSE layer evicts every 4–6 minutes. If the v2 stream inherits tha
 
 ## Open Questions
 
-1. Should `done` builders drop out of scope after a grace period, or stay until the client changes scope? Recommend staying; disappearing rows are worse than stale ones.
-2. Does the VS Code extension eventually want this stream instead of `broadcastNotification`? Out of scope here, but if yes, C1's "never touch it" gets cheaper to revisit later.
+Ranked, most consequential first.
+
+1. **Does the VS Code extension eventually want this stream instead of `broadcastNotification`?** Out of scope here, but if yes, C1's "never touch it" becomes cheaper to revisit and this stream's audience doubles. Does not block the build.
+2. **Is a 50-client v2 cap right?** Chosen as a quarter of the existing 200 on the reasoning that v2 clients are few and long-lived. Cheap to change, so not worth blocking on.
+
+**Closed in this revision:** whether `done` builders drop out of scope. **They stay** until the client changes scope. Disappearing rows are worse than stale ones, and this is what keeps `done` reachable now that it outranks `offline`.
 
 ## Test Scenarios
 
@@ -185,14 +261,15 @@ The existing SSE layer evicts every 4–6 minutes. If the v2 stream inherits tha
 
 ## Risks and Mitigation
 
-| Risk | Mitigation |
-|---|---|
-| Idle cost scales with builder count | Absence-means-zero in `tick`; scenario 3 measures the real case |
-| Resume path rarely exercised, so silently broken | 4–6 min eviction exercises it constantly; scenarios 4–6 cover it |
-| A second stalled threshold drifts from the dashboard | Reuse `IDLE_WAITING_THRESHOLD_MS` and `isIdleWaiting`; do not define a new one |
-| Someone reaches for `EventSource` and gets 401s | Stated on the contract, with the reason and the `useSSE.ts` precedent |
-| Upstream merge conflict | One mount block; criterion 12 makes it falsifiable |
-| v2 clients starve VS Code clients | C4, separate cap accounting |
+| Risk | Probability | Impact | Mitigation |
+|---|---|---|---|
+| Idle cost scales with builder count | Medium | High — defeats the reason for building this | Absence-means-zero in `tick`; scenario 3 measures 20 silent builders, not zero |
+| Resume silently broken because it is rarely hit | Medium | High — corruption looks like a UI bug | Scenarios 4–6 test it directly rather than relying on eviction to trigger it |
+| A second stalled threshold drifts from the dashboard | High if not specified | Medium — two surfaces disagree about one builder | Reuse `IDLE_WAITING_THRESHOLD_MS` and `isIdleWaiting`; define no new threshold |
+| `EventSource` reached for, 401s follow | High | Low — loud and fast to diagnose | Stated on the contract with the `useSSE.ts` precedent and the reason |
+| Upstream merge conflict | Low | High — the fork constraint is the whole design | One mount block beside the existing `/api/tunnel/` prefix; criterion 12 makes it falsifiable |
+| v2 clients starve VS Code clients | Low | Medium | C4: separate cap accounting, 50 v2 clients against the existing 200 |
+| Ids unstable across reconnect, `gone` unmatchable | Low | High — silent leaks in the tree | Ids derive from existing natural keys; nothing new is minted or persisted |
 
 ## References
 
@@ -201,5 +278,6 @@ The existing SSE layer evicts every 4–6 minutes. If the v2 stream inherits tha
 - Spike 2: `codev/experiments/39-https-on-a-phone/` (#39)
 - `packages/sdk/src/builder-helpers.ts` — `IDLE_WAITING_THRESHOLD_MS`, `isIdleWaiting`
 - `apps/web/src/hooks/useSSE.ts` — why `fetch`+stream rather than `EventSource`
-- `packages/codev/src/agent-farm/servers/tower-server.ts:259,283-297`
+- `packages/codev/src/agent-farm/servers/tower-server.ts:259,283-308,364`
+- `packages/codev/src/terminal/pty-session.ts:783` — `bytesWritten`
 - `packages/codev/src/agent-farm/servers/tower-routes.ts:192,256,1139,1425,1443`
