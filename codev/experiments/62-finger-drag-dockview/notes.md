@@ -1,6 +1,6 @@
 # Experiment 62: Can a finger drag a dockview split on a real iPad
 
-**Status**: Complete (arm A scored; arm B not built) · **Date**: 2026-08-23
+**Status**: Complete (arm A device-scored; arm B built and DOM-scored) · **Date**: 2026-08-23
 
 Spawn prompt named `codev/specs/0062-secure-remote-access.md` (already shipped, then `--remote` was removed in spec 99). Issue #62 and porch project `62-spike-v2-ui-can-a-finger-drag-` are the work. Same template-fill collision as experiments 38 and 39.
 
@@ -110,6 +110,7 @@ git diff --stat -- apps/web
 | `src/main.jsx` | Vite entry. |
 | `src/App.jsx` | Dockview 8.2.0 page, 2×2 start layout, on-page score sheet. |
 | `src/measure.js` | DOM probe for sash and tab-close sizes. |
+| `b.html` `src/b.css` `src/b.js` | Arm B. No library. Grid split, sibling close, native scroll. |
 | `scripts/probe-package.mjs` | Grep the installed package for the pointer backend. |
 | `artifacts/` | Probe output and (later) device scores. |
 
@@ -165,7 +166,10 @@ That is the default chrome of every pane, not an edge widget. One React tab comp
 | Text selection and copy inside a pane | **Pass** | Human: "Text selection and copy INSIDE a pane: WORKS." This was the biggest risk on the widened list. |
 | Gesture 1–5, keyboard attached | **Not separately scored** | He did not call this out. Not treated as a fail. |
 | VoiceOver, Dynamic Type, both orientations, momentum scroll | **Not separately scored** | Covered only by "everything else worked." Not named. |
-| Arm B (native primitives) | **Not run** | Never built. Issue comments added the second arm after spawn. I shipped only A. No device score exists. I will not invent one. |
+| Arm B FR-22 size + separation | **Pass** | Live DOM, Chromium 1024×768. Tab 88.3×44, close 66.9×44, gap 8 pt, `closeInsideTab: false`. `artifacts/arm-b-targets.json`. |
+| Arm B selection (Chromium) | **Pass** | `user-select: text`. Range select of the `<pre>` contained `DOM`. Close hides the pane, node stays, restore keeps the text. `artifacts/arm-b-behavior.json`. |
+| Arm B split | **Menu only** | Side-by-side / stack buttons. No drag-to-rearrange. By design. |
+| Arm B VoiceOver, Dynamic Type at large sizes, both orientations, finger scroll | **Not run** | Needs the iPad. CSS uses `font-size: 100%` and rem, and `env(safe-area-inset-*)`. Computed insets are 0 on this desktop. |
 | `apps/web` untouched | **Pass** | `git diff --stat -- apps/web` empty. |
 
 **v8 package split, verified.** `dockview@8.2.0` is a thin re-export of `dockview-core` and has no `DockviewReact`. React bindings are `dockview-react@8.2.0`. The page uses that. The FRD's "React bindings" line is stale against v8 names. The pointer backend lives in core either way.
@@ -180,19 +184,23 @@ Do not read the target failure as "dockview failed." Selection and copy work. Th
 
 Do not soften the target failure because the gestures passed. A learned gesture is not a destructive mis-tap.
 
-**Arm B was not on the device.** The issue comments required a native-primitives arm so a dockview miss could not be mistaken for a verdict on the web. Without B, the bake-off table cannot be filled. In particular the row "both fail → the web layer cannot meet the bar" is unevidenced.
+**Arm B is built.** URL: `http://10.10.50.186:4112/b.html`. No UI library. CSS grid, native scroll, DOM text, sibling close.
+
+FR-22 passes on the live DOM. Selection works in Chromium. Close detaches. Finger, VoiceOver, Dynamic Type, and both orientations are not scored. That is not a pass.
+
+The bake-off row "both fail → the web layer cannot meet the bar" is still unevidenced. B has not been on the iPad.
 
 ## Costs, not a winner
 
-No pick. The human decides.
+No pick.
 
-| | Dockview (A), scored | Native primitives (B), not scored |
+| | Dockview (A), iPad | Native primitives (B), DOM + Chromium |
 |---|---|---|
-| Gestures (split, drag, resize) | Pass on device | Unknown. By design B has no drag-to-rearrange. Split is fixed or menu-driven. That cost is the point of B, not a surprise. |
-| Selection and copy in a pane | Pass on device | Unknown. B was specified as a DOM terminal so this would exist. Not proven. |
-| FR-22 size | Fail. Custom CSS on every sash, or accept 4/24. | Unknown. A 44 pt sash is a few rules if we own the chrome. |
-| FR-22 separation | Fail. Needs a custom `defaultTabComponent` and `--dv-tabs-and-actions-container-height` raised from 35. Nested X cannot be padded apart. | Unknown. We would own the tab chrome, so 8 pt gaps are ours to put in. Not proven. |
-| What you give up | Stock close is a mis-tap. Session teardown is #66, not this library. | Drag-to-rearrange, edge-split, dockview serialization. Simpler tiling is the price. |
+| Gestures (split, drag, resize) | Pass on device | No drag-to-rearrange. Side/stack buttons only. That is the price of B, not a miss. |
+| Selection and copy in a pane | Pass on device | Pass in Chromium on a `<pre>`. Not scored on the iPad. |
+| FR-22 size | Fail. 4 px / 24 px sash. Custom CSS on every sash, or accept it. | Pass. Every control ≥ 44×44. `artifacts/arm-b-targets.json`. |
+| FR-22 separation | Fail. 0 pt. Needs a custom `defaultTabComponent` and a tab bar taller than 35. Nested X cannot be padded apart. | Pass. Tab and close are siblings. Gap 8 pt. |
+| What you give up | Stock close is a mis-tap. Session teardown is #66, not this library. | Drag-to-rearrange, edge-split, sash resize, dockview serialization. |
 
 #66 takes the destructive-close question off this spike. Close must detach a viewer, never destroy a session. Library-independent. This spike surfaced it. It is not this spike's to solve.
 
@@ -202,13 +210,13 @@ Worked: finger split, drag, resize. Selection and copy inside a pane. Pointer ba
 
 Did not work: FR-22, both clauses. First contact closed a tab.
 
-Did not run: arm B. That is a miss in this spike, not a score.
+Arm B page exists. FR-22 and Chromium selection pass. Finger and VoiceOver on B are not scored.
 
 ## Next steps
 
-Human chooses on the cost table. I do not.
+Architect picks on the cost table.
 
-If they want the bake-off finished, arm B is still the missing page: CSS grid two-pane, native scroll, DOM text, safe-area insets, no library. Same device, same list. Until that run, do not treat a dockview target fail as a verdict on the web.
+Arm B on a real iPad is still the missing device run if the "both fail → leave the web" row must be filled.
 
 Production path for A, if chosen: custom tab plus taller bar. Do not restyle this spike to pretend stock dockview passes.
 

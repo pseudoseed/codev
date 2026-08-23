@@ -15,4 +15,13 @@ Human finished testing. Words below are his. DOM sizes are from `tab-x-gap.json`
 
 ## Arm B, native primitives
 
-Not built. Not scored.
+Page: `http://10.10.50.186:4112/b.html`
+
+| Item | Score | Source |
+|---|---|---|
+| FR-22 size | Pass | Tab 88.3×44, close 66.9×44. `artifacts/arm-b-targets.json` |
+| FR-22 separation | Pass | Gap 8 pt. `closeInsideTab: false`. Same file. |
+| Selection in Chromium | Pass | `user-select: text`. `artifacts/arm-b-behavior.json` |
+| Close | Detach | Pane hidden, node stays, restore keeps text. |
+| Split | Menu | Side / stack buttons. No drag. |
+| Finger, VoiceOver, Dynamic Type, orientations | Not run | Needs the iPad. |

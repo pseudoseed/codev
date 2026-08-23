@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Exp 62 arm B: native split</title>
+    <link rel="stylesheet" href="/src/b.css" />
+  </head>
+  <body>
+    <a class="skip" href="#work">Skip to panes</a>
+    <header class="chrome">
+      <h1>Exp 62 arm B: native primitives</h1>
+      <p class="meta">No dockview. No drag-to-rearrange. Close detaches a viewer.</p>
+      <div class="toolbar" role="toolbar" aria-label="Split">
+        <button type="button" id="side" aria-pressed="true">Side by side</button>
+        <button type="button" id="stack" aria-pressed="false">Stack</button>
+        <button type="button" id="measure">Measure targets</button>
+        <a class="link" href="/">Arm A</a>
+      </div>
+    </header>
+    <main id="work" class="work side">
+      <section class="pane" id="pane-architect" aria-labelledby="tab-architect">
+        <div class="strip">
+          <button type="button" class="tab" id="tab-architect">Architect</button>
+          <button type="button" class="close" data-pane="architect" aria-label="Detach Architect">
+            Close
+          </button>
+        </div>
+        <article class="body" tabindex="0">
+          <h2>Architect</h2>
+          <p>
+            Native text. Select and copy this paragraph. Scroll this pane with a finger.
+            The close control is a sibling of the tab, not a child.
+          </p>
+          <pre>
+$ afx status
+  architect   running
+  builder-a   idle
+  builder-b   gate-waiting
+
+Select this block. It is a DOM &lt;pre&gt;, not a canvas.
+          </pre>
+          <p>
+            More lines so the pane scrolls. One. Two. Three. Four. Five.
+            Six. Seven. Eight. Nine. Ten. Eleven. Twelve.
+          </p>
+        </article>
+      </section>
+      <section class="pane" id="pane-builder" aria-labelledby="tab-builder">
+        <div class="strip">
+          <button type="button" class="tab" id="tab-builder">Builder A</button>
+          <button type="button" class="close" data-pane="builder" aria-label="Detach Builder A">
+            Close
+          </button>
+        </div>
+        <article class="body" tabindex="0">
+          <h2>Builder A</h2>
+          <p>
+            Second pane. Same rules. Focus with the keyboard. Tab moves between
+            chrome, then into this article.
+          </p>
+          <pre>
+output volume --------/\----/\------
+stalled? no
+gate?    no
+
+Copy me too.
+          </pre>
+          <p>
+            Extra text for momentum scroll. Alpha bravo charlie delta echo
+            foxtrot golf hotel india juliet kilo lima mike november oscar.
+          </p>
+        </article>
+      </section>
+    </main>
+    <p id="restore-wrap" hidden>
+      <button type="button" id="restore">Restore detached pane</button>
+    </p>
+    <textarea id="log" class="log" readonly aria-label="Measure log"></textarea>
+    <script type="module" src="/src/b.js"></script>
+  </body>
+</html>

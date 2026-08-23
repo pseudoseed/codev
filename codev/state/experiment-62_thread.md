@@ -32,4 +32,8 @@ Arm B was never built. Issue comments added the two-arm bake-off. I shipped only
 
 #66 takes destructive close as FR-49, library-independent.
 
-Notes wrapped. PR #70. Refs #62, not Closes: bake-off incomplete.
+Notes wrapped. PR #70 merged 36de6b37.
+
+## 2026-08-23 arm B
+
+Built. `http://10.10.50.186:4112/b.html`. FR-22 pass in live DOM (44×44, 8pt gap, not nested). Close detaches. Chromium selection works. No iPad score on B. No winner.
