@@ -148,7 +148,6 @@ function findStatusPath(root, projectId) {
 }
 
 /**
-/**
  * Read \`phase\` and whether any gate is genuinely awaiting a human.
  *
  * A deliberately small line scanner rather than a YAML parser: this file has
@@ -182,6 +181,7 @@ function readState(statusPath) {
   }
 
   let phase = null;
+  let planPhase = null;
   let gatePending = false;
   let inGates = false;
 
@@ -198,6 +198,13 @@ function readState(statusPath) {
   for (const line of text.split('\\n')) {
     const phaseMatch = /^phase:\\s*['"]?([A-Za-z0-9_-]+)['"]?\\s*$/.exec(line);
     if (phaseMatch) phase = phaseMatch[1];
+    // Mid-implement in SPIR the protocol phase is just "implement" while the
+    // builder is on plan phase 2 of 5 — which is the exact incident. Naming the
+    // plan phase makes the nudge about where it actually stopped.
+    const planMatch = /^current_plan_phase:\\s*['"]?([A-Za-z0-9_-]+)['"]?\\s*$/.exec(line);
+    // A null current_plan_phase is the common case, and the character class
+    // matches the literal word 'null', so exclude it explicitly.
+    if (planMatch && planMatch[1] !== 'null') planPhase = planMatch[1];
 
     if (/^gates:\\s*$/.test(line)) { inGates = true; continue; }
     // Any column-0 key ends the gates block.
@@ -211,7 +218,7 @@ function readState(statusPath) {
   }
   flush();
 
-  return { phase, gatePending };
+  return { phase, planPhase, gatePending };
 }
 
 let raw = '';
@@ -235,7 +242,7 @@ process.stdin.on('end', () => {
     const statusPath = findStatusPath(root, projectId);
     if (!statusPath) return allow();
 
-    const { phase, gatePending } = readState(statusPath);
+    const { phase, planPhase, gatePending } = readState(statusPath);
     if (!phase) return allow();
     if (TERMINAL_PHASES.has(phase)) return allow();
 
@@ -243,7 +250,7 @@ process.stdin.on('end', () => {
     // tell" — gatePending is null only when the file could not be read.
     if (gatePending !== false) return allow();
 
-    return block(phase);
+    return block(planPhase ? phase + ' / ' + planPhase : phase);
   } catch {
     allow();
   }

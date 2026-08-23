@@ -148,31 +148,6 @@ describe('phase stop-guard: paths that must ALLOW the stop', () => {
     expect(runGuard(STOP).blocked).toBe(false);
   });
 
-  it('BLOCKS on a gate that is seeded pending but never requested', () => {
-    // This is the case that made the guard a no-op. createInitialState seeds
-    // every gate as { status: 'pending' } at project creation, so treating bare
-    // `pending` as "a human is waiting" means a human is always waiting and the
-    // guard never fires. Verified against a real committed status.yaml before
-    // this test was written.
-    writeStatus('77', 'test', porchState());
-
-    expect(runGuard(STOP).blocked).toBe(true);
-  });
-
-  it('is not fooled by a requested_at on a DIFFERENT gate', () => {
-    // The two keys arrive on separate lines, so a scanner that does not close
-    // each gate block would pair `pending` from one gate with `requested_at`
-    // from another and allow every stop again.
-    writeStatus('77', 'test', porchState({
-      gates: {
-        pr: { status: 'pending' },
-        'verify-approval': { status: 'approved', requested_at: '2026-08-22T00:00:00Z' },
-      },
-    }));
-
-    expect(runGuard(STOP).blocked).toBe(true);
-  });
-
   it('allows when the status file cannot be read at all', () => {
     // "I could not tell" must not be spelled the same way as "no gate here".
     clearProjects();
@@ -214,6 +189,31 @@ describe('phase stop-guard: paths that must ALLOW the stop', () => {
 });
 
 describe('phase stop-guard: the path that must BLOCK', () => {
+  it('BLOCKS on a gate that is seeded pending but never requested', () => {
+    // This is the case that made the guard a no-op. createInitialState seeds
+    // every gate as { status: 'pending' } at project creation, so treating bare
+    // `pending` as "a human is waiting" means a human is always waiting and the
+    // guard never fires. Verified against a real committed status.yaml before
+    // this test was written.
+    writeStatus('77', 'test', porchState());
+
+    expect(runGuard(STOP).blocked).toBe(true);
+  });
+
+  it('is not fooled by a requested_at on a DIFFERENT gate', () => {
+    // The two keys arrive on separate lines, so a scanner that does not close
+    // each gate block would pair `pending` from one gate with `requested_at`
+    // from another and allow every stop again.
+    writeStatus('77', 'test', porchState({
+      gates: {
+        pr: { status: 'pending' },
+        'verify-approval': { status: 'approved', requested_at: '2026-08-22T00:00:00Z' },
+      },
+    }));
+
+    expect(runGuard(STOP).blocked).toBe(true);
+  });
+
   it('blocks a mid-phase stop with no gate pending', () => {
     writeStatus('77', 'test', MID_PHASE);
     const r = runGuard(STOP);
@@ -334,5 +334,25 @@ describe('against REAL committed status.yaml files', () => {
 
     // phase: verified — terminal, nothing left to drive.
     expect(r.blocked).toBe(false);
+  });
+});
+
+describe('the nudge names where the builder actually stopped', () => {
+  it('names the PLAN phase, not just the protocol phase', () => {
+    // Mid-implement in SPIR the protocol phase is "implement" for the whole
+    // build, while the builder is on plan phase 2 of 5 — which is the exact
+    // incident this guard exists for. "You stopped during implement" is not
+    // actionable; "implement / phase_2_seam_harness" is.
+    writeStatus('77', 'test', porchState({ current_plan_phase: 'phase_2_seam_harness' }));
+
+    expect(runGuard(STOP).reason).toMatch(/implement \/ phase_2_seam_harness/);
+  });
+
+  it('falls back to the protocol phase when there is no plan phase', () => {
+    writeStatus('77', 'test', porchState({ current_plan_phase: null }));
+
+    const reason = runGuard(STOP).reason;
+    expect(reason).toMatch(/phase "implement"/);
+    expect(reason).not.toMatch(/null/);
   });
 });
