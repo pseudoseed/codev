@@ -5,17 +5,17 @@ phase: implement
 plan_phases:
   - id: phase_1
     title: Hierarchy projection
-    status: in_progress
+    status: complete
   - id: phase_2
     title: Scoped event bus and SSE route
-    status: pending
+    status: in_progress
   - id: phase_3
     title: Change sampler and live deltas
     status: pending
   - id: phase_4
     title: Idle-cost and convergence proof
     status: pending
-current_plan_phase: phase_1
+current_plan_phase: phase_2
 gates:
   spec-approval:
     status: approved
@@ -29,7 +29,10 @@ gates:
   verify-approval:
     status: pending
 iteration: 1
-build_complete: true
+build_complete: false
 history: []
 started_at: '2026-08-23T07:21:36.575Z'
-updated_at: '2026-08-23T17:43:40.609Z'
+updated_at: '2026-08-23T17:47:34.397Z'
+context_refreshes:
+  - boundary: plan-phase:phase_2
+    at: '2026-08-23T17:47:34.397Z'
