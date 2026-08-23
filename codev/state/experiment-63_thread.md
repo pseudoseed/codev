@@ -20,4 +20,8 @@ Night-workshop tokens. `--well` is the hole. `--ink` is the mark. Invert control
 `codev/research/v2-mockups/tokens-dark.css`
 `01-site-dark.html` / `02-gate-dark.html`
 Contrast: `codev/experiments/63-v2-dark-palette/artifacts/contrast.md`
-PR #68.
+PR #68, merged. Issue #63 closed.
+
+## 2026-08-23 relaunch
+
+Spawn prompt still names spec 0063. Both experiments already on main. Porch was still at hypothesis. Advanced hypothesis → design → execute → analyze. experiment-complete approved. UX Pilot pull moved off this builder. Done.
