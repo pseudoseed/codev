@@ -27,7 +27,7 @@ import {
   type ConfigurableLane,
 } from '../../lib/consult-lanes.js';
 import type { ModelReasoningEffort } from '@openai/codex-sdk';
-import { getResolver, GitRefResolver, type ArtifactResolver } from '../porch/artifacts.js';
+import { getResolver, GitRefResolver, matchesProjectIdExact, type ArtifactResolver } from '../porch/artifacts.js';
 import { findVerdict } from '../porch/verdict.js';
 import { MetricsDB } from './metrics.js';
 import { extractUsage, extractReviewText, type SDKResultLike, type UsageData } from './usage-extractor.js';
@@ -64,10 +64,14 @@ interface ContentRef {
  * happened: the resolver fell back to zero-stripped matching, so the leading
  * digits of the file it found are not the id that was asked for.
  */
-function artifactHeading(kind: string, ref: ContentRef): string {
+export function artifactHeading(kind: string, ref: ContentRef): string {
   const projectId = ref.requestedId ?? '';
   const leading = /^(\d+)/.exec(ref.label);
-  const inexact = leading !== null && /^\d+$/.test(projectId) && leading[1] !== projectId;
+  // Ask the SAME predicate the resolver used, rather than re-deriving
+  // exactness here. Two implementations of "was this a guess?" drift, and the
+  // one that drifts is always the untested one.
+  const inexact =
+    projectId !== '' && leading !== null && !matchesProjectIdExact(ref.label, projectId);
 
   let heading = `## ${kind}: \`${ref.label}\`\n\n`;
   if (inexact) {
@@ -2276,11 +2280,8 @@ ${spec.content}
 `;
 
   if (plan) {
-    query += `## Plan
-
-${plan.content}
-
-`;
+    // #28: name it and warn on an inexact id, same as every other site.
+    query += artifactHeading('Plan', plan) + plan.content + '\n\n';
   }
 
   query += `Please review:
@@ -2405,11 +2406,8 @@ ${plan.content}
 `;
 
   if (spec) {
-    query += `## Specification (for context)
-
-${spec.content}
-
-`;
+    // #28: name it and warn on an inexact id, same as every other site.
+    query += artifactHeading('Specification (for context)', spec) + spec.content + '\n\n';
   }
 
   query += `Please review:

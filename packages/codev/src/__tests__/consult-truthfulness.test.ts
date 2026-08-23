@@ -19,6 +19,7 @@ import {
   buildOpencodeArgs,
   extractSandboxPaths,
   _buildPRQuery,
+  artifactHeading,
   _consultSandboxDirForTest as _consultSandboxDir,
 } from '../commands/consult/index.js';
 import { protocolsProvidingConsultType } from '../lib/skeleton.js';
@@ -240,5 +241,69 @@ describe('#35: an empty PR diff must throw before anything is written', () => {
     // explanation.
     expect(() => _buildPRQuery('77', { diff: '', changedFiles: [] })).toThrow(/0-byte diff/);
     expect(() => _buildPRQuery('77', { diff: '', changedFiles: [] })).toThrow(/0-byte diff/);
+  });
+});
+
+describe('#28: artifactHeading names the artifact and flags a guessed match', () => {
+  it('warns when the resolved file begins with a DIFFERENT id', () => {
+    // The live failure: project 13 runs PIR and has no spec, so the fallback
+    // returned an unrelated 2025 document that collides on the number, and the
+    // reviewer began reviewing against "Document OS Dependencies".
+    const heading = artifactHeading('Specification', {
+      content: '',
+      label: '0013-document-os-dependencies',
+      requestedId: '13',
+    });
+
+    expect(heading).toMatch(/0013-document-os-dependencies/);
+    expect(heading).toMatch(/WARNING/);
+    expect(heading).toMatch(/may not be project 13's specification/);
+  });
+
+  it('is silent for an exact match', () => {
+    const heading = artifactHeading('Plan', {
+      content: '',
+      label: '13-ci-forge-concepts',
+      requestedId: '13',
+    });
+
+    expect(heading).toMatch(/13-ci-forge-concepts/);
+    expect(heading).not.toMatch(/WARNING/);
+  });
+
+  it('is silent for a legacy project whose id really is zero-padded', () => {
+    // Asking for `0364` and getting `0364-*` is exact. The warning must not
+    // fire across the 116 zero-padded specs in this repo.
+    const heading = artifactHeading('Specification', {
+      content: '',
+      label: '0364-terminal-refresh-button',
+      requestedId: '0364',
+    });
+
+    expect(heading).not.toMatch(/WARNING/);
+  });
+
+  it('names the file but does not warn when no id was recorded', () => {
+    // Backward compatibility: a ref built before requestedId existed must not
+    // be accused. Naming the file is still an improvement over a bare heading.
+    const heading = artifactHeading('Specification', {
+      content: '',
+      label: '0013-document-os-dependencies',
+    });
+
+    expect(heading).toMatch(/0013-document-os-dependencies/);
+    expect(heading).not.toMatch(/WARNING/);
+  });
+
+  it('uses the resolver predicate, so bugfix-style ids do not false-positive', () => {
+    // A local `/^(\d+)/` regex would find no leading digits here and stay
+    // quiet by accident; matchesProjectIdExact answers it properly.
+    const heading = artifactHeading('Plan', {
+      content: '',
+      label: 'bugfix-42-fix-login',
+      requestedId: 'bugfix-42',
+    });
+
+    expect(heading).not.toMatch(/WARNING/);
   });
 });
