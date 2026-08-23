@@ -3,7 +3,10 @@
 - **Issue:** #52
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 8
+- **Status:** Draft, rev. 9
+- **Rev. 9 changes:** `node` upsert emission rule written, which is what stops `lastDataAt`
+  churn from flooding the resume buffer; parent `gone` now reparents and cascades; builder
+  id moved to the worktree directory name so it is stable from creation.
 - **Rev. 8 changes:** `snapshot.seq` defined as the current cursor rather than a new frame
   in the buffer; `builder_id` in the id scheme pinned to `builders.id` with a stated
   fallback.
@@ -131,9 +134,13 @@ architect:<workspace_path>#<architect_id>
 builder:<workspace_path>#<builder_id>
 ```
 
-**`builder_id` is `builders.id`** — the `id TEXT` column of the `builders` table (`db/schema.ts:51`), for example `builder-experiment-39`. **When no row exists** (a worktree present in `.builders/` that was never registered, which `discoverBuilders` will still return) **it is the worktree directory name.**
+**`builder_id` is the worktree directory name** — the basename under `.builders/`, for example `experiment-39`.
 
-It is **not** `OverviewBuilder.roleId`, which is derived from the worktree basename, lowercased, and **nullable** for soft-mode builders whose worktree does not match a protocol pattern — a null there would collapse every such builder onto one id. It is also not any other identifier the overview payload happens to expose.
+Rev. 8 said `builders.id` with a worktree-name fallback. **That is unstable**: a builder is discoverable from its worktree the moment it is created, but its `builders` row appears slightly later, so the id would flip mid-flight and every connected client would see one builder become two. Fixing that with a `gone` plus `node` pair is possible and worse — it makes a routine spawn look like a deletion.
+
+The worktree name is the only identifier that exists for the whole life of the node, is what `discoverBuilders` already keys on, and is unique within a workspace because it is a directory name. Qualified by `workspace_path` it is globally unique.
+
+It is **not** `OverviewBuilder.roleId`, which is the basename lowercased and **nullable** for soft-mode builders whose worktree does not match a protocol pattern — a null there would collapse every such builder onto one id. It is also not `builders.id`, which is a different string (`builder-experiment-39` for worktree `experiment-39`) and arrives later.
 
 **`architect_id` is `architect.id`** — the `id TEXT` column of the `architect` table, which is the architect's name (`main`, `uiv2`).
 
@@ -245,6 +252,26 @@ FR-31 requires scoped subscriptions, not full-state broadcast. Rev. 1's full-hie
 
 **`counts` covers the whole hierarchy, in scope and out.** Rev. 4 described it as an out-of-scope rollup, which leaves the rollup stale whenever an in-scope builder spawns or enters a gate — and two clients with different scopes would then disagree about `gateWaiting`, breaking criterion 7. A `counts` frame is emitted whenever any count changes, whatever the scope of the node that caused it.
 
+### When a `node` upsert is emitted
+
+Without this rule the stream floods. `lastDataAt` changes on **every DATA frame** from every builder, so an upsert per change would exhaust the 500-frame resume buffer in seconds and make in-window resume unreachable in practice.
+
+**A `node` frame is emitted only when one of these changes:**
+
+| Field | Emits |
+|---|---|
+| `status` | yes |
+| `flags.heldMail` | yes |
+| `parentId` | yes |
+| `name` | yes |
+| node first appears | yes |
+| `lastDataAt` | **no**, on its own |
+| `buckets` | **no**, never on an upsert |
+
+`lastDataAt` rides along on whatever frame is being sent anyway — the `snapshot`, or a `node` frame triggered by one of the fields above. It is a timestamp for display, not an event. A client's `lastDataAt` may therefore be stale between status changes, which is correct: nothing renders off it that `status` does not already say.
+
+**`flags.heldMail` must be wired to the mailbox**, not left to fall out of a status change. Held mail is a state a client acts on, and rev. 8 declared the flag without ever saying what makes it move.
+
 ### `gone` versus `offline`, one rule for all three kinds
 
 These two were tangled in rev. 6: it said a workspace deactivating or an architect exiting fires `gone`, while also giving both kinds an `offline` status. Both cannot be true, and as written `offline` was unreachable for anything but a builder.
@@ -259,6 +286,16 @@ These two were tangled in rev. 6: it said a workspace deactivating or an archite
 | Workspace unregistered from Tower | `gone` |
 
 A node that still exists but has nothing attached is `offline`. A node that no longer exists is `gone`. This is what makes `offline` reachable for every kind, and it gives `gone` exactly one meaning.
+
+### A parent going `gone` must not orphan its children
+
+`gone` on an architect or a workspace is not a leaf event. Rev. 8 defined the frame and left the children dangling, which contradicts the no-dangle rule stated under `parentId` and would have failed its own scenario 9g.
+
+**Architect `gone`:** before the `gone` frame, emit a `node` upsert for **every in-scope builder whose `parentId` was that architect**, reparenting it to its workspace. This is the same fallback the `parentId` table already specifies for a null `spawnedByArchitect`, applied when the architect disappears rather than when it was never recorded. Builders survive their architect; that is the normal case after an architect exits.
+
+**Workspace `gone`:** a workspace has no parent to reparent to, so this cascades. Emit `gone` for every in-scope architect and builder under it, children first, then the workspace itself. Children-first ordering means a client applying frames in order never holds a node whose parent has already vanished.
+
+**Ordering is part of the contract, not an implementation detail.** A client must be able to apply frames in `seq` order and never observe an orphan at any point.
 
 Emitted for **in-scope** nodes only; out-of-scope disappearances move `counts` instead.
 
@@ -321,6 +358,7 @@ The v2 stream does not evict; see **v2 capacity and eviction** below. Rev. 2 arg
 6b. A client that snapshots at `seq: N`, then resumes with `since: N`, receives every delta from `N+1` with none skipped and none replayed. Two clients snapshotting at different moments against unchanged state receive the same `seq`.
 7. Two clients on the same scope converge to identical state.
 8. **Idle under 1 KB/s per connection measured with 20 silent builders in scope**, over 60 seconds.
+8b. **Under 1 KB/s with 20 builders producing continuous output and no status changes.** Output volume must not drive frame volume; only `tick` carries it.
 9. Delta latency p95 under 200ms from state change to frame written.
 10. An unreadable scope path emits `dark` **naming that path**, while the rest of the scope keeps streaming. It does not emit an empty snapshot, and a multi-path scope can always tell which path failed.
 11. `GET /api/events`, `broadcastNotification` and VS Code behaviour unchanged, proven by the existing suite passing untouched.
@@ -383,6 +421,10 @@ Ranked, most consequential first.
 9e. **Offline is reachable.** A builder whose worktree exists with no live session appears as `offline` rather than being absent. This fails immediately if the implementation copies `tower-routes.ts:1137` and passes `activeBuilderRoleIds`.
 9f. **Builders never dangle.** A builder with `spawnedByArchitect` null, and one naming an architect outside the scope, both parent to their workspace and render in the tree.
 9g. **Offline is reachable for architects and workspaces too.** Exit an architect: assert a `node` upsert with `status: "offline"`, **not** a `gone`. Then delete its row: assert `gone`. Repeat for a workspace. This fails immediately if the implementation sources architects from `liveArchitects`.
+9h. **Parent `gone` reparents.** Delete an architect row that has two in-scope builders. Assert both builders receive `node` upserts reparenting them to the workspace **before** the architect's `gone`, and that applying the frames in order never yields an orphan.
+9i. **Workspace `gone` cascades children-first.** Unregister a workspace with an architect and builders. Assert `gone` for every child before the workspace's own, and no orphan at any point in the sequence.
+9j. **Upserts are not driven by output.** Run a builder producing continuous output for 60 seconds with no status change. Assert **zero** `node` frames and that the resume buffer has not advanced. This is the flood case that makes in-window resume unreachable.
+9k. **Id is stable across the spawn window.** Spawn a builder and capture frames from before its `builders` row exists through to after. Assert one node id throughout, and no `gone`.
 10. **Non-regression.** Existing SSE suite passes untouched.
 
 ## Risks and Mitigation
@@ -402,6 +444,9 @@ Ranked, most consequential first.
 | Builder id collision across workspaces | High if unqualified | High — builders overwrite each other, blamed on the client | Every id qualified by `workspace_path` per `schema.ts:46`; scenario 7b tests it |
 | `roleId` used as the id, nulls collapse together | Medium — it is the field liveness uses | High — soft-mode builders merge into one node | `builders.id` named explicitly, with the worktree-name fallback |
 | Snapshot consumes a sequence number | Medium | High — silent skipped or replayed deltas on every resume | Stated on the contract; scenario 4b asserts it directly |
+| Upserts driven by `lastDataAt` flood the buffer | High — it is the natural implementation | High — in-window resume becomes unreachable and idle cost blows the Part 5 target | Emission table names the triggering fields; scenario 9j asserts zero frames under continuous output |
+| Children orphaned when a parent goes `gone` | High if unspecified | High — permanent ghost rows in every client's tree | Reparent-then-`gone` for architects, children-first cascade for workspaces; scenarios 9h and 9i |
+| Builder id flips mid-spawn | Certain under rev. 8's rule | High — one builder renders as two | Id is the worktree directory name, which exists for the node's whole life; scenario 9k |
 | Resumed deltas served into the wrong scope | Medium | High — silent corruption | `since` only valid with a matching `streamId`; mismatch returns a flagged snapshot |
 
 ## References
