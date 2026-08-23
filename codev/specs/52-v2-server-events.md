@@ -3,7 +3,11 @@
 - **Issue:** #52
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 5
+- **Status:** Draft, rev. 6
+- **Rev. 6 changes:** `idle` dropped as uncomputable; `stalled` defined against the
+  threshold constant directly rather than via `isIdleWaiting`, closing a hole where a
+  completed builder matched no status; the source of `offline` named precisely
+  (`getOverview` without `activeBuilderRoleIds`); `parentId` given an assignment rule.
 - **Rev. 5 changes:** the eviction self-contradiction removed; `done` dropped because no
   field on the wire carries it; every remaining `Status` defined against a real
   `OverviewBuilder` field and made mutually exclusive by construction; `counts` emission
@@ -121,40 +125,70 @@ These remain the natural keys already in `global.db`. No new identifier is minte
 ### Status, with precedence
 
 ```
-Status = "gate-waiting" | "stalled" | "running" | "idle" | "offline"
+Status = "gate-waiting" | "stalled" | "running" | "offline"
 ```
 
 Computed server-side, once (D4). Clients render what they are told and never re-derive.
 
-**Evaluated in this order; the first match wins, and the list is exhaustive.** Ordering them this way makes the values mutually exclusive by construction rather than by a separate precedence rule that can drift from the predicates.
+**Evaluated in order; first match wins; the list is exhaustive and every input matches exactly one.**
+
+### The source, named precisely
+
+`getOverview(workspaceRoot)` (`overview.ts:862`), **called without `activeBuilderRoleIds`**.
+
+That argument is what filters the payload down to live sessions. `tower-routes.ts:1137` passes it; **this stream must not.** Called without it, `discoverBuilders` returns every builder present in `.builders/`, live or not, which is what makes `offline` a reachable state at all. Rev. 5 named the overview payload as the source without noticing the call site it copied filters out exactly the builders it wanted to describe.
+
+Liveness is then determined the same way `tower-routes.ts:1149-1157` does it: a builder is **live** iff its `roleId` resolves to a session in the terminal registry.
 
 ### Every value, against a real field
-
-Source is the existing overview payload (`packages/types/src/api.ts:147` `OverviewBuilder`), which is already assembled server-side and needs no new plumbing.
 
 **Builder** (`kind: "builder"`), in order:
 
 | # | Status | Predicate |
 |---|---|---|
-| 1 | `gate-waiting` | `blockedGate !== null`. **Uses `blockedGate`, not `blocked`** — `blocked` is a display label and does not match porch's gate keys |
-| 2 | `stalled` | `isIdleWaiting(builder)` — silent past `IDLE_WAITING_THRESHOLD_MS`, not gate-blocked, `lastDataAt` present |
-| 3 | `running` | live session **and** `lastDataAt !== null` **and** `now - lastDataAt <= IDLE_WAITING_THRESHOLD_MS` |
-| 4 | `idle` | live session **and** `lastDataAt === null` — attached but has never produced output |
-| 5 | `offline` | no live session. `lastDataAt` is `null` in this case by definition |
+| 1 | `gate-waiting` | `blockedGate !== null`. Uses `blockedGate`, not the display-only `blocked` |
+| 2 | `offline` | no live session for `roleId`. `lastDataAt` is `null` here by construction |
+| 3 | `stalled` | live session and `now - lastDataAt > IDLE_WAITING_THRESHOLD_MS` |
+| 4 | `running` | live session and `now - lastDataAt <= IDLE_WAITING_THRESHOLD_MS` |
 
-Rev. 4's `idle` said "output within the threshold but no progress signal." **"Progress signal" named nothing that exists**, and it overlapped `running`. Removed rather than defined, because the distinction it gestured at is not on the wire.
+Rows 2 to 4 partition every non-gated builder: either there is a session or there is not, and if there is, `lastDataAt` is either past the threshold or it is not. Nothing falls through.
 
-**Architect** (`kind: "architect"`): `running` with a live session, `offline` without. `gate-waiting`, `stalled` and `idle` are never emitted for this kind.
+### Why `stalled` reuses the constant and not the predicate
 
-**Workspace** (`kind: "workspace"`): `running` when Tower reports it active, `offline` otherwise. No other value is emitted for this kind.
+Rev. 5 defined `stalled` as `isIdleWaiting(builder)`. That predicate additionally excludes completed builders, so a completed builder with a live session and a stale `lastDataAt` returned `false` for `stalled` and also failed `running`'s freshness test — **matching no status at all**, in direct violation of criterion 4b.
+
+`stalled` now tests the threshold directly. `IDLE_WAITING_THRESHOLD_MS` remains the single source of truth, which was the point of reusing it; the predicate carried extra conditions that belong to a different question.
+
+### Why there is no `idle`
+
+Rev. 5 defined `idle` as a live session with `lastDataAt === null`. **That is unreachable.** `PtySession` initialises `_lastDataAt = Date.now()` at construction (`pty-session.ts:155`), and `tower-routes.ts:1156` only stamps `lastDataAt` for builders that have a live session. So a live builder always has a non-null `lastDataAt`, and a builder without one always has no session — which is `offline`.
+
+There is genuinely no way on the current wire to distinguish "attached but has never spoken" from "attached and just spoke." Both look identical. Rather than define a status that can never fire, `idle`'s useful meaning is carried by `stalled`: a builder that is attached and silent.
 
 ### Why there is no `done`
 
-Rev. 3 and 4 carried a `done` status. **Nothing on the wire carries completion.** `OverviewBuilder.phase` is the display sub-phase, `protocolPhase` is the coarse protocol phase (`verify` is a phase a builder is *in*, not a statement that it finished), and `global.db` has no completion column. `done` was a predicate against a field that does not exist, and rev. 3 spent a whole revision fixing its precedence against `offline` without noticing neither could be computed.
+Nothing on the wire carries completion. `phase` is the display sub-phase, `protocolPhase`'s `verify` is a phase a builder is *in* rather than a statement it finished, and `global.db` has no completion column.
 
-**A finished builder reads `offline`**, which is true: nothing is attached to it.
+**A finished builder reads `offline`** once its session ends, and leaves the tree via `gone` when its worktree is removed by `afx cleanup`. The cost is stated rather than hidden: **a completed builder and a crashed builder look identical.** Open question 3.
 
-The cost is real and stated rather than hidden: **a completed builder and a crashed builder look identical.** Closing that needs a completion signal added to the overview payload, which is an upstream file and therefore a C1 decision, not a free one. Open question 3.
+**Architect** (`kind: "architect"`): `running` with a live session, `offline` without. `gate-waiting` and `stalled` are never emitted for this kind.
+
+**Workspace** (`kind: "workspace"`): `running` when Tower reports it active, `offline` otherwise.
+
+**FR-4's `needs-attention` is `stalled`.** It is not a fifth value; FR-4 names a UI concept and `stalled` is its server-side spelling.
+
+### `parentId`
+
+FR-3 requires a builder to appear under the architect that spawned it, and under its workspace. `spawnedByArchitect` is nullable, so the rule must cover that:
+
+| Node | `parentId` |
+|---|---|
+| workspace | `null` |
+| architect | its workspace id |
+| builder, `spawnedByArchitect` set and that architect is in scope | that architect's id |
+| builder, `spawnedByArchitect` null or naming an architect not in scope | its workspace id |
+
+**A builder never dangles.** Falling back to the workspace keeps the tree connected for legacy rows, soft-mode builders, and any case where the spawning architect has exited. A client rendering an orphan is worse than one rendering a builder a tier higher than ideal.
 
 `heldMail` is a **flag, not a status**, because a builder can be running and have held mail at the same time. FR-4 lists it alongside statuses; that is a UI grouping, not an enum member.
 
@@ -242,8 +276,8 @@ The v2 stream does not evict; see **v2 capacity and eviction** below. Rev. 2 arg
 1. Snapshot on connect carries every in-scope node with status, and a counts rollup for the rest.
 2. Spawning a builder emits a `node` frame to every connected in-scope client within **500ms**, no client timer involved.
 3. Entering gate-waiting emits a `node` frame carrying that status.
-4. A builder silent past `IDLE_WAITING_THRESHOLD_MS` and not gate-blocked reports `stalled`. A gate-blocked builder silent for the same period reports `gate-waiting`, proving evaluation order.
-4b. Every builder resolves to exactly one status. No input produces two matches or none.
+4. A builder with a live session silent past `IDLE_WAITING_THRESHOLD_MS` reports `stalled`. A gate-blocked builder silent for the same period reports `gate-waiting`, proving evaluation order.
+4b. **Every builder resolves to exactly one status.** Exercised against the cases that broke earlier revisions: completed-and-live-and-stale, live-and-never-spoken, worktree-present-with-no-session, and gate-blocked-while-stale. No input produces two matches or none.
 5. Every in-scope builder carries `buckets` sufficient to render FR-41.
 6. Reconnect with `since` either resumes from `since+1` or returns `snapshot` with `resumed: false`. Never an empty delta list.
 7. Two clients on the same scope converge to identical state.
@@ -306,6 +340,8 @@ Ranked, most consequential first.
 9b. **Counts follow in-scope changes too.** Spawn an **in-scope** builder, assert both a `node` frame and an updated `counts`. Two clients with different scopes must report the same `gateWaiting`.
 9c. **`gone` on cleanup.** Remove an in-scope builder, assert a `gone` frame carrying its qualified id, and assert it leaves both connected clients' trees.
 9d. **Sparkline single-writer.** Drive `node` upserts between ticks on one client and not the other; assert both sparklines are identical after the next `tick`.
+9e. **Offline is reachable.** A builder whose worktree exists with no live session appears as `offline` rather than being absent. This fails immediately if the implementation copies `tower-routes.ts:1137` and passes `activeBuilderRoleIds`.
+9f. **Builders never dangle.** A builder with `spawnedByArchitect` null, and one naming an architect outside the scope, both parent to their workspace and render in the tree.
 10. **Non-regression.** Existing SSE suite passes untouched.
 
 ## Risks and Mitigation
@@ -320,6 +356,7 @@ Ranked, most consequential first.
 | v2 clients starve VS Code clients | Low | Medium | C4: separate cap accounting, 50 v2 clients against the existing 200 |
 | Ids unstable across reconnect, `gone` unmatchable | Low | High — silent leaks in the tree | Ids derive from existing natural keys; nothing new is minted or persisted |
 | Finished and crashed builders indistinguishable | Certain | Low — both are correctly "nothing attached" | Stated, not hidden. Open question 3 carries the upstream cost of fixing it |
+| Implementation copies the filtered `getOverview` call site | High — it is the obvious one to copy | High — `offline` silently never fires and finished builders vanish | Called out on the source, and scenario 9e fails loudly if it happens |
 | Builder id collision across workspaces | High if unqualified | High — builders overwrite each other, blamed on the client | Every id qualified by `workspace_path` per `schema.ts:46`; scenario 7b tests it |
 | Resumed deltas served into the wrong scope | Medium | High — silent corruption | `since` only valid with a matching `streamId`; mismatch returns a flagged snapshot |
 
@@ -333,5 +370,8 @@ Ranked, most consequential first.
 - `packages/codev/src/agent-farm/servers/tower-server.ts:259,283-308,364`
 - `packages/codev/src/terminal/pty-session.ts:783` — `bytesWritten`
 - `packages/codev/src/agent-farm/db/schema.ts:46` — `PRIMARY KEY (workspace_path, id)` on `builders`
-- `packages/types/src/api.ts:147` — `OverviewBuilder`: `blockedGate`, `lastDataAt`, `protocolPhase`, `roleId`
+- `packages/types/src/api.ts:147` — `OverviewBuilder`: `blockedGate`, `lastDataAt`, `protocolPhase`, `roleId`, `spawnedByArchitect`
+- `packages/codev/src/agent-farm/servers/overview.ts:862` — `getOverview`, and the `activeBuilderRoleIds` filter that must not be passed
+- `packages/codev/src/agent-farm/servers/tower-routes.ts:1149-1157` — how liveness and `lastDataAt` are resolved today
+- `packages/codev/src/terminal/pty-session.ts:155` — `_lastDataAt = Date.now()` at construction, which is why `idle` was unreachable
 - `packages/codev/src/agent-farm/servers/tower-routes.ts:192,256,1139,1425,1443`
