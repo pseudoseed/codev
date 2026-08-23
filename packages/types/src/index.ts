@@ -17,6 +17,21 @@ export {
   type MailboxEscalationPayload,
 } from './sse.js';
 
+export {
+  type V2Status,
+  type V2NodeKind,
+  type V2Node,
+  type V2Counts,
+  type V2SnapshotFrame,
+  type V2NodeFrame,
+  type V2GoneFrame,
+  type V2CountsFrame,
+  type V2TickFrame,
+  type V2DarkFrame,
+  type V2ResumedFrame,
+  type V2Frame,
+} from './v2-events.js';
+
 export { VSCODE_USER_SENDER } from './messaging.js';
 
 export {

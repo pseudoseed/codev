@@ -1,0 +1,197 @@
+id: '52'
+title: v2-server-events-push-based-st
+protocol: spir
+phase: review
+plan_phases:
+  - id: phase_1
+    title: Hierarchy projection
+    status: complete
+  - id: phase_2
+    title: Scoped event bus and SSE route
+    status: complete
+  - id: phase_3
+    title: Change sampler and live deltas
+    status: complete
+  - id: phase_4
+    title: Idle-cost and convergence proof
+    status: complete
+current_plan_phase: null
+gates:
+  spec-approval:
+    status: approved
+    approved_at: '2026-08-23T07:21:52.671Z'
+  plan-approval:
+    status: approved
+    requested_at: '2026-08-23T17:36:09.446Z'
+    approved_at: '2026-08-23T17:38:09.737Z'
+  pr:
+    status: pending
+  verify-approval:
+    status: pending
+iteration: 2
+build_complete: true
+history:
+  - iteration: 1
+    plan_phase: phase_2
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_2-iter1-gemini.txt
+        stated: false
+      - model: codex
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_2-iter1-codex.txt
+        stated: false
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_2-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_2-iter1-opencode.txt
+        stated: true
+  - iteration: 1
+    plan_phase: phase_3
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_3-iter1-gemini.txt
+        stated: false
+      - model: codex
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_3-iter1-codex.txt
+        stated: false
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_3-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_3-iter1-opencode.txt
+        stated: false
+  - iteration: 1
+    plan_phase: phase_4
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter1-gemini.txt
+        stated: false
+      - model: codex
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter1-codex.txt
+        stated: false
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter1-opencode.txt
+        stated: false
+  - iteration: 2
+    plan_phase: phase_4
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter2-gemini.txt
+        stated: false
+      - model: codex
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter2-codex.txt
+        stated: false
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter2-claude.txt
+        stated: true
+      - model: opencode
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter2-opencode.txt
+        stated: true
+  - iteration: 3
+    plan_phase: phase_4
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter3-gemini.txt
+        stated: false
+      - model: codex
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter3-codex.txt
+        stated: false
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter3-claude.txt
+        stated: true
+      - model: opencode
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-phase_4-iter3-opencode.txt
+        stated: false
+  - iteration: 1
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-review-iter1-gemini.txt
+        stated: false
+      - model: codex
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-review-iter1-codex.txt
+        stated: false
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-review-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-52/codev/projects/52-v2-server-events-push-based-st/52-review-iter1-opencode.txt
+        stated: false
+started_at: '2026-08-23T07:21:36.575Z'
+updated_at: '2026-08-23T19:04:58.678Z'
+context_refreshes:
+  - boundary: plan-phase:phase_2
+    at: '2026-08-23T17:47:34.397Z'
+    acknowledged_at: '2026-08-23T17:48:08.675Z'
+  - boundary: plan-phase:phase_3
+    at: '2026-08-23T18:04:16.945Z'
+    acknowledged_at: '2026-08-23T18:06:24.389Z'
+  - boundary: plan-phase:phase_4
+    at: '2026-08-23T18:31:46.814Z'
+    acknowledged_at: '2026-08-23T18:32:24.029Z'
+  - boundary: enter:review
+    at: '2026-08-23T18:55:38.293Z'
+    acknowledged_at: '2026-08-23T18:55:46.462Z'
+force_advanced:
+  phase: phase_4
+  iteration: 3
+  max_iterations: 3
+  rebuttal_file: 52-phase_4-iter3-rebuttals.md
+  at: '2026-08-23T18:55:36.830Z'
