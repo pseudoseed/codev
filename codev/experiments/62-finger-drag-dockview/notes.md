@@ -178,46 +178,53 @@ That is the default chrome of every pane, not an edge widget. One React tab comp
 
 ## Verdict
 
-**Arm A, dockview 8.2.0, real iPad.** Gestures and selection pass. Touch targets fail FR-22 on both clauses: size (sash 4 px, 24 px coarse) and separation (X nested inside the tab, 0 pt).
+These arms were not scored the same way. That is a limitation. It is not a footnote.
 
-Do not read the target failure as "dockview failed." Selection and copy work. That was the biggest risk we were carrying.
+**Arm A was scored on a real iPad by the human.** Arm B has been scored in Chromium and in the live DOM only. Those are not comparable evidence. Testing A on a device and B in a desktop browser repeats, in reverse, the error this spike exists to prevent.
 
-Do not soften the target failure because the gestures passed. A learned gesture is not a destructive mis-tap.
+His observation, attributed: he tested arm A and reported gestures and selection working, with the tab-close mis-tap as the only failure. That is the strongest single data point in this spike.
 
-**Arm B is built.** URL: `http://10.10.50.186:4112/b.html`. No UI library. CSS grid, native scroll, DOM text, sibling close.
+What can be stated without a device:
 
-FR-22 passes on the live DOM. Selection works in Chromium. Close detaches. Finger, VoiceOver, Dynamic Type, and both orientations are not scored. That is not a pass.
+- Arm B passes FR-22 in the live DOM: tab 88×44, close 67×44, gap 8 pt, `closeInsideTab` false. Arm A fails both clauses: sash 4 px / 24 px coarse, close nested at 0 pt.
+- Arm B satisfies FR-49 by construction: close detaches, restore keeps the DOM text. Arm A's close is destructive and its own control is nested inside the most common target.
+- Arm A needs a custom `defaultTabComponent` plus a raised tab bar to reach FR-22. The number is below.
+- Arm B's cost is what it cannot do. Enumerated below. Not "does less."
 
-The bake-off row "both fail → the web layer cannot meet the bar" is still unevidenced. B has not been on the iPad.
+**Unscored for arm B:** VoiceOver traversal. Dynamic Type at large sizes. Both orientations. Real-finger scroll and momentum. Safe areas on device.
+
+No winner.
 
 ## Costs, not a winner
 
-No pick.
+**Arm A, dockview 8.2.0**
 
-| | Dockview (A), iPad | Native primitives (B), DOM + Chromium |
-|---|---|---|
-| Gestures (split, drag, resize) | Pass on device | No drag-to-rearrange. Side/stack buttons only. That is the price of B, not a miss. |
-| Selection and copy in a pane | Pass on device | Pass in Chromium on a `<pre>`. Not scored on the iPad. |
-| FR-22 size | Fail. 4 px / 24 px sash. Custom CSS on every sash, or accept it. | Pass. Every control ≥ 44×44. `artifacts/arm-b-targets.json`. |
-| FR-22 separation | Fail. 0 pt. Needs a custom `defaultTabComponent` and a tab bar taller than 35. Nested X cannot be padded apart. | Pass. Tab and close are siblings. Gap 8 pt. |
-| What you give up | Stock close is a mis-tap. Session teardown is #66, not this library. | Drag-to-rearrange, edge-split, sash resize, dockview serialization. |
+- To reach FR-22 without a fork: 2 new files we own, 0 dockview files edited. A title-only `defaultTabComponent` (the published `DockviewDefaultTab` is ~45 lines and renders the close *inside* the tab). Plus a `rightHeaderActionsComponent` close, because `Tab` mounts that renderer inside `.dv-tab`, which is the drag source. A custom tab that still contains close still has gap 0. `hideClose` plus a group-level close is the documented way out. One CSS variable, `--dv-tabs-and-actions-container-height`, today 35 px. Sash size is ~5 rules in our stylesheet (4 px box + coarse `::before`).
+- Per-tab close with an 8 pt gap requires changing `Tab` itself (`tab.d.ts` is 46 lines; the body lives in dockview-core). That is a fork. Not counted as "a theme tweak."
+- Session teardown on close is #66. Not this library.
 
-#66 takes the destructive-close question off this spike. Close must detach a viewer, never destroy a session. Library-independent. This spike surfaced it. It is not this spike's to solve.
+**Arm B, native primitives**
+
+Lost, exactly:
+
+- Drag a tab to an edge to split.
+- Drag a pane from one group into another.
+- Drag the sash to resize.
+- Floating groups.
+- Popout windows.
+- Layout serialization (`api.toJSON` / `fromJSON`).
+- Tab overflow, pinned tabs, tab groups.
+
+What it has: a fixed two-pane grid. Buttons flip side-by-side vs stack. Close detaches. Targets are 44 pt with 8 pt gaps and are not nested.
+
+#66 takes destructive close off this spike. Close must detach a viewer. Library-independent.
 
 ## What worked / what didn't
 
-Worked: finger split, drag, resize. Selection and copy inside a pane. Pointer backend in 8.2.0.
+His words on arm A: gestures and selection working, tab-close mis-tap the only failure.
 
-Did not work: FR-22, both clauses. First contact closed a tab.
-
-Arm B page exists. FR-22 and Chromium selection pass. Finger and VoiceOver on B are not scored.
+Arm B: FR-22 and detach measured in Chromium. Finger and VoiceOver on B are unscored.
 
 ## Next steps
 
-Architect picks on the cost table.
-
-Arm B on a real iPad is still the missing device run if the "both fail → leave the web" row must be filled.
-
-Production path for A, if chosen: custom tab plus taller bar. Do not restyle this spike to pretend stock dockview passes.
-
-`apps/web` stays untouched.
+Two cost lists. Stop.
