@@ -1,9 +1,21 @@
 id: '52'
 title: v2-server-events-push-based-st
 protocol: spir
-phase: plan
-plan_phases: []
-current_plan_phase: null
+phase: implement
+plan_phases:
+  - id: phase_1
+    title: Hierarchy projection
+    status: in_progress
+  - id: phase_2
+    title: Scoped event bus and SSE route
+    status: pending
+  - id: phase_3
+    title: Change sampler and live deltas
+    status: pending
+  - id: phase_4
+    title: Idle-cost and convergence proof
+    status: pending
+current_plan_phase: phase_1
 gates:
   spec-approval:
     status: approved
@@ -17,7 +29,7 @@ gates:
   verify-approval:
     status: pending
 iteration: 1
-build_complete: true
+build_complete: false
 history: []
 started_at: '2026-08-23T07:21:36.575Z'
-updated_at: '2026-08-23T17:38:09.738Z'
+updated_at: '2026-08-23T17:38:21.139Z'
