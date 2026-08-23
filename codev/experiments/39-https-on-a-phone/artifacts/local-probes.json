@@ -1,0 +1,122 @@
+{
+  "at": "2026-08-22T20:13:32.508Z",
+  "gates": {
+    "host_reject_magicdns": {
+      "pass": true,
+      "localhost": 200,
+      "magicdns": 401,
+      "magicBody": "Unauthorized"
+    },
+    "ingress_host_rewrite": {
+      "pass": true,
+      "spike": 200,
+      "proxiedHealth": 200
+    },
+    "local_echo_ws": {
+      "pass": true,
+      "messages": [
+        "{\"type\":\"hello\",\"at\":\"2026-08-22T20:13:33.043Z\"}",
+        "exp-39-ping"
+      ]
+    },
+    "local_terminal_ws": {
+      "pass": true,
+      "terminalId": "874a02bd-0842-4ac7-8eea-c889abf3d718",
+      "frames": [
+        {
+          "type": "control",
+          "text": "{\"type\":\"seq\",\"payload\":{\"seq\":0}}"
+        },
+        {
+          "type": "data",
+          "text": "exp-39-terminal-ping\r\n"
+        },
+        {
+          "type": "data",
+          "text": "exp-39-terminal-ping\r\n"
+        }
+      ]
+    },
+    "pwa_assets": {
+      "pass": true,
+      "assets": [
+        {
+          "path": "/v2/spike/",
+          "pass": true,
+          "status": 200,
+          "type": "text/html; charset=utf-8"
+        },
+        {
+          "path": "/v2/spike/manifest.webmanifest",
+          "pass": true,
+          "status": 200,
+          "type": "application/manifest+json; charset=utf-8"
+        },
+        {
+          "path": "/v2/spike/sw.js",
+          "pass": true,
+          "status": 200,
+          "type": "text/javascript; charset=utf-8",
+          "swAllowed": "/v2/spike/"
+        },
+        {
+          "path": "/v2/spike/app.js",
+          "pass": true,
+          "status": 200,
+          "type": "text/javascript; charset=utf-8"
+        },
+        {
+          "path": "/v2/spike/icon-180.png",
+          "pass": true,
+          "status": 200,
+          "type": "image/png"
+        },
+        {
+          "path": "/v2/spike/icon-192.png",
+          "pass": true,
+          "status": 200,
+          "type": "image/png"
+        }
+      ]
+    },
+    "vapid": {
+      "pass": true,
+      "status": 200,
+      "publicKeyLen": 87,
+      "uncompressedBytes": 65
+    },
+    "subscribe": {
+      "pass": true,
+      "status": 200,
+      "count": 1
+    },
+    "push_plumbing": {
+      "pass": true,
+      "status": 200,
+      "resultOk": false,
+      "error": "Error: getaddrinfo ENOTFOUND exp39.invalid"
+    },
+    "serve_https": {
+      "pass": false,
+      "skipped": "gate 1 blocked on external GitOps hostname, not a technical failure"
+    },
+    "pwa_install": {
+      "pass": false,
+      "skipped": "needs physical device after hostname exists"
+    },
+    "push_permission": {
+      "pass": false,
+      "skipped": "needs physical device after hostname exists"
+    },
+    "delivered_push": {
+      "pass": false,
+      "skipped": "needs physical device after hostname exists"
+    }
+  },
+  "notes": [
+    {
+      "createStatus": 201,
+      "createBody": "{\"id\":\"874a02bd-0842-4ac7-8eea-c889abf3d718\",\"pid\":47556,\"cols\":80,\"rows\":24,\"label\":\"exp-39-throwaway\",\"status\":\"running\",\"createdAt\":\"2026-08-22T20:13:33.850Z\",\"persistent\":false,\"lastDataAt\":1787429613850,\"writable\":true,\"wsPath\":\"/ws/terminal/874a02bd-0842-4ac7-8eea-c889abf3d718\"}"
+    }
+  ]
+}

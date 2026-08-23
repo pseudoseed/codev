@@ -1,0 +1,5 @@
+node_modules/
+artifacts/vapid.json
+artifacts/subscriptions.json
+artifacts/subscriptions-root.json
+artifacts/chrome-*/
