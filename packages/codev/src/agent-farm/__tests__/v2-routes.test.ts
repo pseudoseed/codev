@@ -225,6 +225,22 @@ describe('handleV2Route', () => {
     void body;
   });
 
+  it('keeps an encoded comma inside a workspace path', async () => {
+    const pathWithComma = '/tmp/ws,a';
+    setV2RouteDeps({
+      listWorkspaces: () => [pathWithComma],
+      project: () => ({ nodes: [builderNode(pathWithComma, 'spir-52')], counts }),
+      now: () => 1_000,
+      isReadable: () => true,
+    });
+    const q = `/v2/events?scope=${encodeURIComponent(pathWithComma)}`;
+    const out = makeRes();
+    await handleV2Route(makeReq('GET', q), out.res, urlFor(q));
+    const parsed = frames(out.body());
+    expect(parsed[0].type).toBe('snapshot');
+    expect((parsed[0].nodes as V2Node[])[0].id).toBe(builderId(pathWithComma, 'spir-52'));
+  });
+
   it('does not double-decode a scope path that contains %', async () => {
     const pathWithPct = '/tmp/ws%20a';
     setV2RouteDeps({

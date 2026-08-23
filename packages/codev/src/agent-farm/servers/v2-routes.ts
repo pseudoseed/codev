@@ -77,14 +77,23 @@ function writeSse(res: http.ServerResponse, frame: V2Frame): void {
   res.write(`data: ${JSON.stringify(frame)}\n\n`);
 }
 
-function parseScope(raw: string | null): string[] | null {
-  if (raw === null || raw === '') return null;
+function parseScope(search: string): string[] | null {
+  const q = search.startsWith('?') ? search.slice(1) : search;
+  const match = /(?:^|&)scope=([^&]*)/.exec(q);
+  if (!match) return null;
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const part of raw.split(',')) {
-    if (part === '' || seen.has(part)) continue;
-    seen.add(part);
-    out.push(part);
+  for (const part of match[1].split(',')) {
+    if (part === '') continue;
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(part);
+    } catch {
+      decoded = part;
+    }
+    if (decoded === '' || seen.has(decoded)) continue;
+    seen.add(decoded);
+    out.push(decoded);
   }
   return out.length === 0 ? null : out;
 }
@@ -249,7 +258,7 @@ export async function handleV2Route(
     return;
   }
 
-  const scopePaths = parseScope(url.searchParams.get('scope'));
+  const scopePaths = parseScope(url.search);
   if (!scopePaths) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'scope is required' }));

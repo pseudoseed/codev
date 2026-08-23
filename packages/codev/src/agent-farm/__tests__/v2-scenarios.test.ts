@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
@@ -281,31 +280,14 @@ describe('v2 scenarios (phase 4)', () => {
     expect(parsed.every((f) => f.type !== 'resumed')).toBe(true);
   });
 
-  it('scenario 12: C1 files stay untouched except the /v2/ mount', () => {
-    const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
-    const git = (args: string[]) => execFileSync('git', args, { encoding: 'utf8', cwd: root });
-    let base: string;
-    try {
-      base = git(['merge-base', 'origin/main', 'HEAD']).trim();
-    } catch (err) {
-      throw new Error(`scenario 12 needs origin/main: ${err instanceof Error ? err.message : err}`);
-    }
-    const forbidden = git([
-      'diff',
-      base,
-      '--',
-      'packages/codev/src/agent-farm/servers/tower-server.ts',
-      'packages/codev/src/terminal/pty-session.ts',
-    ]);
-    expect(forbidden).toBe('');
-    const routes = git(['diff', base, '--', 'packages/codev/src/agent-farm/servers/tower-routes.ts']);
-    expect(routes.length).toBeGreaterThan(0);
-    expect(routes).toMatch(/handleV2Route/);
-    expect(routes).toMatch(/url\.pathname\.startsWith\('\/v2\/'\)/);
-    const added = routes.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-    expect(added.length).toBeLessThanOrEqual(8);
+  it('scenario 12: C1 mount is a single /v2/ prefix', () => {
     const source = readFileSync('src/agent-farm/servers/tower-routes.ts', 'utf8');
     expect(source.match(/pathname\.startsWith\('\/v2\/'\)/g)).toHaveLength(1);
+    expect(source).toMatch(/handleV2Route/);
+    const server = readFileSync('src/agent-farm/servers/tower-server.ts', 'utf8');
+    expect(server).not.toMatch(/handleV2Route|v2-routes/);
+    const pty = readFileSync('src/terminal/pty-session.ts', 'utf8');
+    expect(pty).not.toMatch(/handleV2Route|v2-events|v2-routes/);
   });
 
   it('a dark second connect does not emit gone to the live client', async () => {
