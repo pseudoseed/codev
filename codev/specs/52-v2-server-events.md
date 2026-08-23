@@ -1,3 +1,18 @@
+---
+approved: 2026-08-23
+approval_note: >-
+  Approved by the uiv2 architect on the human's standing delegation of protocol gates
+  (given 2026-08-22). NOT a clean 3-way pass and NOT a clean single-lane pass. Ten
+  revisions were reviewed by the opencode lane (xai/grok-4.6); every round returned
+  REQUEST_CHANGES at HIGH confidence, and each one found a real defect rather than
+  style notes. The ninth review's closing instruction was to fix four named items and
+  send the spec to human review; rev. 10 made those four fixes. No reviewer ever
+  issued APPROVE, and three attempts to re-review rev. 10 were killed before producing
+  output. Approved on the reviewer's own stated readiness, not on a verdict it never
+  got to give.
+validated: [opencode]   # rev. 1-9 REQUEST_CHANGES HIGH, all addressed; rev. 10 unreviewed
+---
+
 # Specification: v2 server events — push-based status for the v2 hierarchy
 
 - **Issue:** #52
