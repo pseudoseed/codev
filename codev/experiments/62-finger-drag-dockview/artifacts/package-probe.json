@@ -1,0 +1,757 @@
+{
+  "at": "2026-08-23T21:09:13.236Z",
+  "dockview": "8.2.0",
+  "dockviewCore": "8.2.0",
+  "filesScanned": 139,
+  "hitCount": 43,
+  "pointerBackendPresent": true,
+  "pointerFiles": [
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dismissableLayer.d.ts",
+      "needles": [
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 3196
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/backend.d.ts",
+      "needles": [
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 3099
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/droptarget.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 9432
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/pointer/index.d.ts",
+      "needles": [
+        "pointer",
+        "longPress"
+      ],
+      "bytes": 684
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/pointer/longPress.d.ts",
+      "needles": [
+        "pointer",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 1059
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/pointer/pointerDragController.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 2504
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/pointer/pointerDragSource.d.ts",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 2630
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/pointer/types.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 506
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/tab/tab.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 1942
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/floatingTitleBar.d.ts",
+      "needles": [
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent"
+      ],
+      "bytes": 1632
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/groupDragSource.d.ts",
+      "needles": [
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent"
+      ],
+      "bytes": 2459
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/tabGroupChip.d.ts",
+      "needles": [
+        "long-press",
+        "touch"
+      ],
+      "bytes": 1456
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/tabGroups.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 4872
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/tabReorderController.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 13354
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/tabs.d.ts",
+      "needles": [
+        "pointer",
+        "pointerdown"
+      ],
+      "bytes": 11321
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/tabsContainer.d.ts",
+      "needles": [
+        "PointerEvent"
+      ],
+      "bytes": 6856
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/voidContainer.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 938
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/dndCapabilities.d.ts",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "touch"
+      ],
+      "bytes": 816
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/dockviewComponent.d.ts",
+      "needles": [
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent"
+      ],
+      "bytes": 49530
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/dockviewGroupPanelModel.d.ts",
+      "needles": [
+        "touch",
+        "PointerEvent"
+      ],
+      "bytes": 18657
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/events.d.ts",
+      "needles": [
+        "PointerEvent"
+      ],
+      "bytes": 2050
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/moduleContracts.d.ts",
+      "needles": [
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent"
+      ],
+      "bytes": 31102
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/options.d.ts",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent"
+      ],
+      "bytes": 35920
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/rootDropTargetService.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 2220
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/overlay/overlay.d.ts",
+      "needles": [
+        "pointer",
+        "long-press"
+      ],
+      "bytes": 3668
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/paneview/options.d.ts",
+      "needles": [
+        "PointerEvent"
+      ],
+      "bytes": 1480
+    },
+    {
+      "file": "node_modules/dockview-core/dist/dockview-core.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "longPress",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 925028
+    },
+    {
+      "file": "node_modules/dockview-core/dist/dockview-core.min.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 524560
+    },
+    {
+      "file": "node_modules/dockview-core/dist/dockview-core.min.noStyle.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 374130
+    },
+    {
+      "file": "node_modules/dockview-core/dist/dockview-core.noStyle.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "longPress",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 770291
+    },
+    {
+      "file": "node_modules/dockview-core/dist/package/main.cjs.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "longPress",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 751426
+    },
+    {
+      "file": "node_modules/dockview-core/dist/package/main.cjs.min.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 374662
+    },
+    {
+      "file": "node_modules/dockview-core/dist/package/main.esm.min.mjs",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 373846
+    },
+    {
+      "file": "node_modules/dockview-core/dist/package/main.esm.mjs",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "longPress",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 748012
+    },
+    {
+      "file": "node_modules/dockview-react/dist/dockview-react.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 957387
+    },
+    {
+      "file": "node_modules/dockview-react/dist/dockview-react.min.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 544029
+    }
+  ],
+  "allHits": [
+    {
+      "file": "node_modules/dockview-core/dist/cjs/api/dockviewPanelApi.d.ts",
+      "needles": [
+        "touch"
+      ],
+      "bytes": 5171
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dismissableLayer.d.ts",
+      "needles": [
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 3196
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/backend.d.ts",
+      "needles": [
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 3099
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/droptarget.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 9432
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/pointer/index.d.ts",
+      "needles": [
+        "pointer",
+        "longPress"
+      ],
+      "bytes": 684
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/pointer/longPress.d.ts",
+      "needles": [
+        "pointer",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 1059
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/pointer/pointerDragController.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 2504
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/pointer/pointerDragSource.d.ts",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 2630
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/pointer/pointerDropTarget.d.ts",
+      "needles": [
+        "pointer"
+      ],
+      "bytes": 3198
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/pointer/pointerGhost.d.ts",
+      "needles": [
+        "pointer"
+      ],
+      "bytes": 954
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dnd/pointer/types.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 506
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/panel/content.d.ts",
+      "needles": [
+        "pointer"
+      ],
+      "bytes": 2043
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/tab/tab.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 1942
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/floatingTitleBar.d.ts",
+      "needles": [
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent"
+      ],
+      "bytes": 1632
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/groupDragSource.d.ts",
+      "needles": [
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent"
+      ],
+      "bytes": 2459
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/tabGroupChip.d.ts",
+      "needles": [
+        "long-press",
+        "touch"
+      ],
+      "bytes": 1456
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/tabGroups.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 4872
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/tabReorderController.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 13354
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/tabs.d.ts",
+      "needles": [
+        "pointer",
+        "pointerdown"
+      ],
+      "bytes": 11321
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/tabsContainer.d.ts",
+      "needles": [
+        "PointerEvent"
+      ],
+      "bytes": 6856
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/components/titlebar/voidContainer.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 938
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/dndCapabilities.d.ts",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "touch"
+      ],
+      "bytes": 816
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/dockviewComponent.d.ts",
+      "needles": [
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent"
+      ],
+      "bytes": 49530
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/dockviewGroupPanelModel.d.ts",
+      "needles": [
+        "touch",
+        "PointerEvent"
+      ],
+      "bytes": 18657
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/events.d.ts",
+      "needles": [
+        "PointerEvent"
+      ],
+      "bytes": 2050
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/moduleContracts.d.ts",
+      "needles": [
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent"
+      ],
+      "bytes": 31102
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/options.d.ts",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent"
+      ],
+      "bytes": 35920
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/dockview/rootDropTargetService.d.ts",
+      "needles": [
+        "pointer",
+        "PointerEvent"
+      ],
+      "bytes": 2220
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/overlay/overlay.d.ts",
+      "needles": [
+        "pointer",
+        "long-press"
+      ],
+      "bytes": 3668
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/paneview/draggablePaneviewPanel.d.ts",
+      "needles": [
+        "pointer"
+      ],
+      "bytes": 1407
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/paneview/options.d.ts",
+      "needles": [
+        "PointerEvent"
+      ],
+      "bytes": 1480
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/scrollbar.d.ts",
+      "needles": [
+        "pointer"
+      ],
+      "bytes": 1102
+    },
+    {
+      "file": "node_modules/dockview-core/dist/cjs/types.d.ts",
+      "needles": [
+        "pointer"
+      ],
+      "bytes": 943
+    },
+    {
+      "file": "node_modules/dockview-core/dist/dockview-core.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "longPress",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 925028
+    },
+    {
+      "file": "node_modules/dockview-core/dist/dockview-core.min.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 524560
+    },
+    {
+      "file": "node_modules/dockview-core/dist/dockview-core.min.noStyle.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 374130
+    },
+    {
+      "file": "node_modules/dockview-core/dist/dockview-core.noStyle.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "longPress",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 770291
+    },
+    {
+      "file": "node_modules/dockview-core/dist/package/main.cjs.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "longPress",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 751426
+    },
+    {
+      "file": "node_modules/dockview-core/dist/package/main.cjs.min.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 374662
+    },
+    {
+      "file": "node_modules/dockview-core/dist/package/main.esm.min.mjs",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 373846
+    },
+    {
+      "file": "node_modules/dockview-core/dist/package/main.esm.mjs",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "longPress",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 748012
+    },
+    {
+      "file": "node_modules/dockview-react/dist/dockview-react.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "long-press",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 957387
+    },
+    {
+      "file": "node_modules/dockview-react/dist/dockview-react.min.js",
+      "needles": [
+        "dndStrategy",
+        "pointer",
+        "touch",
+        "PointerEvent",
+        "pointerdown"
+      ],
+      "bytes": 544029
+    }
+  ]
+}
