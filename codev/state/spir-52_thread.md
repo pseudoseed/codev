@@ -27,3 +27,9 @@ Builder for Issue #52 / Spec 52. STRICT mode. SPIR.
 - architect:uiv2 approved under standing delegation. Recorded as 2 genuine review lanes (claude + opencode), not 4.
 - Tightened Phase 1 AC: parentId must equal the architect id, not merely "not fail". 9f still cannot catch a skipped join.
 - Phase 4: no silent production fixes. If a phase-3 hole surfaces, say so in the commit body.
+
+### 2026-08-23 — Phase 1: Hierarchy projection
+
+- Types in `packages/types/src/v2-events.ts`. Ids, status, `projectHierarchy` with injected `V2Deps`.
+- `getBuilders` join is `row.worktree === discovered.worktreePath`. Test asserts parentId is the architect id, not the workspace.
+- 11 tests pass (`v2-projection.test.ts`). Does not import `isIdleWaiting`.
