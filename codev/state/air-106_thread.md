@@ -77,6 +77,27 @@ update/adopt, consult lanes).
 
 Nothing about it reached the PR body.
 
+## CMAP round (air / pr, PR #132)
+
+`claude=APPROVE`, `codex=REQUEST_CHANGES` (branch behind base), `gemini=SKIPPED`
+(agy exited 1 on quota — a skip, recorded as a skip, not read as an approval).
+
+Fixed in `be49a0273`:
+
+- **Auth strip was a dead end.** `openOnce` returns `no-retry`, `streamLoop`
+  exits, nothing emits again — so the strip and the stale tree persist with no
+  way out, where the whole-page banner used to make that unmissable. Copy now
+  says "Reload to retry."
+- **`lastSeenLabel` was clock-only**, so a two-day-old tree read as today. It
+  now carries the date once the outage crosses a day. Same failure as the one
+  the stamp exists to prevent, one size down.
+- **The rust test was near-vacuous** — it read rendered `innerHTML`, where a CSS
+  colour never appears. It now parses `site.css` and checks every `.conn-strip`
+  rule; I confirmed it fails when one is switched to `var(--rust)` before
+  restoring the file.
+- **`data-connection` was read by nothing.** The two new e2e tests assert it.
+- Merged `origin/main` (2 docs commits).
+
 ## Flaky Tests
 
 None seen.
