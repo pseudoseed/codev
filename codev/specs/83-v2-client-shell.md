@@ -3,7 +3,7 @@
 - **Issue:** #83
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 7
+- **Status:** Draft, rev. 8
 - **Depends on:** spec 52 (v2 server events), merged
 
 ## Problem Statement
@@ -132,7 +132,26 @@ The rule:
 2. Make **one** recovery attempt: reconnect **without** `since` and `stream`, forcing a fresh `snapshot` rather than a resume.
 3. If a bad frame arrives on that fresh connection too, stay in the mismatch state and **stop**. No further attempts. A contract the client cannot read is not a transient fault and retrying it is a spin, not a recovery.
 
-The mismatch state names the frame's `seq` and `type`. A client that cannot say which frame broke it is not reporting, it is just failing.
+**What the mismatch state can say depends on how far the frame got.** Rev. 7 demanded the `seq` and `type` of a frame that failed to parse — neither is knowable from invalid JSON.
+
+| How it failed | What the state says |
+|---|---|
+| Did not parse as JSON | `invalid JSON after cursor <N>`, plus the first 120 bytes of the offending line, escaped |
+| Parsed, unknown `type` | the `type` verbatim, and the `seq` if it is a number |
+| Parsed, known `type`, invalid fields | the `type`, the `seq`, and which field failed |
+
+A client that cannot say what broke it is not reporting, it is failing quietly. But it must only claim what it actually decoded.
+
+**TypeScript does not validate the wire.** `packages/types` describes the frames; nothing checks that a decoded object matches. Every frame is validated at runtime before it reaches the reducer, and a known `type` carrying a bad payload is **terminal**, same as an unknown type:
+
+- `seq` is not a number
+- `node`/`gone`: no `id`, or `id` is not a string
+- `node`: no `kind`, or `kind` outside `workspace | architect | builder`
+- `snapshot`: `nodes` is not an array, or `counts` is missing or malformed
+- `tick`: `buckets` is not an object, or any value in it is not a number
+- `dark`: no `id`, or the `id` does not parse as `workspace:<path>`
+
+**One deliberate exception, and it is not a validation failure.** A structurally valid node carrying a `status` outside the four ships as D3 says: rendered **visibly wrong**, not terminal, not defaulted to `running`. The distinction is the point — an unexpected *value* in a well-formed frame is a contract drift the page should show and keep running through; a malformed *frame* is a contract the client cannot read at all.
 
 **`tick` is the only writer of `buckets` after the snapshot.** That is contract, not preference: `node` frames carry no buckets precisely so two clients cannot diverge.
 
@@ -238,7 +257,9 @@ Three outcomes, three renderings:
 | 200, one or more workspaces | those paths | open the stream |
 | 200, zero workspaces | none | the empty site (D5). **Do not open the stream** — an empty `scope` takes a 400 and would read as a connection failure |
 | non-200, or the fetch throws | unknown | the unreachable state (D5), and retry with D2's backoff |
-| **200 with a body that is not what it claims** — invalid JSON, no `workspaces` field, or `workspaces` not an array | unknown | the unreachable state **and** a contract mismatch, then retry. **Never the empty state.** A 200 whose body cannot be read is still "I could not tell", and the status code is not permission to guess |
+| **200 with a body that is not what it claims** — invalid JSON, no `workspaces` field, `workspaces` not an array, **or any entry without a non-empty string `path`** | unknown | the unreachable state **and** a contract mismatch, then retry. **Never the empty state.** A 200 whose body cannot be read is still "I could not tell", and the status code is not permission to guess |
+
+**Validate every entry, not just the array.** The endpoint returns objects — measured shape: `{path, name, active, proxyUrl, terminals}` — and only `path` is used here. `{"workspaces": [{}]}` or a non-string `path` would otherwise become a scope path of `undefined`, which the server answers with a `dark` frame and `reason: "unknown"`. That renders as a plausible unreachable workspace, so a client bug arrives disguised as a server fact. An entry that fails is a contract mismatch for the whole bootstrap, not a workspace to skip: a partial scope silently drops machines the person expects to see.
 
 ### D9 — `/v2/` and its assets must be public routes
 
@@ -408,7 +429,11 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 25. **Bootstrap retries, then stops.** A 500 then a 200: assert two requests total, and that a later reconnect makes none.
 26. **A 200 that lies.** Four bodies — invalid JSON, `{}`, `{"workspaces": null}`, `{"workspaces": "nope"}` — each produces the unreachable state and a retry, and **none** produces the empty state.
 27. **Transport framing.** The reader is hand-written, so the reducer tests prove nothing about it. Feed a scripted `ReadableStream` and assert identical results for: one frame split across 3 chunks; **a chunk that splits a multi-byte UTF-8 character** (`TextDecoder` must be constructed with `{stream: true}` semantics and reused, not per-chunk); 4 frames arriving in one chunk; a chunk ending mid-frame with the remainder arriving later; `\r\n` as well as `\n` line endings; a trailing partial frame at EOF, which must **not** be applied. A reader that passes every reducer test and fails this is the expected failure mode, not an unlikely one.
-28. **Bad frame is terminal and bounded.** A malformed frame mid-stream: assert frames stop applying, the mismatch state names the `seq` and `type`, exactly **one** reconnect happens and it carries **no** `since`/`stream`, and a second bad frame produces **no third connection**.
+28. **Bad frame is terminal and bounded.** A malformed frame mid-stream: assert frames stop applying, exactly **one** reconnect happens and it carries **no** `since`/`stream`, and a second bad frame produces **no third connection**.
+29. **The mismatch state claims only what it decoded.** Three cases: invalid JSON reports `invalid JSON after cursor <N>` and a byte preview and **does not** invent a `seq` or `type`; an unknown `type` reports the type; a known type with a bad field reports type, `seq` and the failing field.
+30. **Field validation, per frame type.** One case each: `seq` not a number; `node` with no `id`; `node` with `kind: "machine"`; `snapshot` with `nodes` not an array; `snapshot` with no `counts`; `tick` with `buckets` as an array; `tick` with a non-numeric value; `dark` with an `id` that is not `workspace:<path>`. Every one terminal.
+31. **Unknown status is not a validation failure.** A structurally valid node with `status: "reticulating"` renders visibly wrong, does **not** default to `running`, and does **not** enter the mismatch state. This is the one place a surprising value keeps the page running (D3).
+32. **Bootstrap entry validation.** `{"workspaces": [{}]}`, `{"workspaces": [{"path": 42}]}` and `{"workspaces": [{"path": ""}]}` each produce a contract mismatch for the whole bootstrap — not a partial scope, and not a dark workspace.
 
 ## Risks and Mitigation
 
@@ -421,6 +446,10 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 | Cursor advanced only on snapshots | Medium | Medium — a reconnect replays every delta since the snapshot | D1; scenario 19 |
 | A bad frame dropped and the next one applied | High — it is the forgiving thing to do | High — a corrupt tree that looks right, and a resume that replays the bad frame forever | D1's terminal rule; scenario 28 |
 | The SSE reader assumes one frame per chunk | High — it works on localhost and fails on a real network | High — dropped or spliced frames with no error | Scenario 27, including a split multi-byte character |
+| Wire types mistaken for wire validation | High — the types are right there and TypeScript looks like a guarantee | High — a decoded object with a known `type` and a bad payload reaches the reducer | D1's field list; scenario 30 |
+| Unknown `status` treated as a validation failure | Medium — the new terminal rule invites it | Medium — the page dies on a contract drift it was designed to survive | D1's exception; scenario 31 |
+| A bad `workspaces` entry skipped instead of refused | Medium — skipping looks resilient | High — a silently partial scope, or a client bug rendered as a server-reported dark machine | D7; scenario 32 |
+| The mismatch state invents a `seq` for unparseable JSON | Medium — rev. 7 required it | Low — a fabricated identifier in the one place accuracy matters | D1's table; scenario 29 |
 | `buckets` treated as one shape | High — the field name is identical | High — breaks on the first tick, which is also the first thing that arrives after the snapshot | D1 with both line numbers |
 | `counts` never initialised because no `counts` delta follows the snapshot | Medium | Medium — the footer stays empty and the contract looks unexercised | D1's snapshot row stores it |
 | `/v2/` ships in-repo only and 404s from the installed CLI | High — nothing in the build wires it | High — adopters have only the installed CLI | D14; criterion 19 requires `npm pack` |
