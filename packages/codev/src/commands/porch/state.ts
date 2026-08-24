@@ -283,7 +283,11 @@ function findProjectInDir(projectsDir: string, projectId: string): string | null
  * Spec 653: in multi-PR workflows, early phases merge status.yaml to main,
  * which becomes stale. Worktree copies are always the most recent.
  */
-export function findStatusPath(workspaceRoot: string, projectId: string): string | null {
+export function findStatusPath(
+  workspaceRoot: string,
+  projectId: string,
+  opts?: { alias?: boolean },
+): string | null {
   // 1. Search builder worktrees first (.builders/*/codev/projects/)
   // These have the most up-to-date state in multi-PR workflows.
   const buildersDir = path.join(workspaceRoot, '.builders');
@@ -302,7 +306,9 @@ export function findStatusPath(workspaceRoot: string, projectId: string): string
 
   // 3. Bare issue number → unique prefixed porch id (bugfix-109, experiment-63, …).
   // Exact `109` / `109-*` already won above. Alias only when that miss is unique.
-  if (/^\d+$/.test(projectId)) {
+  // Off for existence checks (`porch init`): a leftover bugfix-109 on main
+  // must not block `porch init pir 109`.
+  if ((opts?.alias ?? true) && /^\d+$/.test(projectId)) {
     const aliases = listPrefixedAliases(workspaceRoot, projectId);
     if (aliases.length === 1) return aliases[0].statusPath;
   }
@@ -311,7 +317,11 @@ export function findStatusPath(workspaceRoot: string, projectId: string): string
 }
 
 function isPrefixedNumericId(id: string, numericId: string): boolean {
-  return new RegExp(`^[a-z]+-${numericId}$`, 'i').test(id);
+  const dash = id.lastIndexOf('-');
+  if (dash <= 0) return false;
+  const prefix = id.slice(0, dash);
+  const rest = id.slice(dash + 1);
+  return /^[a-z]+$/i.test(prefix) && rest === numericId;
 }
 
 export function listPrefixedAliases(

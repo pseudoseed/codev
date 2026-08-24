@@ -1074,7 +1074,7 @@ export async function init(
   }
 
   // Also check if a project with this ID exists under a different name
-  const existingPath = findStatusPath(workspaceRoot, projectId);
+  const existingPath = findStatusPath(workspaceRoot, projectId, { alias: false });
   if (existingPath) {
     const existingState = readState(existingPath);
     console.log('');

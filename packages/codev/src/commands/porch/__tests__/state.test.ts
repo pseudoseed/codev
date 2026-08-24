@@ -359,6 +359,7 @@ updated_at: "${state.updated_at}"
       const result = findStatusPath(testDir, '109');
       expect(result).not.toBeNull();
       expect(result).toContain('bugfix-109-afx-status-shows-finished-buil');
+      expect(findStatusPath(testDir, '109', { alias: false })).toBeNull();
     });
 
     it('prefers an exact numeric project over a prefixed alias (#109)', () => {
