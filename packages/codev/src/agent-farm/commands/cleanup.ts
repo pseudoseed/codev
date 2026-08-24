@@ -251,12 +251,42 @@ export function findOrphanWorktree(workspaceRoot: string, projectId: string): Or
   return { status: 'ambiguous', dirNames: matches.map((m) => m.dirName) };
 }
 
+const PORCH_BOOKKEEPING_PREFIXES = ['codev/projects/', 'codev/state/'] as const;
+const PORCH_BOOKKEEPING_EXACT = new Set(['codev/projects', 'codev/state']);
+
+export function isPorchBookkeepingPath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/');
+  return PORCH_BOOKKEEPING_EXACT.has(normalized)
+    || PORCH_BOOKKEEPING_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+async function isOnlyPorchBookkeepingDelta(
+  workspaceRoot: string,
+  defaultBranch: string,
+  sha: string,
+): Promise<boolean> {
+  try {
+    const { stdout } = await run(
+      `git log --name-only --pretty=format: "${defaultBranch}..${sha}"`,
+      { cwd: workspaceRoot },
+    );
+    if (!stdout) return true;
+    return stdout.split('\n').filter(Boolean).every(isPorchBookkeepingPath);
+  } catch {
+    return false;
+  }
+}
+
 export async function isWorktreeMerged(workspaceRoot: string, worktreePath: string): Promise<boolean> {
   try {
     const { stdout: sha } = await run('git rev-parse HEAD', { cwd: worktreePath });
     const defaultBranch = resolveDefaultBranch(workspaceRoot);
-    await run(`git merge-base --is-ancestor ${sha} "${defaultBranch}"`, { cwd: workspaceRoot });
-    return true;
+    try {
+      await run(`git merge-base --is-ancestor ${sha} "${defaultBranch}"`, { cwd: workspaceRoot });
+      return true;
+    } catch {
+      return await isOnlyPorchBookkeepingDelta(workspaceRoot, defaultBranch, sha);
+    }
   } catch {
     return false;
   }
