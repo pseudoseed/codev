@@ -15,6 +15,11 @@ import type { OverviewData } from '@cluesmith/codev-types';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from '../../lib/config.js';
+import {
+  formatReclaimableBytes,
+  listOrphanWorktrees,
+  measureOrphanBytes,
+} from './cleanup.js';
 import chalk from 'chalk';
 
 /**
@@ -29,6 +34,12 @@ export interface StatusOptions {
   json?: boolean;
   architect?: string;
   mine?: boolean;
+  size?: boolean;
+}
+
+export interface OrphanStatus {
+  count: number;
+  bytes: number | null;
 }
 
 /** Placeholder shown for builders whose spawning architect is unknown (legacy rows). */
@@ -69,6 +80,32 @@ function sortByOwner(builders: Builder[]): Builder[] {
 /** A builder is considered "running" when it has a live terminal session. */
 function isBuilderRunning(builder: Builder): boolean {
   return !!builder.terminalId;
+}
+
+export function collectOrphanStatus(
+  workspaceRoot: string,
+  builders: ReadonlyArray<{ worktree: string }>,
+  size: boolean,
+): OrphanStatus {
+  const orphans = listOrphanWorktrees(workspaceRoot, builders);
+  return {
+    count: orphans.length,
+    bytes: size ? measureOrphanBytes(orphans.map((o) => o.worktreePath)) : null,
+  };
+}
+
+export function orphanStatusLabel(orphans: OrphanStatus, sized: boolean): string {
+  if (orphans.count === 0) return 'none';
+  if (sized && orphans.bytes !== null) {
+    return `${orphans.count} (${formatReclaimableBytes(orphans.bytes)})`;
+  }
+  if (sized) return `${orphans.count} (size unknown)`;
+  return String(orphans.count);
+}
+
+function renderOrphans(orphans: OrphanStatus, sized: boolean): void {
+  const label = orphanStatusLabel(orphans, sized);
+  logger.kv('Orphans', orphans.count === 0 ? chalk.gray(label) : label);
 }
 
 /**
@@ -190,8 +227,9 @@ function emitStatusJson(params: {
   // overview payload). Defaults (0 / false / empty map) when Tower is down.
   mailbox: { heldCount: number; escalated: boolean };
   heldByRoleId: Map<string, number>;
+  orphans: OrphanStatus;
 }): void {
-  const { towerRunning, workspace, architects, builders, ownerFilter, fleet, mailbox, heldByRoleId } = params;
+  const { towerRunning, workspace, architects, builders, ownerFilter, fleet, mailbox, heldByRoleId, orphans } = params;
   const visible = sortByOwner(filterByOwner(builders, ownerFilter));
 
   const payload = {
@@ -199,6 +237,7 @@ function emitStatusJson(params: {
     workspace,
     fleet,
     mailbox,
+    orphans,
     ownerFilter: ownerFilter ?? null,
     architects: architects.map((a) => ({ name: a.name ?? 'main' })),
     builders: visible.map((b) => ({
@@ -249,6 +288,8 @@ export async function status(options: StatusOptions = {}): Promise<void> {
     heldCount: overview?.heldCount ?? 0,
     escalated: overview?.mailboxEscalated ?? false,
   };
+  const sized = !!options.size;
+  const orphans = collectOrphanStatus(workspacePath, builders, sized);
 
   // Machine-readable mode (Spec 1057): gather workspace metadata when Tower is
   // up, then emit JSON and return before any human-facing output.
@@ -282,6 +323,7 @@ export async function status(options: StatusOptions = {}): Promise<void> {
       fleet,
       mailbox: mailboxSummary,
       heldByRoleId,
+      orphans,
     });
     return;
   }
@@ -321,6 +363,7 @@ export async function status(options: StatusOptions = {}): Promise<void> {
       logger.kv('Workspace', workspaceStatus.name);
       logger.kv('  Status', statusText);
       logger.kv('  Terminals', workspaceStatus.terminals.length);
+      renderOrphans(orphans, sized);
 
       if (workspaceStatus.terminals.length > 0) {
         // Spec 786 Phase 5: enumerate architects explicitly first, so users see
@@ -377,6 +420,7 @@ export async function status(options: StatusOptions = {}): Promise<void> {
 
     // Workspace not found in tower, show "not active"
     logger.kv('Workspace', chalk.gray('not active in tower'));
+    renderOrphans(orphans, sized);
     logger.info(`Run 'afx workspace start' to activate this workspace`);
     return;
   }
@@ -384,6 +428,7 @@ export async function status(options: StatusOptions = {}): Promise<void> {
   // Tower not running - show message and fall back to local state
   logger.kv('Tower', chalk.gray('not running'));
   logger.info(`Run 'afx tower start' to start the tower daemon`);
+  renderOrphans(orphans, sized);
 
   showArtifactConfig(workspacePath);
 
