@@ -17,4 +17,16 @@ Scope: pre-dispatch `--help`/`-h` print usage exit 0. Fits BUGFIX.
 
 ## Fix (2026-08-24)
 
-`cli()` now treats `--help`/`-h` anywhere in argv before the switch. Usage extracted to `printUsage()`. Test: `issue-102-help-before-dispatch.test.ts`.
+`cli()` now treats `--help`/`-h` anywhere in argv before the switch. Usage extracted to `printUsage()`. Test: `issue-102-help-before-dispatch.test.ts`. Confirmed the test fails without the early return (`process.exit(1)` from dispatched `done`) and passes with it. Build + full test suite green via `porch done`.
+
+## PR (2026-08-24)
+
+PR #135: https://github.com/pseudoseed/codev/pull/135
+
+CMAP:
+- gemini: SKIPPED (agy exit 1, quota). Not a review.
+- opencode (fallback): APPROVE
+- codex: COMMENT (branch 2 commits behind main; unrelated thread log only; no code change requested)
+- claude: APPROVE
+
+No REQUEST_CHANGES. Handing to architect:uiv2 at the pr gate.
