@@ -69,6 +69,26 @@ The sandbox will not let a dev server bind, so the visual check ran by navigatin
 real `/v2/` origin under Playwright and routing only the static assets to the local
 `dist/`. `/api/workspaces` and `/v2/events` stayed real.
 
+## Why both got past spec 83
+
+Neither issue was catchable by the tests that existed, and neither was a skipped test.
+Spec 83 was green on 127 client tests, the server suite and 15 Playwright specs.
+
+Two different blind spots:
+
+- **A component test that asserts a name renders cannot see a missing prefix.** `b1` is
+  present whether or not `builder/` precedes it. Every label assertion was satisfied by
+  the string that made the row unreadable.
+- **The one-workspace Playwright fixture could not produce either symptom.** One
+  workspace has no second plot to be stretched against and no row to leave a crater in.
+  The layout assertions were structurally incapable of failing on #111. The fixture was
+  not too small to be convenient — it was too small to be falsifiable, and a fixture that
+  cannot express the failure is no evidence rather than weak evidence.
+
+The crater test was checked against the old row grid before it was kept: reverted
+`.plot-grid`, watched it fail at 873px against a 734px bound, restored the fix. A
+regression test that has never failed is a claim, not a test.
+
 ## Constraints checked
 
 `git diff --stat` on the C1/C2 frozen set (apps/web, tower.html, apps/vscode,
