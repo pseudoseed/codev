@@ -38,8 +38,14 @@ description of them. Screenshotted the shipped render and the new one at each st
   running is empty for a different reason and gets no copy.
 - **Gate stake** turns rust (border plus the 3px stake), matching the mockup. Still the
   only place rust appears besides the GATE stamp.
-- **#111**: `.plot-grid` got `align-items: start`. One line, and it was compounding
-  everything else — every plot was as tall as the tallest in its row.
+- **#111**, in two passes. `align-items: start` stopped the stretching, and the architect
+  measured the result against the live stream: the plots ended at their content but the
+  page was still 2886px, because a grid row is as tall as its tallest cell and ENTRIQ has
+  27 builders. Three columns beside it were dead space. `.plot-grid` is now column flow
+  (`column-width: 300px`, `break-inside: avoid` per plot), so plots pack down each column
+  and the lot ends at its tallest plot. Same viewport, same stream: 2886px -> 1852px, lot
+  1635px against a tallest plot of 1595px. Ordering goes column-major; nothing here is
+  ranked, and no plot is sliced across a boundary.
 
 ## Testing
 
@@ -50,8 +56,11 @@ mockup's own data (checkout / checkout-v3 / pay-2201 / pay-2189) and asserts the
 per kind, the register counts, the idle floor, and that the reconnect copy appears only
 where it is true.
 
-e2e gained the same checks against real CSS in a browser, plus a direct #111 assertion:
-two workspaces of different content must have different heights.
+e2e gained the same checks against real CSS in a browser, plus two for #111: different
+content means different heights, and — the one that matters — six workspaces with one of
+them twelve builders deep must not leave a row-height crater. The one-workspace fixture
+cannot produce a crater, which is exactly why #111 got past spec 83. Confirmed the crater
+test fails against the old row grid (873px against a 734px bound) before keeping it.
 
 Verified visually, not just green: screenshotted the shipped `/v2/` render, then the new
 build against the same live Tower stream, and compared both against `01-site.png`.
