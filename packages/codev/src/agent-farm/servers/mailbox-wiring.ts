@@ -227,7 +227,47 @@ function formatOwnerNoticeBody(info: HeldOwnerNoticeInfo): string {
     `Mailbox delivery is STUCK for builder '${info.toAgent}' @ ${path.basename(info.workspacePath)}. ` +
     `${info.heldCount} ${plural} held ~${mins}m (reason: ${info.reason ?? 'held'}) — its composer never classifies as a ready prompt, ` +
     `so nothing is being delivered (cron nudges included). ` +
-    `Remedy: run 'afx inbox' to inspect; 'afx interrupt ${info.toAgent}' clears a stuck composer.`
+    heldRemedy(info.toAgent, info.detail ?? null)
+  );
+}
+
+/**
+ * The remedy that actually works, chosen by what the gate saw (#21).
+ *
+ * The old text named `afx interrupt`, which sends ESC. ESC does not clear typed
+ * text in a composer, so running it changed nothing and the alert fired again
+ * three minutes later. What works is `afx send <id> --interrupt`, which sends
+ * Ctrl+C first and clears the line — documented as a way to send a message, not
+ * as the remedy for this state, so nobody found it. Hit five times on
+ * 2026-08-21, each needing manual intervention.
+ *
+ * `user-text` gets the clearing command. `busy-indicator` is an agent mid-turn:
+ * clearing there would corrupt a live turn, and the answer is to wait. Anything
+ * else is a screen the gate could not read at all, which is a different problem
+ * and says so rather than offering a remedy for the wrong one.
+ */
+export function heldRemedy(toAgent: string, detail: string | null): string {
+  const inspect = `Inspect with 'afx inbox'.`;
+
+  if (detail === 'user-text') {
+    return (
+      `${inspect} Its composer is holding TEXT the agent left behind and will not clear on its own. ` +
+      `Clear it with: afx send ${toAgent} --interrupt "<your message>"   ` +
+      `(sends Ctrl+C first, which clears the line — 'afx interrupt' sends ESC, which does not).`
+    );
+  }
+
+  if (detail === 'busy-indicator') {
+    return (
+      `${inspect} The agent is MID-TURN, not stuck on a leftover prompt. Do not clear its composer — ` +
+      `that corrupts a live turn. Delivery resumes on its own when the turn ends; ` +
+      `'afx interrupt ${toAgent}' ends the turn if it is genuinely wedged.`
+    );
+  }
+
+  return (
+    `${inspect} The gate could not read a ready prompt${detail ? ` (${detail})` : ''}, ` +
+    `which is a screen problem rather than a leftover draft. Look at the pane before acting.`
   );
 }
 

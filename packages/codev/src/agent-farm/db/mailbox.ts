@@ -76,12 +76,12 @@ const INSERT_SQL = `
   INSERT INTO mailbox (
     id, workspace_path, to_agent, terminal_id, from_agent, from_agent_name,
     requested_to, from_workspace,
-    body, formatted_message, no_enter, status, reason, supersede_key,
+    body, formatted_message, no_enter, status, reason, hold_detail, supersede_key,
     escalated, not_before, created_at, updated_at, resolved_at
   ) VALUES (
     @id, @workspace_path, @to_agent, @terminal_id, @from_agent, @from_agent_name,
     @requested_to, @from_workspace,
-    @body, @formatted_message, @no_enter, @status, @reason, @supersede_key,
+    @body, @formatted_message, @no_enter, @status, @reason, @hold_detail, @supersede_key,
     @escalated, @not_before, @created_at, @updated_at, @resolved_at
   )
 `;
@@ -95,6 +95,7 @@ function buildRow(input: EnqueueInput, now: number): DbMailbox {
     from_agent: input.fromAgent ?? null,
     from_agent_name: input.fromAgentName ?? null,
     requested_to: input.requestedTo ?? null,
+    hold_detail: null, // set by the gate when a delivery attempt holds (#21)
     from_workspace: input.fromWorkspace ?? null,
     body: input.body,
     formatted_message: input.formattedMessage,
@@ -280,11 +281,16 @@ export function setHeldReason(
   db: Database.Database,
   id: string,
   reason: MailboxReason | null,
-  now: number = Date.now()
+  now: number = Date.now(),
+  detail: string | null = null,
 ): boolean {
+  // #21: `reason` alone is 'busy' for every not-clean verdict, and the two that
+  // matter most are opposite situations — an abandoned draft a human can clear,
+  // and a live turn that must not be touched. The gate knows which; this is
+  // where that knowledge stopped.
   const info = db
-    .prepare("UPDATE mailbox SET reason = ?, updated_at = ? WHERE id = ? AND status = 'held'")
-    .run(reason, now, id);
+    .prepare("UPDATE mailbox SET reason = ?, hold_detail = ?, updated_at = ? WHERE id = ? AND status = 'held'")
+    .run(reason, detail, now, id);
   return info.changes > 0;
 }
 
@@ -325,6 +331,13 @@ export interface StarvingAgent {
   count: number;
   /** Representative why-held reason (held rows for one agent share the gate's verdict). */
   reason: MailboxReason | null;
+  /**
+   * The gate detail behind that reason (#21) — 'user-text', 'busy-indicator', etc.
+   *
+   * Null on rows held before the migration. That is "not recorded", and the alarm
+   * says so rather than guessing which remedy applies.
+   */
+  detail: string | null;
 }
 
 /**
@@ -343,7 +356,11 @@ export function findStarvingAgents(db: Database.Database, now: number = Date.now
       `SELECT workspace_path AS workspacePath, to_agent AS toAgent,
               MIN(${ESCALATION_START_SQL}) AS stuckSince,
               COUNT(*) AS count,
-              MAX(reason) AS reason
+              MAX(reason) AS reason,
+              -- #21: the gate detail alongside the reason, so the alarm can name a
+              -- remedy that works. MAX() like reason: every row for an agent was set
+              -- by the same verdict on the same pass, so the aggregate is that value.
+              MAX(hold_detail) AS detail
          FROM mailbox
         WHERE status = 'held'
           AND (not_before IS NULL OR not_before <= ?)

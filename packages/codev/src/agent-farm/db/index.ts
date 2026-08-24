@@ -142,7 +142,7 @@ function ensureGlobalDatabase(): Database.Database {
   configurePragmas(db);
 
   // Current migration version — bump when adding new migrations
-  const GLOBAL_CURRENT_VERSION = 19;
+  const GLOBAL_CURRENT_VERSION = 20;
 
   // Detect fresh vs existing database by checking if content tables exist.
   // On existing databases, GLOBAL_SCHEMA must NOT run because it references column names
@@ -662,6 +662,28 @@ function ensureGlobalDatabase(): Database.Database {
     }
     db.prepare('INSERT INTO _migrations (version) VALUES (19)').run();
     console.log('[info] Added mailbox sender/target provenance columns (#47)');
+  }
+
+  // v20 (#21): record WHICH not-clean gate verdict held a message.
+  //
+  // `reason` is 'busy' for every one of them, and the two that matter are
+  // opposite situations: `user-text` is a draft the agent abandoned in its own
+  // composer and will never clear on its own — safe for a human to clear;
+  // `busy-indicator` is an agent mid-turn, which must not be touched. Both
+  // reached the operator as the single word "busy", alongside a remedy that does
+  // not work, and each occurrence needed manual intervention.
+  //
+  // Nullable and additive: rows held before this migration read as "not
+  // recorded" rather than being assigned a guess.
+  const v20 = db.prepare('SELECT version FROM _migrations WHERE version = 20').get();
+  if (!v20) {
+    const cols = (db.prepare(`PRAGMA table_info(mailbox)`).all() as Array<{ name: string }>)
+      .map((c) => c.name);
+    if (!cols.includes('hold_detail')) {
+      db.exec(`ALTER TABLE mailbox ADD COLUMN hold_detail TEXT`);
+    }
+    db.prepare('INSERT INTO _migrations (version) VALUES (20)').run();
+    console.log('[info] Added mailbox hold_detail column (#21)');
   }
 
   return db;

@@ -179,6 +179,14 @@ export interface HeldOwnerNoticeInfo {
   toAgent: string;
   /** Its current why-held reason (busy/no-profile/no-live-pty), if the gate set one. */
   reason: MailboxReason | null;
+  /**
+   * The gate's `detail` for that reason (#21), if recorded.
+   *
+   * `reason` is 'busy' for every not-clean verdict, and the remedy differs by
+   * detail: an abandoned draft needs clearing, a live turn needs leaving alone.
+   * Null on a row held before the migration — "not recorded", not "unknown kind".
+   */
+  detail: string | null;
   /** How long the oldest eligible held row has been stuck, in ms. */
   ageMs: number;
   /** How many eligible held rows are backed up for the agent. */
@@ -381,8 +389,14 @@ export async function deliverAgentMail(
     // Carry the gate detail so a sustained classifier-stuck streak (a drifted profile
     // or an unrenderable frame) escalates to liveness telemetry instead of holding silently.
     const reason = verdict.reason ?? 'busy';
+    // #21: persist the gate's DETAIL alongside the reason. `reason` is 'busy' for
+    // every not-clean verdict, so an abandoned draft and a live turn were the same
+    // word to anyone reading `afx inbox` — and they need opposite remedies.
+    const detail = verdict.detail ?? null;
     for (const row of held) {
-      if (row.reason !== reason) setHeldReason(db, row.id, reason, ports.now());
+      if (row.reason !== reason || row.hold_detail !== detail) {
+        setHeldReason(db, row.id, reason, ports.now(), detail);
+      }
     }
     return { delivered: [], reason, detail: verdict.detail };
   }
@@ -755,6 +769,7 @@ export class MailboxDrainer {
           workspacePath: agent.workspacePath,
           toAgent: agent.toAgent,
           reason: agent.reason,
+          detail: agent.detail ?? null,
           ageMs: now - agent.stuckSince,
           heldCount: agent.count,
         });

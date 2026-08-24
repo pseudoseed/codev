@@ -24,6 +24,14 @@ interface InboxRow {
   toAgent: string;
   fromAgent: string | null;
   reason: string | null; // 'busy' | 'no-profile' | 'no-live-pty'
+  /**
+   * The gate's detail behind `reason` (#21).
+   *
+   * `reason` is 'busy' for every not-clean verdict, and the two that matter need
+   * opposite remedies: 'user-text' is a draft the agent abandoned and will never
+   * clear on its own; 'busy-indicator' is a live turn that must not be touched.
+   */
+  holdDetail: string | null;
   escalated: boolean;
   createdAt: number; // epoch ms
   /**
@@ -71,6 +79,8 @@ interface InboxMessage {
   fromWorkspace: string | null;
   status: string; // 'held' | 'delivered' | 'superseded' | 'dismissed'
   reason: string | null; // 'busy' | 'no-profile' | 'no-live-pty'
+  /** The gate's detail behind `reason` (#21) — decides which remedy applies. */
+  holdDetail: string | null;
   escalated: boolean;
   body: string;
   createdAt: number; // epoch ms
@@ -143,7 +153,11 @@ export async function inboxList(options: InboxListOptions = {}): Promise<void> {
     // send that is simply waiting for its due time is not mistaken for a starving held message.
     const preDue = row.notBefore != null && row.notBefore > now;
     const ageCell = preDue ? `→${formatDuration(row.notBefore! - now)}` : formatAge(row.createdAt, now);
-    const reason = preDue ? 'scheduled' : `${row.reason ?? 'held'}${row.escalated ? '!' : ''}`;
+    // #21: prefer the gate DETAIL over the bare reason. Every not-clean verdict
+    // reports 'busy', which told an operator nothing and pointed at a remedy that
+    // does not work. 'user-text' and 'busy-indicator' need opposite responses.
+    const why = row.holdDetail ?? row.reason ?? 'held';
+    const reason = preDue ? 'scheduled' : `${why}${row.escalated ? '!' : ''}`;
     logger.row(
       [row.id, ageCell, reason.slice(0, 13), fromTo.slice(0, 22), wsName.slice(0, 14)],
       widths,
@@ -152,6 +166,16 @@ export async function inboxList(options: InboxListOptions = {}): Promise<void> {
 
   logger.blank();
   logger.info('Show a message body: afx inbox show <id>   ·   Dismiss: afx inbox dismiss <id>');
+
+  // Name the working remedy where it is read, not only in the escalation alarm.
+  if (rows.some(r => r.holdDetail === 'user-text')) {
+    logger.blank();
+    logger.info(
+      'A row marked user-text is a composer holding text the agent left behind. It will not clear on its own:',
+    );
+    logger.info('  afx send <id> --interrupt "<message>"   (Ctrl+C first, which clears the line)');
+    logger.info('  afx interrupt sends ESC, which ends a turn but does not clear typed text.');
+  }
 }
 
 /**
@@ -177,6 +201,12 @@ export async function inboxShow(id: string, options: InboxShowOptions = {}): Pro
   logger.header(`Message ${row.id}`);
   logger.kv('Status', `${row.status}${row.escalated ? ' (escalated)' : ''}`);
   logger.kv('Reason', row.reason ?? '—');
+  // #21: `reason` is 'busy' for every not-clean gate verdict. This is the one that
+  // decides what to do about it. Null on a row held before the migration, and that
+  // is "not recorded" rather than a fourth kind.
+  if (row.status === 'held' || row.holdDetail) {
+    logger.kv('Gate saw', row.holdDetail ?? '— (not recorded)');
+  }
   logger.kv('From → To', `${from} → ${row.toAgent}`);
   // #47. `From → To` above shows the sender's KIND and the RESOLVED recipient, and
   // those are exactly the two fields that made 13 misroutes unattributable: every

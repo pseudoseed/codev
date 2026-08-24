@@ -288,7 +288,17 @@ CREATE TABLE IF NOT EXISTS mailbox (
   -- 'architect:main' — the two forms the anti-spoofing rules treat differently.
   -- That combination made a 13-occurrence misroute report unfalsifiable.
   from_agent_name TEXT,                   -- sender IDENTITY: architect name, or the builder id
-  requested_to TEXT                       -- the target as TYPED, before resolution
+  requested_to TEXT,                      -- the target as TYPED, before resolution
+  -- #21. Declared LAST for the same reason as the two above: a fresh install must
+  -- match the column order an ALTER TABLE migration produces.
+  --
+  -- The reason column collapses every not-clean gate verdict to 'busy', and the two that
+  -- matter are opposite situations: 'user-text' is a draft the agent abandoned in
+  -- its own composer and will never clear, which a human can safely clear;
+  -- 'busy-indicator' is an agent mid-turn, which must not be touched. Told apart
+  -- only inside the gate, they reached the operator as one word and one wrong
+  -- remedy.
+  hold_detail TEXT                        -- GateVerdict.detail: WHY the gate held
 );
 
 CREATE INDEX IF NOT EXISTS idx_mailbox_workspace_status ON mailbox(workspace_path, status);

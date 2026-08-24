@@ -2176,6 +2176,9 @@ function handleInboxList(res: http.ServerResponse, url: URL): void {
     toAgent: r.to_agent,
     fromAgent: r.from_agent,
     reason: r.reason,
+    // #21: which not-clean verdict. `reason` is 'busy' for all of them, and an
+    // abandoned draft and a live turn need opposite remedies.
+    holdDetail: r.hold_detail,
     escalated: r.escalated === 1,
     createdAt: r.created_at,
     // Spec 1313 round 3: due time of a pre-due delayed (`--delay`) row; null = deliver-ASAP.
@@ -2257,6 +2260,7 @@ function handleInboxShow(
     fromWorkspace: row.from_workspace,
     status: row.status,
     reason: row.reason,
+    holdDetail: row.hold_detail,
     escalated: row.escalated === 1,
     body: row.body,
     createdAt: row.created_at,
