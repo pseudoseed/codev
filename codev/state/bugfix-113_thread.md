@@ -8,7 +8,7 @@ Project 83 is still in `review`. `pr` is approved. PR #104 is MERGED. `verify-ap
 
 `porch approve 83 verify-approval` runs checks for `state.phase` (review), not for the phase that owns the gate. Review's first check is `pr_exists`, which asks `git branch --show-current` in whichever worktree owns the status.yaml. After merge that is almost never `builder/spir-83`.
 
-The issue's "open vs all states" guess is stale. `github/pr-exists.sh` already accepts OPEN or MERGED (#568). Against `CODEV_BRANCH_NAME=builder/spir-83` it returns true. The lookup key is the wrong branch, and the post-merge gate should not be running that check at all.
+The issue title's premise is wrong. `pr_exists` already uses `--state all`, so a merged PR matches (#568 / #16 / upstream #1331). The real cause is the `--head` argument: `git branch --show-current` runs in whichever worktree `findStatusPath` returns, and after merge that is almost never the PR head. The search is for the wrong head, not the wrong state. Against `CODEV_BRANCH_NAME=builder/spir-83` the script returns true.
 
 Verify phase has no checks. Scope is small: approve the named gate's phase checks, and if verify-approval is requested while still in review with `pr` already approved, enter verify first so the existing auto-advance can reach `verified`.
 
