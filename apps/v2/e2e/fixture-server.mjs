@@ -52,6 +52,7 @@ const state = {
   pending: [],
   clients: [],
   unreachable: false,
+  lastEvents: { since: null, stream: null, mode: null },
 };
 
 function injectV2Key(html, key) {
@@ -166,11 +167,12 @@ function handleEvents(req, res, url) {
     state.clients = state.clients.filter((c) => c !== client);
   });
   const resumeOk = state.honorResume && since !== null && stream === state.streamId;
+  state.lastEvents = { since, stream, mode: resumeOk ? 'resumed' : 'snapshot' };
   if (resumeOk) {
     writeSse(res, { seq: state.seq, type: 'resumed', from: Number(since) });
     for (const f of state.pending) writeSse(res, f);
     state.pending = [];
-    } else {
+  } else {
     state.pending = [];
     writeSse(res, snapshot(false));
     for (const d of state.dark) {
@@ -183,6 +185,10 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
   if (state.unreachable && url.pathname.startsWith('/api/')) {
     req.socket.destroy();
+    return;
+  }
+  if (req.method === 'GET' && url.pathname === '/__fixture/last-events') {
+    json(res, 200, state.lastEvents);
     return;
   }
   if (req.method === 'POST' && url.pathname.startsWith('/__fixture/')) {
@@ -199,6 +205,7 @@ const server = http.createServer(async (req, res) => {
       state.dark = [];
       state.pending = [];
       state.unreachable = false;
+      state.lastEvents = { since: null, stream: null, mode: null };
       for (const c of state.clients) {
         c.closed = true;
         c.res.end();

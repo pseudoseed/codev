@@ -19,3 +19,5 @@ Iter 1: gemini skip, codex/claude/opencode REQUEST_CHANGES. All accepted (unreac
 Iter 2: gemini skip, claude APPROVE, codex REQUEST_CHANGES (`res.text()` on 200 → mismatch; fixed). Opencode consult CLI cannot read its temp prompt (external_directory). Review written against disk files: APPROVE.
 
 Phase 4 on 3ff35f22a. Phase 5: fixture server + 14 Playwright tests green. cold-load-ms=137.
+
+Phase 5 iter 2: Claude/opencode APPROVE. Codex REQUEST_CHANGES accepted except idle CDP (spec says measure/print, not assert). Resume now records since/stream/mode + sentinel; GATE/STALLED computed colours; two-page tree dump. 14 e2e still green.

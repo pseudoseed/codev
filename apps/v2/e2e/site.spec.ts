@@ -14,6 +14,36 @@ async function push(frames: unknown[]): Promise<void> {
   });
 }
 
+async function lastEvents(): Promise<{ since: string | null; stream: string | null; mode: string | null }> {
+  const res = await fetch(`${FIXTURE}/__fixture/last-events`);
+  return res.json() as Promise<{ since: string | null; stream: string | null; mode: string | null }>;
+}
+
+async function plantSentinel(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    (window as Window & { __v2Sentinel?: number }).__v2Sentinel = 1;
+  });
+}
+
+async function sentinelAlive(page: Page): Promise<number | undefined> {
+  return page.evaluate(() => (window as Window & { __v2Sentinel?: number }).__v2Sentinel);
+}
+
+async function treeDump(page: Page): Promise<string> {
+  return page.evaluate(() =>
+    [...document.querySelectorAll('[data-kind]')]
+      .map((el) =>
+        [
+          el.getAttribute('data-kind'),
+          el.getAttribute('data-id'),
+          el.getAttribute('data-dark') ?? '',
+          el.className,
+        ].join('|'),
+      )
+      .join('\n'),
+  );
+}
+
 async function openSite(page: Page): Promise<void> {
   await page.goto('/v2/');
   await expect(page.locator('[data-kind="workspace"]').first()).toBeVisible({ timeout: 10_000 });
@@ -57,13 +87,15 @@ test('gate-waiting is GATE rust and rust nowhere else', async ({ page }) => {
   const gate = page.locator('[data-id="builder:2"] .stamp-gate');
   await expect(gate).toHaveText('GATE');
   await expect(page.locator('[data-id="builder:2"]')).toHaveClass(/needs-attn/);
-  const rustHolders = await page.evaluate(() => {
-    const rust = 'rgb(181, 80, 42)';
+  const rust = 'rgb(181, 80, 42)';
+  await expect.poll(async () => gate.evaluate((el) => getComputedStyle(el).color)).toBe(rust);
+  const rustHolders = await page.evaluate((want) => {
     return [...document.querySelectorAll('*')].filter((el) => {
       const s = getComputedStyle(el);
-      return s.color === rust || s.backgroundColor === rust;
+      return s.color === want || s.backgroundColor === want;
     }).map((el) => el.className);
-  });
+  }, rust);
+  expect(rustHolders.length).toBeGreaterThan(0);
   expect(rustHolders.every((c) => String(c).includes('stamp-gate') || String(c).includes('needs-attn'))).toBe(true);
 });
 
@@ -83,7 +115,9 @@ test('stalled is STALLED ochre', async ({ page }) => {
       },
     },
   ]);
-  await expect(page.locator('[data-id="builder:1"] .stamp-stalled')).toHaveText('STALLED');
+  const stamp = page.locator('[data-id="builder:1"] .stamp-stalled');
+  await expect(stamp).toHaveText('STALLED');
+  await expect.poll(async () => stamp.evaluate((el) => getComputedStyle(el).color)).toBe('rgb(192, 138, 46)');
 });
 
 test('sparkline advances on tick and silent builder flattens', async ({ page }) => {
@@ -105,13 +139,18 @@ test('gone removes the row', async ({ page }) => {
 
 test('disconnect then honoured resume recovers without reload', async ({ page }) => {
   await openSite(page);
+  await plantSentinel(page);
   await fetch(`${FIXTURE}/__fixture/honor-resume`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ honor: true }),
   });
   await fetch(`${FIXTURE}/__fixture/disconnect`, { method: 'POST', body: '{}' });
-  await page.waitForTimeout(1500);
+  await expect.poll(async () => (await lastEvents()).mode).toBe('resumed');
+  const honoured = await lastEvents();
+  expect(honoured.since).not.toBeNull();
+  expect(honoured.stream).toBe('s1');
+  await expect(page.locator('[data-id="builder:1"]')).toBeVisible();
   await push([
     {
       type: 'node',
@@ -127,17 +166,24 @@ test('disconnect then honoured resume recovers without reload', async ({ page })
     },
   ]);
   await expect(page.locator('[data-id="builder:resume"]')).toBeVisible();
+  await expect(page.locator('[data-id="builder:1"]')).toBeVisible();
+  expect(await sentinelAlive(page)).toBe(1);
 });
 
 test('disconnect then refused snapshot recovers without reload', async ({ page }) => {
   await openSite(page);
+  await plantSentinel(page);
   await fetch(`${FIXTURE}/__fixture/honor-resume`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ honor: false, streamId: 's2' }),
   });
   await fetch(`${FIXTURE}/__fixture/disconnect`, { method: 'POST', body: '{}' });
-  await page.waitForTimeout(1500);
+  await expect.poll(async () => (await lastEvents()).since).not.toBeNull();
+  const refused = await lastEvents();
+  expect(refused.mode).toBe('snapshot');
+  expect(refused.stream).toBe('s1');
+  await expect(page.locator('[data-id="builder:1"]')).toBeVisible();
   await push([
     {
       type: 'node',
@@ -153,6 +199,8 @@ test('disconnect then refused snapshot recovers without reload', async ({ page }
     },
   ]);
   await expect(page.locator('[data-id="builder:refused"]')).toBeVisible();
+  await expect(page.locator('[data-id="builder:1"]')).toBeVisible();
+  expect(await sentinelAlive(page)).toBe(1);
 });
 
 test('dark workspace dark, sibling live', async ({ page }) => {
@@ -203,6 +251,7 @@ test('two pages on one scope converge', async ({ browser }) => {
   ]);
   await expect(a.locator('[data-id="builder:z"]')).toBeVisible();
   await expect(b.locator('[data-id="builder:z"]')).toBeVisible();
+  expect(await treeDump(a)).toBe(await treeDump(b));
   await ctx.close();
 });
 
