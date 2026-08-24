@@ -2,6 +2,14 @@
 
 ## Implement
 
-`isWorktreeMerged` still prefers ancestry. If that fails, a content check treats the branch as merged when every path unique since the merge-base lives under `codev/projects/` or `codev/state/`.
+`isWorktreeMerged` still prefers ancestry. If that fails, `git log --name-only main..HEAD` treats the branch as merged when every path those commits touched lives under `codev/projects/` or `codev/state/`.
 
-Triple-dot diff so a later commit on main does not pin the worktree. Real unmerged files still return `preserved-unmerged`.
+Log, not triple-dot tree diff: an add-then-rename into `codev/state/` still shows the original path. A later commit on main does not pin the worktree.
+
+## PR
+
+https://github.com/pseudoseed/codev/pull/129
+
+CMAP: gemini=skipped (agy exit 1), codex=APPROVE, claude=COMMENT.
+
+Addressed: rename of real work into a bookkeeping path now preserves; never-merged bookkeeping-only is documented as `removed-merged`.

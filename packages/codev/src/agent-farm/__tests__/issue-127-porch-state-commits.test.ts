@@ -138,4 +138,27 @@ describe('cleanup after porch post-merge state commit', () => {
     expect(existsSync(worktreePath)).toBe(true);
     expect(worktreeList(repo)).toContain(worktreePath);
   });
+
+  it('removes a never-merged branch whose only commits are porch bookkeeping', async () => {
+    commitPorchState('chore(porch): 120 init air');
+
+    const result = await cleanupNonEphemeralWorktree(repo, worktreePath);
+
+    expect(result).toBe('removed-merged');
+    expect(existsSync(worktreePath)).toBe(false);
+  });
+
+  it('preserves a rename of real work into a bookkeeping path', async () => {
+    writeFileSync(join(worktreePath, 'src.ts'), 'work\n');
+    git('add src.ts', worktreePath);
+    git('commit -q -m work', worktreePath);
+    mkdirSync(join(worktreePath, 'codev', 'state'), { recursive: true });
+    git('mv src.ts codev/state/src.ts', worktreePath);
+    git('commit -q -m rename', worktreePath);
+
+    const result = await cleanupNonEphemeralWorktree(repo, worktreePath);
+
+    expect(result).toBe('preserved-unmerged');
+    expect(existsSync(worktreePath)).toBe(true);
+  });
 });

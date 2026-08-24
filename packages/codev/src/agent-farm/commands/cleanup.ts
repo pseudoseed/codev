@@ -267,7 +267,7 @@ async function isOnlyPorchBookkeepingDelta(
 ): Promise<boolean> {
   try {
     const { stdout } = await run(
-      `git diff --name-only "${defaultBranch}...${sha}"`,
+      `git log --name-only --pretty=format: "${defaultBranch}..${sha}"`,
       { cwd: workspaceRoot },
     );
     if (!stdout) return true;
