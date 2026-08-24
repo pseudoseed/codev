@@ -5,7 +5,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import type { Builder, Config } from '../types.js';
 import { getConfig } from '../utils/index.js';
 import { logger, fatal } from '../utils/logger.js';
@@ -169,6 +169,68 @@ export function isLiveBuilderWorktree(
   return builders.some((b) => b.worktree === worktreePath || basename(b.worktree) === dirName);
 }
 
+export function listOrphanWorktrees(
+  workspaceRoot: string,
+  builders: ReadonlyArray<{ worktree: string }>,
+): { dirName: string; worktreePath: string }[] {
+  const buildersDir = join(workspaceRoot, '.builders');
+  if (!existsSync(buildersDir)) return [];
+
+  let entries;
+  try {
+    entries = readdirSync(buildersDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({ dirName: entry.name, worktreePath: join(buildersDir, entry.name) }))
+    .filter((entry) => !isLiveBuilderWorktree(builders, entry.worktreePath));
+}
+
+export function measureOrphanBytes(paths: string[]): number | null {
+  if (paths.length === 0) return 0;
+  try {
+    const result = spawnSync('du', ['-sk', ...paths], { encoding: 'utf-8', timeout: 30000 });
+    if (result.status !== 0 || !result.stdout) return null;
+    let totalKb = 0;
+    for (const line of result.stdout.trim().split('\n')) {
+      if (!line) continue;
+      const kb = parseInt(line.trim().split(/\s+/)[0], 10);
+      if (!Number.isFinite(kb)) return null;
+      totalKb += kb;
+    }
+    return totalKb * 1024;
+  } catch {
+    return null;
+  }
+}
+
+export function formatReclaimableBytes(bytes: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return unit === 0 ? `${value} B` : `${value.toFixed(1)} ${units[unit]}`;
+}
+
+export type NonEphemeralCleanupResult = 'removed-merged' | 'removed-force' | 'preserved-unmerged';
+
+export async function cleanupNonEphemeralWorktree(
+  workspaceRoot: string,
+  worktreePath: string,
+  force?: boolean,
+): Promise<NonEphemeralCleanupResult> {
+  const merged = await isWorktreeMerged(workspaceRoot, worktreePath);
+  if (!merged && !force) return 'preserved-unmerged';
+  await removeOrphanWorktree(workspaceRoot, worktreePath, force, { deleteBranch: merged });
+  return merged ? 'removed-merged' : 'removed-force';
+}
+
 export function findOrphanWorktree(workspaceRoot: string, projectId: string): OrphanLookup {
   const buildersDir = join(workspaceRoot, '.builders');
   if (!existsSync(buildersDir)) return { status: 'none' };
@@ -214,6 +276,7 @@ export async function removeOrphanWorktree(
   workspaceRoot: string,
   worktreePath: string,
   force?: boolean,
+  options?: { deleteBranch?: boolean },
 ): Promise<void> {
   const merged = await isWorktreeMerged(workspaceRoot, worktreePath);
   if (!merged && !force) {
@@ -226,13 +289,14 @@ export async function removeOrphanWorktree(
   }
 
   const branch = await worktreeBranch(worktreePath);
+  const deleteBranch = options?.deleteBranch !== false;
 
   if (existsSync(worktreePath)) {
     const gitForce = force || scaffoldOnly ? ' --force' : '';
     await run(`git worktree remove "${worktreePath}"${gitForce}`, { cwd: workspaceRoot });
   }
 
-  if (branch && branch !== 'main' && branch !== 'master') {
+  if (deleteBranch && branch && branch !== 'main' && branch !== 'master') {
     try {
       await run(`git branch -D "${branch}"`, { cwd: workspaceRoot });
     } catch {
@@ -547,15 +611,35 @@ async function cleanupBuilder(builder: Builder, force?: boolean, issueNumber?: n
       }
     }
   } else if (!isShellMode) {
-    // Non-bugfix mode: preserve worktree and branch (existing behavior)
-    if (existsSync(builder.worktree)) {
-      logger.info(`Worktree preserved at: ${builder.worktree}`);
-      logger.info('To remove: git worktree remove "' + builder.worktree + '"');
-    }
-
-    if (builder.branch) {
-      logger.info(`Branch preserved: ${builder.branch}`);
-      logger.info('To delete: git branch -d "' + builder.branch + '"');
+    if (!existsSync(builder.worktree)) {
+      logger.info('Worktree already gone');
+    } else {
+      try {
+        const result = await cleanupNonEphemeralWorktree(
+          config.workspaceRoot,
+          builder.worktree,
+          force,
+        );
+        if (result === 'preserved-unmerged') {
+          logger.info(`Worktree preserved (unmerged) at: ${builder.worktree}`);
+          logger.info('To remove: git worktree remove "' + builder.worktree + '"');
+          if (builder.branch) {
+            logger.info(`Branch preserved: ${builder.branch}`);
+            logger.info('To delete: git branch -d "' + builder.branch + '"');
+          }
+        } else {
+          const reason = result === 'removed-merged' ? 'merged' : '--force';
+          logger.info(`Worktree removed (${reason})`);
+          if (result === 'removed-force' && builder.branch) {
+            logger.info(`Branch preserved: ${builder.branch}`);
+          }
+        }
+      } catch (error) {
+        if (error instanceof UnmergedOrphanError || error instanceof DirtyOrphanError) {
+          fatal(error.message);
+        }
+        fatal(`Failed to remove worktree: ${error instanceof Error ? error.message : error}`);
+      }
     }
   }
 
