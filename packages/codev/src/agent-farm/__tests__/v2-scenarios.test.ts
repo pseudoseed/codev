@@ -131,7 +131,7 @@ function apply(frames: V2Frame[]): { nodes: Map<string, V2Node>; counts: unknown
 
 const samplers: V2Sampler[] = [];
 
-function attach(world: World): V2Sampler {
+function attach(world: World, isReadable: () => boolean = () => true): V2Sampler {
   const sampler = new V2Sampler({
     bus: getV2Bus(),
     deps: world.deps(),
@@ -142,6 +142,7 @@ function attach(world: World): V2Sampler {
       setInterval: () => 0,
       clearInterval: () => {},
     },
+    hooks: { isReadable: () => isReadable() },
   });
   samplers.push(sampler);
   setV2SamplerForTests(sampler);
@@ -159,7 +160,7 @@ function attach(world: World): V2Sampler {
       };
     },
     now: () => world.now,
-    isReadable: () => true,
+    isReadable: () => isReadable(),
   });
   return sampler;
 }
@@ -288,6 +289,24 @@ describe('v2 scenarios (phase 4)', () => {
     expect(server).not.toMatch(/handleV2Route|v2-routes/);
     const pty = readFileSync('src/terminal/pty-session.ts', 'utf8');
     expect(pty).not.toMatch(/handleV2Route|v2-events|v2-routes/);
+  });
+
+  it('re-evaluates readability both ways on one connection', async () => {
+    const world = new World();
+    world.addBuilder('spir-52');
+    const readable = { value: true };
+    const sampler = attach(world, () => readable.value);
+    const client = await connect();
+    expect(client.frames().some((f) => f.type === 'dark')).toBe(false);
+
+    readable.value = false;
+    sampler.compare();
+    const darkened = client.frames().find((f) => f.type === 'dark');
+    expect(darkened).toMatchObject({ type: 'dark', id: workspaceId(WS), reason: 'unreadable' });
+
+    readable.value = true;
+    sampler.compare();
+    expect(client.frames().some((f) => f.type === 'node' && f.node.id === workspaceId(WS))).toBe(true);
   });
 
   it('a dark second connect does not emit gone to the live client', async () => {

@@ -15,7 +15,8 @@ export type V2DeltaInput =
   | { type: 'node'; node: V2Node }
   | { type: 'gone'; id: string }
   | { type: 'counts'; counts: V2Counts }
-  | { type: 'tick'; at: string; buckets: { [builderId: string]: number } };
+  | { type: 'tick'; at: string; buckets: { [builderId: string]: number } }
+  | { type: 'dark'; id: string; reason: string };
 
 export type V2Subscriber = (frame: V2Frame) => void;
 

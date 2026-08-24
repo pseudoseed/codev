@@ -87,6 +87,18 @@ describe('ScopeBus', () => {
     expect(bus.resume(key, 1, 'other-stream')).toEqual({ kind: 'snapshot', reason: 'mismatch' });
   });
 
+  it('dark is a buffered delta', () => {
+    const bus = new ScopeBus();
+    const key = scopeKey(['/a']);
+    const snap = bus.snapshotFrame(key, { scope: ['/a'], nodes: [], counts, resumed: false });
+    bus.emit(key, { type: 'dark', id: 'workspace:/a', reason: 'unreadable' });
+    const result = bus.resume(key, snap.seq, snap.streamId);
+    expect(result.kind).toBe('resumed');
+    if (result.kind !== 'resumed') return;
+    expect(result.frames.map((f) => f.type)).toEqual(['resumed', 'dark']);
+    expect(result.frames[1]).toMatchObject({ type: 'dark', id: 'workspace:/a', reason: 'unreadable' });
+  });
+
   it('fans emit to every subscriber', () => {
     const bus = new ScopeBus();
     const key = scopeKey(['/a']);

@@ -108,6 +108,7 @@ function applyValidated(state: ReducerState, frame: ValidatedFrame, now: string)
         copy.buckets = zeros();
       }
       next.nodes.set(copy.id, copy);
+      if (copy.kind === 'workspace') next.darkPaths.delete(copy.id);
       break;
     }
     case 'gone':

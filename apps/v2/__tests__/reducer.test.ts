@@ -217,6 +217,19 @@ describe('dark store (scenarios 21, 22, 41)', () => {
     expect(s.nodes.has('workspace:/gone')).toBe(false);
   });
 
+  it('workspace node clears that dark path', () => {
+    const s0 = run([
+      snap(),
+      JSON.stringify({ seq: 0, type: 'dark', id: 'workspace:/a', reason: 'unreadable' }),
+    ]);
+    expect(s0.darkPaths.has('workspace:/a')).toBe(true);
+    const s1 = applyFrame(s0, JSON.stringify({
+      seq: 1, type: 'node', node: ws('workspace:/a', 'a'),
+    })).state;
+    expect(s1.darkPaths.has('workspace:/a')).toBe(false);
+    expect(s1.nodes.has('workspace:/a')).toBe(true);
+  });
+
   it('dark records the injected arrival time', () => {
     const s0 = run([snap()]);
     const s = applyFrame(
