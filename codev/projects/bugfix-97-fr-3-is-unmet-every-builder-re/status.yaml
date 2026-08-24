@@ -1,0 +1,14 @@
+id: bugfix-97
+title: fr-3-is-unmet-every-builder-re
+protocol: bugfix
+phase: investigate
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: pending
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-24T07:38:14.504Z'
+updated_at: '2026-08-24T07:38:14.505Z'
