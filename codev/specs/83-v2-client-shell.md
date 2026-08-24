@@ -3,7 +3,7 @@
 - **Issue:** #83
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 4
+- **Status:** Draft, rev. 5
 - **Depends on:** spec 52 (v2 server events), merged
 
 ## Problem Statement
@@ -41,6 +41,7 @@ Rev. 1 said the contract "has never been consumed by anything." At rev. 4 it has
 | 3 | `encodeURIComponent(paths.join(','))` → **HTTP 200**, `nodes: []`, and a `dark` frame | D12. `parseScope` splits the raw value before decoding. The failure is silent and renders as a plausible empty machine. |
 | 4 | All 13 builders returned `parentId: "workspace:<path>"`. **Zero architect parents.** | D13. FR-3 is not satisfiable from this stream. |
 | 5 | A dark workspace appeared in a `dark` frame **and not in `nodes`** | D5, D1. `darkPaths` must be a separate store; there is no node to mark. |
+| 6 | A live tick arrived as `{"seq":1,"type":"tick","at":"…","buckets":{}}` | D1. `buckets` is `number[]` on a node and `Record<id,number>` on a tick — one name, two shapes. The empty object is the common case. |
 
 Findings 1, 2 and 4 are properties of the shipped contract. C2 stands — they are reported, not patched from here.
 
@@ -101,7 +102,7 @@ The stream is the source of truth. The client holds `Map<nodeId, Node>` plus `Co
 
 | Frame | Client action |
 |---|---|
-| `snapshot` | Replace the map wholesale. Store `streamId` and `seq`. Store `buckets`. |
+| `snapshot` | Replace `nodes` and `darkPaths` wholesale. Store `streamId`, `seq`, `buckets`, **and `counts`**. |
 | `resumed` | Nothing to the map. Confirms the resume was honoured; clears any "reconnecting" state. |
 | `node` | Upsert by `id`. **Do not touch `buckets`** — they are absent on upserts by contract. |
 | `gone` | Delete by `id`. |
@@ -123,6 +124,10 @@ Four degenerate cases, each with a defined answer, because the natural handling 
 | Non-2xx on the stream request | The unreachable state (D5) plus backoff. A 400 here means the client built a bad `scope` — see D12 — and must say so rather than render empty. |
 
 **`tick` is the only writer of `buckets` after the snapshot.** That is contract, not preference: `node` frames carry no buckets precisely so two clients cannot diverge.
+
+**`buckets` is two different shapes under one name.** On a node it is `number[]` — a 20-length trace (`v2-events.ts:13`). On a `tick` it is `Record<builderId, number>` — one value per builder (`v2-events.ts:54`). A reducer that treats them alike breaks on the first tick. Confirmed on the wire: a live tick arrived as `{"seq":1,"type":"tick","at":"…","buckets":{}}`.
+
+That empty object is the **common** case, not an edge one — it is what every tick carries while nothing is producing output.
 
 **Absence in `tick` means zero.** Rendering absent builders as "unchanged" would make a silent builder's sparkline freeze at its last value and read as if it were still working, which inverts FR-42's entire purpose.
 
@@ -192,13 +197,13 @@ Three properties are load-bearing and each gets a test, because a copied securit
 2. `Access-Control-Allow-Origin` and `Vary` are **removed** from the HTML response. The body carries the key; the shell is only ever loaded same-origin. Leaving the header on makes the key readable by a cross-origin `fetch` (GHSA-xvjp-7748-v88v).
 3. The injection lands before `</head>`, ahead of the deferred module, so `window.__CODEV_TOWER_KEY__` is set before the app's first request.
 
-Both implementations carry a comment naming the other.
+**Only `v2-static.ts` carries the cross-reference**, naming `injectWebKey` and the three properties it mirrors. `tower-routes.ts` is byte-frozen by C1 and cannot be given a comment pointing back — rev. 4 asked for a mutual reference that the constraints forbid.
 
 ### D7 — Scope is required, fetched exactly once, and **not** through `listWorkspaces()`
 
 `GET /v2/events` without `scope` is a 400 (`v2-routes.ts:260-264`). Rev. 1 never said where the client gets scope paths.
 
-One bootstrap `GET /api/workspaces` at startup, with the key header, **as a raw `fetch` in `apps/v2` that branches on HTTP status**. Its workspace paths become the `scope`. It is not polled and is not repeated on reconnect — reconnect reuses the scope it already has, because re-deriving scope on every reconnect is polling wearing a different hat (C4).
+One **successful** `GET /api/workspaces` at startup, with the key header, **as a raw `fetch` in `apps/v2` that branches on HTTP status**. A failed bootstrap retries on D2's backoff; a succeeded one is never repeated, reconnects included. "Exactly once" means once successfully, not one attempt — rev. 4's criterion said the latter and contradicted this paragraph. Its workspace paths become the `scope`. It is not polled and is not repeated on reconnect — reconnect reuses the scope it already has, because re-deriving scope on every reconnect is polling wearing a different hat (C4).
 
 **Rev. 2 said to use the SDK's `listWorkspaces()`. That was wrong and it broke D5.** The method returns `[]` when `result.ok` is false (`tower-client.ts:400-403`), so 401, 403, 500 and a dead socket all arrive as an empty list. D5 requires unreachable and empty to be distinguishable; through that method they are the same value. This is the general rule, not a local quirk: **"I could not tell" must never be spelled the same way as "no."** C3 forbids changing the SDK, so the client does its own fetch — the same reason it writes its own stream reader.
 
@@ -229,7 +234,9 @@ The Host guard, origin checks and the rest of `isRequestAllowed` are untouched �
 
 `V2NodeKind` is `workspace | architect | builder`. **No machine node is ever emitted.** FR-1 names four levels and the stream carries three.
 
-This unit renders **one** machine — the local one — as the page's own frame: its hostname in the header, and every workspace plot inside it. It is not a node, it is not selectable, and nothing in the reducer represents it. Multi-machine is FR-16 and a later unit; when it lands, the machine level becomes real and this presentation is what it grows out of.
+This unit renders **one** machine — the local one — as the page's own frame: **`window.location.hostname`** in the header, and every workspace plot inside it.
+
+The name has to come from somewhere and neither the stream nor `/api/workspaces` carries it. `window.location.hostname` is the right source precisely because it is what the person typed to get here: on the LAN it is the machine they reached, and there is no second machine to confuse it with until FR-16 lands. No new endpoint, no fixed string that would go stale the first time the page is opened from another device. It is not a node, it is not selectable, and nothing in the reducer represents it. Multi-machine is FR-16 and a later unit; when it lands, the machine level becomes real and this presentation is what it grows out of.
 
 Criterion 1 was written as "renders every machine … the stream reports." The stream reports none. Corrected below.
 
@@ -264,7 +271,7 @@ Measured against the live stream: all 13 builders in a real workspace returned `
 Two things follow, and both are required:
 
 1. **The client renders what the wire says**: builders sit under the workspace, beside the architect header, not under it. **It does not invent a parent** by name-matching a builder to an architect. A guessed hierarchy that is right most of the time is worse than a flat one that is honest.
-2. **This is reported as a finding, per C2 and goal 5** — a separate issue against `discoverBuilders`, not a patch from this unit. FR-3 stays a MUST in the FRD; it is simply unmet until the server can carry it.
+2. **This is reported as a finding, per C2 and goal 5.** Filed as **#97** against `discoverBuilders`, not patched from this unit. FR-3 stays a MUST in the FRD; it is simply unmet until the server can carry it.
 
 ### D14 — `/v2/` must survive `npm pack`, not just `pnpm dev`
 
@@ -297,7 +304,7 @@ Required: a `copy-v2` script into its own published directory, that directory ad
 
 ### Non-functional
 
-11. **No polling.** `grep -r setInterval apps/v2/src` returns **zero** matches. `grep -r setTimeout` returns exactly one, at the named reconnect-backoff call site. `/api/workspaces` is requested exactly once per page load — provable in the devtools network panel.
+11. **No polling.** `grep -r setInterval apps/v2/src` returns **zero** matches. `grep -r setTimeout` returns exactly one, at the named reconnect-backoff call site. **`/api/workspaces` succeeds at most once per page load**: after a 200 it is never requested again, including across every reconnect; after a failure it retries on D2's backoff until it succeeds. Provable in the devtools network panel.
 12. Cold load under 2s to interactive on LAN (Part 5).
 13. Idle network under 1 KB/s with nothing happening (Part 5), measured in devtools.
 14. `GET /v2/` serves the app with `window.__CODEV_TOWER_KEY__` set, and the response carries **no** `Access-Control-Allow-Origin`.
@@ -310,7 +317,7 @@ Required: a `copy-v2` script into its own published directory, that directory ad
 ### Non-regression
 
 20. `apps/web`, `tower.html`, `apps/vscode`, `apps/streamdeck`, `tower-server.ts`, `pty-session.ts` and **`tower-routes.ts`** are byte-unchanged. `git diff --stat` proves it.
-21. The only changes outside `apps/v2/` are: the dispatch prologue in `v2-routes.ts`, the two `GET /v2/` clauses in `isPublicRoute`, and the packaging wiring of D14. The frozen files in C2 are byte-unchanged.
+21. The only changes outside `apps/v2/` are: **the new `v2-static.ts`**, the dispatch prologue in `v2-routes.ts`, the two `GET /v2/` clauses in `isPublicRoute`, and the packaging wiring of D14. The frozen files in C2 are byte-unchanged.
 22. Existing test suites pass untouched, including spec 52's 57 v2 tests and the existing `isPublicRoute` cases.
 
 ## Solution Approaches
@@ -344,7 +351,7 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 6. **Unknown status.** Feed a status outside the four; assert it renders visibly wrong and does not fall back to `running`.
 7. **Dark vs empty vs unreachable.** Three cases, three renderings: a `dark` frame for one `workspace:<path>` leaves the others live; `nodes: []` renders the empty site; a failing `fetch` renders a connection state and never an empty tree.
 8. **Two-client convergence.** Drive 50 frames into two reducer instances; assert identical final state.
-9. **No polling.** Static check: `setInterval` in `apps/v2/src` appears only in reconnect backoff.
+9. **No polling.** Static check: **zero** `setInterval` in `apps/v2/src`, and exactly one `setTimeout`, at the named reconnect-backoff call site.
 10. **Live browser.** Playwright at 1440: load, spawn a builder, assert its row appears without reload.
 11. **Non-regression.** `git diff --stat` on the frozen C1 files, including `tower-routes.ts`, is empty.
 12. **Key injection, three properties.** Malformed key yields no injection; the HTML response has no `Access-Control-Allow-Origin` or `Vary`; the script precedes `</head>`.
@@ -358,6 +365,9 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 20. **Degenerate frames.** Invalid JSON, an unknown `type`, a clean EOF, and a non-2xx — each produces D1's stated answer, and none advances the cursor except where stated.
 21. **Dark has no node.** A snapshot with `nodes: []` plus a `dark` frame renders one dark plot built from the id. A later snapshot without that dark frame clears it.
 22. **A dark workspace recovers.** Assert the stale dark plot disappears rather than persisting.
+23. **`buckets` two shapes.** A node with `buckets: number[]` and a tick with `buckets: {}` in the same session; assert neither path throws and the trace advances by one zero.
+24. **Counts from the snapshot alone.** Feed a snapshot and no `counts` delta; assert the footer shows the snapshot's totals.
+25. **Bootstrap retries, then stops.** A 500 then a 200: assert two requests total, and that a later reconnect makes none.
 
 ## Risks and Mitigation
 
@@ -368,6 +378,8 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 | A builder given an inferred architect parent to satisfy FR-3 | Medium — the names often match | High — a guessed hierarchy that is usually right is worse than a flat honest one | D13 |
 | `counts` rendered as the drawn tree's rollup | High — the fields invite it | Medium — authoritative-looking numbers off by 45 | D11; criterion 17 |
 | Cursor advanced only on snapshots | Medium | Medium — a reconnect replays every delta since the snapshot | D1; scenario 19 |
+| `buckets` treated as one shape | High — the field name is identical | High — breaks on the first tick, which is also the first thing that arrives after the snapshot | D1 with both line numbers |
+| `counts` never initialised because no `counts` delta follows the snapshot | Medium | Medium — the footer stays empty and the contract looks unexercised | D1's snapshot row stores it |
 | `/v2/` ships in-repo only and 404s from the installed CLI | High — nothing in the build wires it | High — adopters have only the installed CLI | D14; criterion 19 requires `npm pack` |
 | Absent-in-`tick` rendered as unchanged | High — it is the natural reading | High — a stalled builder looks busy, inverting FR-42 | D1 states it; scenario 2 asserts it |
 | A charting library added for 20 bars | Medium — `recharts` is already in the monorepo | Medium — bundle and a dependency for a flexbox job | Assumption 4; `.spark` already exists in `tokens.css` |
