@@ -3,7 +3,7 @@
 - **Issue:** #83
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 1
+- **Status:** Draft, rev. 2
 - **Depends on:** spec 52 (v2 server events), merged
 
 ## Problem Statement
@@ -20,7 +20,9 @@ Meanwhile `apps/v2` does not exist. FRD Part 0 decided it must: a new fork-owned
 |---|---|---|
 | Event stream | `GET /v2/events` (`v2-routes.ts`) | shipped, unconsumed |
 | Wire types | `packages/types/src/v2-events.ts` | shipped |
-| Mount | one `/v2/` prefix branch in `tower-routes.ts` | shipped; **reuse it, do not add a second** |
+| Mount | one `/v2/` prefix branch, `tower-routes.ts:282` | shipped; **reuse it, do not add a second** |
+| Dispatch | `handleV2Route`, `v2-routes.ts:250` | 404s every path but `GET /v2/events`; needs a prologue (D6) |
+| Key injection | `injectWebKey`, `tower-routes.ts:2441` | module-private; `v2-static.ts` reimplements it (D6) |
 | Client runtime | `packages/sdk` (`@cluesmith/codev-sdk`) | untouched, environment-agnostic, zero runtime deps |
 | Auth precedent | `apps/web/src/hooks/useSSE.ts:8-12` | `fetch` + `ReadableStream`, because `EventSource` cannot set headers |
 | Design, site view | `codev/research/v2-mockups/01-site.html` | real markup, pattern classes |
@@ -46,11 +48,19 @@ Tiling (FR-7), terminals (FR-27), gates UI (FR-43 to FR-48), pairing (FR-16), th
 
 ## Constraints
 
-**C1 — Additive only.** New files under `apps/v2/` and a workspace entry. Zero edits to `apps/web`, `packages/codev/templates/tower.html`, `apps/vscode`, `apps/streamdeck`, `tower-server.ts`, `pty-session.ts`. The `/v2/` mount already exists; adding a second insertion point defeats the seam.
+**C1 — Additive only, and these files are byte-unchanged.** `apps/web`, `packages/codev/templates/tower.html`, `apps/vscode`, `apps/streamdeck`, `tower-server.ts`, `pty-session.ts`, **and `tower-routes.ts`**. The `/v2/` prefix branch at `tower-routes.ts:282` already hands everything under `/v2/` to `handleV2Route`; adding a second insertion point defeats the seam.
 
-**C2 — Do not modify the server or the contract.** `v2-sampler.ts`, `v2-events.ts`, `v2-routes.ts` and `packages/types/src/v2-events.ts` are fixed. If the contract cannot be rendered, that is a finding to report.
+**C2 — The wire contract is frozen; the dispatch is not.**
 
-**C3 — `packages/sdk` unmodified.** It is the client runtime and it is untouched by the fork. Import it; do not extend it here.
+Frozen, no edits: `v2-events.ts`, `v2-sampler.ts`, `v2-projection.ts`, `v2-status.ts`, `v2-ids.ts`, `packages/types/src/v2-events.ts`. If the contract cannot be rendered, that is a finding to report, not an edit to make.
+
+Permitted, and required: a new `v2-static.ts`, plus **one bounded change to the dispatch prologue of `handleV2Route` in `v2-routes.ts`**. Everything below that prologue — scope parsing, resume, frame emission — is frozen.
+
+This is a correction to rev. 1, which froze both files that own `/v2/`. `handleV2Route` 404s every path that is not `GET /v2/events` (`v2-routes.ts:250-254`), and `tower-routes.ts` is the only other place that could route. Under rev. 1's constraints there was no file left that could serve the page.
+
+**C3 — `packages/sdk` unmodified, and its SSE helpers are the wrong tool.** Import from it; do not extend it here.
+
+`subscribeEvents` (`tower-client.ts:1085`) and `parseSseText` (`sse.ts:18`) target `GET /api/events` and a `{type, body}` envelope. **V2 frames are the bare `data:` payload with no envelope.** Reusing those helpers would silently mis-parse every frame. Write the v2 stream reader in `apps/v2`. `listWorkspaces()` (`tower-client.ts:400`) *is* the right SDK call, and D7 is the only place the client uses it.
 
 **C4 — No polling.** No `setInterval`, no `setTimeout`-driven refetch, no re-fetch on focus. The only timer permitted is reconnect backoff.
 
@@ -77,7 +87,7 @@ The stream is the source of truth. The client holds `Map<nodeId, Node>` plus `Co
 | `gone` | Delete by `id`. |
 | `counts` | Replace `Counts`. |
 | `tick` | Advance every in-scope builder's trace: append the frame's value for that id, or **zero if the id is absent**, then drop the oldest. |
-| `dark` | Mark the named scope path dark. Render the machine as dark; keep everything else. |
+| `dark` | Mark the named **`workspace:<path>`** dark, with its `reason`. Keep every other node streaming. See D5. |
 
 **`tick` is the only writer of `buckets` after the snapshot.** That is contract, not preference: `node` frames carry no buckets precisely so two clients cannot diverge.
 
@@ -113,9 +123,56 @@ There is no fifth colour and no fifth status. If a node arrives with a status no
 
 FR-1 is explicit and FR-21's old wording contradicted it (fixed at FRD rev. 9). Hierarchy is nested space: machine lot → workspace plot → architect header → builder row. **No disclosure triangles, no indent guides, no tree widget.** `01-site.html` is the reference and it already does this.
 
-### D5 — Dark is a subtree state, never an empty tree
+### D5 — Three states that must not look alike: empty, dark, unreachable
 
-FR-15. A `dark` frame names one scope path. That machine renders dark and labelled; every other machine keeps streaming. An empty hierarchy and an unreachable machine must not look alike.
+FR-15. Rev. 1 called a `dark` frame a machine. It is not: `darkFrame` is emitted with `workspaceId(d.path)`, so `dark.id` is **`workspace:<path>`** (`v2-routes.ts:394-395`), one workspace inside a live scope, with a `reason` of `unknown` or `unreadable`. Spec 52 criterion 10 is explicit: that path goes dark, the rest of the scope keeps streaming.
+
+Three distinct renderings, and conflating any two of them is a defect:
+
+| State | How it arrives | Rendering |
+|---|---|---|
+| **Empty** | `snapshot` with `nodes: []`, or zero workspaces from D7 | The site view with no plots, and it says so |
+| **Dark workspace** | A `dark` frame naming `workspace:<path>` | That plot renders dark and labelled with its `reason`; every other plot keeps streaming |
+| **Unreachable Tower** | The `fetch` fails, or 401/403 — **no frame arrives at all** | A connection state on the whole page, not an empty tree. Reconnect per D2 |
+
+The unreachable case is the one with no wire signal, so it is the one that will default to looking empty. It must not. A page that cannot reach Tower and a machine with nothing running are opposite facts.
+
+### D6 — Serving the page, and how the key gets into it
+
+`apps/v2` builds to static assets. A new `v2-static.ts` serves them, reached through the dispatch prologue C2 permits:
+
+| Path | Handler |
+|---|---|
+| `GET /v2/events` | the frozen stream path, unchanged |
+| `GET /v2/` | the built `index.html`, key-injected |
+| `GET /v2/assets/*` | built assets, by extension allowlist, no traversal |
+| anything else under `/v2/` | 404, as today |
+
+**The key injection is duplicated on purpose, and the duplication is tested.** `injectWebKey` and `sendKeyInjectedHtml` (`tower-routes.ts:2441`, `:2466`) are module-private, and `tower-routes.ts` imports `v2-routes.ts` at line 51 — so exporting them would either edit a file C1 freezes or create an import cycle. `v2-static.ts` therefore imports `getExpectedKey` from `server-utils.ts` (already exported, zero edits) and reimplements the injection.
+
+Three properties are load-bearing and each gets a test, because a copied security rule drifts:
+
+1. The key is embedded via `JSON.stringify` and **only** when it matches `/^[0-9a-f]{64}$/`. A malformed key yields no injection and the client fails closed with 401. This is stored-XSS prevention, not defensiveness.
+2. `Access-Control-Allow-Origin` and `Vary` are **removed** from the HTML response. The body carries the key; the shell is only ever loaded same-origin. Leaving the header on makes the key readable by a cross-origin `fetch` (GHSA-xvjp-7748-v88v).
+3. The injection lands before `</head>`, ahead of the deferred module, so `window.__CODEV_TOWER_KEY__` is set before the app's first request.
+
+Both implementations carry a comment naming the other.
+
+### D7 — Scope is required, and it is fetched exactly once
+
+`GET /v2/events` without `scope` is a 400 (`v2-routes.ts:260-264`). Rev. 1 never said where the client gets scope paths.
+
+One bootstrap `GET /api/workspaces` via the SDK's `listWorkspaces()`, at startup. Its workspace paths become the `scope`. **That fetch is not polled and is not repeated on reconnect** — reconnect reuses the scope it already has, because re-deriving scope on every reconnect is polling wearing a different hat (C4).
+
+Zero workspaces: render the empty site view from D5 and **do not open the stream**. Opening it with an empty scope would take a 400 and render as a connection failure, which is the wrong story for a machine that simply has nothing running.
+
+### D8 — What of the design ships here
+
+`01-site.html` is the reference and it contains more than this unit builds. The cut is named so it is not argued later.
+
+**In:** the machine lot, the workspace plot, the architect header, the builder row, the four status stamps, the activity sparkline, the `heldMail` mark, `.grid-bg`, `.dim-sub`, `.needs-attn`.
+
+**Out, and left out of the markup entirely rather than stubbed:** the gate rail, Find node, Add machine, the terminal bank, the command palette. A disabled stub of a later unit is a promise the tree cannot keep.
 
 ## Success Criteria
 
@@ -128,20 +185,22 @@ FR-15. A `dark` frame names one scope path. That machine renders dark and labell
 5. Every builder row shows a sparkline that advances on `tick`, and flattens to zero for a silent builder rather than freezing.
 6. `afx cleanup` on a builder removes its row.
 7. Killing the connection and restoring it recovers state via resume or a flagged snapshot, **without a page reload**.
-8. A `dark` frame renders that machine as dark and leaves the others live.
-9. Two browser tabs on the same scope show identical trees.
+8. A `dark` frame renders **that workspace plot** dark with its reason, and every other plot keeps streaming.
+9. Tower unreachable renders a connection state, **not** an empty tree. Zero workspaces renders an empty tree, and the two are visibly different.
+10. Two browser tabs on the same scope show identical trees.
 
 ### Non-functional
 
-10. **No polling.** `grep` for `setInterval` in `apps/v2/src` returns only reconnect backoff, and that is named as such.
-11. Cold load under 2s to interactive on LAN (Part 5).
-12. Idle network under 1 KB/s with nothing happening (Part 5), measured in devtools.
+11. **No polling.** `grep` for `setInterval` in `apps/v2/src` returns only reconnect backoff, and that is named as such. `/api/workspaces` is requested exactly once per page load — provable in the devtools network panel.
+12. Cold load under 2s to interactive on LAN (Part 5).
+13. Idle network under 1 KB/s with nothing happening (Part 5), measured in devtools.
+14. `GET /v2/` serves the app with `window.__CODEV_TOWER_KEY__` set, and the response carries **no** `Access-Control-Allow-Origin`.
 
 ### Non-regression
 
-13. `apps/web`, `tower.html`, `apps/vscode`, `apps/streamdeck` are byte-unchanged. `git diff --stat` proves it.
-14. `tower-routes.ts` is byte-unchanged: the `/v2/` mount already exists and is reused.
-15. Existing test suites pass untouched.
+15. `apps/web`, `tower.html`, `apps/vscode`, `apps/streamdeck`, `tower-server.ts`, `pty-session.ts` and **`tower-routes.ts`** are byte-unchanged. `git diff --stat` proves it.
+16. The only change to `v2-routes.ts` is the dispatch prologue. The frozen files in C2 are byte-unchanged.
+17. Existing test suites pass untouched, including spec 52's 57 v2 tests.
 
 ## Solution Approaches
 
@@ -153,10 +212,12 @@ FR-15. A `dark` frame names one scope path. That machine renders dark and labell
 
 **D. Server-rendered.** Rejected. The stream is a live push contract; server rendering re-introduces a request cycle for state that arrives on its own.
 
-## Open Questions
+## Resolved Questions
 
-1. Does `apps/v2` get its own dev server port, or proxy through Tower? Recommend proxying so `/v2/events` needs no CORS handling in dev, which would otherwise be dev-only code with no production counterpart.
-2. Light or dark by default before theme switching exists? Recommend light, because `tokens.css` is the reviewed palette and `tokens-dark.css` has been read by nobody on real markup yet.
+Both were open at rev. 1 and are now decided. Neither is a builder decision.
+
+1. **Dev server proxies through Tower.** Vite's dev server proxies `/v2/events` and `/api/*` to port 4100. A separate origin would need CORS handling that exists in dev and has no production counterpart, which is dev-only code on the auth path.
+2. **Light is the default.** `tokens.css` is the reviewed palette. `tokens-dark.css` has been read by nobody against real markup, and this unit is not where that gets discovered. Theme switching is a later unit; ship one palette.
 
 ## Test Scenarios
 
@@ -166,11 +227,15 @@ FR-15. A `dark` frame names one scope path. That machine renders dark and labell
 4. **Resume honoured.** `resumed` + deltas; assert no map replacement.
 5. **Resume refused.** `snapshot` with `resumed: false`; assert wholesale replacement.
 6. **Unknown status.** Feed a status outside the four; assert it renders visibly wrong and does not fall back to `running`.
-7. **Dark vs empty.** `dark` for one machine; assert that machine is dark and the others still render.
+7. **Dark vs empty vs unreachable.** Three cases, three renderings: a `dark` frame for one `workspace:<path>` leaves the others live; `nodes: []` renders the empty site; a failing `fetch` renders a connection state and never an empty tree.
 8. **Two-client convergence.** Drive 50 frames into two reducer instances; assert identical final state.
 9. **No polling.** Static check: `setInterval` in `apps/v2/src` appears only in reconnect backoff.
 10. **Live browser.** Playwright at 1440: load, spawn a builder, assert its row appears without reload.
-11. **Non-regression.** `git diff --stat` on the four other clients and `tower-routes.ts` is empty.
+11. **Non-regression.** `git diff --stat` on the frozen C1 files, including `tower-routes.ts`, is empty.
+12. **Key injection, three properties.** Malformed key yields no injection; the HTML response has no `Access-Control-Allow-Origin` or `Vary`; the script precedes `</head>`.
+13. **Scope bootstrap.** `/api/workspaces` is requested once; a reconnect reuses the cached scope and does not re-request it.
+14. **Zero workspaces.** `listWorkspaces()` returns `[]`; assert the stream is never opened and the empty site renders.
+15. **Static serving.** `GET /v2/assets/../../etc/passwd` is refused; a non-allowlisted extension is refused; `GET /v2/nonsense` is 404.
 
 ## Risks and Mitigation
 
@@ -182,7 +247,12 @@ FR-15. A `dark` frame names one scope path. That machine renders dark and labell
 | Rust used for something other than gates | High without a rule | High — the colour discipline is the design | D3 states it; review the diff for `--rust` uses |
 | A second `/v2/` mount added | Medium | High — defeats the one-insertion-point seam | Criterion 14 makes it falsifiable |
 | Reconnect implemented as page reload | Medium — it is the easy path | High — discards the reason for the stream | D2 states it; scenario 7 asserts no reload |
-| Polling creeps in for something the stream lacks | Medium | High — reproduces the problem v2 exists to solve | C4 and criterion 10; if the stream lacks it, that is a finding |
+| Polling creeps in for something the stream lacks | Medium | High — reproduces the problem v2 exists to solve | C4 and criterion 11; if the stream lacks it, that is a finding |
+| Scope re-derived on every reconnect | Medium — it looks like correctness | Medium — polling by another name | D7; scenario 13 |
+| The copied key injection drifts from `injectWebKey` | Medium — two copies of a security rule | High — stored XSS, or a key readable cross-origin | D6's three tested properties; cross-reference comments both ways |
+| Unreachable Tower renders as an empty tree | High — it is the default behaviour of a failed fetch | High — inverts FR-15 | D5's three-state table; scenario 7 |
+| `subscribeEvents` reused for the v2 stream | Medium — it is right there in the SDK | High — silently mis-parses every frame, wrong endpoint and wrong envelope | C3 names it |
+| Later-unit chrome stubbed into the site view | Medium | Medium — a disabled control reads as broken | D8 |
 
 ## References
 
