@@ -2,17 +2,14 @@
  * Porch terminal notifications — sends `afx send <target>` to deliver
  * messages into a target terminal as PTY input.
  *
- * Currently used only to wake the builder after a gate is approved. The
- * builder's interactive Claude session sits idle at the gate until it
- * receives an input event; without this wake-up it would not call
- * `porch next` and advance.
+ * Two callers:
+ *   - gate approval: wake the builder so an idle session runs `porch next`
+ *   - protocol complete: tell the spawning architect cleanup is due (#109)
  *
- * Architect-bound gate notifications were removed deliberately: PIR/SPIR
- * gates are explicit human-decision points (review the plan / review the
- * worktree), surfaced via the VSCode sidebar tree and toast. The
- * architect cannot act on a gate autonomously (approval requires a human
- * `--a-human-explicitly-approved-this` flag), so pushing gate state into
- * its conversation history only adds noise.
+ * Architect-bound *gate* notifications stay gone: PIR/SPIR gates are
+ * human-decision points, and the architect cannot approve them. Protocol
+ * complete is different — it is the cleanup trigger, and without it
+ * finished builders sit until a human happens to look.
  */
 
 import { execFile } from 'node:child_process';
@@ -36,6 +33,19 @@ export interface NotifyTerminalOptions {
 /** Builder-bound wake-up after a gate is approved. */
 export function gateApprovedMessage(gateName: string): string {
   return `Gate ${gateName} approved — please run \`porch next\` to advance.`;
+}
+
+/** Architect-bound cleanup trigger when a protocol reaches verified. */
+export function protocolCompleteMessage(projectId: string): string {
+  return `Project ${projectId} protocol complete. Ready for cleanup.`;
+}
+
+export function notifyProtocolComplete(workspaceRoot: string, projectId: string): void {
+  notifyTerminal({
+    target: 'architect',
+    message: protocolCompleteMessage(projectId),
+    worktreeDir: workspaceRoot,
+  });
 }
 
 /**

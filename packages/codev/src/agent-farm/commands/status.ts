@@ -12,6 +12,7 @@ import { getTypeColor } from '../utils/display.js';
 import { currentArchitectName } from '../utils/architect-name.js';
 import type { Builder } from '../types.js';
 import type { OverviewData } from '@cluesmith/codev-types';
+import { overlayBuilderFromPorch } from '../lib/porch-overlay.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from '../../lib/config.js';
@@ -275,7 +276,7 @@ export async function status(options: StatusOptions = {}): Promise<void> {
   // front — it's the canonical owner source whether or not Tower is running.
   // Guarded with `?.` because some unit tests leave the loadState mock unset.
   const state = loadState(workspacePath);
-  const builders = state?.builders ?? [];
+  const builders = (state?.builders ?? []).map(overlayBuilderFromPorch);
   const architects = state?.architects ?? [];
 
   // Spec 1313 round 3: held-mail awareness. The overview payload already carries the
