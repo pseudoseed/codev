@@ -3,7 +3,7 @@
 - **Issue:** #83
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 6
+- **Status:** Draft, rev. 7
 - **Depends on:** spec 52 (v2 server events), merged
 
 ## Problem Statement
@@ -55,7 +55,7 @@ Findings 1, 2, 4 and 7 are properties of the shipped contract. C2 stands — the
 1. `apps/v2` exists as a fork-owned workspace and builds.
 2. The stream is consumed correctly, every frame type handled.
 3. The site view renders per the approved design, using the shipped tokens.
-4. FR-1, FR-4, FR-41, FR-42 and FR-15 are satisfied and demonstrable in a browser. **FR-3 is not, and D13 says why.**
+4. FR-1, FR-4, FR-41 and FR-42 are satisfied and demonstrable in a browser. **FR-3 is not** (D13). **FR-15 is deferred, not satisfied** (D5).
 5. **The wire contract is exercised by a real client**, and any place it fails a renderer is reported rather than worked around.
 
 ## Non-Goals
@@ -119,10 +119,20 @@ Four degenerate cases, each with a defined answer, because the natural handling 
 
 | Case | Answer |
 |---|---|
-| A frame that is not valid JSON | Drop that frame, **do not advance the cursor**, log it. Never treat a parse failure as a `gone`. |
-| A frame with an unknown `type` | Drop it, **do not advance the cursor**, surface it as a contract mismatch. There is no silent ignore. |
+| A frame that is not valid JSON | **Terminal for this connection.** See below. Never treat a parse failure as a `gone`. |
+| A frame with an unknown `type` | **Terminal for this connection.** See below. There is no silent ignore. |
 | Stream EOF (server closed cleanly) | Reconnect with `since` and `stream` per D2. Not an error state, not an empty tree. |
 | Non-2xx on the stream request | The unreachable state (D5) plus backoff. A 400 here means the client built a bad `scope` — see D12 — and must say so rather than render empty. |
+
+**A bad frame is terminal, and recovery is bounded at one attempt.** Rev. 6 said to drop the frame and not advance the cursor. That is unsafe two ways: frame `N+1` then applies on top of a tree that silently missed `N`, giving a corrupt-but-plausible render; and a reconnect resumes from before `N`, so the server replays the same bad frame forever.
+
+The rule:
+
+1. Stop applying frames. Enter a **contract mismatch** state and say so on the page — this is not the unreachable state and must not look like it.
+2. Make **one** recovery attempt: reconnect **without** `since` and `stream`, forcing a fresh `snapshot` rather than a resume.
+3. If a bad frame arrives on that fresh connection too, stay in the mismatch state and **stop**. No further attempts. A contract the client cannot read is not a transient fault and retrying it is a spin, not a recovery.
+
+The mismatch state names the frame's `seq` and `type`. A client that cannot say which frame broke it is not reporting, it is just failing.
 
 **`tick` is the only writer of `buckets` after the snapshot.** That is contract, not preference: `node` frames carry no buckets precisely so two clients cannot diverge.
 
@@ -164,7 +174,9 @@ FR-1 is explicit and FR-21's old wording contradicted it (fixed at FRD rev. 9). 
 
 ### D5 — Three states that must not look alike: empty, dark, unreachable
 
-FR-15. Rev. 1 called a `dark` frame a machine. It is not: `darkFrame` is emitted with `workspaceId(d.path)`, so `dark.id` is **`workspace:<path>`** (`v2-routes.ts:394-395`), one workspace inside a live scope, with a `reason` of `unknown` or `unreadable`. Spec 52 criterion 10 is explicit: that path goes dark, the rest of the scope keeps streaming.
+**FR-15 is deferred here, not satisfied.** It reads "one **environment** being down or unreachable degrades that subtree only," and an environment is a connected Tower (FR-14, FR-16), not a workspace. This unit has exactly one environment, so when it is unreachable the whole page *is* the subtree — there is no sibling left running to prove the requirement. Rev. 6 listed FR-15 as a goal; rev. 7 removes the claim. What follows anticipates FR-15's shape and lands as its foundation when pairing arrives.
+
+Rev. 1 called a `dark` frame a machine. It is not: `darkFrame` is emitted with `workspaceId(d.path)`, so `dark.id` is **`workspace:<path>`** (`v2-routes.ts:394-395`), one workspace inside a live scope, with a `reason` of `unknown` or `unreadable`. Spec 52 criterion 10 is explicit: that path goes dark, the rest of the scope keeps streaming.
 
 Three distinct renderings, and conflating any two of them is a defect:
 
@@ -187,7 +199,7 @@ Filed as **#98**. The client's obligation is narrow and it is all the client can
 - **Do not poll to refresh readability.** C4 forbids it and reconnecting to force a snapshot is polling with extra steps.
 - Do not claim more freshness in the UI than the contract carries. The dark plot's label says what the server said and when.
 
-FR-15 is therefore true at connect and decays after. That is a contract limitation, recorded, not a client bug to code around.
+The dark signal is therefore true at connect and decays after. That is a contract limitation, recorded, not a client bug to code around.
 
 ### D6 — Serving the page, and how the key gets into it
 
@@ -198,7 +210,8 @@ FR-15 is therefore true at connect and decays after. That is a contract limitati
 | `GET /v2/events` | the frozen stream path, unchanged |
 | `GET /v2/` | the built `index.html`, key-injected |
 | `GET /v2/assets/*` | built assets, by extension allowlist, no traversal |
-| anything else under `/v2/` | 404, as today |
+| non-`GET` on `/v2/events` | **405, as today** (`v2-routes.ts:256-259`) — the existing method check is frozen and keeps its response |
+| any other unknown path under `/v2/` | 404, as today |
 
 **The key injection is duplicated on purpose, and the duplication is tested.** `injectWebKey` and `sendKeyInjectedHtml` (`tower-routes.ts:2441`, `:2466`) are module-private, and `tower-routes.ts` imports `v2-routes.ts` at line 51 — so exporting them would either edit a file C1 freezes or create an import cycle. `v2-static.ts` therefore imports `getExpectedKey` from `server-utils.ts` (already exported, zero edits) and reimplements the injection.
 
@@ -329,7 +342,7 @@ Required: a `copy-v2` script into its own published directory, that directory ad
 ### Non-regression
 
 20. `apps/web`, `tower.html`, `apps/vscode`, `apps/streamdeck`, `tower-server.ts`, `pty-session.ts` and **`tower-routes.ts`** are byte-unchanged. `git diff --stat` proves it.
-21. The only changes outside `apps/v2/` are: **the new `v2-static.ts`**, the dispatch prologue in `v2-routes.ts`, the two `GET /v2/` clauses in `isPublicRoute`, and the packaging wiring of D14. The frozen files in C2 are byte-unchanged.
+21. The only **production-code** changes outside `apps/v2/` are: the new `v2-static.ts`, the dispatch prologue in `v2-routes.ts`, the two `GET /v2/` clauses in `isPublicRoute`, and the packaging wiring of D14. Also permitted, because the spec demands them: **new test files** for static serving, the public-route split and packaging; and **`pnpm-workspace.yaml` plus `pnpm-lock.yaml`**, which a new workspace necessarily touches. The frozen files in C2 are byte-unchanged.
 22. Existing test suites pass untouched, including spec 52's 57 v2 tests and the existing `isPublicRoute` cases.
 
 ## Solution Approaches
@@ -394,6 +407,8 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 24. **Counts from the snapshot alone.** Feed a snapshot and no `counts` delta; assert the footer shows the snapshot's totals.
 25. **Bootstrap retries, then stops.** A 500 then a 200: assert two requests total, and that a later reconnect makes none.
 26. **A 200 that lies.** Four bodies — invalid JSON, `{}`, `{"workspaces": null}`, `{"workspaces": "nope"}` — each produces the unreachable state and a retry, and **none** produces the empty state.
+27. **Transport framing.** The reader is hand-written, so the reducer tests prove nothing about it. Feed a scripted `ReadableStream` and assert identical results for: one frame split across 3 chunks; **a chunk that splits a multi-byte UTF-8 character** (`TextDecoder` must be constructed with `{stream: true}` semantics and reused, not per-chunk); 4 frames arriving in one chunk; a chunk ending mid-frame with the remainder arriving later; `\r\n` as well as `\n` line endings; a trailing partial frame at EOF, which must **not** be applied. A reader that passes every reducer test and fails this is the expected failure mode, not an unlikely one.
+28. **Bad frame is terminal and bounded.** A malformed frame mid-stream: assert frames stop applying, the mismatch state names the `seq` and `type`, exactly **one** reconnect happens and it carries **no** `since`/`stream`, and a second bad frame produces **no third connection**.
 
 ## Risks and Mitigation
 
@@ -404,6 +419,8 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 | A builder given an inferred architect parent to satisfy FR-3 | Medium — the names often match | High — a guessed hierarchy that is usually right is worse than a flat honest one | D13 |
 | `counts` rendered as the drawn tree's rollup | High — the fields invite it | Medium — authoritative-looking numbers off by 45 | D11; criterion 17 |
 | Cursor advanced only on snapshots | Medium | Medium — a reconnect replays every delta since the snapshot | D1; scenario 19 |
+| A bad frame dropped and the next one applied | High — it is the forgiving thing to do | High — a corrupt tree that looks right, and a resume that replays the bad frame forever | D1's terminal rule; scenario 28 |
+| The SSE reader assumes one frame per chunk | High — it works on localhost and fails on a real network | High — dropped or spliced frames with no error | Scenario 27, including a split multi-byte character |
 | `buckets` treated as one shape | High — the field name is identical | High — breaks on the first tick, which is also the first thing that arrives after the snapshot | D1 with both line numbers |
 | `counts` never initialised because no `counts` delta follows the snapshot | Medium | Medium — the footer stays empty and the contract looks unexercised | D1's snapshot row stores it |
 | `/v2/` ships in-repo only and 404s from the installed CLI | High — nothing in the build wires it | High — adopters have only the installed CLI | D14; criterion 19 requires `npm pack` |
@@ -415,7 +432,8 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 | Polling creeps in for something the stream lacks | Medium | High — reproduces the problem v2 exists to solve | C4 and criterion 11; if the stream lacks it, that is a finding |
 | Scope re-derived on every reconnect | Medium — it looks like correctness | Medium — polling by another name | D7; scenario 13 |
 | The copied key injection drifts from `injectWebKey` | Medium — two copies of a security rule | High — stored XSS, or a key readable cross-origin | D6's three tested properties; `v2-static.ts` carries the cross-reference (`tower-routes.ts` is frozen) |
-| Unreachable Tower renders as an empty tree | High — it is the default behaviour of a failed fetch | High — inverts FR-15 | D5's three-state table; scenario 7 |
+| Unreachable Tower renders as an empty tree | High — it is the default behaviour of a failed fetch | High — inverts what FR-15 will require | D5's three-state table; scenario 7 |
+| FR-15 marked satisfied because dark workspaces work | Medium — the behaviours look alike | Medium — a MUST recorded as met when no sibling environment exists to degrade | D5 states the deferral; goal 4 |
 | `subscribeEvents` reused for the v2 stream | Medium — it is right there in the SDK | High — silently mis-parses every frame, wrong endpoint and wrong envelope | C3 names it |
 | `listWorkspaces()` used for the bootstrap | High — it is the obvious SDK call and rev. 2 asked for it | High — collapses 401, 500 and a dead socket into `[]`, so unreachable renders as empty | D7 states it with the line number; scenario 17 |
 | `isPublicRoute` widened further than two `GET` shapes | Medium | High — `/v2/events` or a future `/v2/` write path becomes unauthenticated | D9 and criterion 15; scenario 16 asserts `/v2/events` still 401s |
