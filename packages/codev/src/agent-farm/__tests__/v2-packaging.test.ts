@@ -7,7 +7,11 @@ const codevRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 
 describe('v2 packaging (D14)', () => {
   it('npm pack includes v2-dist after copy-v2', () => {
-    execSync('pnpm copy-v2', { cwd: codevRoot, stdio: 'pipe' });
+    execSync('pnpm copy-v2', {
+      cwd: codevRoot,
+      stdio: 'pipe',
+      env: { ...process.env, NODE_ENV: 'production' },
+    });
     const output = execSync('npm pack --dry-run 2>&1', {
       cwd: codevRoot,
       encoding: 'utf-8',
