@@ -3,7 +3,7 @@
 - **Issue:** #83
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 8
+- **Status:** Draft, rev. 9
 - **Depends on:** spec 52 (v2 server events), merged
 
 ## Problem Statement
@@ -142,14 +142,27 @@ The rule:
 
 A client that cannot say what broke it is not reporting, it is failing quietly. But it must only claim what it actually decoded.
 
-**TypeScript does not validate the wire.** `packages/types` describes the frames; nothing checks that a decoded object matches. Every frame is validated at runtime before it reaches the reducer, and a known `type` carrying a bad payload is **terminal**, same as an unknown type:
+**TypeScript does not validate the wire.** `packages/types` describes the frames; nothing checks that a decoded object matches. Every frame is validated at runtime before it reaches the reducer, and a known `type` carrying a bad payload is **terminal**, same as an unknown type.
 
-- `seq` is not a number
-- `node`/`gone`: no `id`, or `id` is not a string
-- `node`: no `kind`, or `kind` outside `workspace | architect | builder`
-- `snapshot`: `nodes` is not an array, or `counts` is missing or malformed
-- `tick`: `buckets` is not an object, or any value in it is not a number
-- `dark`: no `id`, or the `id` does not parse as `workspace:<path>`
+**The guarantee is deliberately narrow, and the narrowing is the specification: validate every field the reducer reads, and no others.** Re-enumerating the whole schema here would duplicate `packages/types` and drift from it; ignoring a field the reducer reads is how a number lands in `parentId` and the tree quietly reparents. So the rule is checkable without a second schema — the read-set is closed and listed:
+
+| Frame | Fields read, and therefore validated |
+|---|---|
+| all | `seq` (see below), `type` |
+| `snapshot` | `streamId` non-empty string; `resumed` boolean; `nodes` array, **each element validated as a node**; `counts` present and matching the `counts` shape |
+| node element | `id` non-empty string; `kind` in `workspace \| architect \| builder`; `parentId` string or `null`; `name` string; `status` string (**value** unchecked — see the exception); `flags.heldMail` boolean; `lastDataAt` string or `null`; `buckets` absent or an array of numbers |
+| `node` | the node element rules |
+| `gone` | `id` non-empty string |
+| `counts` | `workspaces` non-negative integer; `builders.total` non-negative integer; `builders.byStatus` an object of non-negative integers; `gateWaiting` non-negative integer |
+| `tick` | `buckets` a plain object, every value a finite number; `at` a string |
+| `dark` | `id` parses as `workspace:<path>` with a non-empty path; `reason` a string |
+| `resumed` | `from` a valid `seq` |
+
+A field outside that set is ignored and never read, so a bad value in it cannot reach the render. If a later unit starts reading one, it joins the list.
+
+**`seq` needs more than "is a number".** It must be a **finite non-negative safe integer** — `NaN`, `Infinity`, `1.5`, `-1` and `2**60` are each terminal. Rev. 8's "is not a number" admitted all of them.
+
+Ordering is **non-decreasing, not strictly increasing.** Measured: a snapshot and the `dark` frame beside it both arrived with `"seq":0`, so frames legitimately share a sequence. A frame whose `seq` is **lower** than the cursor is terminal — that is a replay or a crossed stream, and applying it would move the tree backwards.
 
 **One deliberate exception, and it is not a validation failure.** A structurally valid node carrying a `status` outside the four ships as D3 says: rendered **visibly wrong**, not terminal, not defaulted to `running`. The distinction is the point — an unexpected *value* in a well-formed frame is a contract drift the page should show and keep running through; a malformed *frame* is a contract the client cannot read at all.
 
@@ -333,6 +346,16 @@ Required: a `copy-v2` script into its own published directory, that directory ad
 
 **Out, and left out of the markup entirely rather than stubbed:** the gate rail, Find node, Add machine, the terminal bank, the command palette. A disabled stub of a later unit is a promise the tree cannot keep.
 
+## What is spec here, and what belongs to the plan
+
+Eight review rounds pushed a lot of file names and line numbers into this document. The split is deliberate and it is stated so the plan does not re-litigate it.
+
+**Stays here, because it is binding behaviour or a security property:** the wire semantics of D1, the three states of D5, the public-route split and key-injection properties of D6 and D9, the bootstrap rules of D7, the colour discipline of D3, the FR-49 ownership rule in C5, and every frozen-file constraint. These are WHAT and WHY: change any of them and the unit is a different unit.
+
+**Stays here as evidence, not as instruction:** the line-number citations. `v2-routes.ts:302-314`, `tower-client.ts:400-403`, `server-utils.ts:142` and the rest are the proof behind claims this spec got **wrong twice** before measuring — that `/v2/` could be served under the original constraints, and that a recovering dark workspace clears itself. A spec that asserts a server behaviour without saying where it read it is a spec that gets revised again. They are load-bearing and they stay.
+
+**Belongs to the plan:** the file layout under `apps/v2/`, component boundaries, the `copy-v2` script's name and shape, the Vite proxy configuration, which test file holds which scenario, and phase ordering. D14 says packaging must survive `npm pack`; **how** it is wired is the plan's call.
+
 ## Success Criteria
 
 ### Functional
@@ -404,7 +427,7 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
     - a gate-waiting builder renders rust with a `GATE` stamp, and rust appears **nowhere else on the page** (criterion 3, D3)
     - a builder past `IDLE_WAITING_THRESHOLD_MS` renders ochre and `STALLED` (criterion 4)
     - a sparkline advances on `tick` and flattens to zero for a silent builder (criterion 5)
-    - `afx cleanup` removes the row (criterion 6)
+    - a `gone` frame removes the row (criterion 6). **Driven by a fixture, not by `afx cleanup`** — a browser test must not destroy a real builder worktree, and the repository's irreversible-acts rule puts that decision with a human, not a test runner. The real `afx cleanup` path is exercised once by hand during UX verification and recorded there
     - kill the socket and restore it: state recovers with **no page reload**, both on an honoured resume and on a refused one (criterion 7)
     - a `dark` workspace renders dark while its siblings keep streaming (criterion 8)
     - unreachable Tower and zero workspaces render **differently** (criterion 9)
@@ -431,7 +454,10 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 27. **Transport framing.** The reader is hand-written, so the reducer tests prove nothing about it. Feed a scripted `ReadableStream` and assert identical results for: one frame split across 3 chunks; **a chunk that splits a multi-byte UTF-8 character** (`TextDecoder` must be constructed with `{stream: true}` semantics and reused, not per-chunk); 4 frames arriving in one chunk; a chunk ending mid-frame with the remainder arriving later; `\r\n` as well as `\n` line endings; a trailing partial frame at EOF, which must **not** be applied. A reader that passes every reducer test and fails this is the expected failure mode, not an unlikely one.
 28. **Bad frame is terminal and bounded.** A malformed frame mid-stream: assert frames stop applying, exactly **one** reconnect happens and it carries **no** `since`/`stream`, and a second bad frame produces **no third connection**.
 29. **The mismatch state claims only what it decoded.** Three cases: invalid JSON reports `invalid JSON after cursor <N>` and a byte preview and **does not** invent a `seq` or `type`; an unknown `type` reports the type; a known type with a bad field reports type, `seq` and the failing field.
-30. **Field validation, per frame type.** One case each: `seq` not a number; `node` with no `id`; `node` with `kind: "machine"`; `snapshot` with `nodes` not an array; `snapshot` with no `counts`; `tick` with `buckets` as an array; `tick` with a non-numeric value; `dark` with an `id` that is not `workspace:<path>`. Every one terminal.
+30. **Field validation, per frame type.** One case per row of D1's read-set table, at minimum: `node` with no `id`; `node` with `kind: "machine"`; `node` with a numeric `parentId`; `snapshot` with `nodes` not an array; `snapshot` with one bad element among good ones; `snapshot` with no `counts`; `counts` with a negative total; `tick` with `buckets` as an array; `tick` with a non-numeric value; `dark` with an `id` that is not `workspace:<path>`; `resumed` with a bad `from`. Every one terminal.
+33. **`seq` is a safe non-negative integer.** `NaN`, `Infinity`, `1.5`, `-1` and `2**60` are each terminal.
+34. **Sequence ordering is non-decreasing.** Two frames sharing a `seq` are both applied — this is the real snapshot-plus-`dark` case, measured on the wire. A frame whose `seq` is **below** the cursor is terminal.
+35. **Fields outside the read-set are ignored.** A frame carrying an extra unknown field, and a node carrying garbage in a field nothing reads, both apply normally. The validation is narrow on purpose and must not become a schema lock.
 31. **Unknown status is not a validation failure.** A structurally valid node with `status: "reticulating"` renders visibly wrong, does **not** default to `running`, and does **not** enter the mismatch state. This is the one place a surprising value keeps the page running (D3).
 32. **Bootstrap entry validation.** `{"workspaces": [{}]}`, `{"workspaces": [{"path": 42}]}` and `{"workspaces": [{"path": ""}]}` each produce a contract mismatch for the whole bootstrap — not a partial scope, and not a dark workspace.
 
@@ -450,6 +476,10 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 | Unknown `status` treated as a validation failure | Medium — the new terminal rule invites it | Medium — the page dies on a contract drift it was designed to survive | D1's exception; scenario 31 |
 | A bad `workspaces` entry skipped instead of refused | Medium — skipping looks resilient | High — a silently partial scope, or a client bug rendered as a server-reported dark machine | D7; scenario 32 |
 | The mismatch state invents a `seq` for unparseable JSON | Medium — rev. 7 required it | Low — a fabricated identifier in the one place accuracy matters | D1's table; scenario 29 |
+| `seq` validated only as "a number" | High — it is the obvious check | Medium — `NaN` and negatives pass, and the cursor stops meaning anything | D1's safe-integer rule; scenario 33 |
+| Ordering enforced as strictly increasing | High — it is the intuitive invariant | High — the real snapshot-plus-`dark` pair shares a `seq` and would be rejected as corrupt | D1, measured; scenario 34 |
+| Validation hardened into a full schema lock | Medium — the terminal rule invites it | Medium — a harmless added server field kills the page | D1's read-set is closed; scenario 35 |
+| A browser test destroying a real builder worktree | Medium — `afx cleanup` is the honest end-to-end path | High — an irreversible act moved from a human to a test runner | Scenario 10 uses a `gone` fixture; the real path is verified by hand |
 | `buckets` treated as one shape | High — the field name is identical | High — breaks on the first tick, which is also the first thing that arrives after the snapshot | D1 with both line numbers |
 | `counts` never initialised because no `counts` delta follows the snapshot | Medium | Medium — the footer stays empty and the contract looks unexercised | D1's snapshot row stores it |
 | `/v2/` ships in-repo only and 404s from the installed CLI | High — nothing in the build wires it | High — adopters have only the installed CLI | D14; criterion 19 requires `npm pack` |
