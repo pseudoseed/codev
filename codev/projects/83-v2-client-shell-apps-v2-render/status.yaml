@@ -31,11 +31,35 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 1
-build_complete: true
-history: []
+iteration: 2
+build_complete: false
+history:
+  - iteration: 1
+    plan_phase: phase_2
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_2-iter1-gemini.txt
+        stated: false
+      - model: codex
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_2-iter1-codex.txt
+        stated: true
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_2-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_2-iter1-opencode.txt
+        stated: true
 started_at: '2026-08-24T06:44:19.322Z'
-updated_at: '2026-08-24T07:36:20.788Z'
+updated_at: '2026-08-24T07:46:34.782Z'
 context_refreshes:
   - boundary: enter:implement
     at: '2026-08-24T07:12:46.426Z'
