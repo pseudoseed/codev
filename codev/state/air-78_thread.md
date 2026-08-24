@@ -13,4 +13,4 @@ Tick, the 100ms compare loop, and `not_before` still call `compare()` directly.
 
 ## Status
 
-Implement phase. Code and tests in `v2-sampler.ts` / `v2-sampler.test.ts`.
+Implement committed (`3ec95ce6d`). 27/27 `v2-sampler` tests green, including the spec 52 suite plus burst / max-wait / tick-not-debounced / 500ms-cap cases. Build check passed. PR phase.
