@@ -18,4 +18,4 @@ Iter 1: gemini skip, codex/claude/opencode REQUEST_CHANGES. All accepted (unreac
 
 Iter 2: gemini skip, claude APPROVE, codex REQUEST_CHANGES (`res.text()` on 200 → mismatch; fixed). Opencode consult CLI cannot read its temp prompt (external_directory). Review written against disk files: APPROVE.
 
-Iter 3 consult: gemini skip, codex REQUEST_CHANGES (forceFresh after applied snapshot then read error). Accepted: `applied-retry` clears forceFresh. 101 client tests green. Claude consult retrying.
+Phase 4 in progress: site view + httpMismatch in display precedence. 119 client tests green. Refresh refused (opencode has no in-session clear).

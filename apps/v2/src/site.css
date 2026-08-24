@@ -1,0 +1,171 @@
+html, body, #root {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bone);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+.page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.lot-header {
+  border-bottom: var(--rule) solid var(--ink);
+  background: var(--chalk);
+  padding: 16px 24px;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.lot-header h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.lot-header .stamp {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--graphite);
+}
+
+.site-main {
+  flex: 1;
+  padding: 24px;
+}
+
+.lot {
+  position: relative;
+  padding: 20px 16px 16px;
+}
+
+.lot-tag {
+  position: absolute;
+  top: 0;
+  left: 12px;
+  transform: translateY(-50%);
+  background: var(--chalk);
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 0 8px;
+  border: 1px solid var(--ink);
+}
+
+.plot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.ws-plot {
+  border: var(--rule) solid var(--ink);
+  background: var(--bone);
+  padding: 12px;
+}
+
+.ws-plot-name {
+  font-size: 12px;
+  text-transform: uppercase;
+  font-weight: 500;
+  margin-bottom: 12px;
+}
+
+.arch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.arch-row .stamp {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.stake-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 12px;
+}
+
+.stake {
+  background: var(--chalk);
+  padding: 6px 8px 6px 8px;
+}
+
+.stake-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.stake-name {
+  font-size: 11px;
+}
+
+.held-mail {
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--graphite);
+  margin-left: 6px;
+}
+
+.stamp-gate { color: var(--rust); font-size: 9px; text-transform: uppercase; }
+.stamp-stalled { color: var(--ochre); font-size: 9px; text-transform: uppercase; }
+.stamp-run { color: var(--moss); font-size: 9px; text-transform: uppercase; }
+.stamp-offline { color: var(--graphite); font-size: 9px; text-transform: uppercase; }
+.stamp-unknown { color: var(--graphite); font-size: 9px; text-transform: uppercase; }
+
+.dark-meta {
+  font-size: 11px;
+  color: var(--graphite);
+  margin-top: 8px;
+}
+
+.machine-footer {
+  border-top: var(--rule) solid var(--ink);
+  background: var(--chalk);
+  padding: 12px 24px;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--graphite);
+}
+
+.banner {
+  padding: 16px 24px;
+  border-bottom: var(--rule) solid var(--ink);
+  background: var(--chalk);
+}
+
+.banner h2 {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 20px;
+}
+
+.banner p {
+  margin: 0;
+  color: var(--graphite);
+  font-size: 13px;
+}
+
+.reconnecting {
+  padding: 8px 24px;
+  background: var(--chalk);
+  border-bottom: 1px solid var(--concrete);
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--graphite);
+}
+
+.empty-copy {
+  padding: 48px 24px;
+  color: var(--graphite);
+}
