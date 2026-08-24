@@ -98,6 +98,24 @@ Fixed in `be49a0273`:
 - **`data-connection` was read by nothing.** The two new e2e tests assert it.
 - Merged `origin/main` (2 docs commits).
 
+## Merged and verified
+
+PR #132 merged as `436731ec8` (2026-08-24 20:48:43Z). Gate approved by
+architect:uiv2 under standing delegation; #105 and #106 left open for the
+architect to close.
+
+Verified on the merged tree (`origin/main` merged back into this worktree,
+including #133's atomic local-key fix): `packages/codev` 6013 passed / 0 failed,
+`apps/v2` 167 passed. Rebuilt the dist and re-ran the live check through the
+scratch proxy against the Tower on 4100 — 87 nodes before the cut, 87 after,
+ochre strip with `last seen 14:51:29`, machine row `UNREACHABLE`, no banner, page
+sentinel alive.
+
+CI on #132 went red once on `issue-6-local-key-race.test.ts`. That was the
+architect's own test catching a hole in their `writeFileSync(..., 'wx')` fix —
+exclusive but not atomic, so a concurrent reader could see a zero-byte file and
+get an empty key. Fixed in #133, not on this branch.
+
 ## Flaky Tests
 
 None seen.
