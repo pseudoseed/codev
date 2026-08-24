@@ -874,6 +874,27 @@ export async function approve(
 
   // Run phase checks before approving
   const protocol = loadProtocol(workspaceRoot, state.protocol);
+
+  // Issue #113: verify-approval is the post-merge gate. After a normal merge
+  // the project is still in review (porch done after the pr gate is a separate
+  // step). Approving this gate must not re-run review's pr_exists — that check
+  // keys off git branch --show-current in whichever worktree findStatusPath
+  // returns, which after merge is almost never the PR head. Enter verify first
+  // so the checks below are the verify phase's (none) and the existing
+  // auto-advance can reach verified.
+  if (gateName === 'verify-approval' && state.phase !== 'verify') {
+    if (state.phase === 'review' && state.gates['pr']?.status === 'approved') {
+      state.phase = 'verify';
+      state.build_complete = true;
+      await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} verify phase-transition (verify-approval)`);
+    } else {
+      throw new Error(
+        `Cannot approve verify-approval from phase '${state.phase}'. ` +
+        `The pr gate must be approved first.`,
+      );
+    }
+  }
+
   const overrides = loadCheckOverrides(workspaceRoot, state.protocol);
   const phaseConfig = getPhaseConfig(protocol, state.phase);
   const phaseCheckNames = phaseConfig?.checks ?? [];
