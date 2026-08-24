@@ -6,6 +6,8 @@ import { projectHierarchy, type V2Deps } from './v2-projection.js';
 export const V2_BUCKET_SLOTS = 20;
 export const V2_COMPARE_MS = 100;
 export const V2_TICK_MS = 30_000;
+export const V2_WATCH_DEBOUNCE_MS = 50;
+export const V2_WATCH_MAX_WAIT_MS = 200;
 
 export interface SamplerTimers {
   now: () => number;
@@ -97,6 +99,9 @@ export class V2Sampler {
   private readonly watchers = new Map<string, () => void>();
   private interval: unknown = null;
   private notBeforeTimer: unknown = null;
+  private watchDebounceTimer: unknown = null;
+  private lastWatchWalkAt: number | null = null;
+  private watchPending = false;
   private lastTickAt = 0;
   private running = false;
 
@@ -139,6 +144,11 @@ export class V2Sampler {
       this.timers.clearTimeout(this.notBeforeTimer);
       this.notBeforeTimer = null;
     }
+    if (this.watchDebounceTimer !== null) {
+      this.timers.clearTimeout(this.watchDebounceTimer);
+      this.watchDebounceTimer = null;
+    }
+    this.watchPending = false;
     for (const unwatch of this.watchers.values()) unwatch();
     this.watchers.clear();
   }
@@ -264,8 +274,37 @@ export class V2Sampler {
     }
     for (const dir of wanted) {
       if (this.watchers.has(dir)) continue;
-      this.watchers.set(dir, this.watch(dir, () => this.compare()));
+      this.watchers.set(dir, this.watch(dir, () => this.wakeFromWatch()));
     }
+  }
+
+  private wakeFromWatch(): void {
+    const now = this.timers.now();
+    const elapsed = this.lastWatchWalkAt === null ? Number.POSITIVE_INFINITY : now - this.lastWatchWalkAt;
+    const quiet = !this.watchPending && elapsed >= V2_WATCH_DEBOUNCE_MS;
+    const capped = this.watchPending && elapsed >= V2_WATCH_MAX_WAIT_MS;
+    if (quiet || capped) {
+      this.flushWatchWake();
+      return;
+    }
+    this.watchPending = true;
+    if (this.watchDebounceTimer !== null) {
+      this.timers.clearTimeout(this.watchDebounceTimer);
+    }
+    this.watchDebounceTimer = this.timers.setTimeout(() => {
+      this.watchDebounceTimer = null;
+      this.flushWatchWake();
+    }, V2_WATCH_DEBOUNCE_MS);
+  }
+
+  private flushWatchWake(): void {
+    if (this.watchDebounceTimer !== null) {
+      this.timers.clearTimeout(this.watchDebounceTimer);
+      this.watchDebounceTimer = null;
+    }
+    this.watchPending = false;
+    this.lastWatchWalkAt = this.timers.now();
+    this.compare();
   }
 
   private scheduleNotBefore(): void {

@@ -14,6 +14,8 @@ import {
   V2Sampler,
   V2_BUCKET_SLOTS,
   V2_TICK_MS,
+  V2_WATCH_DEBOUNCE_MS,
+  V2_WATCH_MAX_WAIT_MS,
   scopeFilter,
   type SamplerTimers,
 } from '../servers/v2-sampler.js';
@@ -95,6 +97,40 @@ function nodeFrames(frames: V2Frame[]): Array<V2Frame & { type: 'node' }> {
 }
 
 const samplers: V2Sampler[] = [];
+
+function fakeTimers(world: World): {
+  timers: SamplerTimers;
+  pending: Array<{ id: number; fn: () => void; at: number }>;
+  flushDue: () => void;
+} {
+  const pending: Array<{ id: number; fn: () => void; at: number }> = [];
+  let nextId = 0;
+  return {
+    pending,
+    timers: {
+      now: () => world.now,
+      setTimeout: (fn, ms) => {
+        const id = ++nextId;
+        pending.push({ id, fn, at: world.now + ms });
+        return id;
+      },
+      clearTimeout: (id) => {
+        const i = pending.findIndex((t) => t.id === id);
+        if (i >= 0) pending.splice(i, 1);
+      },
+      setInterval: () => 0,
+      clearInterval: () => {},
+    },
+    flushDue: () => {
+      const due = pending.filter((t) => t.at <= world.now);
+      for (const t of due) {
+        const i = pending.indexOf(t);
+        if (i >= 0) pending.splice(i, 1);
+        t.fn();
+      }
+    },
+  };
+}
 
 function makeSampler(world: World, bus: ScopeBus, extra?: {
   watch?: (dir: string, wake: () => void) => () => void;
@@ -534,6 +570,128 @@ describe('V2Sampler', () => {
     world.addLiveBuilder('spir-52');
     wakes[0]();
     expect(nodeFrames(frames).some((f) => f.node.id === builderId(WS_A, 'spir-52'))).toBe(true);
+    unsub();
+  });
+
+  it('fs.watch burst coalesces into one trailing walk', () => {
+    const world = new World();
+    const wakes: Array<() => void> = [];
+    const clock = fakeTimers(world);
+    const bus = new ScopeBus();
+    const sampler = makeSampler(world, bus, {
+      timers: clock.timers,
+      watch: (_dir, wake) => {
+        wakes.push(wake);
+        return () => {};
+      },
+    });
+    const snap = world.projection();
+    sampler.seedScope([WS_A], snap.nodes, snap.counts);
+    sampler.compare();
+    const { frames, unsub } = collect(bus, [WS_A]);
+    world.addLiveBuilder('lead');
+    wakes[0]();
+    expect(nodeFrames(frames).map((f) => f.node.id)).toEqual([builderId(WS_A, 'lead')]);
+    world.addLiveBuilder('mid');
+    wakes[0]();
+    world.addLiveBuilder('tail');
+    wakes[0]();
+    expect(nodeFrames(frames).some((f) => f.node.id === builderId(WS_A, 'mid'))).toBe(false);
+    expect(nodeFrames(frames).some((f) => f.node.id === builderId(WS_A, 'tail'))).toBe(false);
+    world.now += V2_WATCH_DEBOUNCE_MS;
+    clock.flushDue();
+    expect(nodeFrames(frames).some((f) => f.node.id === builderId(WS_A, 'mid'))).toBe(true);
+    expect(nodeFrames(frames).some((f) => f.node.id === builderId(WS_A, 'tail'))).toBe(true);
+    unsub();
+  });
+
+  it('fs.watch sustained burst still walks at max wait', () => {
+    const world = new World();
+    const wakes: Array<() => void> = [];
+    const clock = fakeTimers(world);
+    const bus = new ScopeBus();
+    const sampler = makeSampler(world, bus, {
+      timers: clock.timers,
+      watch: (_dir, wake) => {
+        wakes.push(wake);
+        return () => {};
+      },
+    });
+    const snap = world.projection();
+    sampler.seedScope([WS_A], snap.nodes, snap.counts);
+    sampler.compare();
+    const { frames, unsub } = collect(bus, [WS_A]);
+    world.addLiveBuilder('lead');
+    wakes[0]();
+    const step = 10;
+    const steps = V2_WATCH_MAX_WAIT_MS / step;
+    for (let i = 1; i < steps; i++) {
+      world.now += step;
+      world.addLiveBuilder(`b${i}`);
+      wakes[0]();
+      expect(nodeFrames(frames).some((f) => f.node.id === builderId(WS_A, `b${i}`))).toBe(false);
+    }
+    world.now += step;
+    world.addLiveBuilder('capped');
+    wakes[0]();
+    expect(nodeFrames(frames).some((f) => f.node.id === builderId(WS_A, 'capped'))).toBe(true);
+    expect(nodeFrames(frames).some((f) => f.node.id === builderId(WS_A, 'b1'))).toBe(true);
+    unsub();
+  });
+
+  it('tick is not debounced by a pending watch wake', () => {
+    const world = new World();
+    const wakes: Array<() => void> = [];
+    const clock = fakeTimers(world);
+    const bus = new ScopeBus();
+    const sampler = makeSampler(world, bus, {
+      timers: clock.timers,
+      watch: (_dir, wake) => {
+        wakes.push(wake);
+        return () => {};
+      },
+    });
+    const snap = world.projection();
+    sampler.seedScope([WS_A], snap.nodes, snap.counts);
+    sampler.compare();
+    const { frames, unsub } = collect(bus, [WS_A]);
+    world.addLiveBuilder('lead');
+    wakes[0]();
+    world.addLiveBuilder('via-tick');
+    sampler.tick();
+    expect(nodeFrames(frames).some((f) => f.node.id === builderId(WS_A, 'via-tick'))).toBe(true);
+    expect(frames.some((f) => f.type === 'tick')).toBe(true);
+    unsub();
+  });
+
+  it('watch-path spawn stays inside 500ms even at the max-wait cap', () => {
+    const world = new World();
+    const wakes: Array<() => void> = [];
+    const clock = fakeTimers(world);
+    const bus = new ScopeBus();
+    const sampler = makeSampler(world, bus, {
+      timers: clock.timers,
+      watch: (_dir, wake) => {
+        wakes.push(wake);
+        return () => {};
+      },
+    });
+    const snap = world.projection();
+    sampler.seedScope([WS_A], snap.nodes, snap.counts);
+    sampler.compare();
+    const { frames, unsub } = collect(bus, [WS_A]);
+    world.addLiveBuilder('lead');
+    wakes[0]();
+    const spawnedAt = world.now + 1;
+    world.now = spawnedAt;
+    world.addLiveBuilder('late');
+    wakes[0]();
+    world.now = spawnedAt + V2_WATCH_MAX_WAIT_MS;
+    wakes[0]();
+    const late = nodeFrames(frames).find((f) => f.node.id === builderId(WS_A, 'late'));
+    expect(late).toBeDefined();
+    expect(world.now - spawnedAt).toBeLessThanOrEqual(500);
+    expect(V2_WATCH_MAX_WAIT_MS + V2_WATCH_DEBOUNCE_MS).toBeLessThan(500);
     unsub();
   });
 
