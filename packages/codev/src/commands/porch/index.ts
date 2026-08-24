@@ -1236,6 +1236,31 @@ function getArtifactForPhase(workspaceRoot: string, state: ProjectState, resolve
 // CLI
 // ============================================================================
 
+function printUsage(): void {
+  console.log('porch - Protocol Orchestrator');
+  console.log('');
+  console.log('Commands:');
+  console.log('  next [id]                Emit next tasks as JSON (planner mode)');
+  console.log('  status [id]              Show current state and instructions');
+  console.log('  check [id]               Run checks for current phase');
+  console.log('  done [id]                Signal build complete (validates checks, advances)');
+  console.log('  done [id] --pr N --branch NAME   Record PR creation (no phase advancement)');
+  console.log('  done [id] --merged N             Mark PR as merged (no phase advancement)');
+  console.log('  gate [id]                Request human approval');
+  console.log('  pending                  List all gates awaiting approval across projects');
+  console.log('  approve <id> <gate> --a-human-explicitly-approved-this');
+  console.log('  verify <id> --skip "reason"      Skip verification and mark as verified');
+  console.log('  rollback <id> <phase>    Rewind project to an earlier phase');
+  console.log('  init <protocol> <id> <name>  Initialize a new project');
+  console.log('');
+  console.log('Flags:');
+  console.log('  --version, -v            Print porch (codev) version');
+  console.log('  --help, -h               Print this usage and exit 0');
+  console.log('');
+  console.log('Project ID is auto-detected from worktree path or when exactly one project exists.');
+  console.log('');
+}
+
 export async function cli(args: string[]): Promise<void> {
   const [command, ...rest] = args;
 
@@ -1243,6 +1268,11 @@ export async function cli(args: string[]): Promise<void> {
   // must work from any directory and never require a project context.
   if (command === '--version' || command === '-v') {
     console.log(version);
+    return;
+  }
+
+  if (args.includes('--help') || args.includes('-h')) {
+    printUsage();
     return;
   }
 
@@ -1370,28 +1400,8 @@ export async function cli(args: string[]): Promise<void> {
         break;
 
       default:
-        console.log('porch - Protocol Orchestrator');
-        console.log('');
-        console.log('Commands:');
-        console.log('  next [id]                Emit next tasks as JSON (planner mode)');
-        console.log('  status [id]              Show current state and instructions');
-        console.log('  check [id]               Run checks for current phase');
-        console.log('  done [id]                Signal build complete (validates checks, advances)');
-        console.log('  done [id] --pr N --branch NAME   Record PR creation (no phase advancement)');
-        console.log('  done [id] --merged N             Mark PR as merged (no phase advancement)');
-        console.log('  gate [id]                Request human approval');
-        console.log('  pending                  List all gates awaiting approval across projects');
-        console.log('  approve <id> <gate> --a-human-explicitly-approved-this');
-        console.log('  verify <id> --skip "reason"      Skip verification and mark as verified');
-        console.log('  rollback <id> <phase>    Rewind project to an earlier phase');
-        console.log('  init <protocol> <id> <name>  Initialize a new project');
-        console.log('');
-        console.log('Flags:');
-        console.log('  --version, -v            Print porch (codev) version');
-        console.log('');
-        console.log('Project ID is auto-detected from worktree path or when exactly one project exists.');
-        console.log('');
-        process.exit(command && command !== '--help' && command !== '-h' ? 1 : 0);
+        printUsage();
+        process.exit(command ? 1 : 0);
     }
 
     // After a successful mutating command, broadcast `overview-changed`
