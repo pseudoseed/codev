@@ -14,7 +14,7 @@ import { tmpdir, homedir } from 'node:os';
 import chalk from 'chalk';
 import { query as claudeQuery } from '@anthropic-ai/claude-agent-sdk';
 import { Codex } from '@openai/codex-sdk';
-import { readCodevFile, findWorkspaceRoot, protocolsProvidingConsultType } from '../../lib/skeleton.js';
+import { readCodevFile, findWorkspaceRoot, protocolsProvidingConsultType, listConsultTypes } from '../../lib/skeleton.js';
 import { NO_REVIEW_MARKER } from '../porch/verdict.js';
 import { resolveDefaultBranch } from '../../lib/default-branch.js';
 import { loadConfig, findConfigSource } from '../../lib/config.js';
@@ -255,15 +255,39 @@ function resolveProtocolPrompt(workspaceRoot: string, protocol: string | undefin
     // shipped at `codev/consult-types/`, only under `protocols/<name>/`, so the
     // old message pointed at a file that has never existed in any release and
     // read as "create this". The actual fix is `--protocol`, and nothing said so.
-    if (!protocol) {
-      const owners = protocolsProvidingConsultType(templateName, workspaceRoot);
-      if (owners.length > 0) {
-        throw new Error(
-          `No bare template for --type ${type}. This review type is protocol-scoped; ` +
-          `pass --protocol with one of: ${owners.join(', ')}\n` +
-          `  e.g. consult -m <model> -t ${type} --protocol ${owners[0]} --issue <N>`,
-        );
-      }
+    const owners = protocolsProvidingConsultType(templateName, workspaceRoot);
+
+    if (!protocol && owners.length > 0) {
+      throw new Error(
+        `No bare template for --type ${type}. This review type is protocol-scoped; ` +
+        `pass --protocol with one of: ${owners.join(', ')}\n` +
+        `  e.g. consult -m <model> -t ${type} --protocol ${owners[0]} --issue <N>`,
+      );
+    }
+
+    // Issue #54: `--protocol` was given, and it is the wrong one. The type is
+    // real and some other protocol has it, so naming the unresolved path sends
+    // you off to create a file that already exists next door.
+    if (protocol && owners.length > 0) {
+      throw new Error(
+        `Protocol "${protocol}" has no ${type} review. This type lives under: ${owners.join(', ')}\n` +
+        `  e.g. consult -m <model> -t ${type} --protocol ${owners[0]} --issue <N>`,
+      );
+    }
+
+    // Nothing anywhere provides this type, at any tier. Naming the unresolved
+    // path reads as "create this file" when the real answer is "that is not a
+    // review type" — so say which ones are, instead (#54).
+    const available = listConsultTypes(workspaceRoot);
+    if (available.length > 0) {
+      const lines = available.map(({ type: t, protocols }) =>
+        `  ${t.padEnd(14)} ${protocols.length === 0 ? '(no --protocol needed)' : `--protocol ${protocols.join(' | ')}`}`,
+      );
+      throw new Error(
+        `Unknown review type "${type}" — no ${templateName} at any tier.\n` +
+        `Searched: ${location}\n` +
+        `Available review types:\n${lines.join('\n')}`,
+      );
     }
 
     throw new Error(`Prompt template not found: ${location}`);
