@@ -695,7 +695,7 @@ async function advanceProtocolPhase(workspaceRoot: string, state: ProjectState, 
   if (!nextPhase) {
     state.phase = 'verified';
     await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} protocol complete`);
-    notifyProtocolComplete(workspaceRoot, state.id);
+    notifyProtocolComplete(getArtifactRoot(statusPath), state.id);
     console.log('');
     // Issue #57: the check runs AFTER that commit, deliberately. That commit is
     // itself one of the unlanded ones -- along with the `PR #N merged` commit
@@ -1359,6 +1359,7 @@ export async function cli(args: string[]): Promise<void> {
         st.phase = 'verified';
         st.context = { ...st.context, verify_skip_reason: skipReason };
         await writeStateAndCommit(sp, st, `chore(porch): ${st.id} verify skipped: ${skipReason}`);
+        notifyProtocolComplete(getArtifactRoot(sp), st.id);
         console.log('');
         console.log(chalk.green(`VERIFIED (skipped): ${st.id}`));
         console.log(`  Reason: ${skipReason}`);

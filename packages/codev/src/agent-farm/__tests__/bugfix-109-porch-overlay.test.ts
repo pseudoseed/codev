@@ -20,41 +20,45 @@ import type { Builder } from '../types.js';
 function builder(worktree: string, extra: Partial<Builder> = {}): Builder {
   return {
     id: 'builder-bugfix-147',
-    name: 'bugfix-147',
+    name: 'Bugfix #147: finished builders look live',
     type: 'bugfix',
     status: 'implementing',
     phase: 'init',
     worktree,
     branch: 'builder/bugfix-147',
+    issueNumber: 147,
     ...extra,
   };
 }
 
-function writeStatus(worktree: string, yaml: string): void {
-  const dir = join(worktree, 'codev', 'projects', 'bugfix-147-finished');
+function writeProject(worktree: string, dirName: string, yaml: string): void {
+  const dir = join(worktree, 'codev', 'projects', dirName);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'status.yaml'), yaml);
 }
 
 describe('porch overlay (issue #109)', () => {
+  let root: string;
   let worktree: string;
 
   beforeEach(() => {
-    worktree = join(tmpdir(), `bugfix-109-overlay-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    root = join(tmpdir(), `porch-overlay-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    worktree = join(root, 'bugfix-147');
   });
 
   afterEach(() => {
-    rmSync(worktree, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   });
 
-  it('reads phase from the worktree status.yaml', () => {
-    writeStatus(worktree, 'id: bugfix-147\nphase: verified\nbuild_complete: true\n');
-    expect(readPorchPhase(worktree)).toBe('verified');
+  it('reads phase from the matching project status.yaml', () => {
+    writeProject(worktree, 'bugfix-147-finished', 'id: bugfix-147\nphase: verified\nbuild_complete: true\n');
+    expect(readPorchPhase(worktree, 'bugfix-147')).toBe('verified');
   });
 
   it('returns null when the worktree has no porch state', () => {
-    expect(readPorchPhase(worktree)).toBeNull();
-    expect(readPorchPhase('')).toBeNull();
+    expect(readPorchPhase(worktree, 'bugfix-147')).toBeNull();
+    expect(readPorchPhase('', 'bugfix-147')).toBeNull();
+    expect(readPorchPhase(worktree, null)).toBeNull();
   });
 
   it('maps verified/complete to status complete, pr to pr, else leaves status', () => {
@@ -66,14 +70,22 @@ describe('porch overlay (issue #109)', () => {
   });
 
   it('overlays a finished builder so afx status no longer says implementing/init', () => {
-    writeStatus(worktree, "id: 'bugfix-147'\nphase: verified\n");
+    writeProject(worktree, 'bugfix-147-finished', "id: 'bugfix-147'\nphase: verified\n");
     const shown = overlayBuilderFromPorch(builder(worktree));
     expect(shown.phase).toBe('verified');
     expect(shown.status).toBe('complete');
   });
 
   it('overlays an in-progress protocol phase (not just the terminal one)', () => {
-    writeStatus(worktree, 'id: bugfix-147\nphase: investigate\n');
+    writeProject(worktree, 'bugfix-147-finished', 'id: bugfix-147\nphase: investigate\n');
+    const shown = overlayBuilderFromPorch(builder(worktree));
+    expect(shown.phase).toBe('investigate');
+    expect(shown.status).toBe('implementing');
+  });
+
+  it('ignores an unrelated project dir that sorts first', () => {
+    writeProject(worktree, '0087-unrelated', 'id: "0087"\nprotocol: spir\nphase: complete\n');
+    writeProject(worktree, 'bugfix-147-done', 'id: bugfix-147\nphase: investigate\n');
     const shown = overlayBuilderFromPorch(builder(worktree));
     expect(shown.phase).toBe('investigate');
     expect(shown.status).toBe('implementing');

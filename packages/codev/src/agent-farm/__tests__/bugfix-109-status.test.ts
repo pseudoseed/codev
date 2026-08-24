@@ -56,7 +56,11 @@ describe('afx status overlays porch state (issue #109)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsRunning.mockResolvedValue(false);
-    worktree = join(tmpdir(), `bugfix-109-status-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    const root = join(tmpdir(), `bugfix-109-status-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    worktree = join(root, 'bugfix-147');
+    const stale = join(worktree, 'codev', 'projects', '0087-unrelated');
+    mkdirSync(stale, { recursive: true });
+    writeFileSync(join(stale, 'status.yaml'), 'id: "0087"\nprotocol: spir\nphase: complete\n');
     const projectDir = join(worktree, 'codev', 'projects', 'bugfix-147-done');
     mkdirSync(projectDir, { recursive: true });
     writeFileSync(join(projectDir, 'status.yaml'), 'id: bugfix-147\nphase: verified\nbuild_complete: true\n');
@@ -65,12 +69,13 @@ describe('afx status overlays porch state (issue #109)', () => {
       architects: [],
       builders: [{
         id: 'builder-bugfix-147',
-        name: 'bugfix-147',
+        name: 'Bugfix #147: finished builders look live',
         type: 'bugfix',
         status: 'implementing',
         phase: 'init',
         worktree,
         branch: 'builder/bugfix-147',
+        issueNumber: 147,
         terminalId: 'term-1',
         spawnedByArchitect: 'main',
       }],

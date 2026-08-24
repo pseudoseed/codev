@@ -56,4 +56,8 @@ Bare number: `findStatusPath('109')` resolves a unique `bugfix-109`. Ambiguous a
 
 Protocol complete calls `notifyProtocolComplete` → `afx send architect`.
 
-Regression: `bugfix-109-status.test.ts` fails without the overlay map (`implementing` vs `complete`) and passes with it. 115 targeted tests green.
+Regression: `bugfix-109-status.test.ts` fails without the overlay map (`implementing` vs `complete`) and passes with it. 115 targeted tests green. Porch check: build 15.8s, tests 349.6s.
+
+## PR
+
+https://github.com/pseudoseed/codev/pull/136 — CMAP in flight.

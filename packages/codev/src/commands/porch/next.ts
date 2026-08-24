@@ -11,7 +11,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { readState, writeStateAndCommit, findStatusPath, projectNotFoundMessage, getProjectDir, resolveArtifactBaseName } from './state.js';
+import { readState, writeStateAndCommit, findStatusPath, projectNotFoundMessage, getProjectDir, getArtifactRoot, resolveArtifactBaseName } from './state.js';
 import { notifyProtocolComplete } from './notify.js';
 import { getForgeCommand, loadForgeConfig } from '../../lib/forge.js';
 import {
@@ -365,7 +365,7 @@ export async function next(workspaceRoot: string, projectId: string): Promise<Po
       if (!nextPhase) {
         state.phase = 'verified';
         await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} protocol complete`);
-        notifyProtocolComplete(workspaceRoot, state.id);
+        notifyProtocolComplete(getArtifactRoot(statusPath), state.id);
         return next(workspaceRoot, projectId);
       }
 
@@ -869,7 +869,7 @@ async function handleVerifyApproved(
   if (!nextPhase) {
     state.phase = 'verified';
     await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} protocol complete`);
-    notifyProtocolComplete(workspaceRoot, state.id);
+    notifyProtocolComplete(getArtifactRoot(statusPath), state.id);
     return next(workspaceRoot, projectId);
   }
 
