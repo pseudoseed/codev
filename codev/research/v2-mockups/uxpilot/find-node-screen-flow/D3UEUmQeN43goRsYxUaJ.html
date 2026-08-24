@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Find Node</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        cream: '#F5F1E8', paper: '#FFFDF7', card: '#FFFFFF',
+        line: '#E4DDC8', line2: '#D8CFAF', ink: '#1F1B16',
+        sub: '#7A7362', sub2: '#A69F8C',
+        yolk: '#F5A623', yolkdark: '#D6870B',
+        moss: '#4C7A54', mossbg: '#E4EFDF',
+        blush: '#E8604C', blushbg: '#FBE3DD',
+        violet: '#7C5CFC', violetbg: '#EDE7FE',
+        sky: '#2F8FD1', skybg: '#E1F0FB',
+      },
+      fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] },
+      boxShadow: { block: '3px 3px 0 0 rgba(31,27,22,1)', blocksm: '2px 2px 0 0 rgba(31,27,22,1)' }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #F5F1E8; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #D8CFAF; border-radius: 4px; } ::-webkit-scrollbar-track { background: transparent; }
+  .dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
+  .scrim { background: rgba(31,27,22,0.45); }
+</style>
+</head>
+<body class="text-ink font-sans text-[13px]">
+
+<div class="h-[1024px] relative bg-cream">
+
+  <!-- dimmed backdrop -->
+  <div class="absolute inset-0 opacity-50">
+    <header class="border-b-2 border-ink bg-paper flex items-center px-4 h-12">
+      <div class="flex items-center gap-2">
+        <div class="w-6 h-6 rounded-lg bg-ink flex items-center justify-center rotate-[-4deg]"><i class="fa-solid fa-house-chimney text-yolk text-[11px]"></i></div>
+        <span class="font-extrabold text-[14px]">Porch</span>
+      </div>
+    </header>
+    <div class="p-4 grid grid-cols-2 gap-3">
+      <div class="h-40 rounded-xl border-2 border-ink bg-card"></div>
+      <div class="h-40 rounded-xl border-2 border-ink bg-card"></div>
+    </div>
+  </div>
+
+  <!-- palette -->
+  <div class="absolute inset-0 scrim flex items-start justify-center pt-24">
+    <div class="w-full max-w-[600px] rounded-xl border-2 border-ink bg-paper shadow-block overflow-hidden">
+
+      <div class="flex items-center gap-2.5 px-4 h-12 border-b-2 border-ink">
+        <i class="fa-solid fa-magnifying-glass text-sub text-[12px]"></i>
+        <input type="text" value="pay" autofocus class="flex-1 bg-transparent outline-none text-[14px] placeholder:text-sub2 font-medium">
+        <span class="font-mono text-[10px] text-sub px-1.5 py-0.5 rounded border-2 border-line">esc</span>
+      </div>
+
+      <div class="max-h-[420px] overflow-y-auto py-2 px-2">
+
+        <div class="px-2 pt-1.5 pb-1 text-[10px] uppercase tracking-wide text-sub2 font-bold">tower-01 / checkout / payments-arch</div>
+
+        <a href="#" class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg mb-1 border-2 border-blush bg-blushbg">
+          <span class="dot bg-blush"></span>
+          <span class="font-mono text-[13px] font-bold flex-1"><span class="text-violet">pay</span>-2201</span>
+          <span class="text-[10.5px] font-bold text-blush uppercase">Gate · 24m</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg mb-1 hover:bg-cream">
+          <span class="dot bg-moss"></span>
+          <span class="font-mono text-[13px] flex-1"><span class="text-violet">pay</span>-2189</span>
+          <span class="text-[10.5px] text-sub font-medium">Running</span>
+        </a>
+
+        <div class="px-2 pt-2 pb-1 text-[10px] uppercase tracking-wide text-sub2 font-bold">tower-02 / billing-svc (offline)</div>
+
+        <a href="#" class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg mb-1 hover:bg-cream opacity-50">
+          <span class="dot bg-sub2"></span>
+          <span class="font-mono text-[13px] flex-1"><span class="text-violet">pi</span>r-12</span>
+          <span class="text-[10.5px] text-sub2 font-medium">Idle · offline</span>
+        </a>
+
+        <div class="px-2 pt-2 pb-1 text-[10px] uppercase tracking-wide text-sub2 font-bold">Other matches</div>
+
+        <a href="#" class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg mb-1 border-2 border-transparent hover:bg-cream">
+          <span class="dot bg-yolkdark"></span>
+          <span class="font-mono text-[13px] flex-1">bugfix-1441</span>
+          <span class="text-[10.5px] font-bold text-yolkdark uppercase">No output · 6m</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg mb-1 border-2 border-blush bg-blushbg">
+          <span class="dot bg-blush"></span>
+          <span class="font-mono text-[13px] flex-1">bugfix-1455</span>
+          <span class="text-[10.5px] font-bold text-blush uppercase">Gate · 3m</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-cream">
+          <i class="fa-solid fa-compass-drafting text-[11px] text-violet w-[7px]"></i>
+          <span class="text-[13px] flex-1 ml-1.5 font-medium">payments-arch</span>
+          <span class="text-[10.5px] text-sub2">Architect</span>
+        </a>
+
+      </div>
+
+      <div class="flex items-center justify-between px-4 h-9 border-t-2 border-line text-[10px] font-mono text-sub2">
+        <div class="flex items-center gap-3">
+          <span><span class="border-2 border-line px-1 py-0.5 rounded mr-1">↑↓</span>navigate</span>
+          <span><span class="border-2 border-line px-1 py-0.5 rounded mr-1">↵</span>open</span>
+        </div>
+        <span>6 results</span>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

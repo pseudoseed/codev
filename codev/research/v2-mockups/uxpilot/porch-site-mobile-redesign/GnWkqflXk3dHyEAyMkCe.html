@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Site</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        canvas: '#0B0D0F',
+        panel: '#111417',
+        panel2: '#161A1E',
+        line: '#242A30',
+        line2: '#2E353D',
+        ink: '#E7EAED',
+        sub: '#8B939C',
+        sub2: '#5C646D',
+        accent: '#3B82F6',
+        red: '#EF4444',
+        amber: '#F59E0B',
+        green: '#22C55E',
+      },
+      fontFamily: {
+        sans: ['Inter', 'sans-serif'],
+        mono: ['JetBrains Mono', 'monospace'],
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #0B0D0F; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #2E353D; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  .row-hover:hover { background: #161A1E; }
+  .dot { width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0; }
+</style>
+</head>
+<body class="text-ink font-sans text-[13px]">
+
+<div id="app" class="h-[1024px] flex flex-col">
+
+  <!-- TOP BAR -->
+  <header id="header" class="border-b border-line bg-panel flex items-center justify-between px-4 h-12 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <div class="w-5 h-5 rounded bg-accent flex items-center justify-center">
+          <i class="fa-solid fa-diagram-project text-white text-[10px]"></i>
+        </div>
+        <span class="font-semibold text-[13px]">Porch</span>
+      </div>
+      <div class="h-4 w-px bg-line"></div>
+      <div class="flex items-center gap-1 text-sub text-[12px]">
+        <span class="text-ink font-medium">Site</span>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <button class="flex items-center gap-2 h-7 px-2.5 rounded bg-panel2 border border-line hover:border-line2 text-[12px] text-sub">
+        <i class="fa-solid fa-magnifying-glass text-[11px]"></i>
+        <span>Find</span>
+        <span class="px-1 py-0.5 rounded bg-canvas border border-line text-[10px] font-mono text-sub2">⌘K</span>
+      </button>
+      <button class="flex items-center gap-1.5 h-7 px-2.5 rounded bg-panel2 border border-line hover:border-line2 text-[12px] text-sub">
+        <i class="fa-solid fa-plus text-[11px]"></i>
+        <span>Machine</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="flex flex-1 min-h-0">
+
+    <!-- GATE QUEUE — compact, always-visible left rail -->
+    <aside id="gate-rail" class="w-[280px] shrink-0 border-r border-line bg-panel flex flex-col">
+      <div class="h-9 flex items-center justify-between px-3 border-b border-line shrink-0">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-sub">Needs you · 3</span>
+      </div>
+      <div class="flex-1 overflow-y-auto">
+        <a href="#" class="flex flex-col gap-0.5 px-3 py-2 border-b border-line row-hover border-l-2 border-l-red bg-red/5">
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-[12px] font-medium">pay-2201</span>
+            <span class="font-mono text-[10px] text-red">24m</span>
+          </div>
+          <span class="text-[11px] text-sub truncate">Delete legacy refund table or keep for audit?</span>
+          <span class="text-[10px] text-sub2 font-mono">checkout / payments-arch</span>
+        </a>
+        <a href="#" class="flex flex-col gap-0.5 px-3 py-2 border-b border-line row-hover border-l-2 border-l-transparent">
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-[12px] font-medium">air-22</span>
+            <span class="font-mono text-[10px] text-sub2">9m</span>
+          </div>
+          <span class="text-[11px] text-sub truncate">Approve new snapshot baseline?</span>
+          <span class="text-[10px] text-sub2 font-mono">marketing-site / redesign-arch</span>
+        </a>
+        <a href="#" class="flex flex-col gap-0.5 px-3 py-2 border-b border-line row-hover border-l-2 border-l-transparent">
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-[12px] font-medium">bugfix-1455</span>
+            <span class="font-mono text-[10px] text-sub2">3m</span>
+          </div>
+          <span class="text-[11px] text-sub truncate">Use prod rate-limit value?</span>
+          <span class="text-[10px] text-sub2 font-mono">api-core / rate-limits-arch</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- MAIN: flat hierarchical list, Machine > Architect > Builder -->
+    <main class="flex-1 overflow-y-auto bg-canvas">
+
+      <!-- column header -->
+      <div class="sticky top-0 z-10 h-8 flex items-center px-4 border-b border-line bg-canvas text-[10px] uppercase tracking-wide text-sub2 font-medium">
+        <div class="w-[26px]"></div>
+        <div class="flex-1">Name</div>
+        <div class="w-[160px]">Status</div>
+        <div class="w-[90px] text-right">Time</div>
+        <div class="w-[40px]"></div>
+      </div>
+
+      <!-- MACHINE: tower-01 -->
+      <div id="machine-tower-01">
+        <div class="flex items-center h-8 px-4 bg-panel border-b border-line">
+          <i class="fa-solid fa-chevron-down text-[9px] text-sub2 w-[18px]"></i>
+          <span class="dot bg-green mr-2"></span>
+          <span class="font-medium text-[12px]">tower-01</span>
+          <span class="text-sub2 text-[11px] ml-2">Mac Studio</span>
+          <span class="ml-auto font-mono text-[10px] text-sub2">41% load</span>
+        </div>
+
+        <!-- ARCHITECT: payments-arch -->
+        <div id="architect-payments">
+          <div class="flex items-center h-7 pl-8 pr-4 border-b border-line/60">
+            <i class="fa-solid fa-chevron-down text-[8px] text-sub2 w-[18px]"></i>
+            <i class="fa-solid fa-diagram-project text-[10px] text-accent mr-2 w-3"></i>
+            <span class="text-[12px] text-sub">payments-arch</span>
+            <span class="ml-2 text-[10px] font-mono text-sub2">checkout</span>
+            <span class="ml-auto text-[10px] font-mono text-sub2">2 builders</span>
+          </div>
+
+          <a href="#" class="flex items-center h-8 pl-12 pr-4 border-b border-line/60 row-hover">
+            <span class="dot bg-red mr-2"></span>
+            <span class="flex-1 font-mono text-[12px]">pay-2201</span>
+            <span class="w-[160px] text-[11px] text-red font-medium">Waiting on gate</span>
+            <span class="w-[90px] text-right font-mono text-[11px] text-red">24m</span>
+            <span class="w-[40px] text-right"><i class="fa-solid fa-chevron-right text-[10px] text-sub2"></i></span>
+          </a>
+          <a href="#" class="flex items-center h-8 pl-12 pr-4 border-b border-line/60 row-hover">
+            <span class="dot bg-green mr-2"></span>
+            <span class="flex-1 font-mono text-[12px]">pay-2189</span>
+            <span class="w-[160px] text-[11px] text-sub">Running · 22/48 tests</span>
+            <span class="w-[90px] text-right font-mono text-[11px] text-sub2">11m</span>
+            <span class="w-[40px] text-right"><i class="fa-solid fa-chevron-right text-[10px] text-sub2"></i></span>
+          </a>
+        </div>
+
+        <!-- ARCHITECT: rate-limits-arch -->
+        <div id="architect-ratelimits">
+          <div class="flex items-center h-7 pl-8 pr-4 border-b border-line/60">
+            <i class="fa-solid fa-chevron-down text-[8px] text-sub2 w-[18px]"></i>
+            <i class="fa-solid fa-diagram-project text-[10px] text-accent mr-2 w-3"></i>
+            <span class="text-[12px] text-sub">rate-limits-arch</span>
+            <span class="ml-2 text-[10px] font-mono text-sub2">api-core</span>
+            <span class="ml-auto text-[10px] font-mono text-sub2">2 builders</span>
+          </div>
+
+          <a href="#" class="flex items-center h-8 pl-12 pr-4 border-b border-line/60 row-hover">
+            <span class="dot bg-red mr-2"></span>
+            <span class="flex-1 font-mono text-[12px]">bugfix-1455</span>
+            <span class="w-[160px] text-[11px] text-red font-medium">Waiting on gate</span>
+            <span class="w-[90px] text-right font-mono text-[11px] text-red">3m</span>
+            <span class="w-[40px] text-right"><i class="fa-solid fa-chevron-right text-[10px] text-sub2"></i></span>
+          </a>
+          <a href="#" class="flex items-center h-8 pl-12 pr-4 border-b border-line/60 row-hover">
+            <span class="dot bg-amber mr-2"></span>
+            <span class="flex-1 font-mono text-[12px]">bugfix-1441</span>
+            <span class="w-[160px] text-[11px] text-amber">No output · 6m</span>
+            <span class="w-[90px] text-right font-mono text-[11px] text-sub2">14m</span>
+            <span class="w-[40px] text-right"><i class="fa-solid fa-chevron-right text-[10px] text-sub2"></i></span>
+          </a>
+        </div>
+
+        <!-- ARCHITECT: redesign-arch -->
+        <div id="architect-redesign">
+          <div class="flex items-center h-7 pl-8 pr-4 border-b border-line/60">
+            <i class="fa-solid fa-chevron-down text-[8px] text-sub2 w-[18px]"></i>
+            <i class="fa-solid fa-diagram-project text-[10px] text-accent mr-2 w-3"></i>
+            <span class="text-[12px] text-sub">redesign-arch</span>
+            <span class="ml-2 text-[10px] font-mono text-sub2">marketing-site</span>
+            <span class="ml-auto text-[10px] font-mono text-sub2">3 builders</span>
+          </div>
+
+          <a href="#" class="flex items-center h-8 pl-12 pr-4 border-b border-line/60 row-hover">
+            <span class="dot bg-red mr-2"></span>
+            <span class="flex-1 font-mono text-[12px]">air-22</span>
+            <span class="w-[160px] text-[11px] text-red font-medium">Waiting on gate</span>
+            <span class="w-[90px] text-right font-mono text-[11px] text-red">9m</span>
+            <span class="w-[40px] text-right"><i class="fa-solid fa-chevron-right text-[10px] text-sub2"></i></span>
+          </a>
+          <a href="#" class="flex items-center h-8 pl-12 pr-4 border-b border-line/60 row-hover">
+            <span class="dot bg-green mr-2"></span>
+            <span class="flex-1 font-mono text-[12px]">air-19</span>
+            <span class="w-[160px] text-[11px] text-sub">Running · build</span>
+            <span class="w-[90px] text-right font-mono text-[11px] text-sub2">4m</span>
+            <span class="w-[40px] text-right"><i class="fa-solid fa-chevron-right text-[10px] text-sub2"></i></span>
+          </a>
+          <a href="#" class="flex items-center h-8 pl-12 pr-4 border-b border-line/60 row-hover opacity-50">
+            <span class="dot bg-sub2 mr-2"></span>
+            <span class="flex-1 font-mono text-[12px]">air-18</span>
+            <span class="w-[160px] text-[11px] text-sub2">Idle</span>
+            <span class="w-[90px] text-right font-mono text-[11px] text-sub2">—</span>
+            <span class="w-[40px] text-right"><i class="fa-solid fa-chevron-right text-[10px] text-sub2"></i></span>
+          </a>
+        </div>
+      </div>
+
+      <!-- MACHINE: tower-02 (offline) -->
+      <div id="machine-tower-02" class="opacity-50">
+        <div class="flex items-center h-8 px-4 bg-panel border-b border-line">
+          <i class="fa-solid fa-chevron-right text-[9px] text-sub2 w-[18px]"></i>
+          <span class="dot bg-sub2 mr-2"></span>
+          <span class="font-medium text-[12px]">tower-02</span>
+          <span class="text-sub2 text-[11px] ml-2">Linux box</span>
+          <span class="ml-auto font-mono text-[10px] text-sub2">offline · 2h ago</span>
+        </div>
+      </div>
+
+      <!-- MACHINE: gpu-box -->
+      <div id="machine-gpu-box">
+        <div class="flex items-center h-8 px-4 bg-panel border-b border-line">
+          <i class="fa-solid fa-chevron-down text-[9px] text-sub2 w-[18px]"></i>
+          <span class="dot bg-green mr-2"></span>
+          <span class="font-medium text-[12px]">gpu-box</span>
+          <span class="text-sub2 text-[11px] ml-2">Linux · 4x A100</span>
+          <span class="ml-auto font-mono text-[10px] text-sub2">78% load</span>
+        </div>
+
+        <div id="architect-ml-pipeline">
+          <div class="flex items-center h-7 pl-8 pr-4 border-b border-line/60">
+            <i class="fa-solid fa-chevron-down text-[8px] text-sub2 w-[18px]"></i>
+            <i class="fa-solid fa-diagram-project text-[10px] text-accent mr-2 w-3"></i>
+            <span class="text-[12px] text-sub">ml-pipeline-arch</span>
+            <span class="ml-2 text-[10px] font-mono text-sub2">inference-svc</span>
+            <span class="ml-auto text-[10px] font-mono text-sub2">2 builders</span>
+          </div>
+          <a href="#" class="flex items-center h-8 pl-12 pr-4 border-b border-line/60 row-hover">
+            <span class="dot bg-green mr-2"></span>
+            <span class="flex-1 font-mono text-[12px]">infer-04</span>
+            <span class="w-[160px] text-[11px] text-sub">Running · benchmark</span>
+            <span class="w-[90px] text-right font-mono text-[11px] text-sub2">31m</span>
+            <span class="w-[40px] text-right"><i class="fa-solid fa-chevron-right text-[10px] text-sub2"></i></span>
+          </a>
+          <a href="#" class="flex items-center h-8 pl-12 pr-4 border-b border-line/60 row-hover opacity-50">
+            <span class="dot bg-sub2 mr-2"></span>
+            <span class="flex-1 font-mono text-[12px]">infer-03</span>
+            <span class="w-[160px] text-[11px] text-sub2">Idle</span>
+            <span class="w-[90px] text-right font-mono text-[11px] text-sub2">—</span>
+            <span class="w-[40px] text-right"><i class="fa-solid fa-chevron-right text-[10px] text-sub2"></i></span>
+          </a>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- STATUS BAR -->
+  <footer id="footer" class="h-6 shrink-0 border-t border-line bg-panel flex items-center justify-between px-4 text-[10px] font-mono text-sub2">
+    <div class="flex items-center gap-3">
+      <span>3 machines</span>
+      <span>5 architects</span>
+      <span>11 builders</span>
+    </div>
+    <div class="flex items-center gap-3">
+      <span class="text-red">3 gates open</span>
+    </div>
+  </footer>
+
+</div>
+
+</body>
+</html>

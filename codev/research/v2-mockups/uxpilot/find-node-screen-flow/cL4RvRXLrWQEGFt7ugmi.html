@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Find Node</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        bone: '#EDE8DE', chalk: '#F6F3EB', concrete: '#DAD3C4',
+        ink: '#221F1A', graphite: '#4A463D', rust: '#B5502A',
+        rustdark: '#8C3D1F', ochre: '#C08A2E', moss: '#5C6B4F',
+      },
+      fontFamily: {
+        display: ['Fraunces', 'serif'], sans: ['Space Grotesk', 'sans-serif'], mono: ['IBM Plex Mono', 'monospace'],
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #EDE8DE; }
+  .stamp { font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.06em; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #C7BFAC; } ::-webkit-scrollbar-track { background: transparent; }
+  .scrim { background: rgba(34,31,26,0.55); }
+  .spark { display: flex; align-items: flex-end; gap: 2px; height: 16px; }
+  .spark i { display:block; width: 2.5px; background: #221F1A; }
+</style>
+</head>
+<body class="text-ink font-sans">
+
+<div class="min-h-[900px] relative">
+
+  <!-- backdrop: dimmed site (context) -->
+  <div class="absolute inset-0 opacity-30 blur-[1px] pointer-events-none select-none">
+    <header class="border-b-[1.5px] border-ink bg-chalk flex items-center justify-between px-6 h-16">
+      <div class="flex items-center gap-2.5">
+        <div class="w-8 h-8 border-[1.5px] border-ink bg-ink flex items-center justify-center"><i class="fa-solid fa-compass-drafting text-chalk text-sm"></i></div>
+        <div class="font-display font-semibold text-lg">Porch</div>
+      </div>
+    </header>
+    <div class="p-6 grid grid-cols-3 gap-4">
+      <div class="h-48 border-[1.5px] border-ink bg-bone"></div>
+      <div class="h-48 border-[1.5px] border-ink bg-bone"></div>
+      <div class="h-48 border-[1.5px] border-ink bg-bone"></div>
+    </div>
+  </div>
+
+  <!-- scrim + palette -->
+  <div class="absolute inset-0 scrim flex items-start justify-center pt-28">
+    <div class="w-full max-w-[720px] border-[1.5px] border-ink bg-chalk shadow-[8px_8px_0_0_rgba(34,31,26,0.25)]">
+
+      <!-- search input -->
+      <div class="flex items-center gap-3 px-5 h-14 border-b-[1.5px] border-ink">
+        <i class="fa-solid fa-magnifying-glass text-graphite"></i>
+        <input type="text" value="pay" autofocus class="flex-1 bg-transparent outline-none stamp text-[15px] text-ink placeholder:text-graphite/50" placeholder="Jump to machine, workspace, architect, or builder…">
+        <span class="stamp text-[10px] text-graphite uppercase px-1.5 py-0.5 border border-concrete">esc</span>
+      </div>
+
+      <!-- filter chips -->
+      <div class="flex items-center gap-2 px-5 py-2.5 border-b border-concrete stamp text-[10px] uppercase">
+        <span class="px-2 py-1 bg-ink text-chalk">all · 6</span>
+        <span class="px-2 py-1 text-graphite border border-concrete">machines · 0</span>
+        <span class="px-2 py-1 text-graphite border border-concrete">workspaces · 0</span>
+        <span class="px-2 py-1 text-graphite border border-concrete">architects · 1</span>
+        <span class="px-2 py-1 text-graphite border border-concrete">builders · 5</span>
+      </div>
+
+      <!-- results -->
+      <div class="max-h-[420px] overflow-y-auto">
+
+        <div class="px-5 pt-3 pb-1 stamp text-[10px] uppercase text-graphite/60 tracking-wider">Workspace / checkout — tower-01</div>
+
+        <a href="#" class="flex items-center gap-3 px-5 py-2.5 bg-bone border-y border-ink/10">
+          <i class="fa-solid fa-compass-drafting w-4 text-center text-graphite"></i>
+          <div class="flex-1 min-w-0">
+            <div class="stamp text-[13px]"><span class="text-rust font-semibold">pay</span>ment architect — <span class="text-rust font-semibold">pay</span>-2201's parent</div>
+            <div class="stamp text-[10px] text-graphite uppercase">architect/checkout-v3 · planning</div>
+          </div>
+          <span class="stamp text-[10px] uppercase text-graphite/60">↵ open</span>
+        </a>
+
+        <a href="#" class="flex items-center gap-3 px-5 py-3 hover:bg-bone">
+          <i class="fa-solid fa-person-digging w-4 text-center text-rust"></i>
+          <div class="flex-1 min-w-0">
+            <div class="stamp text-[13px] font-medium">builder/<span class="text-rust font-semibold">pay</span>-2201</div>
+            <div class="stamp text-[10px] text-graphite uppercase">checkout · gate waiting · held 24 min</div>
+          </div>
+          <div class="spark shrink-0">
+            <i style="height:3px" class="bg-graphite/30"></i><i style="height:3px" class="bg-graphite/30"></i><i style="height:2px" class="bg-graphite/20"></i><i style="height:2px" class="bg-graphite/20"></i><i style="height:2px" class="bg-graphite/20"></i>
+          </div>
+          <span class="stamp text-[9px] uppercase text-rust border border-rust px-1.5 py-0.5">gate</span>
+        </a>
+
+        <a href="#" class="flex items-center gap-3 px-5 py-3 hover:bg-bone">
+          <i class="fa-solid fa-person-digging w-4 text-center text-moss"></i>
+          <div class="flex-1 min-w-0">
+            <div class="stamp text-[13px] font-medium">builder/<span class="text-rust font-semibold">pay</span>-2189</div>
+            <div class="stamp text-[10px] text-graphite uppercase">checkout · running · vitest 22/48</div>
+          </div>
+          <div class="spark shrink-0">
+            <i style="height:6px" class="bg-moss"></i><i style="height:12px" class="bg-moss"></i><i style="height:9px" class="bg-moss"></i><i style="height:16px" class="bg-moss"></i><i style="height:11px" class="bg-moss"></i>
+          </div>
+        </a>
+
+        <div class="px-5 pt-3 pb-1 stamp text-[10px] uppercase text-graphite/60 tracking-wider">Workspace / billing-svc — tower-02 (offline)</div>
+
+        <a href="#" class="flex items-center gap-3 px-5 py-3 hover:bg-bone opacity-60">
+          <i class="fa-solid fa-person-digging w-4 text-center text-graphite"></i>
+          <div class="flex-1 min-w-0">
+            <div class="stamp text-[13px] font-medium">builder/<span class="text-rust font-semibold">pi</span>r-12</div>
+            <div class="stamp text-[10px] text-graphite uppercase">billing-svc · idle · machine offline</div>
+          </div>
+          <div class="spark shrink-0">
+            <i style="height:2px" class="bg-graphite/20"></i><i style="height:2px" class="bg-graphite/20"></i><i style="height:2px" class="bg-graphite/20"></i><i style="height:2px" class="bg-graphite/20"></i><i style="height:2px" class="bg-graphite/20"></i>
+          </div>
+        </a>
+
+        <div class="px-5 pt-3 pb-1 stamp text-[10px] uppercase text-graphite/60 tracking-wider">Other matches</div>
+
+        <a href="#" class="flex items-center gap-3 px-5 py-3 hover:bg-bone">
+          <i class="fa-solid fa-person-digging w-4 text-center text-ochre"></i>
+          <div class="flex-1 min-w-0">
+            <div class="stamp text-[13px] font-medium">builder/bugfix-1441</div>
+            <div class="stamp text-[10px] text-graphite uppercase">api-core · no output 6 min</div>
+          </div>
+          <div class="spark shrink-0">
+            <i style="height:14px" class="bg-ochre/70"></i><i style="height:3px" class="bg-graphite/20"></i><i style="height:2px" class="bg-graphite/20"></i><i style="height:2px" class="bg-graphite/20"></i><i style="height:2px" class="bg-graphite/20"></i>
+          </div>
+        </a>
+
+        <a href="#" class="flex items-center gap-3 px-5 py-3 hover:bg-bone">
+          <i class="fa-solid fa-person-digging w-4 text-center text-rust"></i>
+          <div class="flex-1 min-w-0">
+            <div class="stamp text-[13px] font-medium">builder/bugfix-1455</div>
+            <div class="stamp text-[10px] text-graphite uppercase">api-core · gate waiting · held 3 min</div>
+          </div>
+          <span class="stamp text-[9px] uppercase text-rust border border-rust px-1.5 py-0.5">gate</span>
+        </a>
+
+      </div>
+
+      <!-- footer hint bar -->
+      <div class="flex items-center justify-between px-5 h-10 border-t-[1.5px] border-ink stamp text-[10px] uppercase text-graphite">
+        <div class="flex items-center gap-4">
+          <span><span class="border border-concrete px-1.5 py-0.5 mr-1">↑↓</span>navigate</span>
+          <span><span class="border border-concrete px-1.5 py-0.5 mr-1">↵</span>open</span>
+          <span><span class="border border-concrete px-1.5 py-0.5 mr-1">tab</span>filter</span>
+        </div>
+        <span>6 results across 2 machines</span>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

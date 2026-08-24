@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Add Machine</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        window.FontAwesomeConfig = { autoReplaceSvg: 'nest' };
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/js/all.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+          theme: {
+            extend: {
+              colors: {
+                cream: '#F5F1E8', paper: '#FFFDF7', card: '#FFFFFF',
+                line: '#E4DDC8', line2: '#D8CFAF', ink: '#1F1B16',
+                sub: '#7A7362', sub2: '#A69F8C',
+                yolk: '#F5A623', yolkdark: '#D6870B',
+                moss: '#4C7A54', mossbg: '#E4EFDF',
+                blush: '#E8604C', blushbg: '#FBE3DD',
+                sky: '#2F8FD1', skybg: '#E1F0FB',
+              },
+              fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] },
+              boxShadow: { block: '3px 3px 0 0 rgba(31,27,22,1)', blocksm: '2px 2px 0 0 rgba(31,27,22,1)' }
+            }
+          }
+        }
+    </script>
+    <style>
+      body { background: #F5F1E8; }
+      ::-webkit-scrollbar { display: none; }
+      .dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
+      .qr {
+        background-image:
+          repeating-linear-gradient(0deg, #1F1B16 0 4px, transparent 4px 8px),
+          repeating-linear-gradient(90deg, #1F1B16 0 4px, transparent 4px 8px);
+        background-blend-mode: multiply;
+        opacity: 0.85;
+      }
+      .blink { animation: blink 1.4s steps(1) infinite; }
+      @keyframes blink { 50% { opacity: 0.3; } }
+      .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+    </style>
+</head>
+<body class="text-ink font-sans text-[13px] overflow-x-hidden">
+
+<div class="min-h-screen flex flex-col bg-cream max-w-md mx-auto relative border-x border-line2 shadow-2xl">
+
+  <!-- Mobile Header -->
+  <header id="header" class="sticky top-0 z-50 border-b-2 border-ink bg-paper flex items-center justify-between px-4 h-14 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <div class="w-7 h-7 rounded-lg bg-ink flex items-center justify-center rotate-[-4deg]">
+          <i class="fa-solid fa-house-chimney text-yolk text-[12px]"></i>
+        </div>
+        <span class="font-extrabold text-[16px] tracking-tight">Porch</span>
+      </div>
+      <div class="h-5 w-px bg-line2"></div>
+      <span class="text-ink font-bold text-[12px]">Add machine</span>
+    </div>
+    <button class="w-10 h-10 flex items-center justify-center rounded-lg bg-paper border-2 border-ink active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all shadow-blocksm">
+      <i class="fa-solid fa-magnifying-glass text-[14px]"></i>
+    </button>
+  </header>
+
+  <main class="flex-1 overflow-y-auto px-4 py-6 space-y-6">
+    
+    <!-- Title Section -->
+    <div id="title-block">
+      <h1 class="text-[22px] font-extrabold mb-1 tracking-tight leading-tight">Add a new machine</h1>
+      <p class="text-[14px] text-sub">Connect a tower to your site fleet.</p>
+    </div>
+
+    <!-- Pairing Card (Moved Up for Mobile Visibility) -->
+    <div id="pairing-card" class="border-2 border-ink rounded-xl bg-card shadow-block overflow-hidden">
+      <div class="flex items-center justify-between px-4 py-3 border-b-2 border-line">
+        <span class="text-[13px] font-bold">Pairing Session</span>
+        <span class="flex items-center gap-2 text-[11px] text-yolkdark font-bold font-mono uppercase bg-yolk/10 px-2 py-0.5 rounded">
+          <span class="w-1.5 h-1.5 bg-yolkdark rounded-full blink"></span>waiting
+        </span>
+      </div>
+      <div class="p-6 flex flex-col items-center">
+        <div class="w-[180px] h-[180px] qr rounded-lg border-2 border-ink bg-cream flex items-center justify-center">
+            <!-- Simulated QR Pattern -->
+        </div>
+        <div class="font-mono text-[18px] tracking-[0.25em] font-bold mt-5 px-4 py-2 rounded-lg bg-cream border-2 border-ink shadow-blocksm">7F3K-91QD</div>
+        <div class="text-[11px] text-sub font-mono mt-3 font-medium">expires in <span class="text-blush font-bold">04:52</span></div>
+      </div>
+      <div class="px-4 py-4 border-t-2 border-line bg-paper/50 space-y-2.5">
+        <div class="flex items-center gap-3 text-[12px] text-sub font-medium">
+          <div class="w-5 h-5 rounded-full bg-mossbg flex items-center justify-center">
+            <i class="fa-solid fa-check text-moss text-[10px]"></i>
+          </div>
+          <span>agent installed</span>
+        </div>
+        <div class="flex items-center gap-3 text-[12px] text-sub font-medium">
+          <div class="w-5 h-5 rounded-full bg-mossbg flex items-center justify-center">
+            <i class="fa-solid fa-check text-moss text-[10px]"></i>
+          </div>
+          <span>tunnel opened</span>
+        </div>
+        <div class="flex items-center gap-3 text-[12px] font-bold">
+          <div class="w-5 h-5 flex items-center justify-center">
+            <i class="fa-solid fa-spinner animate-spin text-yolk text-[12px]"></i>
+          </div>
+          <span>waiting for pairing…</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Instructions -->
+    <div id="instructions" class="space-y-4">
+      <div class="text-[11px] uppercase tracking-wider text-sub font-black mb-2 px-1">Setup Instructions</div>
+      
+      <!-- Step 1 -->
+      <div class="border-2 border-ink rounded-xl bg-card shadow-block p-4">
+        <div class="flex items-center gap-3 mb-3">
+          <span class="w-7 h-7 rounded-full bg-yolk border-2 border-ink text-ink text-[12px] font-black flex items-center justify-center shrink-0">1</span>
+          <span class="text-[14px] font-bold">Install Agent</span>
+        </div>
+        <div class="flex items-center justify-between rounded-lg bg-cream border-2 border-line p-3 min-h-[48px]">
+          <code class="font-mono text-[12px] text-ink break-all overflow-hidden mr-2">curl -fsSL porch.dev/install.sh | sh</code>
+          <button class="w-8 h-8 shrink-0 flex items-center justify-center rounded-md hover:bg-line2 transition-colors active:scale-95">
+            <i class="fa-regular fa-copy text-sub"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 2 -->
+      <div class="border-2 border-ink rounded-xl bg-card shadow-block p-4">
+        <div class="flex items-center gap-3 mb-3">
+          <span class="w-7 h-7 rounded-full bg-yolk border-2 border-ink text-ink text-[12px] font-black flex items-center justify-center shrink-0">2</span>
+          <span class="text-[14px] font-bold">Pair Site</span>
+        </div>
+        <div class="flex items-center justify-between rounded-lg bg-cream border-2 border-line p-3 min-h-[48px]">
+          <code class="font-mono text-[12px] text-ink break-all overflow-hidden mr-2">porch pair --site=foreman-hq</code>
+          <button class="w-8 h-8 shrink-0 flex items-center justify-center rounded-md hover:bg-line2 transition-colors active:scale-95">
+            <i class="fa-regular fa-copy text-sub"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 3 -->
+      <div class="border-2 border-line2 rounded-xl bg-card p-4 opacity-50">
+        <div class="flex items-center gap-3 mb-3">
+          <span class="w-7 h-7 rounded-full bg-cream border-2 border-line2 text-sub2 text-[12px] font-black flex items-center justify-center shrink-0">3</span>
+          <span class="text-[14px] font-bold">Machine Name</span>
+        </div>
+        <input type="text" disabled placeholder="e.g. tower-03" class="w-full h-12 bg-cream border-2 border-line rounded-lg px-4 text-[13px] text-sub2 placeholder:text-sub2 font-mono">
+      </div>
+    </div>
+
+    <!-- Active Machines -->
+    <div id="fleet-status" class="pt-4 pb-8">
+      <div class="text-[11px] uppercase tracking-wider text-sub font-black mb-3 px-1">Already on site</div>
+      <div class="space-y-2">
+        <div class="flex items-center gap-3 px-4 h-12 rounded-xl border-2 border-line bg-card">
+          <span class="dot bg-moss"></span>
+          <span class="font-bold text-[13px]">tower-01</span>
+          <span class="ml-auto font-mono text-[11px] text-sub px-2 py-0.5 rounded bg-cream border border-line">online</span>
+        </div>
+        <div class="flex items-center gap-3 px-4 h-12 rounded-xl border-2 border-line bg-card opacity-60">
+          <span class="dot bg-sub2"></span>
+          <span class="font-bold text-[13px]">tower-02</span>
+          <span class="ml-auto font-mono text-[11px] text-sub px-2 py-0.5 rounded bg-cream border border-line">offline</span>
+        </div>
+        <div class="flex items-center gap-3 px-4 h-12 rounded-xl border-2 border-line bg-card">
+          <span class="dot bg-moss"></span>
+          <span class="font-bold text-[13px]">gpu-box</span>
+          <span class="ml-auto font-mono text-[11px] text-sub px-2 py-0.5 rounded bg-cream border border-line">online</span>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Mobile Footer / Bottom Nav -->
+  <footer id="footer" class="sticky bottom-0 z-50 border-t-2 border-ink bg-paper flex items-center justify-between px-4 h-12 shrink-0 safe-bottom">
+    <div class="flex items-center gap-2">
+      <span class="w-2 h-2 rounded-full bg-moss"></span>
+      <span class="text-[10px] font-mono font-bold uppercase tracking-tight text-ink">3 machines active</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-[10px] font-mono text-yolkdark font-black tracking-tighter">PAIRING ACTIVE</span>
+    </div>
+  </footer>
+
+  <!-- Floating Mobile Menu Button -->
+  <button id="mobile-menu" class="fixed bottom-16 right-6 w-14 h-14 rounded-full bg-ink text-yolk border-2 border-paper shadow-block flex items-center justify-center z-[100] active:scale-90 transition-transform">
+    <i class="fa-solid fa-plus text-xl"></i>
+  </button>
+
+</div>
+
+<script>
+    // Handle simple interactions for mobile UI
+    document.addEventListener('DOMContentLoaded', () => {
+        const qrBox = document.querySelector('.qr');
+        // Simple visual feedback for "copy" buttons
+        const copyBtns = document.querySelectorAll('.fa-copy');
+        copyBtns.forEach(btn => {
+            btn.parentElement.addEventListener('click', () => {
+                const originalClass = btn.className;
+                btn.className = 'fa-solid fa-check text-moss';
+                setTimeout(() => {
+                    btn.className = originalClass;
+                }, 2000);
+            });
+        });
+    });
+</script>
+
+</body>
+</html>

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Find Node</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        canvas: '#0B0D0F', panel: '#111417', panel2: '#161A1E',
+        line: '#242A30', line2: '#2E353D', ink: '#E7EAED',
+        sub: '#8B939C', sub2: '#5C646D', accent: '#3B82F6',
+        red: '#EF4444', amber: '#F59E0B', green: '#22C55E',
+      },
+      fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #0B0D0F; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #2E353D; border-radius: 4px; } ::-webkit-scrollbar-track { background: transparent; }
+  .dot { width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0; }
+  .scrim { background: rgba(11,13,15,0.7); }
+</style>
+</head>
+<body class="text-ink font-sans text-[13px]">
+
+<div class="h-[1024px] relative bg-canvas">
+
+  <!-- dimmed backdrop -->
+  <div class="absolute inset-0 opacity-40">
+    <header class="border-b border-line bg-panel flex items-center px-4 h-12">
+      <div class="flex items-center gap-2">
+        <div class="w-5 h-5 rounded bg-accent flex items-center justify-center"><i class="fa-solid fa-diagram-project text-white text-[10px]"></i></div>
+        <span class="font-semibold text-[13px]">Porch</span>
+      </div>
+    </header>
+    <div class="p-4 space-y-2">
+      <div class="h-8 bg-panel border-b border-line"></div>
+      <div class="h-8 bg-panel border-b border-line"></div>
+      <div class="h-8 bg-panel border-b border-line"></div>
+    </div>
+  </div>
+
+  <!-- palette -->
+  <div class="absolute inset-0 scrim flex items-start justify-center pt-24">
+    <div class="w-full max-w-[600px] rounded-lg border border-line2 bg-panel shadow-2xl overflow-hidden">
+
+      <div class="flex items-center gap-2.5 px-4 h-11 border-b border-line">
+        <i class="fa-solid fa-magnifying-glass text-sub2 text-[12px]"></i>
+        <input type="text" value="pay" autofocus class="flex-1 bg-transparent outline-none text-[14px] placeholder:text-sub2">
+        <span class="font-mono text-[10px] text-sub2 px-1.5 py-0.5 rounded border border-line">esc</span>
+      </div>
+
+      <div class="max-h-[420px] overflow-y-auto py-1">
+
+        <div class="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wide text-sub2">tower-01 / checkout / payments-arch</div>
+
+        <a href="#" class="flex items-center gap-2.5 px-4 py-2 hover:bg-panel2 border-l-2 border-l-red">
+          <span class="dot bg-red"></span>
+          <span class="font-mono text-[13px] font-medium flex-1"><span class="text-accent">pay</span>-2201</span>
+          <span class="text-[11px] text-red">Gate · 24m</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-4 py-2 hover:bg-panel2 border-l-2 border-l-transparent">
+          <span class="dot bg-green"></span>
+          <span class="font-mono text-[13px] flex-1"><span class="text-accent">pay</span>-2189</span>
+          <span class="text-[11px] text-sub">Running</span>
+        </a>
+
+        <div class="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wide text-sub2">tower-02 / billing-svc (offline)</div>
+
+        <a href="#" class="flex items-center gap-2.5 px-4 py-2 hover:bg-panel2 opacity-50">
+          <span class="dot bg-sub2"></span>
+          <span class="font-mono text-[13px] flex-1"><span class="text-accent">pi</span>r-12</span>
+          <span class="text-[11px] text-sub2">Idle · offline</span>
+        </a>
+
+        <div class="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wide text-sub2">Other matches</div>
+
+        <a href="#" class="flex items-center gap-2.5 px-4 py-2 hover:bg-panel2 border-l-2 border-l-amber">
+          <span class="dot bg-amber"></span>
+          <span class="font-mono text-[13px] flex-1">bugfix-1441</span>
+          <span class="text-[11px] text-amber">No output · 6m</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-4 py-2 hover:bg-panel2 border-l-2 border-l-red">
+          <span class="dot bg-red"></span>
+          <span class="font-mono text-[13px] flex-1">bugfix-1455</span>
+          <span class="text-[11px] text-red">Gate · 3m</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-4 py-2 hover:bg-panel2">
+          <i class="fa-solid fa-diagram-project text-[11px] text-accent w-[6px]"></i>
+          <span class="text-[13px] flex-1 ml-1.5">payments-arch</span>
+          <span class="text-[11px] text-sub2">Architect</span>
+        </a>
+
+      </div>
+
+      <div class="flex items-center justify-between px-4 h-9 border-t border-line text-[10px] font-mono text-sub2">
+        <div class="flex items-center gap-3">
+          <span><span class="border border-line px-1 py-0.5 rounded mr-1">↑↓</span>navigate</span>
+          <span><span class="border border-line px-1 py-0.5 rounded mr-1">↵</span>open</span>
+        </div>
+        <span>6 results</span>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

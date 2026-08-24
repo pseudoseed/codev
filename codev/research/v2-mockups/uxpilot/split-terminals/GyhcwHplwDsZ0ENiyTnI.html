@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Split Terminals</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        bone: '#EDE8DE', chalk: '#F6F3EB', concrete: '#DAD3C4',
+        ink: '#221F1A', graphite: '#4A463D', rust: '#B5502A',
+        ochre: '#C08A2E', moss: '#5C6B4F',
+      },
+      fontFamily: {
+        display: ['Fraunces', 'serif'],
+        sans: ['Space Grotesk', 'sans-serif'],
+        mono: ['IBM Plex Mono', 'monospace'],
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #EDE8DE; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #DAD3C4; } ::-webkit-scrollbar-track { background: transparent; }
+  .lbl { font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.06em; }
+  .term { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; line-height: 1.7; }
+  .dot { width: 7px; height: 7px; flex-shrink: 0; }
+  .hatch {
+    background-image: repeating-linear-gradient(135deg, #221F1A 0 1.5px, transparent 1.5px 9px);
+    opacity: 0.55;
+  }
+</style>
+</head>
+<body class="text-ink font-sans text-[13px]">
+
+<div id="app" class="w-[1024px] h-[1366px] flex flex-col bg-bone">
+
+  <div class="pt-3 shrink-0"></div>
+
+  <!-- TOP BAR -->
+  <header id="header" class="border-b-[1.5px] border-ink bg-chalk flex items-center justify-between px-4 h-14 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <div class="w-7 h-7 border-[1.5px] border-ink flex items-center justify-center bg-ink">
+          <i class="fa-solid fa-house-chimney text-chalk text-[13px]"></i>
+        </div>
+        <span class="font-display font-semibold text-[17px] tracking-tight">Porch</span>
+      </div>
+      <div class="h-5 w-px bg-concrete"></div>
+      <div class="flex items-center gap-1.5 text-[12px]">
+        <a href="#" class="text-graphite font-medium">Site</a>
+        <span class="text-concrete">/</span>
+        <span class="text-ink font-semibold lbl text-[10px]">split view</span>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="flex items-center gap-2 h-10 px-3 border-[1.5px] border-rust bg-rust text-chalk">
+        <i class="fa-solid fa-hand text-[12px]"></i>
+        <span class="lbl text-[11px] font-semibold">3 gates</span>
+      </button>
+      <button class="flex items-center gap-2 h-10 px-3 border-[1.5px] border-ink bg-chalk">
+        <i class="fa-solid fa-magnifying-glass text-[12px]"></i>
+        <span class="lbl text-[11px]">Find</span>
+        <span class="px-1.5 py-0.5 bg-ink text-chalk text-[9px] font-mono">⌘K</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- PANE SWAP AFFORDANCE -->
+  <div id="swap-bar" class="shrink-0 border-b-[1.5px] border-ink bg-chalk px-4 h-11 flex items-center justify-between">
+    <span class="lbl text-[10px] text-graphite">2 builders tiled · vertical split</span>
+    <div class="flex items-center gap-2">
+      <button class="flex items-center gap-2 h-9 px-3 border-[1.5px] border-ink bg-bone">
+        <i class="fa-solid fa-arrow-right-arrow-left text-[11px]"></i>
+        <span class="lbl text-[10px]">Swap panes</span>
+      </button>
+      <button class="flex items-center gap-2 h-9 px-3 border-[1.5px] border-ink bg-bone">
+        <i class="fa-solid fa-table-columns text-[11px]"></i>
+        <span class="lbl text-[10px]">Layout</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- TWO PANES SIDE BY SIDE -->
+  <main id="tile-area" class="flex-1 min-h-0 flex">
+
+    <!-- PANE LEFT: running -->
+    <div id="pane-left" class="w-1/2 border-r-[1.5px] border-ink flex flex-col min-h-0 overflow-hidden bg-ink">
+      <div class="flex items-center gap-2 h-12 px-3 border-b-[1.5px] border-ink bg-moss/15 shrink-0">
+        <span class="dot bg-moss"></span>
+        <span class="font-mono text-[13px] font-semibold text-ink">pay-2189</span>
+        <span class="lbl text-[9px] text-graphite">checkout</span>
+        <span class="lbl ml-auto text-[9px] text-moss font-bold">running</span>
+        <button class="w-11 h-11 -mr-2 flex items-center justify-center text-graphite"><i class="fa-solid fa-arrow-right-arrow-left text-[12px]"></i></button>
+        <button class="w-11 h-11 flex items-center justify-center text-graphite"><i class="fa-solid fa-expand text-[12px]"></i></button>
+      </div>
+      <div class="flex-1 overflow-y-auto p-4 term text-[#D8D2C2]">
+        <span class="text-[#8C8672]">foreman@tower-01</span> <span class="text-[#5C6B4F]">~/checkout</span> $ vitest run src/checkout/*.test.ts<br><br>
+        <span class="text-[#8FAE7C]">✓</span> applies promo before tax (14ms)<br>
+        <span class="text-[#8FAE7C]">✓</span> rejects expired promo code (9ms)<br>
+        <span class="text-[#8FAE7C]">✓</span> rounds to nearest cent (3ms)<br>
+        <span class="text-[#8FAE7C]">✓</span> stacks loyalty + promo (18ms)<br>
+        <span class="text-[#8FAE7C]">✓</span> handles zero-value cart (2ms)<br><br>
+        running 22/48 …<span class="inline-block w-[7px] h-[13px] bg-[#D8D2C2] align-middle ml-0.5 animate-pulse"></span>
+      </div>
+      <div class="h-9 border-t-[1.5px] border-concrete/30 flex items-center px-3 lbl text-[9px] text-[#8C8672] shrink-0">
+        builder/pay-2189 · uptime 41m
+      </div>
+    </div>
+
+    <!-- PANE RIGHT: stalled -->
+    <div id="pane-right" class="w-1/2 flex flex-col min-h-0 overflow-hidden bg-ink">
+      <div class="flex items-center gap-2 h-12 px-3 border-b-[1.5px] border-ochre bg-ochre/15 shrink-0">
+        <span class="dot bg-ochre"></span>
+        <span class="font-mono text-[13px] font-semibold text-ink">bugfix-1441</span>
+        <span class="lbl text-[9px] text-graphite">api-core</span>
+        <span class="lbl ml-auto text-[9px] text-ochre font-bold">stalled · 6m</span>
+        <button class="w-11 h-11 -mr-2 flex items-center justify-center text-graphite"><i class="fa-solid fa-arrow-right-arrow-left text-[12px]"></i></button>
+        <button class="w-11 h-11 flex items-center justify-center text-graphite"><i class="fa-solid fa-expand text-[12px]"></i></button>
+      </div>
+      <div class="flex-1 overflow-y-auto p-4 term text-[#D8D2C2]">
+        <span class="text-[#8C8672]">foreman@tower-01</span> <span class="text-[#5C6B4F]">~/api-core</span> $ cargo watch -x test<br><br>
+        Compiling api-core v0.9.2<br>
+        <span class="text-[#D9B871]">warning: unused import `std::sync::Arc`</span><br><br>
+        no output for 6m — process idle, no error, no exit<br><br>
+        <span class="text-[#D9B871] font-semibold">⚠ builder has not produced output since 14:02</span>
+      </div>
+      <div class="h-9 border-t-[1.5px] border-concrete/30 flex items-center justify-between px-3 shrink-0">
+        <span class="lbl text-[9px] text-[#8C8672]">builder/bugfix-1441 · idle 6m</span>
+        <button class="lbl text-[9px] text-ochre font-bold px-2 py-1 border-[1.5px] border-ochre">nudge</button>
+      </div>
+    </div>
+
+  </main>
+
+  <footer id="footer" class="h-10 shrink-0 border-t-[1.5px] border-ink bg-chalk flex items-center justify-between px-4 lbl text-[10px] text-graphite">
+    <span>2 panes open · vertical split</span>
+    <span class="text-rust font-bold">● 3 gates open</span>
+  </footer>
+
+  <div class="pb-2 shrink-0"></div>
+
+</div>
+
+</body>
+</html>

@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gate</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        bone: '#EDE8DE', chalk: '#F6F3EB', concrete: '#DAD3C4',
+        ink: '#221F1A', graphite: '#4A463D', rust: '#B5502A',
+        rustdark: '#8C3D1F', ochre: '#C08A2E', moss: '#5C6B4F',
+      },
+      fontFamily: {
+        display: ['Fraunces', 'serif'], sans: ['Space Grotesk', 'sans-serif'], mono: ['IBM Plex Mono', 'monospace'],
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #EDE8DE; }
+  .meta { font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.04em; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #C7BFAC; } ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body class="text-ink font-sans">
+
+<div class="min-h-[900px] flex flex-col">
+
+  <!-- TOP BAR -->
+  <header id="header" class="border-b-[1.5px] border-ink bg-chalk flex items-center justify-between px-6 h-16 shrink-0">
+    <div class="flex items-center gap-4">
+      <div class="flex items-center gap-2.5">
+        <div class="w-8 h-8 border-[1.5px] border-ink flex items-center justify-center bg-ink">
+          <i class="fa-solid fa-compass-drafting text-chalk text-sm"></i>
+        </div>
+        <div class="font-display font-semibold text-lg tracking-tight">Porch</div>
+      </div>
+      <div class="h-8 w-px bg-concrete mx-1"></div>
+      <a href="#" class="text-[13px] font-medium text-graphite hover:text-ink flex items-center"><i class="fa-solid fa-arrow-left mr-1.5 text-[11px]"></i>Back to site</a>
+    </div>
+    <div class="flex items-center gap-3">
+      <button class="flex items-center gap-2 h-9 px-3 border-[1.5px] border-ink bg-chalk text-[13px] font-medium">
+        <i class="fa-solid fa-magnifying-glass text-[12px] text-graphite"></i><span>Find node</span>
+        <span class="ml-2 px-1.5 py-0.5 bg-ink text-chalk text-[10px] meta">⌘K</span>
+      </button>
+      <div class="h-9 w-9 border-[1.5px] border-ink flex items-center justify-center relative">
+        <i class="fa-solid fa-clipboard-list text-sm"></i>
+        <span class="absolute -top-2 -right-2 bg-rust text-chalk text-[10px] font-bold w-5 h-5 flex items-center justify-center border border-ink rounded-full">3</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="flex flex-1 min-h-0">
+
+    <!-- QUEUE RAIL -->
+    <aside class="w-[320px] shrink-0 border-r-[1.5px] border-ink bg-ink flex flex-col">
+      <div class="px-4 py-4 border-b border-graphite/60 flex items-center justify-between">
+        <div>
+          <div class="text-chalk font-display font-semibold text-lg leading-none mb-1">Gate queue</div>
+          <div class="meta text-[10px] uppercase text-chalk/50">Ruling on 1 of 3</div>
+        </div>
+        <div class="bg-rust text-chalk font-bold text-lg w-9 h-9 flex items-center justify-center rounded-full shrink-0">3</div>
+      </div>
+      <div class="flex-1 overflow-y-auto py-3 px-3 space-y-3">
+        <div class="block bg-chalk text-ink p-3.5 border-2 border-rust relative">
+          <div class="flex items-center gap-2 mb-1.5">
+            <span class="bg-ink text-chalk text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full">1</span>
+            <span class="meta text-[10px] text-rust uppercase ml-auto font-semibold"><i class="fa-regular fa-clock mr-1"></i>24 min</span>
+          </div>
+          <div class="text-[15px] font-semibold mb-1.5">builder/pay-2201</div>
+          <div class="text-[13px] text-graphite leading-snug mb-2">"Delete the legacy refund table or keep for audit?"</div>
+          <div class="meta text-[10px] text-graphite/60 uppercase">checkout</div>
+        </div>
+        <a href="#" class="block bg-chalk/90 text-ink p-3.5 border-[1.5px] border-ink/30 relative opacity-75 hover:opacity-100 transition-opacity">
+          <div class="flex items-center gap-2 mb-1.5">
+            <span class="meta text-[10px] text-graphite uppercase ml-auto"><i class="fa-regular fa-clock mr-1"></i>9 min</span>
+          </div>
+          <div class="text-[15px] font-semibold mb-1.5">builder/air-22</div>
+          <div class="text-[13px] text-graphite leading-snug mb-2">"Two failing snapshots — approve new baseline?"</div>
+          <div class="meta text-[10px] text-graphite/60 uppercase">marketing-site</div>
+        </a>
+        <a href="#" class="block bg-chalk/90 text-ink p-3.5 border-[1.5px] border-ink/30 relative opacity-75 hover:opacity-100 transition-opacity">
+          <div class="flex items-center gap-2 mb-1.5">
+            <span class="meta text-[10px] text-graphite uppercase ml-auto"><i class="fa-regular fa-clock mr-1"></i>3 min</span>
+          </div>
+          <div class="text-[15px] font-semibold mb-1.5">builder/bugfix-1455</div>
+          <div class="text-[13px] text-graphite leading-snug mb-2">"Rate-limit constant differs from staging — use prod value?"</div>
+          <div class="meta text-[10px] text-graphite/60 uppercase">api-core</div>
+        </a>
+      </div>
+      <div class="px-4 py-3 border-t border-graphite/60">
+        <div class="text-[11px] text-chalk/60 leading-relaxed">Next opens automatically once you rule.</div>
+      </div>
+    </aside>
+
+    <!-- GATE DETAIL -->
+    <main class="flex-1 overflow-y-auto px-10 py-8">
+
+      <div class="max-w-[880px] mx-auto">
+
+        <!-- ticket header -->
+        <div class="border-[1.5px] border-ink bg-chalk">
+          <div class="flex items-start justify-between px-6 pt-5 pb-4">
+            <div>
+              <div class="inline-flex items-center gap-1.5 bg-rust text-chalk text-[10px] font-bold uppercase px-2 py-1 mb-2.5">
+                <i class="fa-solid fa-hand"></i> Gate — work has stopped
+              </div>
+              <h1 class="font-display font-semibold text-3xl tracking-tight">builder/pay-2201</h1>
+              <div class="text-[13px] text-graphite mt-2 flex items-center gap-2.5">
+                <span><i class="fa-solid fa-server mr-1 text-graphite/60"></i>tower-01</span>
+                <span class="text-concrete">·</span>
+                <span><i class="fa-solid fa-folder-tree mr-1 text-graphite/60"></i>checkout</span>
+                <span class="text-concrete">·</span>
+                <span>spawned by architect/checkout-v3</span>
+              </div>
+            </div>
+            <div class="text-right shrink-0">
+              <div class="meta text-[10px] uppercase text-graphite mb-0.5">held for</div>
+              <div class="font-display font-semibold text-3xl text-rust">24:07</div>
+            </div>
+          </div>
+          <div class="mx-6 border-t border-dashed border-ink/25"></div>
+          <div class="px-6 py-3 flex items-center gap-6 meta text-[10px] uppercase text-graphite">
+            <span><i class="fa-solid fa-hard-drive mr-1"></i>worktree: /checkout/pay-2201</span>
+            <span><i class="fa-solid fa-code-branch mr-1"></i>fix/legacy-refund-migration</span>
+            <span><i class="fa-solid fa-code-commit mr-1"></i>18 commits this run</span>
+          </div>
+        </div>
+
+        <!-- the question -->
+        <div class="border-x-[1.5px] border-b-[1.5px] border-ink bg-bone px-6 py-6">
+          <div class="text-[11px] font-semibold uppercase text-rust mb-2 tracking-wide">The question</div>
+          <p class="font-display text-2xl leading-snug">"Delete the legacy <span class="italic">refunds_legacy</span> table, or keep it for audit purposes?"</p>
+        </div>
+
+        <!-- last output -->
+        <div class="border-x-[1.5px] border-b-[1.5px] border-ink bg-ink">
+          <div class="flex items-center justify-between px-6 py-2.5 border-b border-graphite/50">
+            <span class="text-[12px] text-chalk font-medium uppercase">Last terminal output</span>
+            <span class="meta text-[10px] text-chalk/50">14:41:52</span>
+          </div>
+          <div class="p-6 font-mono text-[13px] text-chalk/90 leading-relaxed">
+<span class="text-chalk/50">$</span> migrate --dry-run refunds_legacy<br>
+found 41,208 rows referencing refunds_legacy<br>
+3 foreign keys still point at this table:<br>
+&nbsp;&nbsp;- audit_log.refund_ref<br>
+&nbsp;&nbsp;- disputes.original_refund_id<br>
+&nbsp;&nbsp;- payouts.refund_source<br><br>
+<span class="text-ochre">⚠ dropping refunds_legacy now would orphan audit_log.refund_ref</span><br>
+<span class="text-ochre">⚠ compliance retention policy requires 7yr audit trail on refunds</span><br><br>
+<span class="text-chalk/70">two paths forward:</span><br>
+&nbsp;&nbsp;1. drop table, migrate audit_log to reference refunds_v2 first<br>
+&nbsp;&nbsp;2. keep refunds_legacy as read-only archive, add view for audit_log<br><br>
+<span class="text-chalk">?</span> <span class="text-chalk">delete legacy refund table or keep for audit</span>
+          </div>
+        </div>
+
+        <!-- what happens next -->
+        <div class="border-x-[1.5px] border-b-[1.5px] border-ink bg-bone px-6 py-5">
+          <div class="text-[11px] font-semibold uppercase text-graphite mb-3 tracking-wide">What happens next</div>
+          <div class="grid grid-cols-2 gap-4">
+            <div class="border-[1.5px] border-ink p-4 bg-chalk">
+              <div class="flex items-center gap-2 mb-2">
+                <i class="fa-solid fa-trash-can text-rust"></i>
+                <span class="text-[13px] font-semibold">If you say drop it</span>
+              </div>
+              <p class="text-[12.5px] text-graphite leading-relaxed">Builder migrates audit_log.refund_ref to refunds_v2, drops refunds_legacy, runs full checkout test suite, opens PR for review.</p>
+            </div>
+            <div class="border-[1.5px] border-ink p-4 bg-chalk">
+              <div class="flex items-center gap-2 mb-2">
+                <i class="fa-solid fa-box-archive text-moss"></i>
+                <span class="text-[13px] font-semibold">If you say keep it</span>
+              </div>
+              <p class="text-[12.5px] text-graphite leading-relaxed">Builder marks refunds_legacy read-only, adds a compatibility view for audit_log, skips the drop migration, opens PR for review.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- decision bar -->
+        <div class="border-[1.5px] border-t-0 border-ink bg-ink px-6 py-5 flex items-center gap-3">
+          <input type="text" placeholder="Add a note for the builder (optional)…" class="flex-1 bg-transparent border-[1.5px] border-graphite/50 focus:border-chalk outline-none px-3 py-2.5 text-[13px] text-chalk placeholder:text-chalk/40">
+          <button class="flex items-center gap-2 px-4 py-2.5 border-[1.5px] border-graphite/50 text-chalk text-[13px] font-medium hover:border-chalk transition-colors">
+            <i class="fa-solid fa-box-archive"></i> Keep for audit
+          </button>
+          <button class="flex items-center gap-2 px-5 py-2.5 bg-rust border-[1.5px] border-rust text-chalk text-[13px] font-semibold hover:bg-rustdark transition-colors">
+            <i class="fa-solid fa-check"></i> Approve drop
+          </button>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <footer id="footer" class="border-t-[1.5px] border-ink bg-chalk h-9 shrink-0 flex items-center justify-between px-6 meta text-[10px] uppercase text-graphite">
+    <div class="flex items-center gap-4">
+      <span><i class="fa-solid fa-server mr-1"></i>2 machines</span>
+      <span><i class="fa-solid fa-compass-drafting mr-1"></i>4 architects</span>
+      <span><i class="fa-solid fa-person-digging mr-1"></i>11 builders</span>
+    </div>
+    <div class="flex items-center gap-4">
+      <span class="text-rust font-semibold">3 gates open</span>
+      <span>foreman: you</span>
+    </div>
+  </footer>
+</div>
+
+</body>
+</html>

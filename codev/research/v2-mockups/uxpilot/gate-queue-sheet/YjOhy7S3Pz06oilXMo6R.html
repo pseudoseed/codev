@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gate Queue</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        bone: '#EDE8DE', chalk: '#F6F3EB', concrete: '#DAD3C4',
+        ink: '#221F1A', graphite: '#4A463D', rust: '#B5502A',
+        ochre: '#C08A2E', moss: '#5C6B4F',
+      },
+      fontFamily: {
+        display: ['Fraunces', 'serif'],
+        sans: ['Space Grotesk', 'sans-serif'],
+        mono: ['IBM Plex Mono', 'monospace'],
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #EDE8DE; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #DAD3C4; } ::-webkit-scrollbar-track { background: transparent; }
+  .lbl { font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.06em; }
+  .term { font-family: 'IBM Plex Mono', monospace; font-size: 11px; line-height: 1.6; }
+  .dot { width: 7px; height: 7px; flex-shrink: 0; }
+  .scrim { background: rgba(34,31,26,0.5); }
+  .blueprint {
+    background-image: linear-gradient(#DAD3C4 1px, transparent 1px), linear-gradient(90deg, #DAD3C4 1px, transparent 1px);
+    background-size: 16px 16px;
+  }
+  .ticket { position: relative; }
+  .ticket::after {
+    content: '';
+    position: absolute; left: 0; right: 0; top: 0; height: 0;
+    border-top: 1.5px dashed #221F1A;
+  }
+</style>
+</head>
+<body class="text-ink font-sans text-[13px]">
+
+<div id="app" class="w-[1024px] h-[1366px] relative bg-bone overflow-hidden">
+
+  <!-- BACKDROP: dimmed site view -->
+  <div class="absolute inset-0 opacity-40">
+    <div class="pt-3"></div>
+    <header class="border-b-[1.5px] border-ink bg-chalk flex items-center px-4 h-14">
+      <div class="flex items-center gap-2">
+        <div class="w-7 h-7 border-[1.5px] border-ink flex items-center justify-center bg-ink"><i class="fa-solid fa-house-chimney text-chalk text-[13px]"></i></div>
+        <span class="font-display font-semibold text-[17px]">Porch</span>
+      </div>
+    </header>
+    <div class="p-4 grid grid-cols-2 gap-3">
+      <div class="h-32 border-[1.5px] border-ink bg-chalk"></div>
+      <div class="h-32 border-[1.5px] border-ink bg-chalk"></div>
+    </div>
+    <div class="px-4 blueprint h-[600px] border-t-[1.5px] border-ink"></div>
+  </div>
+
+  <!-- SCRIM -->
+  <div class="absolute inset-0 scrim"></div>
+
+  <!-- SHEET: slides up from bottom, doesn't take a permanent rail -->
+  <div id="gate-sheet" class="absolute left-0 right-0 bottom-0 bg-chalk border-t-[1.5px] border-ink flex flex-col" style="height: 78%;">
+
+    <!-- grab handle -->
+    <div class="flex items-center justify-center pt-2.5 pb-1 shrink-0">
+      <div class="w-10 h-1.5 bg-concrete"></div>
+    </div>
+
+    <div class="flex items-center justify-between px-5 pb-3 border-b-[1.5px] border-ink shrink-0">
+      <div class="flex items-center gap-2.5">
+        <span class="font-display font-semibold text-[19px]">Needs you</span>
+        <span class="w-6 h-6 bg-rust text-chalk lbl text-[11px] font-bold flex items-center justify-center">3</span>
+      </div>
+      <button class="w-11 h-11 flex items-center justify-center text-graphite"><i class="fa-solid fa-xmark text-[16px]"></i></button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+
+      <a href="#" class="ticket block border-[1.5px] border-rust bg-rust/10 px-4 py-3.5">
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="font-mono text-[15px] font-bold">pay-2201</span>
+          <span class="lbl text-[10px] font-bold text-rust">24m held</span>
+        </div>
+        <div class="text-[13px] text-ink leading-snug mb-2">Delete legacy refund table, or keep it for audit?</div>
+        <div class="flex items-center justify-between">
+          <span class="lbl text-[10px] text-graphite">checkout / payments-arch</span>
+          <i class="fa-solid fa-chevron-right text-[11px] text-graphite"></i>
+        </div>
+      </a>
+
+      <a href="#" class="ticket block border-[1.5px] border-rust bg-rust/10 px-4 py-3.5">
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="font-mono text-[15px] font-bold">air-22</span>
+          <span class="lbl text-[10px] font-bold text-rust">9m held</span>
+        </div>
+        <div class="text-[13px] text-ink leading-snug mb-2">Approve new visual snapshot baseline?</div>
+        <div class="flex items-center justify-between">
+          <span class="lbl text-[10px] text-graphite">marketing-site / redesign-arch</span>
+          <i class="fa-solid fa-chevron-right text-[11px] text-graphite"></i>
+        </div>
+      </a>
+
+      <a href="#" class="ticket block border-[1.5px] border-rust bg-rust/10 px-4 py-3.5">
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="font-mono text-[15px] font-bold">bugfix-1455</span>
+          <span class="lbl text-[10px] font-bold text-rust">3m held</span>
+        </div>
+        <div class="text-[13px] text-ink leading-snug mb-2">Use prod rate-limit value or match staging?</div>
+        <div class="flex items-center justify-between">
+          <span class="lbl text-[10px] text-graphite">api-core / rate-limits-arch</span>
+          <i class="fa-solid fa-chevron-right text-[11px] text-graphite"></i>
+        </div>
+      </a>
+
+      <div class="pt-1 pb-2">
+        <div class="lbl text-[10px] text-graphite mb-2 px-1">Resolved today</div>
+        <div class="flex items-center gap-2.5 px-4 py-3 border-[1.5px] border-concrete bg-bone opacity-70">
+          <i class="fa-solid fa-check text-[11px] text-moss"></i>
+          <span class="font-mono text-[12px]">infer-04</span>
+          <span class="text-[11.5px] text-graphite truncate flex-1">approved GPU batch size bump</span>
+          <span class="lbl text-[9px] text-graphite">1h ago</span>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="h-12 border-t-[1.5px] border-ink flex items-center justify-center gap-3 shrink-0 lbl text-[9px] text-graphite bg-bone">
+      <span><span class="border-[1.5px] border-concrete px-1.5 py-0.5 mr-1">Tab</span>next gate</span>
+      <span><span class="border-[1.5px] border-concrete px-1.5 py-0.5 mr-1">Esc</span>close queue</span>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
