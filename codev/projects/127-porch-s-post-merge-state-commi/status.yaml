@@ -1,7 +1,7 @@
 id: '127'
 title: porch-s-post-merge-state-commi
 protocol: air
-phase: implement
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-24T19:21:43.503Z'
-updated_at: '2026-08-24T19:21:43.504Z'
+updated_at: '2026-08-24T19:29:41.572Z'
