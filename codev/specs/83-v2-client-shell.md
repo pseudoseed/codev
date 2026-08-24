@@ -3,7 +3,7 @@
 - **Issue:** #83
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 9
+- **Status:** Draft, rev. 10
 - **Depends on:** spec 52 (v2 server events), merged
 
 ## Problem Statement
@@ -131,6 +131,7 @@ The rule:
 1. Stop applying frames. Enter a **contract mismatch** state and say so on the page — this is not the unreachable state and must not look like it.
 2. Make **one** recovery attempt: reconnect **without** `since` and `stream`, forcing a fresh `snapshot` rather than a resume.
 3. If a bad frame arrives on that fresh connection too, stay in the mismatch state and **stop**. No further attempts. A contract the client cannot read is not a transient fault and retrying it is a spin, not a recovery.
+4. **A valid fresh `snapshot` clears the mismatch state completely.** Normal reducing and normal D2 reconnect behaviour resume, and the one-attempt budget resets. The mismatch state is a state, not a latch — otherwise a single bad frame poisons a tab until someone reloads it, which is the page reload D2 exists to avoid.
 
 **What the mismatch state can say depends on how far the frame got.** Rev. 7 demanded the `seq` and `type` of a frame that failed to parse — neither is knowable from invalid JSON.
 
@@ -162,7 +163,12 @@ A field outside that set is ignored and never read, so a bad value in it cannot 
 
 **`seq` needs more than "is a number".** It must be a **finite non-negative safe integer** — `NaN`, `Infinity`, `1.5`, `-1` and `2**60` are each terminal. Rev. 8's "is not a number" admitted all of them.
 
-Ordering is **non-decreasing, not strictly increasing.** Measured: a snapshot and the `dark` frame beside it both arrived with `"seq":0`, so frames legitimately share a sequence. A frame whose `seq` is **lower** than the cursor is terminal — that is a replay or a crossed stream, and applying it would move the tree backwards.
+**Ordering is non-decreasing, and it is scoped to a `streamId`.** Two rules, and rev. 9 had only the first:
+
+1. Within one `streamId`: non-decreasing, not strictly increasing. Measured — a snapshot and the `dark` frame beside it both arrived with `"seq":0`, so frames legitimately share a sequence. A frame whose `seq` is **below** the cursor **in the same stream** is terminal: that is a replay or a crossed stream, and applying it would move the tree backwards.
+2. Across `streamId`s: **no comparison at all.** A `snapshot` with a new `streamId` establishes a fresh cursor baseline at its own `seq`, however low.
+
+Rev. 9's rule alone would have killed the page on every refused resume. Measured: two consecutive connections returned `streamId` `73da9f829b466efd` then `0b3e88cce99fe0b1`, **both starting at `seq: 0`**. A Tower restart, an evicted stream, or any `snapshot` with `resumed: false` therefore arrives with a `seq` at or below the old cursor — which D2 requires accepting and rev. 9 declared terminal. The cursor belongs to the stream, not to the client.
 
 **One deliberate exception, and it is not a validation failure.** A structurally valid node carrying a `status` outside the four ships as D3 says: rendered **visibly wrong**, not terminal, not defaulted to `running`. The distinction is the point — an unexpected *value* in a well-formed frame is a contract drift the page should show and keep running through; a malformed *frame* is a contract the client cannot read at all.
 
@@ -270,7 +276,12 @@ Three outcomes, three renderings:
 | 200, one or more workspaces | those paths | open the stream |
 | 200, zero workspaces | none | the empty site (D5). **Do not open the stream** — an empty `scope` takes a 400 and would read as a connection failure |
 | non-200, or the fetch throws | unknown | the unreachable state (D5), and retry with D2's backoff |
-| **200 with a body that is not what it claims** — invalid JSON, no `workspaces` field, `workspaces` not an array, **or any entry without a non-empty string `path`** | unknown | the unreachable state **and** a contract mismatch, then retry. **Never the empty state.** A 200 whose body cannot be read is still "I could not tell", and the status code is not permission to guess |
+| **200 with a body that is not what it claims** — invalid JSON, no `workspaces` field, `workspaces` not an array, **or any entry without a non-empty string `path`** | unknown | the **contract mismatch** state, not the unreachable one, then **one** retry and stop. **Never the empty state.** A 200 whose body cannot be read is still "I could not tell", and the status code is not permission to guess |
+
+**A malformed 200 is a mismatch, not unreachability, and rev. 9 called it both.** D5 requires those two states to look different, so naming both was a contradiction. The split follows what is actually retryable:
+
+- **non-200 or a thrown fetch** → unreachable, retried on backoff **indefinitely**. A 500 or a dead socket is transient; Tower comes back.
+- **a 200 whose body cannot be read** → contract mismatch, **one** retry, then stop. A server returning garbage returns garbage again, and spinning on it is not recovery. Same one-attempt budget as a bad frame, for the same reason.
 
 **Validate every entry, not just the array.** The endpoint returns objects — measured shape: `{path, name, active, proxyUrl, terminals}` — and only `path` is used here. `{"workspaces": [{}]}` or a non-string `path` would otherwise become a scope path of `undefined`, which the server answers with a `dark` frame and `reason: "unknown"`. That renders as a plausible unreachable workspace, so a client bug arrives disguised as a server fact. An entry that fails is a contract mismatch for the whole bootstrap, not a workspace to skip: a partial scope silently drops machines the person expects to see.
 
@@ -456,7 +467,10 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 29. **The mismatch state claims only what it decoded.** Three cases: invalid JSON reports `invalid JSON after cursor <N>` and a byte preview and **does not** invent a `seq` or `type`; an unknown `type` reports the type; a known type with a bad field reports type, `seq` and the failing field.
 30. **Field validation, per frame type.** One case per row of D1's read-set table, at minimum: `node` with no `id`; `node` with `kind: "machine"`; `node` with a numeric `parentId`; `snapshot` with `nodes` not an array; `snapshot` with one bad element among good ones; `snapshot` with no `counts`; `counts` with a negative total; `tick` with `buckets` as an array; `tick` with a non-numeric value; `dark` with an `id` that is not `workspace:<path>`; `resumed` with a bad `from`. Every one terminal.
 33. **`seq` is a safe non-negative integer.** `NaN`, `Infinity`, `1.5`, `-1` and `2**60` are each terminal.
-34. **Sequence ordering is non-decreasing.** Two frames sharing a `seq` are both applied — this is the real snapshot-plus-`dark` case, measured on the wire. A frame whose `seq` is **below** the cursor is terminal.
+34. **Sequence ordering is non-decreasing within a stream.** Two frames sharing a `seq` are both applied — the real snapshot-plus-`dark` case, measured on the wire. A frame whose `seq` is below the cursor **in the same `streamId`** is terminal.
+36. **A new stream resets the baseline.** A `snapshot` with a new `streamId` and `seq: 0` arriving after a cursor of 500 is **accepted**, not terminal. Measured: consecutive connections returned different `streamId`s both starting at `seq: 0`, so every refused resume hits this path.
+37. **Mismatch is a state, not a latch.** After a bad frame and its one recovery attempt, a valid fresh snapshot clears the mismatch state, normal reducing resumes, and the one-attempt budget resets — a second unrelated bad frame later gets its own recovery attempt.
+38. **Bootstrap retry policy splits by cause.** A 500 retries indefinitely on backoff; a 200 with an unreadable body retries **once** and stops in the mismatch state. Assert the two render differently.
 35. **Fields outside the read-set are ignored.** A frame carrying an extra unknown field, and a node carrying garbage in a field nothing reads, both apply normally. The validation is narrow on purpose and must not become a schema lock.
 31. **Unknown status is not a validation failure.** A structurally valid node with `status: "reticulating"` renders visibly wrong, does **not** default to `running`, and does **not** enter the mismatch state. This is the one place a surprising value keeps the page running (D3).
 32. **Bootstrap entry validation.** `{"workspaces": [{}]}`, `{"workspaces": [{"path": 42}]}` and `{"workspaces": [{"path": ""}]}` each produce a contract mismatch for the whole bootstrap — not a partial scope, and not a dark workspace.
@@ -478,6 +492,9 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 | The mismatch state invents a `seq` for unparseable JSON | Medium — rev. 7 required it | Low — a fabricated identifier in the one place accuracy matters | D1's table; scenario 29 |
 | `seq` validated only as "a number" | High — it is the obvious check | Medium — `NaN` and negatives pass, and the cursor stops meaning anything | D1's safe-integer rule; scenario 33 |
 | Ordering enforced as strictly increasing | High — it is the intuitive invariant | High — the real snapshot-plus-`dark` pair shares a `seq` and would be rejected as corrupt | D1, measured; scenario 34 |
+| The cursor compared across `streamId`s | High — rev. 9 required it | High — **every** refused resume arrives at `seq: 0` and would be declared terminal, killing the page on a Tower restart | D1's per-stream rule, measured; scenario 36 |
+| Mismatch implemented as a latch | Medium — "terminal" reads that way | Medium — one bad frame poisons the tab until a reload, which is what D2 exists to avoid | D1 step 4; scenario 37 |
+| A malformed bootstrap 200 shown as unreachable | Medium — rev. 9 said both | Medium — collapses two states D5 requires to differ, and retries garbage forever | D7's split; scenario 38 |
 | Validation hardened into a full schema lock | Medium — the terminal rule invites it | Medium — a harmless added server field kills the page | D1's read-set is closed; scenario 35 |
 | A browser test destroying a real builder worktree | Medium — `afx cleanup` is the honest end-to-end path | High — an irreversible act moved from a human to a test runner | Scenario 10 uses a `gone` fixture; the real path is verified by hand |
 | `buckets` treated as one shape | High — the field name is identical | High — breaks on the first tick, which is also the first thing that arrives after the snapshot | D1 with both line numbers |
