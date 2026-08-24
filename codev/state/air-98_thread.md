@@ -7,3 +7,7 @@ Fix is in the sampler. `scopes` already held every path; `filterByScope` dropped
 Client: a workspace `node` clears that entry in `darkPaths`. Spec 83 said dark only cleared on snapshot because the server never sent a recovery; gone still does not clear dark.
 
 No baked decisions on the issue.
+
+PR #118. CMAP: gemini skipped (agy exit 1), codex REQUEST_CHANGES, claude COMMENT.
+
+Follow-up: hoist `listWorkspaces` + `isReadable` to once per compare (shared across scopes). Mid-stream dark is only `unreadable`; a dropped workspace stays children-first `gone` and does not become a phantom dark plot. Merged origin/main (air-100, no overlap).

@@ -186,9 +186,18 @@ export class V2Sampler {
   compare(): void {
     const now = this.timers.now();
     const projection = projectHierarchy(now, this.deps);
+    const known = new Set(this.deps.listWorkspaces());
+    const readable = new Map<string, boolean>();
+    const probe = (p: string): boolean => {
+      const cached = readable.get(p);
+      if (cached !== undefined) return cached;
+      const next = this.isReadable(p);
+      readable.set(p, next);
+      return next;
+    };
 
     for (const [key, paths] of this.scopes) {
-      this.syncReadability(key, paths, now);
+      this.syncReadability(key, paths, now, known, probe);
       const scoped = scopeFilter(projection.nodes, this.filterByScope.get(key) ?? paths);
       const scopedMap = new Map(scoped.map((n) => [n.id, n]));
       const last = this.lastByScope.get(key);
@@ -225,7 +234,7 @@ export class V2Sampler {
       }
     }
 
-    this.syncWatchers();
+    this.syncWatchers(known);
     this.scheduleNotBefore();
   }
 
@@ -274,23 +283,33 @@ export class V2Sampler {
 
   private rememberDark(key: string, paths: string[]): void {
     if (this.darkByScope.has(key)) return;
-    this.darkByScope.set(key, this.classify(paths).dark);
+    const known = new Set(this.deps.listWorkspaces());
+    this.darkByScope.set(key, this.classify(paths, known, (p) => this.isReadable(p)).dark);
   }
 
-  private classify(paths: string[]): { live: string[]; dark: Map<string, string> } {
-    const known = new Set(this.deps.listWorkspaces());
+  private classify(
+    paths: string[],
+    known: Set<string>,
+    probe: (p: string) => boolean,
+  ): { live: string[]; dark: Map<string, string> } {
     const live: string[] = [];
     const dark = new Map<string, string>();
     for (const p of paths) {
-      if (!known.has(p)) dark.set(p, 'unknown');
-      else if (!this.isReadable(p)) dark.set(p, 'unreadable');
+      if (!known.has(p)) continue;
+      if (!probe(p)) dark.set(p, 'unreadable');
       else live.push(p);
     }
     return { live, dark };
   }
 
-  private syncReadability(key: string, paths: string[], now: number): void {
-    const { live, dark } = this.classify(paths);
+  private syncReadability(
+    key: string,
+    paths: string[],
+    now: number,
+    known: Set<string>,
+    probe: (p: string) => boolean,
+  ): void {
+    const { live, dark } = this.classify(paths, known, probe);
     const prev = this.darkByScope.get(key) ?? new Map();
     for (const [path, reason] of dark) {
       if (prev.get(path) !== reason) {
@@ -301,8 +320,8 @@ export class V2Sampler {
     this.filterByScope.set(key, live);
   }
 
-  private syncWatchers(): void {
-    const wanted = new Set(this.deps.listWorkspaces().map((ws) => `${ws}/.builders`));
+  private syncWatchers(knownWorkspaces: Iterable<string> = this.deps.listWorkspaces()): void {
+    const wanted = new Set([...knownWorkspaces].map((ws) => `${ws}/.builders`));
     for (const [dir, unwatch] of this.watchers) {
       if (wanted.has(dir)) continue;
       unwatch();

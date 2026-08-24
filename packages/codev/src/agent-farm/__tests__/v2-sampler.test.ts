@@ -457,11 +457,12 @@ describe('V2Sampler', () => {
     world.workspaces = [];
     sampler.compare();
     const gones = frames.filter((f) => f.type === 'gone');
-    expect(gones.map((f) => f.type === 'gone' ? f.id : '')).toEqual([
+      expect(gones.map((f) => f.type === 'gone' ? f.id : '')).toEqual([
       builderId(WS_A, 'spir-52'),
       architectId(WS_A, 'uiv2'),
       workspaceId(WS_A),
     ]);
+    expect(frames.some((f) => f.type === 'dark')).toBe(false);
     unsub();
   });
 
