@@ -39,6 +39,23 @@ export interface EnqueueInput {
   /** Last-known PTY hint; the recipient is the agent, not this terminal. */
   terminalId?: string | null;
   fromAgent?: string | null;
+  /**
+   * The sender's IDENTITY, as distinct from its kind (#47).
+   *
+   * `fromAgent` records a builder id or the literal 'architect', so every
+   * architect collapses to one string and a misroute cannot be attributed. This
+   * carries the architect's actual name (or the builder id, so the column is
+   * always populated with something answerable).
+   */
+  fromAgentName?: string | null;
+  /**
+   * What the caller typed as the target, before resolution (#47).
+   *
+   * `toAgent` holds the RESOLVED recipient, so `architect` and `architect:main`
+   * are indistinguishable after the fact -- and those two forms are exactly what
+   * the anti-spoofing rules treat differently.
+   */
+  requestedTo?: string | null;
   fromWorkspace?: string | null;
   /** Stage the text without submitting (no trailing Enter). */
   noEnter?: boolean;
@@ -57,11 +74,13 @@ export interface EnqueueInput {
 
 const INSERT_SQL = `
   INSERT INTO mailbox (
-    id, workspace_path, to_agent, terminal_id, from_agent, from_workspace,
+    id, workspace_path, to_agent, terminal_id, from_agent, from_agent_name,
+    requested_to, from_workspace,
     body, formatted_message, no_enter, status, reason, supersede_key,
     escalated, not_before, created_at, updated_at, resolved_at
   ) VALUES (
-    @id, @workspace_path, @to_agent, @terminal_id, @from_agent, @from_workspace,
+    @id, @workspace_path, @to_agent, @terminal_id, @from_agent, @from_agent_name,
+    @requested_to, @from_workspace,
     @body, @formatted_message, @no_enter, @status, @reason, @supersede_key,
     @escalated, @not_before, @created_at, @updated_at, @resolved_at
   )
@@ -74,6 +93,8 @@ function buildRow(input: EnqueueInput, now: number): DbMailbox {
     to_agent: input.toAgent,
     terminal_id: input.terminalId ?? null,
     from_agent: input.fromAgent ?? null,
+    from_agent_name: input.fromAgentName ?? null,
+    requested_to: input.requestedTo ?? null,
     from_workspace: input.fromWorkspace ?? null,
     body: input.body,
     formatted_message: input.formattedMessage,

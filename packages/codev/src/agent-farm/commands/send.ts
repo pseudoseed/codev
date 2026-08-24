@@ -319,6 +319,18 @@ export async function send(options: SendOptions): Promise<void> {
     fatal(err instanceof Error ? err.message : String(err));
   }
 
+  // #47: `from` above is the sender's KIND — a builder id, or the literal
+  // 'architect' for every architect alike. Six architects existed in one
+  // database with no way to tell which had sent, which is what made a
+  // 13-occurrence misroute report unfalsifiable: a builder that lost its
+  // identity and got reclassified as 'architect' is byte-identical to an
+  // architect that sent deliberately.
+  //
+  // CODEV_ARCHITECT_NAME is set per architect session at spawn, so it names the
+  // sender when `from` cannot. Null when neither is available, which records
+  // "not known" rather than guessing.
+  const fromName = from !== 'architect' ? from : (process.env.CODEV_ARCHITECT_NAME || null);
+
   // Ensure Tower is running
   const client = new TowerClient();
   const towerRunning = await client.isRunning();
@@ -354,6 +366,7 @@ export async function send(options: SendOptions): Promise<void> {
     try {
       const result = await client.sendMessage(target!, message, {
         from,
+        fromName: fromName ?? undefined,
         workspace,
         fromWorkspace: workspace,
         raw: options.raw,

@@ -264,7 +264,7 @@ CREATE TABLE IF NOT EXISTS mailbox (
   workspace_path TEXT NOT NULL,           -- addressing scope
   to_agent TEXT NOT NULL,                 -- recipient agent identity (drains across respawn)
   terminal_id TEXT,                       -- last-known PTY hint (nullable; not the identity)
-  from_agent TEXT,
+  from_agent TEXT,                        -- sender KIND: a builder id, or the literal 'architect'
   from_workspace TEXT,
   body TEXT NOT NULL,                     -- raw message (never logged)
   formatted_message TEXT NOT NULL,        -- what gets written to the PTY
@@ -277,7 +277,18 @@ CREATE TABLE IF NOT EXISTS mailbox (
   not_before INTEGER,                     -- epoch ms; delayed-send due time (Spec 1313 round 3, --delay). null = deliver ASAP; a row is deliverable only when not_before IS NULL OR not_before <= now
   created_at INTEGER NOT NULL,            -- epoch ms (enqueue order per agent)
   updated_at INTEGER NOT NULL,
-  resolved_at INTEGER                     -- delivered/superseded/dismissed timestamp
+  resolved_at INTEGER,                    -- delivered/superseded/dismissed timestamp
+  -- #47. Declared LAST so a fresh install matches the column order an
+  -- ALTER TABLE migration produces; the convergence test compares shapes.
+  --
+  -- from_agent above records the sender's KIND (a builder id, or the literal
+  -- 'architect' for every architect alike) and to_agent records the RESOLVED
+  -- recipient. Six architects existed in one database with no way to tell which
+  -- had sent, and no record of whether the caller typed 'architect' or
+  -- 'architect:main' — the two forms the anti-spoofing rules treat differently.
+  -- That combination made a 13-occurrence misroute report unfalsifiable.
+  from_agent_name TEXT,                   -- sender IDENTITY: architect name, or the builder id
+  requested_to TEXT                       -- the target as TYPED, before resolution
 );
 
 CREATE INDEX IF NOT EXISTS idx_mailbox_workspace_status ON mailbox(workspace_path, status);

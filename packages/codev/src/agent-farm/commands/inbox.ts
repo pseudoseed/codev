@@ -59,6 +59,15 @@ interface InboxMessage {
   workspacePath: string;
   toAgent: string;
   fromAgent: string | null;
+  /**
+   * #47: the sender's IDENTITY, where fromAgent carries only its kind (a builder
+   * id, or the literal 'architect' for every architect alike). Null on rows
+   * enqueued before the migration, or by an older CLI — rendered as "not
+   * recorded", which must stay distinct from a recorded value.
+   */
+  fromAgentName: string | null;
+  /** #47: the target as the caller TYPED it, before resolution. Null as above. */
+  requestedTo: string | null;
   fromWorkspace: string | null;
   status: string; // 'held' | 'delivered' | 'superseded' | 'dismissed'
   reason: string | null; // 'busy' | 'no-profile' | 'no-live-pty'
@@ -169,6 +178,21 @@ export async function inboxShow(id: string, options: InboxShowOptions = {}): Pro
   logger.kv('Status', `${row.status}${row.escalated ? ' (escalated)' : ''}`);
   logger.kv('Reason', row.reason ?? '—');
   logger.kv('From → To', `${from} → ${row.toAgent}`);
+  // #47. `From → To` above shows the sender's KIND and the RESOLVED recipient, and
+  // those are exactly the two fields that made 13 misroutes unattributable: every
+  // architect reads as 'architect', and `architect` vs `architect:main` — the two
+  // forms the anti-spoofing rules treat differently — resolve to the same string.
+  //
+  // Shown only when they add something. An identity equal to the kind, or a typed
+  // target equal to the resolved one, is already on the line above. A null is
+  // "not recorded" (pre-migration row, or an older CLI) and says so rather than
+  // being silently indistinguishable from a value that was recorded.
+  if (row.fromAgentName !== row.fromAgent) {
+    logger.kv('Sender identity', row.fromAgentName ?? '— (not recorded)');
+  }
+  if (row.requestedTo !== row.toAgent) {
+    logger.kv('Addressed as', row.requestedTo ?? '— (not recorded)');
+  }
   logger.kv('Workspace', row.workspacePath);
   logger.kv('Created', new Date(row.createdAt).toISOString());
   // Spec 1313 round 3: a still-scheduled delayed (`--delay`) row shows its due time and

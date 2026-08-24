@@ -210,6 +210,12 @@ describe('Spec 1313 — mailbox table migration (v15)', () => {
     buildPreV15Db();
     runV15Migration();
     db.exec(`ALTER TABLE mailbox ADD COLUMN not_before INTEGER`); // v17 add-column (see the v17 block below)
+    // v19 (#47) ADDs the sender/target provenance columns. Extending the chain
+    // rather than relaxing the assertion: this test exists to catch exactly the
+    // base-schema/migration drift that adding columns to GLOBAL_SCHEMA alone
+    // would introduce, and it caught it.
+    db.exec(`ALTER TABLE mailbox ADD COLUMN from_agent_name TEXT`);
+    db.exec(`ALTER TABLE mailbox ADD COLUMN requested_to TEXT`);
     const migratedCols = mailboxColumns();
     const migratedIdx = mailboxIndexes();
 
@@ -458,6 +464,12 @@ describe('Spec 1313 round 3 — mailbox not_before column migration (v17)', () =
   it('a fresh install (GLOBAL_SCHEMA) has not_before, matching the migrated shape', () => {
     buildPreV17Db();
     runV17Migration();
+    // v19 (#47) ADDs the sender/target provenance columns. Extending the chain
+    // rather than relaxing the assertion: this test exists to catch exactly the
+    // base-schema/migration drift that adding columns to GLOBAL_SCHEMA alone
+    // would introduce, and it caught it.
+    db.exec(`ALTER TABLE mailbox ADD COLUMN from_agent_name TEXT`);
+    db.exec(`ALTER TABLE mailbox ADD COLUMN requested_to TEXT`);
     const migratedCols = mailboxCols();
 
     const fresh = new Database(resolve(testDir, 'fresh.db'));
