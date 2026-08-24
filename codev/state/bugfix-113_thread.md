@@ -13,3 +13,9 @@ The issue's "open vs all states" guess is stale. `github/pr-exists.sh` already a
 Verify phase has no checks. Scope is small: approve the named gate's phase checks, and if verify-approval is requested while still in review with `pr` already approved, enter verify first so the existing auto-advance can reach `verified`.
 
 Fix: `approve()` enters verify when verify-approval is requested from review with `pr` already approved. Review's `pr_exists` no longer runs. Regression test fails without the block (process.exit from `false` pr_exists) and passes with it.
+
+PR #137: https://github.com/pseudoseed/codev/pull/137
+
+CMAP: gemini skipped (agy exit 1, quota). Substitute opencode=APPROVE. codex=COMMENT (branch trails main by a docs merge, no code change). claude=APPROVE. No REQUEST_CHANGES.
+
+Claude noted a residual: `porch done` / `porch check` still fail review's `pr_exists` after merge when cwd is not the PR head. Left as a follow-up; this bugfix unblocks verify-approval.
