@@ -456,7 +456,7 @@ async function handleBuildVerify(
   resolver?: ArtifactResolver,
 ): Promise<PorchNextResponse> {
   const verifyConfig = getVerifyConfig(protocol, state.phase);
-  const overrides = loadCheckOverrides(workspaceRoot);
+  const overrides = loadCheckOverrides(workspaceRoot, state.protocol);
 
   // Determine plan phase context for per_plan_phase protocols
   const planPhase = isPhased(protocol, state.phase)
@@ -492,7 +492,7 @@ async function handleBuildVerify(
     }
 
     // Add check tasks (with overrides applied)
-    const checks = getPhaseChecks(protocol, state.phase, overrides ?? undefined);
+    const checks = getPhaseChecks(protocol, state.phase, overrides ?? undefined, workspaceRoot);
     // Also show skipped checks as informational tasks
     const phaseConfig_ = phaseConfig.checks ?? [];
     for (const name of phaseConfig_) {

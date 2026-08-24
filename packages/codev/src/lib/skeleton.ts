@@ -321,6 +321,63 @@ export function listConsultTypes(workspaceRoot?: string): Array<{ type: string; 
     .sort((a, b) => a.type.localeCompare(b.type));
 }
 
+/**
+ * Every check name declared by ANY protocol visible at any tier (#33).
+ *
+ * `porch.checks` is one flat map applied to every protocol, and protocols do not
+ * declare the same check names. Overriding `test` is required for BUGFIX and AIR
+ * in a repo with no package.json; SPIR has no `test`, so every `porch status` on
+ * a SPIR project warned about a correct and necessary override. The name is not
+ * unknown — it is simply not used here, and those are different statements.
+ *
+ * Union across all four tiers, matching `listProtocolNames`. Includes
+ * `phase_completion` predicates, which `porch.checks` also overrides.
+ */
+export function listAllCheckNames(workspaceRoot?: string): Set<string> {
+  const names = new Set<string>();
+  for (const dir of protocolDirs(workspaceRoot)) {
+    let protocols: fs.Dirent[];
+    try {
+      protocols = fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory());
+    } catch {
+      continue; // unreadable tier contributes nothing; it is not this function's error to raise
+    }
+    for (const proto of protocols) {
+      const json = readProtocolJson(path.join(dir, proto.name, 'protocol.json'));
+      if (!json) continue;
+
+      const collect = (section: unknown): void => {
+        if (typeof section === 'object' && section !== null && !Array.isArray(section)) {
+          for (const name of Object.keys(section)) names.add(name);
+        }
+      };
+
+      // Two shapes. `loadProtocol` hoists per-phase check OBJECTS into a
+      // top-level map and rewrites `phase.checks` to a name list, so a protocol
+      // read raw from disk usually carries them under each phase instead —
+      // reading only the top-level `checks` found nothing at all.
+      collect(json.checks);
+      collect(json.phase_completion);
+
+      const phases = json.phases;
+      if (Array.isArray(phases)) {
+        for (const phase of phases) {
+          if (typeof phase !== 'object' || phase === null) continue;
+          const phaseChecks = (phase as { checks?: unknown }).checks;
+          if (Array.isArray(phaseChecks)) {
+            for (const name of phaseChecks) {
+              if (typeof name === 'string') names.add(name);
+            }
+          } else {
+            collect(phaseChecks);
+          }
+        }
+      }
+    }
+  }
+  return names;
+}
+
 function readProtocolJson(filePath: string): Record<string, unknown> | null {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
