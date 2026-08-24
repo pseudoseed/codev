@@ -11,14 +11,14 @@ plan_phases:
     status: complete
   - id: phase_3
     title: Bootstrap, stream reader, reconnect
-    status: in_progress
+    status: complete
   - id: phase_4
     title: Site view
-    status: pending
+    status: in_progress
   - id: phase_5
     title: Playwright fixture proof
     status: pending
-current_plan_phase: phase_3
+current_plan_phase: phase_4
 gates:
   spec-approval:
     status: approved
@@ -31,8 +31,8 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 3
-build_complete: true
+iteration: 1
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_2
@@ -131,7 +131,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_3-iter3-opencode.txt
         stated: true
 started_at: '2026-08-24T06:44:19.322Z'
-updated_at: '2026-08-24T09:18:38.454Z'
+updated_at: '2026-08-24T09:18:40.332Z'
 context_refreshes:
   - boundary: enter:implement
     at: '2026-08-24T07:12:46.426Z'
@@ -142,6 +142,8 @@ context_refreshes:
   - boundary: plan-phase:phase_3
     at: '2026-08-24T07:56:14.825Z'
     acknowledged_at: '2026-08-24T07:56:44.092Z'
+  - boundary: plan-phase:phase_4
+    at: '2026-08-24T09:18:40.332Z'
 force_advanced:
   phase: phase_3
   iteration: 3
