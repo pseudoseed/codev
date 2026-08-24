@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, linkSync, unlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { AGENT_FARM_DIR } from './constants.js';
@@ -52,25 +52,37 @@ export function ensureLocalKey(): string {
 
   if (!existsSync(LOCAL_KEY_PATH)) {
     const key = randomBytes(32).toString('hex');
+    // Create via a fully-written temp file plus `link` (issue #6, round 2).
+    //
+    // `writeFileSync(..., { flag: 'wx' })` was exclusive but NOT atomic: it
+    // creates the file and THEN writes it, so a concurrent caller's
+    // `existsSync` sees a zero-byte file, skips this branch, and reads `''`.
+    // Measured over 25 cold-start rounds of 8 processes: one round returned
+    // lengths `64,0,64,0,64,64,64,64` — two callers got an EMPTY key while the
+    // file on disk was a correct 64-char one.
+    //
+    // An empty key is worse than the mismatch the `wx` flag was added to fix:
+    // it presents as "no key at all" and every request 401s with nothing
+    // naming the cause. `link` is atomic and fails EEXIST when the target
+    // exists, so the file becomes visible only once it is already complete.
+    const tmp = `${LOCAL_KEY_PATH}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
     try {
-      // Exclusive create (issue #6). The previous check-then-write let two
-      // concurrent callers each pass `existsSync`, each generate a different
-      // key, and each write it — so the file ended up holding the LOSER's key
-      // while the winner returned its own. Whoever started a Tower with the
-      // returned value then failed to authenticate against the file, and every
-      // request 401'd.
-      //
-      // Invisible on a warm machine, because the file already exists and the
-      // branch never runs. It shows up on a cold CI runner where several e2e
-      // suites start in parallel with no `~/.agent-farm` at all: `Tower
-      // Integration Tests` failed with `expected 401 to be 404` across 13 of 16
-      // cases, intermittently, on code that passes locally and upstream.
-      writeFileSync(LOCAL_KEY_PATH, key, { mode: 0o600, flag: 'wx' });
-      return key;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      // Someone else created it first. THEIR key is the shared one — fall
-      // through and read it, rather than returning a value nothing else holds.
+      writeFileSync(tmp, key, { mode: 0o600 });
+      try {
+        linkSync(tmp, LOCAL_KEY_PATH);
+        return key;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        // Someone else won. Their key is the shared one — fall through and read
+        // it. It is guaranteed complete, because it was linked from a file that
+        // had already been written in full.
+      }
+    } finally {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        /* best effort — the temp is gone on the success path anyway */
+      }
     }
   }
 
@@ -83,5 +95,24 @@ export function ensureLocalKey(): string {
   } catch {
     /* best effort — platform may not support chmod */
   }
-  return readFileSync(LOCAL_KEY_PATH, 'utf-8').trim();
+
+  // An empty read must never be RETURNED (#6). `link` above closes the window
+  // that produced one, so reaching the retry means something else truncated the
+  // file — and handing back `''` would spell "no key" identically to "the key
+  // could not be read", which is the failure this whole issue is about.
+  for (let attempt = 0; ; attempt++) {
+    const value = readFileSync(LOCAL_KEY_PATH, 'utf-8').trim();
+    if (value) return value;
+    if (attempt >= 20) {
+      throw new Error(
+        `Local key at ${LOCAL_KEY_PATH} is empty. Delete it and re-run to have Tower regenerate it.`,
+      );
+    }
+    sleepMs(5);
+  }
+}
+
+/** Block briefly without pulling in a timer — this path is sync by contract. */
+function sleepMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
