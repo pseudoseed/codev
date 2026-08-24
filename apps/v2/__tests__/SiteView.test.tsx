@@ -124,6 +124,28 @@ describe('SiteView display (scenarios 6, 7, 21)', () => {
     expect(arch?.querySelector('[data-kind="builder"]')).toBeNull();
   });
 
+  it('renders workspace name and status as separately readable text', () => {
+    const { container } = render(<Page state={liveState()} hostname="box" />);
+    const header = container.querySelector('[data-id="workspace:/a"] .ws-plot-name');
+    expect(header?.querySelector('.ws-plot-label')?.textContent).toBe('alpha');
+    expect(header?.querySelector('.stamp-run')?.textContent).toBe('RUN');
+    expect(header?.querySelector('.ws-plot-label')?.textContent).not.toContain('RUN');
+  });
+
+  it('renders workspace held mail beside name and status, not concatenated', () => {
+    const s = liveState();
+    s.reducer.nodes.set(
+      'workspace:/a',
+      node({ id: 'workspace:/a', kind: 'workspace', name: 'alpha', flags: { heldMail: true } }),
+    );
+    const { container } = render(<Page state={s} hostname="box" />);
+    const header = container.querySelector('[data-id="workspace:/a"] .ws-plot-name');
+    expect(header?.querySelector('.ws-plot-label')?.textContent).toBe('alpha');
+    expect(header?.querySelector('.held-mail')?.textContent).toBe('mail');
+    expect(header?.querySelector('.stamp-run')?.textContent).toBe('RUN');
+    expect(header?.querySelector('.ws-plot-label')?.textContent).not.toMatch(/mail|RUN/);
+  });
+
   it('dims an offline workspace and shows architect heldMail plus status', () => {
     const s = liveState();
     s.reducer.nodes.set(

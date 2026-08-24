@@ -11,7 +11,7 @@ export function WorkspacePlot({ plot }: Props) {
   return (
     <div className={cls} data-kind="workspace" data-id={plot.id} data-dark={plot.dark ? 'true' : 'false'}>
       <div className="stamp ws-plot-name">
-        {plot.name}
+        <span className="ws-plot-label">{plot.name}</span>
         {plot.flags.heldMail ? <span className="held-mail">mail</span> : null}
         {plot.status ? <StatusStamp status={plot.status} /> : null}
       </div>

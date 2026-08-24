@@ -58,6 +58,9 @@ test('load and render hierarchy', async ({ page }) => {
   await expect(page.locator('[data-kind="workspace"]')).toContainText('alpha');
   await expect(page.locator('[data-kind="architect"]')).toContainText('arch');
   await expect(page.locator('[data-kind="builder"][data-id="builder:1"]')).toContainText('b1');
+  const header = page.locator('[data-kind="workspace"] .ws-plot-name');
+  await expect.poll(async () => header.evaluate((el) => getComputedStyle(el).display)).toBe('flex');
+  await expect.poll(async () => header.evaluate((el) => getComputedStyle(el).gap)).toBe('8px');
 });
 
 test('new builder appears with no reload', async ({ page }) => {
