@@ -11,3 +11,11 @@ Plan-approval: architect:uiv2 under standing delegation. Refresh at enter:implem
 Phase 1 done: `2c9777a0b` plus NODE_ENV fix `8489c45ca`. Reviews: gemini skip, codex APPROVE, claude COMMENT (fixed), opencode APPROVE.
 
 Phase 2: validate.ts + reducer.ts. 47 client tests green. `passWithNoTests` removed.
+
+Phase 3: bootstrap + SSE reader + stream client. 100 v2 tests green.
+
+Iter 1: gemini skip, codex/claude/opencode REQUEST_CHANGES. All accepted (unreachable vs mismatch, forceFresh, cancel SSE, emit copy, wait TDZ, applied-eof).
+
+Iter 2: gemini skip, claude APPROVE, codex REQUEST_CHANGES (`res.text()` on 200 → mismatch; fixed). Opencode consult CLI cannot read its temp prompt (external_directory). Review written against disk files: APPROVE.
+
+Iter 3 consult: gemini skip, codex REQUEST_CHANGES (forceFresh after applied snapshot then read error). Accepted: `applied-retry` clears forceFresh. 101 client tests green. Claude consult retrying.
