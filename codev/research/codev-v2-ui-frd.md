@@ -2,7 +2,7 @@
 
 **Status:** Decided — Option 2, multi-machine in v1, built as an additive fork-owned app.
 Not a spec. No implementation authorized; spikes in the appendix come first.
-**Date:** 2026-08-23 (rev. 8 — rev. 7's coverage claim disproved; FR-21 rewritten;
+**Date:** 2026-08-23 (rev. 9 — the FR-21 phone conflict retracted; FR-21 rewritten;
 dark mode and tablet tiling decided; both spikes run; Option 0 shipped)
 **Author:** Architect (main)
 **Reviewed by:** Claude Opus 5, Grok 4.6 (Codex unavailable, Gemini unauthenticated)
@@ -547,11 +547,21 @@ gate and glancing at output, not for driving work.
   The designs resolved it in FR-1's favour with a picker sheet, so the wording was the
   defect. Found in #74 by scoring the requirements against the 27 designs.*
 
-  **Open conflict, unresolved:** the phone `OPEN IN` sheet
-  (Site Mobile `pcuGTxWBv4S195IB7nXO`) offers `LEFT PANE` and `RIGHT PANE`, which this
-  requirement forbids below 768px. Either that sheet is wrong on a phone, or FR-21 needs a
-  clause permitting a phone to *place* content into an existing iPad split it is not itself
-  rendering. Do not resolve this by quietly shipping either side.
+  *Rev. 9 retracts the conflict rev. 8 recorded here.* Rev. 8 reported that the `OPEN IN`
+  sheet (`pcuGTxWBv4S195IB7nXO`) offers `LEFT PANE` / `RIGHT PANE` on a phone, against this
+  requirement. **It is not a phone screen.** Measured: 1440x1024. FR-21 governs below 768px
+  and does not apply to it.
+
+  The group is named *Porch Site Mobile Redesign*, and the conflict came from trusting that
+  name. Measured widths across its 9 designs: **seven are 1440px, one is 1024px, and exactly
+  one is 375px.**
+
+  The single genuine phone design (`jClfsPTbpz9rne4YAGBh`, 375x1122) is a **single-column
+  card stack with a segmented control** — Active Panes / Activity / PRs & Issues — and a
+  hamburger for the hierarchy. It does not tile. It satisfies this requirement as written,
+  including the segmented-control clause.
+
+  **No requirement and no design are in conflict here.**
 - **FR-22 (MUST)** Touch targets ≥ 44pt with ≥ 8pt separation. This applies to terminal
   chrome, tab close buttons and tree disclosure triangles — the usual offenders.
 - **FR-23 (MUST)** Respect `safe-area-inset-*`. Any sticky bottom bar adds
