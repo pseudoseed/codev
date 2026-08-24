@@ -25,3 +25,5 @@ Phase 5 iter 2: Claude/opencode APPROVE. Codex REQUEST_CHANGES accepted except i
 Phase 5 iter 3: Codex/Claude/opencode APPROVE. Refresh at enter:review refused (opencode has no in-session clear). Architect verified phase 5; screenshot defect: workspace header `ALPHARUN`. Fixed `.ws-plot-name` flex+gap; name wrapped; 124 unit tests. Review at `codev/reviews/83-v2-client-shell.md`. idle-Bps=0 recorded as no-polling evidence.
 
 Review iter 1: gemini skip, opencode APPROVE, Codex/Claude REQUEST_CHANGES. Merged origin/main (spec rev. 12). Accepted CI step, drop frozen-files test, rename packaging to e2e, orphan render, architect-parented coverage, sourcemap off. Cache-Control left. PR #104.
+
+PR #104 merged (`e88412740`). #83 left open. Follow-ups filed: #105 (bare GET /v2 401), #106 (thrown fetch discards tree), #107 (Playwright not in CI). Review cites #97 (closed) and #98 (open) at lines 32 and 209. Live Tower still pre-#104: keyless GET /v2/ is 401. Post-merge apps/v2 vitest 127/127. Verify-approval next.
