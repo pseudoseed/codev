@@ -75,13 +75,39 @@ packages/codev/src/agent-farm/__tests__/v2-scope-encoding.test.ts   # scenario 1
 
 ## Shared implementation rules (every phase)
 
-**Reducer is the whole state model.** `nodes: Map<id, Node>`, `darkPaths: Map<workspaceId, {reason, at}>`, `counts`, `cursor: {streamId, seq}`, `page: 'live' | 'empty' | 'unreachable' | 'mismatch'`. No parallel store. Every accepted frame advances `cursor.seq` to that frame's `seq`. A `snapshot` with a new `streamId` resets the baseline and **replaces `darkPaths` wholesale** before applying that snapshot's own `dark` frames.
+**Two layers, one composed `AppState`. The reducer is the frame layer only.**
+
+```
+AppState = {
+  connection: 'loading' | 'unreachable' | 'reconnecting' | 'live',
+  connectionWhy: null | 'auth' | 'transport',
+  bootstrap: 'pending' | 'scoped' | 'empty' | 'mismatch',
+  bootstrapMismatch: null | { how, preview? },
+  reducer: {                          // frames only. No unreachable here.
+    nodes, darkPaths, counts,
+    cursor: { streamId, seq },
+    mismatch: null | { how, seq?, type?, field?, preview?, afterSeq },
+    mismatchAttempts,
+  },
+}
+```
+
+Display, in this order:
+
+1. `connection === 'unreachable'` → connection banner (auth-labelled when `connectionWhy === 'auth'`). Not the empty site.
+2. `bootstrap === 'mismatch'` or `reducer.mismatch` → mismatch page. Not unreachable.
+3. `bootstrap === 'empty'` **or** (`connection === 'live'` and `nodes.size === 0` and `darkPaths.size === 0`) → empty site.
+4. Else SiteView. `nodes: []` plus a `dark` entry is a dark plot, not empty (scenario 21).
+
+`App.tsx` is the only composer. The reducer never sees a failed fetch. Bootstrap mismatch and frame mismatch share a render, not a store.
+
+Every accepted frame advances `cursor.seq` to that frame's `seq`. A `snapshot` with a new `streamId` resets the baseline and **replaces `darkPaths` wholesale** before applying that snapshot's own `dark` frames.
 
 **Validate before reduce.** The read-set in D1 is the closed list. Extra fields are ignored (scenario 35). `status` value is not validated (scenario 31). `seq` is a finite non-negative safe integer. Ordering is non-decreasing **within** a `streamId`; across `streamId`s there is no comparison.
 
 **New builder, no buckets.** On `node` upsert: known id → leave trace; new `kind === 'builder'` → 20 zeros. `tick` is the only later writer. Absent id in `tick.buckets` appends 0.
 
-**Timers.** Zero `setInterval` under `apps/v2/src`. Exactly one `setTimeout`, at a call site named `reconnectBackoff`. Start 1s, cap 15s, reset on a successful frame. No refetch on focus or visibility.
+**Timers.** Zero `setInterval` under `apps/v2/src`. Exactly one `setTimeout`, inside `reconnectBackoff` in `stream.ts`. Bootstrap retries and stream reconnects both call that function. Start 1s, cap 15s, reset on a successful frame or a successful bootstrap 200. No refetch on focus or visibility.
 
 **Retry policy.**
 
@@ -130,8 +156,9 @@ packages/codev/src/agent-farm/__tests__/v2-scope-encoding.test.ts   # scenario 1
 
 - `apps/v2/package.json` — `@cluesmith/codev-v2`, private, React 19 / Vite 6 / Vitest 4 / testing-library / jsdom. Dep: `@cluesmith/codev-types`. **No** `@cluesmith/codev-sdk`. No `recharts`.
 - `apps/v2/index.html`, `src/main.tsx`, `src/App.tsx` — shell that renders a single heading so serving is observable. Replaced in phase 4.
-- `apps/v2/vite.config.ts` — `base: '/v2/'`; `server.proxy` `/api` and `/v2/events` to `http://localhost:4100`.
-- `apps/v2/vitest.config.ts`, `tsconfig.json`, `src/vite-env.d.ts`
+- `apps/v2/vite.config.ts` — `base: '/v2/'`; `server.proxy` `/api` and `/v2/events` to `http://localhost:4100`. Dev-only (`apply: 'serve'`) `transformIndexHtml` plugin injects `window.__CODEV_TOWER_KEY__` from `CODEV_TOWER_KEY` or `~/.agent-farm/local-key` (64-hex check, `JSON.stringify`, before `</head>`). Production injection stays in `v2-static.ts`. No `localStorage` fallback.
+- `apps/v2/vitest.config.ts` — jsdom, `passWithNoTests: true` (phase 1 has no client tests yet; without this, `pnpm --filter @cluesmith/codev-v2 test` fails and porch's root `npm test` goes red)
+- `apps/v2/tsconfig.json`, `src/vite-env.d.ts`
 - `apps/v2/src/tokens.css`, `apps/v2/src/tokens-dark.css` — byte copies of the research files
 - `packages/codev/src/agent-farm/servers/v2-static.ts` — see rules below
 - `packages/codev/src/agent-farm/servers/v2-routes.ts` — **prologue only**:
@@ -142,21 +169,24 @@ packages/codev/src/agent-farm/__tests__/v2-scope-encoding.test.ts   # scenario 1
   }
   ```
   Everything from the existing `req.method !== 'GET'` check downward is untouched.
-- `packages/codev/src/agent-farm/utils/server-utils.ts` — in `isPublicRoute`, after the `/` / `/index.html` clauses:
-  - `GET` + (`pathname === '/v2/'` or `pathname === '/v2'`) → true
-  - `GET` + `pathname.startsWith('/v2/assets/')` → true
-  - nothing else under `/v2/`
-- `packages/codev/package.json` — `files` += `v2-dist`; `copy-v2` script builds `@cluesmith/codev-v2` then `rm -rf v2-dist && cp -r ../../apps/v2/dist v2-dist`; `bundle-assets` runs `copy-v2`; `devDependencies` += `@cluesmith/codev-v2`; `test` becomes `vitest && pnpm --filter @cluesmith/codev-v2 test` so porch's root `npm test` covers the client.
+- `packages/codev/src/agent-farm/utils/server-utils.ts` — `isPublicRoute` clauses as listed under `v2-static.ts` rules below. No `/v2` alias.
+- `packages/codev/package.json` — `files` += `v2-dist`; `copy-v2` script builds `@cluesmith/codev-v2` then `rm -rf v2-dist && cp -r ../../apps/v2/dist v2-dist`; `bundle-assets` runs `copy-v2`; `devDependencies` += `@cluesmith/codev-v2`; `test` becomes `vitest run && pnpm --filter @cluesmith/codev-v2 test` so porch's root `npm test` covers the client and does not hang in watch mode.
 - `pnpm-lock.yaml` (workspace already lists `apps/*`; lockfile is the expected touch)
 - Tests listed below
 
 `v2-static.ts` rules:
 
-1. Resolve the asset root from `path.resolve(__dirname, '../../../v2-dist')`. Export `setV2DistRoot` for tests (same shape as `setV2RouteDeps`).
-2. `GET /v2/` and `GET /v2` → read `index.html`, inject key, strip `Access-Control-Allow-Origin` and `Vary`, `text/html; charset=utf-8`.
-3. Injection is a pure `injectV2Key(html, key)` that mirrors `injectWebKey` (`tower-routes.ts:2441`): embed via `JSON.stringify` **only** when the key matches `/^[0-9a-f]{64}$/`; insert before `</head>`; no placeholder required. The file comments the three D6 properties and names `injectWebKey` as the source of record.
-4. `GET /v2/assets/*` → extension allowlist `{js,css,map,svg,woff2,png,ico}`; reject `..`, absolute segments, and any resolved path that is not under `<root>/assets/`; 404 otherwise.
-5. Any other path, and any non-GET: 404, same body as today (`Not found`).
+1. ESM shim, same as `tower-server.ts:69-70`: `const __dirname = path.dirname(fileURLToPath(import.meta.url))`. Then resolve the asset root from `path.resolve(__dirname, '../../../v2-dist')`. Export `setV2DistRoot` for tests (same shape as `setV2RouteDeps`).
+2. `GET /v2/` **only** → read `index.html`, inject key, strip `Access-Control-Allow-Origin` and `Vary`, `text/html; charset=utf-8`. **Do not handle bare `/v2`.** `tower-routes.ts:282` is `pathname.startsWith('/v2/')` and C1 freezes it, so `/v2` never reaches this function. D9 names `/v2/` and `/v2/assets/*` only.
+3. Injection is a pure `injectV2Key(html, key)` that mirrors `injectWebKey` (`tower-routes.ts:2441`): embed via `JSON.stringify` **only** when the key matches `/^[0-9a-f]{64}$/`; insert before `</head>`; no placeholder required. The file comments the three D6 properties and names `injectWebKey` as the source of record. `removeHeader` is called **only** on this index branch.
+4. `GET /v2/assets/*` → extension allowlist `{js,css,map,svg,woff2,png,ico}`; reject `..`, absolute segments, and any resolved path that is not under `<root>/assets/`; 404 otherwise. Do not call `removeHeader`.
+5. Any other path, and any non-GET: 404, same body as today (`Not found`). No `removeHeader`. Existing `v2-routes.test.ts:127` (`GET /v2/nope` on a mock without `removeHeader`) keeps passing.
+
+`isPublicRoute` clauses, after `/` / `/index.html`:
+
+- `GET` + `pathname === '/v2/'` → true
+- `GET` + `pathname.startsWith('/v2/assets/')` → true
+- nothing else under `/v2/`. No `/v2` alias.
 
 #### Deliverables
 
@@ -177,9 +207,9 @@ packages/codev/src/agent-farm/__tests__/v2-scope-encoding.test.ts   # scenario 1
 
 #### Test Plan
 
-- `v2-static.test.ts` — injectV2Key table; traversal; extension allowlist; missing dist → 404; method not GET → 404. Drive via `setV2DistRoot` + `handleV2Route` so the prologue is the path under test.
-- `v2-public-route.test.ts` — scenario 16 against `isPublicRoute` only (no HTTP). Existing `request-auth.test.ts` cases stay untouched and must still pass.
-- `v2-packaging.test.ts` — `npm pack --dry-run`, same shape as `dashboard-terminals.test.ts:162-170`.
+- `v2-static.test.ts` — injectV2Key table; traversal; extension allowlist; missing dist → 404; method not GET → 404. Drive via `setV2DistRoot` + `handleV2Route` so the prologue is the path under test. Index-path mocks must implement `removeHeader`; 404-path mocks need not (the handler must not call it there).
+- `v2-public-route.test.ts` — scenario 16 against both `isPublicRoute` **and** `isRequestAllowed` (same helper style as `request-auth.test.ts`). Keyless `GET /v2/` and `GET /v2/assets/x.js` allowed; keyless `GET /v2/events?scope=…` and `POST /v2/` rejected. Existing `request-auth.test.ts` cases stay untouched and must still pass.
+- `v2-packaging.test.ts` — lives in `__tests__/` (not `e2e/`, so the default vitest run sees it). The test itself runs `pnpm copy-v2` then `npm pack --dry-run` and asserts `v2-dist/index.html` and `v2-dist/assets/`. Self-contained; does not depend on a prior build.
 
 ### Phase 2: Frame validation and reducer
 
@@ -196,7 +226,7 @@ Every frame type has a validator and a reducer transition. Degenerate frames are
 - `apps/v2/__tests__/validate.test.ts`
 - `apps/v2/__tests__/reducer.test.ts`
 
-Reducer state:
+Reducer state (frame layer only — see Shared implementation rules):
 
 ```
 {
@@ -204,13 +234,12 @@ Reducer state:
   darkPaths: Map<string, {reason, at}>,
   counts: V2Counts | null,
   cursor: { streamId: string | null, seq: number },
-  page: 'live' | 'empty' | 'mismatch',
   mismatch: null | { how, seq?, type?, field?, preview?, afterSeq },
   mismatchAttempts: 0,               // 0 = budget full; 1 = recovery used
 }
 ```
 
-Unreachable is a **connection** state, not a reducer state. It lives in the stream client (phase 3). The reducer never sees a failed fetch.
+Empty is derived: `nodes.size === 0 && darkPaths.size === 0`. `nodes: []` plus a `dark` entry is **not** empty (scenario 21). Unreachable is `AppState.connection`, not a reducer field.
 
 `applyFrame(state, raw): { state, effect }` where `effect` is `none | recover-fresh | halt`. `recover-fresh` means "one reconnect without since/stream". The stream client owns the attempt counter's side effects; the reducer exposes whether this mismatch is still recoverable.
 
@@ -277,7 +306,7 @@ Backoff lives in `stream.ts` as:
 function reconnectBackoff(ms: number, cb: () => void): Timer
 ```
 
-That identifier is what scenario 9 greps for. It is the only `setTimeout` in `apps/v2/src`.
+That identifier is what scenario 9 greps for. It is the only `setTimeout` in `apps/v2/src`. `bootstrap.ts` retries by calling `reconnectBackoff`; it does not import `setTimeout` itself.
 
 #### Deliverables
 
@@ -302,7 +331,7 @@ That identifier is what scenario 9 greps for. It is the only `setTimeout` in `ap
 
 #### Test Plan
 
-Scripted `ReadableStream` and a fake `fetch` that records URLs. Scenario 18's round-trip uses the existing `handleV2Route` test harness (`WS_A`, `WS_B` in `v2-routes.test.ts`) in `v2-scope-encoding.test.ts` so it exercises the frozen `parseScope`.
+Scripted `ReadableStream` and a fake `fetch` that records URLs. Scenario 18's round-trip lives in `v2-scope-encoding.test.ts` and **duplicates** `WS_A` / `WS_B` / `makeReq` / `makeRes` / `urlFor` — those helpers are module-local in `v2-routes.test.ts` and are not exported. The test still calls `handleV2Route` so it exercises the frozen `parseScope`.
 
 ### Phase 4: Site view
 
@@ -314,10 +343,10 @@ Scripted `ReadableStream` and a fake `fetch` that records URLs. Scenario 18's ro
 
 #### Files to Create / Modify
 
-- `apps/v2/src/site.css` — lot / plot / row layout using token variables. No Tailwind. No Font Awesome. Fonts: the stacks already in `tokens.css` (Fraunces → Georgia, Plex Sans → system-ui, Plex Mono → ui-monospace). Do not add a Google Fonts or CDN `<link>`.
+- `apps/v2/src/site.css` — hand-translate the mockup's containment layout (lot, plot grid, architect header, `.stake` rows, footer). `01-site.html` does this with Tailwind utilities; `tokens.css` only ships the pattern classes. This file is the rest. No Tailwind. No Font Awesome. Fonts: the fallback stacks already in `tokens.css` (Fraunces → Georgia, Plex Sans → system-ui, Plex Mono → ui-monospace). No Google Fonts `<link>`, no vendored `woff2`. That is an accepted deviation from the mockup's CDN faces, not a later-unit stub.
 - `apps/v2/src/components/*.tsx` as in the file layout
 - `apps/v2/src/lib/tree.ts` — workspaces = nodes with `kind === 'workspace'` plus darkPaths entries not in nodes; children grouped by `parentId`; no inferred architect parent
-- `apps/v2/src/App.tsx` — wires bootstrap + stream to SiteView; four page states
+- `apps/v2/src/App.tsx` — the `AppState` composer (Shared implementation rules). Display precedence lives here, not in the reducer.
 - `apps/v2/__tests__/SiteView.test.tsx`
 - `apps/v2/__tests__/StatusStamp.test.tsx`
 - `apps/v2/__tests__/Sparkline.test.tsx`
@@ -364,14 +393,19 @@ Every browser-facing criterion is driven at 1440 against a local fixture server 
 
 #### Files to Create / Modify
 
-- `apps/v2/playwright.config.ts` — viewport `{ width: 1440, height: 900 }`; `webServer` starts `apps/v2/e2e/fixture-server.ts` and `vite preview --base /v2/` (or Vite preview of the built app with the fixture as proxy). Do not hook `packages/codev/playwright.config.ts` (that one starts live Tower).
-- `apps/v2/e2e/fixture-server.ts` — scripted frames, controllable disconnect, per-test scenarios via query or a small control POST on the fixture only
+- `apps/v2/playwright.config.ts` — viewport `{ width: 1440, height: 900 }`; `baseURL: 'http://127.0.0.1:4173'`; `webServer.command` is `node e2e/fixture-server.ts` on port 4173. Do not start Vite preview. Do not hook `packages/codev/playwright.config.ts`.
+- `apps/v2/e2e/fixture-server.ts` — **sole HTTP owner** for the suite. One origin, port 4173:
+  - `GET /v2/` → built `apps/v2/dist/index.html` with the same `injectV2Key` rules (well-formed 64-hex fixture key)
+  - `GET /v2/assets/*` → files from `apps/v2/dist/assets`, same allowlist / no-traversal as production
+  - `GET /api/workspaces` → scripted body
+  - `GET /v2/events` → SSE frames; honours or refuses `since`+`stream`; controllable disconnect
+  - control POST `/__fixture/...` for per-test scenario switches (not part of the app)
 - `apps/v2/e2e/site.spec.ts` — one test per browser-facing criterion
-- `apps/v2/package.json` — `test:e2e`
+- `apps/v2/package.json` — `test:e2e`; **devDependency `@playwright/test`** (do not import it from `packages/codev`)
 - `codev/reviews/83-v2-client-shell.md` is **not** written here; cold-load and idle-bandwidth numbers from this phase are recorded in the review later
 - Scenario 11 check: `apps/v2/__tests__/frozen-files.test.ts` or a phase-5 script that `git diff --stat`s the C1/C2 list
 
-Fixture injects a well-formed key into its own `/v2/` HTML the same way production does, so the app's `fetch` headers work without live Tower.
+The fixture is the only server Playwright talks to. `vite preview` is not in this phase: its `server.proxy` does not apply to preview, and a second origin would 401 the stream.
 
 #### Deliverables
 
@@ -395,7 +429,7 @@ Scenario 10, each a test:
 - [ ] Two pages on one fixture scope converge
 - [ ] Counts in the footer, not presented as the tree's rollup
 - [ ] Builder under workspace, beside architect
-- [ ] Cold load and idle KB/s **measured and printed**, not asserted (criteria 12, 13)
+- [ ] Cold load and idle KB/s **measured and printed**, not asserted (criteria 12, 13). `tower-routes.ts:242` sets `Cache-Control: no-store` on every response and C1 freezes that file, so hashed `/v2/assets/*` will not be cached in production either. Measure against that fact; do not try to override it.
 
 Also:
 
@@ -425,7 +459,12 @@ Manual UX (not automated): open live `/v2/` on this machine, spawn a builder, wa
 |------|-------------|--------|------------|
 | `encodeURIComponent(join(','))` | High | High — 200 + empty + dark | D12; scenario 18 hits real `parseScope` |
 | Client tests invisible to porch | High | High — green implement, broken client | `packages/codev` `test` also runs `@cluesmith/codev-v2 test` |
-| Playwright against live Tower | Medium | High — flaky, or `afx cleanup` | Fixture server; gone is a frame |
+| Playwright against live Tower | Medium | High — flaky, or `afx cleanup` | Fixture is the sole origin; gone is a frame |
+| Bare `/v2` treated as the shell | Medium | Medium — dead code behind a frozen `startsWith('/v2/')` | D9 as written; no `/v2` alias |
+| `vitest` (watch) as the codev test script | High | High — porch hangs | `vitest run` |
+| Phase 1 client test script with zero files | High | High — porch `npm test` red | `passWithNoTests: true` |
+| `pnpm dev` has no key | High | Medium — every request 401s | serve-only `transformIndexHtml` plugin |
+| `__dirname` in an ESM package | High | High — `v2-static.ts` throws at load | `fileURLToPath(import.meta.url)` shim |
 | Tailwind/CDN pulled from the mockup | Medium | Medium — offline fail, extra CSS | Phase 4 forbids both |
 | `listWorkspaces()` used out of habit | High | High — unreachable === empty | Phase 3; scenario 17 |
 | Rust on footer / reconnect | High | High — colour discipline | Phase 4 + scenario 10 rust assertion |
