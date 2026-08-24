@@ -258,6 +258,69 @@ export function protocolsProvidingConsultType(
   return [...found].sort();
 }
 
+/**
+ * Every consult type that has a template at ANY tier, with the protocols that
+ * provide it (issue #54).
+ *
+ * `protocolsProvidingConsultType` answers "who has THIS type", which is only
+ * useful once you already named a type that exists. A typo, or a type this
+ * install simply does not ship, still fell through to a bare "template not
+ * found" naming a path nothing has ever written -- which reads as "create this
+ * file" when the actual answer is "that is not a review type".
+ *
+ * A type with an empty `protocols` list is available bare (no `--protocol`).
+ * Union across all four tiers, matching `listProtocolNames`.
+ */
+export function listConsultTypes(workspaceRoot?: string): Array<{ type: string; protocols: string[] }> {
+  const byType = new Map<string, Set<string>>();
+
+  const record = (fileName: string, owner: string | null): void => {
+    const m = /^(.+)-review\.md$/.exec(fileName);
+    if (!m) return;
+    const set = byType.get(m[1]) ?? new Set<string>();
+    if (owner) set.add(owner);
+    byType.set(m[1], set);
+  };
+
+  const readDir = (dir: string): string[] => {
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isFile()).map(d => d.name);
+    } catch {
+      return []; // unreadable tier -- not this function's error to raise
+    }
+  };
+
+  const root = workspaceRoot || findWorkspaceRoot();
+  const cacheDir = _getFrameworkCacheDir(root);
+  const bareDirs = [
+    path.join(root, '.codev', 'consult-types'),
+    path.join(root, 'codev', 'consult-types'),
+    ...(cacheDir ? [path.join(cacheDir, 'consult-types')] : []),
+    path.join(getSkeletonDir(), 'consult-types'),
+  ];
+  for (const dir of bareDirs) {
+    for (const f of readDir(dir)) record(f, null);
+  }
+
+  for (const dir of protocolDirs(workspaceRoot)) {
+    let protocols: fs.Dirent[];
+    try {
+      protocols = fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory());
+    } catch {
+      continue;
+    }
+    for (const proto of protocols) {
+      for (const f of readDir(path.join(dir, proto.name, 'consult-types'))) {
+        record(f, proto.name);
+      }
+    }
+  }
+
+  return [...byType.entries()]
+    .map(([type, owners]) => ({ type, protocols: [...owners].sort() }))
+    .sort((a, b) => a.type.localeCompare(b.type));
+}
+
 function readProtocolJson(filePath: string): Record<string, unknown> | null {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
