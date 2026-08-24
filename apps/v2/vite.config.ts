@@ -41,6 +41,6 @@ export default defineConfig({
   base: '/v2/',
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    sourcemap: false,
   },
 });

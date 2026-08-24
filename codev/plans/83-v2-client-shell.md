@@ -8,7 +8,7 @@ Approach A from the spec: React 19 + Vite in a new fork-owned `apps/v2` workspac
 
 Serving reuses the existing `/v2/` prefix branch in `tower-routes.ts` (byte-frozen). A new `v2-static.ts` plus a one-branch change to the `handleV2Route` prologue is the only server seam. `isPublicRoute` gains the two GET clauses in D9. Packaging follows the `dashboard-dist` precedent as `v2-dist` (D14).
 
-The site view is containment from `01-site.html` plus `tokens.css` as shipped. No Tailwind, no Font Awesome, no `recharts`. D8 chrome (gate rail, Find node, Add machine, terminal bank, palette) is omitted entirely, not stubbed. FR-3 is rendered as the flat truth the wire carries (D13, #97). FR-15 is deferred (D5).
+The site view is containment from `01-site.html` plus `tokens.css` as shipped. No Tailwind, no Font Awesome, no `recharts`. D8 chrome (gate rail, Find node, Add machine, terminal bank, palette) is omitted entirely, not stubbed. FR-3 is rendered from `parentId` as the wire sent it (D13, rev. 12). FR-15 is deferred (D5). #97 is closed; the leftover defect is #100.
 
 ## Grounded seams (verified)
 
@@ -69,7 +69,7 @@ apps/v2/
 packages/codev/src/agent-farm/servers/v2-static.ts
 packages/codev/src/agent-farm/__tests__/v2-static.test.ts
 packages/codev/src/agent-farm/__tests__/v2-public-route.test.ts
-packages/codev/src/agent-farm/__tests__/v2-packaging.test.ts
+packages/codev/src/agent-farm/__tests__/v2-packaging.e2e.test.ts
 packages/codev/src/agent-farm/__tests__/v2-scope-encoding.test.ts   # scenario 18 round-trip
 ```
 
@@ -209,7 +209,7 @@ Every accepted frame advances `cursor.seq` to that frame's `seq`. A `snapshot` w
 
 - `v2-static.test.ts` — injectV2Key table; traversal; extension allowlist; missing dist → 404; method not GET → 404. Drive via `setV2DistRoot` + `handleV2Route` so the prologue is the path under test. Index-path mocks must implement `removeHeader`; 404-path mocks need not (the handler must not call it there).
 - `v2-public-route.test.ts` — scenario 16 against both `isPublicRoute` **and** `isRequestAllowed` (same helper style as `request-auth.test.ts`). Keyless `GET /v2/` and `GET /v2/assets/x.js` allowed; keyless `GET /v2/events?scope=…` and `POST /v2/` rejected. Existing `request-auth.test.ts` cases stay untouched and must still pass.
-- `v2-packaging.test.ts` — lives in `__tests__/` (not `e2e/`, so the default vitest run sees it). The test itself runs `pnpm copy-v2` then `npm pack --dry-run` and asserts `v2-dist/index.html` and `v2-dist/assets/`. Self-contained; does not depend on a prior build.
+- `v2-packaging.e2e.test.ts` — named so the default unit suite excludes it (`**/*.e2e.test.ts`). The test itself runs `pnpm copy-v2` then `npm pack --dry-run` and asserts `v2-dist/index.html` and `v2-dist/assets/`. Self-contained; does not depend on a prior build.
 
 ### Phase 2: Frame validation and reducer
 
@@ -345,7 +345,7 @@ Scripted `ReadableStream` and a fake `fetch` that records URLs. Scenario 18's ro
 
 - `apps/v2/src/site.css` — hand-translate the mockup's containment layout (lot, plot grid, architect header, `.stake` rows, footer). `01-site.html` does this with Tailwind utilities; `tokens.css` only ships the pattern classes. This file is the rest. No Tailwind. No Font Awesome. Fonts: the fallback stacks already in `tokens.css` (Fraunces → Georgia, Plex Sans → system-ui, Plex Mono → ui-monospace). No Google Fonts `<link>`, no vendored `woff2`. That is an accepted deviation from the mockup's CDN faces, not a later-unit stub.
 - `apps/v2/src/components/*.tsx` as in the file layout
-- `apps/v2/src/lib/tree.ts` — workspaces = nodes with `kind === 'workspace'` plus darkPaths entries not in nodes; children grouped by `parentId`; no inferred architect parent
+- `apps/v2/src/lib/tree.ts` — workspaces = nodes with `kind === 'workspace'` plus darkPaths entries not in nodes; children grouped by `parentId`; no inferred architect parent; unresolvable parents surface as machine-level orphans, not silent drops
 - `apps/v2/src/App.tsx` — the `AppState` composer (Shared implementation rules). Display precedence lives here, not in the reducer.
 - `apps/v2/__tests__/SiteView.test.tsx`
 - `apps/v2/__tests__/StatusStamp.test.tsx`
@@ -403,7 +403,7 @@ Every browser-facing criterion is driven at 1440 against a local fixture server 
 - `apps/v2/e2e/site.spec.ts` — one test per browser-facing criterion
 - `apps/v2/package.json` — `test:e2e`; **devDependency `@playwright/test`** (do not import it from `packages/codev`)
 - `codev/reviews/83-v2-client-shell.md` is **not** written here; cold-load and idle-bandwidth numbers from this phase are recorded in the review later
-- Scenario 11 check: `apps/v2/__tests__/frozen-files.test.ts` or a phase-5 script that `git diff --stat`s the C1/C2 list
+- Scenario 11 check: measured `git diff --stat` on the C1/C2 list at phase 5 close and recorded in the review. Not a durable unit test — those files are frozen for spec 83, not forever.
 
 The fixture is the only server Playwright talks to. `vite preview` is not in this phase: its `server.proxy` does not apply to preview, and a second origin would 401 the stream.
 
@@ -476,4 +476,4 @@ Manual UX (not automated): open live `/v2/` on this machine, spawn a builder, wa
 
 None in this unit. `arch.md` / `lessons-learned.md` wait for the review. `apps/v2` gets no README unless a later unit needs one; the page is the interface.
 
-Findings already filed stay filed: **#97** (FR-3 unmet), **#98** (dark decided once per connection). The review lists them; this plan does not patch them.
+**#97** is closed as already-working (spec rev. 12). **#98** (dark decided once per connection) and **#100** (worktrees with no `global.db` row) stay filed. The review lists them; this plan does not patch them.

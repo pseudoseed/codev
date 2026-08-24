@@ -78,11 +78,19 @@ html, body, #root {
   margin-bottom: 12px;
 }
 
+.arch-block {
+  margin-bottom: 8px;
+}
+
 .arch-row {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
+}
+
+.unattached {
+  border-style: dashed;
 }
 
 .arch-row .stamp {

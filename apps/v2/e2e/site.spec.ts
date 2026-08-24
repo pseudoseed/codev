@@ -274,6 +274,27 @@ test('builder sits under workspace beside architect', async ({ page }) => {
   await expect(ws.locator('[data-kind="architect"] [data-kind="builder"]')).toHaveCount(0);
 });
 
+test('architect-parented builder nests under that architect', async ({ page }) => {
+  await openSite(page);
+  await push([
+    {
+      type: 'node',
+      node: {
+        id: 'builder:nested',
+        kind: 'builder',
+        parentId: 'architect:1',
+        name: 'nested',
+        status: 'running',
+        flags: { heldMail: false },
+        lastDataAt: null,
+      },
+    },
+  ]);
+  const arch = page.locator('[data-kind="architect"][data-id="architect:1"]');
+  await expect(arch.locator('[data-id="builder:nested"]')).toBeVisible();
+  await expect(page.locator('[data-kind="workspace"] > .stake-list [data-id="builder:nested"]')).toHaveCount(0);
+});
+
 test('cold load and idle bandwidth are measured', async ({ page }) => {
   const start = Date.now();
   await openSite(page);

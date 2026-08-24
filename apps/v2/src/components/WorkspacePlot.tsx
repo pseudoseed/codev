@@ -21,14 +21,7 @@ export function WorkspacePlot({ plot }: Props) {
         </div>
       ) : null}
       {plot.architects.map((g) => (
-        <div key={g.node.id}>
-          <ArchitectHeader node={g.node} />
-          <div className="stake-list">
-            {g.builders.map((b) => (
-              <BuilderRow key={b.id} node={b} />
-            ))}
-          </div>
-        </div>
+        <ArchitectHeader key={g.node.id} node={g.node} builders={g.builders} />
       ))}
       {plot.builders.length > 0 ? (
         <div className="stake-list">

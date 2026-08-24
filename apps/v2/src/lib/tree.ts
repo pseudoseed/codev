@@ -16,6 +16,12 @@ export type WorkspacePlotModel = {
   builders: ClientNode[];
 };
 
+export type TreeModel = {
+  plots: WorkspacePlotModel[];
+  orphanArchitects: ArchitectGroup[];
+  orphanBuilders: ClientNode[];
+};
+
 const WS_PREFIX = 'workspace:';
 
 export function workspaceLabel(id: string): string {
@@ -27,7 +33,7 @@ export function workspaceLabel(id: string): string {
 export function buildTree(
   nodes: Map<string, ClientNode>,
   darkPaths: Map<string, DarkEntry>,
-): WorkspacePlotModel[] {
+): TreeModel {
   const plots = new Map<string, WorkspacePlotModel>();
 
   for (const n of nodes.values()) {
@@ -57,14 +63,17 @@ export function buildTree(
   }
 
   const architects = new Map<string, ArchitectGroup>();
+  const orphanArchitects: ArchitectGroup[] = [];
   for (const n of nodes.values()) {
     if (n.kind !== 'architect') continue;
     const group: ArchitectGroup = { node: n, builders: [] };
     architects.set(n.id, group);
     const plot = n.parentId ? plots.get(n.parentId) : undefined;
     if (plot) plot.architects.push(group);
+    else orphanArchitects.push(group);
   }
 
+  const orphanBuilders: ClientNode[] = [];
   for (const n of nodes.values()) {
     if (n.kind !== 'builder') continue;
     const underArch = n.parentId ? architects.get(n.parentId) : undefined;
@@ -74,7 +83,8 @@ export function buildTree(
     }
     const plot = n.parentId ? plots.get(n.parentId) : undefined;
     if (plot) plot.builders.push(n);
+    else orphanBuilders.push(n);
   }
 
-  return [...plots.values()];
+  return { plots: [...plots.values()], orphanArchitects, orphanBuilders };
 }

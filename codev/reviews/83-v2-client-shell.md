@@ -2,7 +2,7 @@
 
 ## Summary
 
-Five plan phases shipped `apps/v2`: static `/v2/` serving and `v2-dist` packaging, a closed-read-set reducer, bootstrap plus resume reconnect, the containment site view, and a same-origin Playwright fixture. The page draws the live hierarchy from `GET /v2/events` without polling, without SDK behaviour, and without touching the C1/C2 frozen files.
+Five plan phases shipped `apps/v2`: static `/v2/` serving and `v2-dist` packaging, a closed-read-set reducer, bootstrap plus resume reconnect, the containment site view, and a same-origin Playwright fixture. The page draws the live hierarchy from `GET /v2/events` without polling, without SDK behaviour, and without touching the C1/C2 frozen files. Review round 1 merged spec rev. 12 and landed the CI / orphan / packaging-suite fixes.
 
 ## Spec Compliance
 
@@ -23,13 +23,13 @@ Five plan phases shipped `apps/v2`: static `/v2/` serving and `v2-dist` packagin
 - [x] 15. Keyless `GET /v2/` and `/v2/assets/*` are public; keyless `/v2/events` is still 401 (Phase 1)
 - [x] 16. 401, 500, thrown fetch, and 200 with `[]` produce distinct renderings (Phase 3, 4, 5)
 - [x] 17. `counts` sits in the footer as machine totals, including on an empty snapshot (Phase 4, 5)
-- [x] 18. A builder sits under its workspace beside the architect; no inferred parent (Phase 4, 5)
+- [x] 18. A workspace-parented builder sits beside the architect; an architect-parented builder nests under it; no parent is inferred (Phase 4, 5, review)
 - [x] 19. `npm pack` on `packages/codev` contains `v2-dist` (Phase 1)
-- [x] 20. C1 surfaces byte-unchanged vs `origin/main` (Phase 5 frozen-files test)
+- [x] 20. C1 surfaces byte-unchanged vs `origin/main` at phase 5 close (measured, then the durable test was removed)
 - [x] 21. Production changes outside `apps/v2/` are `v2-static.ts`, the `v2-routes.ts` prologue, two `isPublicRoute` GET clauses, packaging, new tests, and the workspace lockfile (Phase 1)
 - [x] 22. Spec 52 v2 suite and existing `isPublicRoute` cases still pass (Phase 1–5)
 
-FR-3 (inferred architect parent) and FR-15 remain unmet per D13/D5. Already filed as #97 and #98.
+FR-3 is satisfied from `parentId` (spec rev. 12). FR-15 remains deferred (D5). #97 is closed; #98 and #100 stay filed.
 
 ## Deviations from Plan
 
@@ -147,6 +147,30 @@ No concerns raised — Codex, Claude, opencode APPROVE. Gemini COMMENT (skip).
 
 Architect screenshot before PR: workspace header rendered `ALPHARUN`. **Addressed** (`.ws-plot-name` is flex + 8px gap; name wrapped; two component tests + e2e computed-style).
 
+### Review (Round 1)
+
+Merged `origin/main` (spec rev. 12) before addressing.
+
+#### Codex
+- **Concern**: branch behind spec rev. 12 / #97 still open → **Addressed** (merge + plan/review/PR)
+- **Concern**: no architect-parented builder coverage → **Addressed** (tree, SiteView, Playwright)
+- **Concern**: three untracked context files → **Addressed**
+- Vitest EPERM in the review sandbox: environment, not a failure
+
+#### Claude
+- **Concern**: CI never runs `apps/v2` → **Addressed** (`test.yml` unit step)
+- **Concern**: `frozen-files.test.ts` freezes a one-PR constraint → **Addressed** (deleted; evidence here)
+- **Concern**: `v2-packaging.test.ts` in the unit suite → **Addressed** (renamed `v2-packaging.e2e.test.ts`)
+- **Concern**: `buildTree` drops unresolvable parents → **Addressed** (machine-level `parent not in tree`)
+- Sourcemap: production `sourcemap: false`. `.map` stays in the allowlist for hashed leftovers; none are emitted.
+- Cache-Control: not changed
+- `"test": "vitest run"` reason recorded in the PR body
+
+#### Gemini / opencode
+Gemini skipped. opencode APPROVE.
+
+Frozen C1/C2 `git diff --stat origin/main...HEAD` was empty on all 13 paths at phase 5 close, before this review round merged rev. 12 (spec only).
+
 ## Lessons Learned
 
 ### What Went Well
@@ -182,6 +206,6 @@ No flaky tests encountered.
 ## Follow-up Items
 
 - Live UX pass on this machine: open `/v2/`, spawn a builder, wait past stall, human `afx cleanup`. Fixture already covers `gone`.
-- #97 FR-3 (inferred architect parent) and #98 (dark decided once per connection) stay filed.
-- `apps/v2` `test:e2e` is not in the root CI matrix.
-- Frozen-files test hardcodes `origin/main...HEAD`.
+- #98 (dark decided once per connection) and #100 (worktree with no `global.db` row) stay filed. #97 is closed.
+- `apps/v2` Playwright is not in the root CI matrix. Vitest is.
+- Bare `GET /v2` (no trailing slash) is still 401. D9 matches `/v2/` only.

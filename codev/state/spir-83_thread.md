@@ -23,3 +23,5 @@ Phase 4 on 3ff35f22a. Phase 5: fixture server + 14 Playwright tests green. cold-
 Phase 5 iter 2: Claude/opencode APPROVE. Codex REQUEST_CHANGES accepted except idle CDP (spec says measure/print, not assert). Resume now records since/stream/mode + sentinel; GATE/STALLED computed colours; two-page tree dump. 14 e2e still green.
 
 Phase 5 iter 3: Codex/Claude/opencode APPROVE. Refresh at enter:review refused (opencode has no in-session clear). Architect verified phase 5; screenshot defect: workspace header `ALPHARUN`. Fixed `.ws-plot-name` flex+gap; name wrapped; 124 unit tests. Review at `codev/reviews/83-v2-client-shell.md`. idle-Bps=0 recorded as no-polling evidence.
+
+Review iter 1: gemini skip, opencode APPROVE, Codex/Claude REQUEST_CHANGES. Merged origin/main (spec rev. 12). Accepted CI step, drop frozen-files test, rename packaging to e2e, orphan render, architect-parented coverage, sourcemap off. Cache-Control left. PR #104.

@@ -124,6 +124,32 @@ describe('SiteView display (scenarios 6, 7, 21)', () => {
     expect(arch?.querySelector('[data-kind="builder"]')).toBeNull();
   });
 
+  it('nests an architect-parented builder inside that architect', () => {
+    const s = liveState();
+    s.reducer.nodes.set(
+      'builder:nested',
+      node({ id: 'builder:nested', kind: 'builder', parentId: 'architect:1', name: 'nested' }),
+    );
+    const { container } = render(<Page state={s} hostname="box" />);
+    const arch = container.querySelector('[data-kind="architect"][data-id="architect:1"]');
+    expect(arch?.querySelector('[data-id="builder:nested"]')).toBeTruthy();
+    const wsLevel = container.querySelector('[data-kind="workspace"] > .stake-list');
+    expect(wsLevel?.querySelector('[data-id="builder:nested"]')).toBeNull();
+  });
+
+  it('renders an unresolvable parent at machine level, labelled', () => {
+    const s = liveState();
+    s.reducer.nodes.set(
+      'builder:lost',
+      node({ id: 'builder:lost', kind: 'builder', parentId: 'workspace:/missing', name: 'lost' }),
+    );
+    render(<Page state={s} hostname="box" />);
+    const box = screen.getByTestId('unattached');
+    expect(box.textContent).toMatch(/parent not in tree/);
+    expect(box.querySelector('[data-id="builder:lost"]')).toBeTruthy();
+    expect(document.querySelector('[data-id="workspace:/a"] [data-id="builder:lost"]')).toBeNull();
+  });
+
   it('renders workspace name and status as separately readable text', () => {
     const { container } = render(<Page state={liveState()} hostname="box" />);
     const header = container.querySelector('[data-id="workspace:/a"] .ws-plot-name');
