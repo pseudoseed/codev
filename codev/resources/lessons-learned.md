@@ -313,6 +313,9 @@ just its inputs.
 
 ## Testing
 
+- [From #130] **"Same failures with my changes reverted" proves *not caused by my diff*, not *pre-existing upstream* — and stating the second is how a phantom failure gets written into a PR.** A builder's full suite showed 78 failures across 16 files, A/B'd identically with its diff reverted, and it reported them as pre-existing on main. Main was green at that SHA (6009 passed), its branch was 0 commits behind, and one of the named files passed standalone in its own worktree. The cause was a second full suite running concurrently against the same `~/.agent-farm`, the same Tower and the same fixed ports. Interference is *stable* — same count, same files, across an A/B — so it wears the shape of a real breakage, and the only way to tell is to check the claim against the upstream branch itself rather than against your own tree twice.
+
+
 - [From #52] Vitest in `packages/codev` has cwd `packages/codev`. A test that runs `git diff` with a repo-root pathspec (`packages/codev/src/...`) matches nothing and exits 0. Pass `cwd: git rev-parse --show-toplevel` and assert the expected diff is non-empty, or the test is a false green.
 - [From #4] **A fixture asserted only at its capture geometry is not a regression test.** Five
   real captured TUI frames all classified correctly at their 110-column capture width, and one
