@@ -1,7 +1,7 @@
 id: '100'
 title: afx-cleanup-cannot-remove-an-o
 protocol: air
-phase: implement
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-24T17:01:25.457Z'
-updated_at: '2026-08-24T17:01:25.458Z'
+updated_at: '2026-08-24T17:24:24.914Z'
