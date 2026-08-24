@@ -1,7 +1,7 @@
 id: '78'
 title: debounce-the-fs-watch-wake-pat
 protocol: air
-phase: implement
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-24T00:32:47.315Z'
-updated_at: '2026-08-24T00:32:47.316Z'
+updated_at: '2026-08-24T01:06:58.288Z'
