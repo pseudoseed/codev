@@ -227,7 +227,7 @@ export async function cleanupNonEphemeralWorktree(
 ): Promise<NonEphemeralCleanupResult> {
   const merged = await isWorktreeMerged(workspaceRoot, worktreePath);
   if (!merged && !force) return 'preserved-unmerged';
-  await removeOrphanWorktree(workspaceRoot, worktreePath, force);
+  await removeOrphanWorktree(workspaceRoot, worktreePath, force, { deleteBranch: merged });
   return merged ? 'removed-merged' : 'removed-force';
 }
 
@@ -276,6 +276,7 @@ export async function removeOrphanWorktree(
   workspaceRoot: string,
   worktreePath: string,
   force?: boolean,
+  options?: { deleteBranch?: boolean },
 ): Promise<void> {
   const merged = await isWorktreeMerged(workspaceRoot, worktreePath);
   if (!merged && !force) {
@@ -288,13 +289,14 @@ export async function removeOrphanWorktree(
   }
 
   const branch = await worktreeBranch(worktreePath);
+  const deleteBranch = options?.deleteBranch !== false;
 
   if (existsSync(worktreePath)) {
     const gitForce = force || scaffoldOnly ? ' --force' : '';
     await run(`git worktree remove "${worktreePath}"${gitForce}`, { cwd: workspaceRoot });
   }
 
-  if (branch && branch !== 'main' && branch !== 'master') {
+  if (deleteBranch && branch && branch !== 'main' && branch !== 'master') {
     try {
       await run(`git branch -D "${branch}"`, { cwd: workspaceRoot });
     } catch {
@@ -628,12 +630,15 @@ async function cleanupBuilder(builder: Builder, force?: boolean, issueNumber?: n
         } else {
           const reason = result === 'removed-merged' ? 'merged' : '--force';
           logger.info(`Worktree removed (${reason})`);
+          if (result === 'removed-force' && builder.branch) {
+            logger.info(`Branch preserved: ${builder.branch}`);
+          }
         }
       } catch (error) {
         if (error instanceof UnmergedOrphanError || error instanceof DirtyOrphanError) {
           fatal(error.message);
         }
-        logger.warn(`Warning: Failed to remove worktree: ${error instanceof Error ? error.message : error}`);
+        fatal(`Failed to remove worktree: ${error instanceof Error ? error.message : error}`);
       }
     }
   }

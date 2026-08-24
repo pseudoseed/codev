@@ -167,6 +167,7 @@ describe('cleanupNonEphemeralWorktree', () => {
     expect(result).toBe('removed-merged');
     expect(existsSync(worktreePath)).toBe(false);
     expect(worktreeList(repo)).not.toContain(worktreePath);
+    expect(git('branch --list builder/air-120', repo).trim()).toBe('');
   });
 
   it('preserves an unmerged non-ephemeral worktree', async () => {
@@ -181,7 +182,7 @@ describe('cleanupNonEphemeralWorktree', () => {
     expect(worktreeList(repo)).toContain(worktreePath);
   });
 
-  it('removes an unmerged non-ephemeral worktree when --force is set', async () => {
+  it('removes an unmerged non-ephemeral worktree when --force is set, but keeps the branch', async () => {
     writeFileSync(join(worktreePath, 'wip.txt'), 'unmerged\n');
     git('add wip.txt', worktreePath);
     git('commit -q -m wip', worktreePath);
@@ -191,5 +192,6 @@ describe('cleanupNonEphemeralWorktree', () => {
     expect(result).toBe('removed-force');
     expect(existsSync(worktreePath)).toBe(false);
     expect(worktreeList(repo)).not.toContain(worktreePath);
+    expect(git('branch --list builder/air-120', repo)).toContain('builder/air-120');
   });
 });
