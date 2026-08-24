@@ -10,14 +10,17 @@ type Props = { hostname: string; connection: ConnectionState };
  */
 export function MachineRow({ hostname, connection }: Props) {
   const live = connection === 'live';
+  /* #106: the tree can outlive the stream now, so this row is the one place
+     that always states which of the two is being shown. A lost connection is
+     ochre, matching its strip; rust stays with the gates. */
+  const lost = connection === 'unreachable';
+  const statusClass = live ? 'online' : lost ? 'lost' : 'off';
   return (
     <div className="machine-row" data-testid="machine-row">
-      <span className={live ? 'dot dot-online' : 'dot dot-off'} aria-hidden="true" />
+      <span className={live ? 'dot dot-online' : lost ? 'dot dot-lost' : 'dot dot-off'} aria-hidden="true" />
       <h1 className="machine-name">{hostname}</h1>
       <span className="stamp machine-meta">this machine</span>
-      <span className={live ? 'stamp machine-status online' : 'stamp machine-status off'}>
-        {live ? 'online' : connection}
-      </span>
+      <span className={`stamp machine-status ${statusClass}`}>{live ? 'online' : connection}</span>
     </div>
   );
 }

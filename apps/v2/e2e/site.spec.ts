@@ -329,6 +329,45 @@ test('unreachable and zero workspaces differ', async ({ page }) => {
   await expect(page.getByTestId('empty-site')).toHaveCount(0);
 });
 
+/*
+ * Issue #106. The failure this replaces: a thrown fetch swapped the whole page
+ * for the unreachable banner and discarded a tree that was still in state.
+ */
+test('a dropped stream keeps the drawn tree and marks it stale', async ({ page }) => {
+  await openSite(page);
+  await expect(page.locator('[data-id="builder:1"]')).toBeVisible();
+  const before = await treeDump(page);
+  await plantSentinel(page);
+
+  await fetch(`${FIXTURE}/__fixture/unreachable`, { method: 'POST', body: '{}' });
+
+  await expect(page.getByTestId('connection-lost')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('connection-lost')).toContainText(/last known tree/i);
+  // The page states its own connection, so a screenshot or a DOM dump says which
+  // of the two trees you are looking at without inferring it from the strip.
+  await expect(page.locator('.page')).toHaveAttribute('data-connection', 'unreachable');
+  await expect(page.getByTestId('unreachable')).toHaveCount(0);
+  await expect(page.getByTestId('empty-site')).toHaveCount(0);
+  await expect(page.locator('[data-id="builder:1"]')).toBeVisible();
+  expect(await treeDump(page)).toBe(before);
+  // Not a page reload: spec 83 D2.
+  expect(await sentinelAlive(page)).toBe(1);
+});
+
+test('the tree comes back live when the stream returns', async ({ page }) => {
+  await openSite(page);
+  await plantSentinel(page);
+  await fetch(`${FIXTURE}/__fixture/unreachable`, { method: 'POST', body: '{}' });
+  await expect(page.getByTestId('connection-lost')).toBeVisible({ timeout: 10_000 });
+
+  await reset();
+  await expect(page.getByTestId('connection-lost')).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.locator('.page')).toHaveAttribute('data-connection', 'live');
+  await expect(page.locator('[data-id="builder:1"]')).toBeVisible();
+  await expect(page.getByTestId('machine-row')).toContainText('online');
+  expect(await sentinelAlive(page)).toBe(1);
+});
+
 test('two pages on one scope converge', async ({ browser }) => {
   const ctx = await browser.newContext();
   const a = await ctx.newPage();
