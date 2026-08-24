@@ -43,10 +43,13 @@ apps/vscode/out/
 *.vsix
 *.tsbuildinfo
 test-results/
+playwright-report/
 
 # Dashboard build output (copied into codev for publishing)
 packages/codev/dashboard-dist/
 apps/web/dist/
+packages/codev/v2-dist/
+apps/v2/dist/
 
 # three.js vendored at build time from the `three` devDependency (copy-three.mjs);
 # copied into templates/vendor/ and shipped in the npm tarball, not committed.

@@ -474,6 +474,7 @@ so it survives review. Pin the constant to the highest migration block in a test
 
 ## UI/UX
 
+- [From #83] Sibling stamps in one header need `display: flex` and a gap. Inline flow concatenates uppercase name + status into one word (`ALPHARUN`, `ALPHAmailRUN`). `textContent` tests will not catch it; assert distinct nodes and the computed `gap`.
 - [From #1463] A Stream Deck action's identity is its **UUID**, not its `Name`. Renaming a key's
   `Name`/`Tooltip`/face label (e.g. `Open Terminal` → `Open Builder Terminal`) leaves every
   already-placed instance working — the app re-labels it in place — **as long as the manifest UUID

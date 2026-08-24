@@ -1,0 +1,234 @@
+id: '83'
+title: v2-client-shell-apps-v2-render
+protocol: spir
+phase: review
+plan_phases:
+  - id: phase_1
+    title: Workspace and /v2/ static serving
+    status: complete
+  - id: phase_2
+    title: Frame validation and reducer
+    status: complete
+  - id: phase_3
+    title: Bootstrap, stream reader, reconnect
+    status: complete
+  - id: phase_4
+    title: Site view
+    status: complete
+  - id: phase_5
+    title: Playwright fixture proof
+    status: complete
+current_plan_phase: null
+gates:
+  spec-approval:
+    status: approved
+    approved_at: '2026-08-24T06:44:32.952Z'
+  plan-approval:
+    status: approved
+    requested_at: '2026-08-24T07:03:04.996Z'
+    approved_at: '2026-08-24T07:12:44.607Z'
+  pr:
+    status: approved
+    requested_at: '2026-08-24T10:36:01.312Z'
+    approved_at: '2026-08-24T11:26:53.574Z'
+  verify-approval:
+    status: pending
+iteration: 1
+build_complete: true
+history:
+  - iteration: 1
+    plan_phase: phase_2
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_2-iter1-gemini.txt
+        stated: false
+      - model: codex
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_2-iter1-codex.txt
+        stated: true
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_2-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_2-iter1-opencode.txt
+        stated: true
+  - iteration: 1
+    plan_phase: phase_3
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_3-iter1-gemini.txt
+        stated: false
+      - model: codex
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_3-iter1-codex.txt
+        stated: true
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_3-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_3-iter1-opencode.txt
+        stated: true
+  - iteration: 2
+    plan_phase: phase_3
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_3-iter2-gemini.txt
+        stated: false
+      - model: codex
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_3-iter2-codex.txt
+        stated: true
+      - model: claude
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_3-iter2-claude.txt
+        stated: true
+      - model: opencode
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_3-iter2-opencode.txt
+        stated: true
+  - iteration: 3
+    plan_phase: phase_3
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_3-iter3-gemini.txt
+        stated: false
+      - model: codex
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_3-iter3-codex.txt
+        stated: true
+      - model: claude
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_3-iter3-claude.txt
+        stated: true
+      - model: opencode
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_3-iter3-opencode.txt
+        stated: true
+  - iteration: 1
+    plan_phase: phase_4
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_4-iter1-gemini.txt
+        stated: false
+      - model: codex
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_4-iter1-codex.txt
+        stated: true
+      - model: claude
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_4-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_4-iter1-opencode.txt
+        stated: true
+  - iteration: 1
+    plan_phase: phase_5
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_5-iter1-gemini.txt
+        stated: false
+      - model: codex
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_5-iter1-codex.txt
+        stated: true
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_5-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_5-iter1-opencode.txt
+        stated: true
+  - iteration: 2
+    plan_phase: phase_5
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_5-iter2-gemini.txt
+        stated: false
+      - model: codex
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_5-iter2-codex.txt
+        stated: true
+      - model: claude
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_5-iter2-claude.txt
+        stated: true
+      - model: opencode
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_5-iter2-opencode.txt
+        stated: true
+started_at: '2026-08-24T06:44:19.322Z'
+updated_at: '2026-08-24T11:26:53.574Z'
+context_refreshes:
+  - boundary: enter:implement
+    at: '2026-08-24T07:12:46.426Z'
+    acknowledged_at: '2026-08-24T07:13:14.682Z'
+  - boundary: plan-phase:phase_2
+    at: '2026-08-24T07:29:12.283Z'
+    acknowledged_at: '2026-08-24T07:29:44.711Z'
+  - boundary: plan-phase:phase_3
+    at: '2026-08-24T07:56:14.825Z'
+    acknowledged_at: '2026-08-24T07:56:44.092Z'
+  - boundary: plan-phase:phase_4
+    at: '2026-08-24T09:18:40.332Z'
+    acknowledged_at: '2026-08-24T09:19:30.593Z'
+  - boundary: plan-phase:phase_5
+    at: '2026-08-24T09:35:58.373Z'
+    acknowledged_at: '2026-08-24T09:36:09.922Z'
+  - boundary: enter:review
+    at: '2026-08-24T10:12:38.762Z'
+    acknowledged_at: '2026-08-24T10:13:13.169Z'
+force_advanced:
+  phase: phase_3
+  iteration: 3
+  max_iterations: 3
+  rebuttal_file: 83-phase_3-iter3-rebuttals.md
+  at: '2026-08-24T09:18:38.454Z'
+pr_ready_for_human: false

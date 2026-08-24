@@ -91,6 +91,10 @@ jobs:
         working-directory: apps/web
         run: pnpm test
 
+      - name: Run v2 unit tests
+        working-directory: apps/v2
+        run: pnpm test
+
       - name: Type-check vscode extension
         working-directory: apps/vscode
         run: pnpm check-types

@@ -17,6 +17,7 @@ Codev is a Human-Agent Software Development Operating System. This repository se
 - **Server Runtime**: `packages/core/` — local-key issuance, homedir-derived paths (server-side only)
 - **VS Code Extension**: `apps/vscode/` — thin client over Tower API
 - **Dashboard**: `apps/web/` — React SPA served by Tower
+- **v2 site**: `apps/v2/` — live hierarchy at `/v2/`; types from `@cluesmith/codev-types`, no SDK behaviour
 - **Consult Tool**: See `packages/codev/src/commands/consult/` and `codev/roles/consultant.md`
 - **Protocols**: Read the relevant protocol in `codev/protocols/{spir,maintain,experiment}/protocol.md`
 
@@ -1159,6 +1160,7 @@ live in `packages/`; end-user client surfaces live in `apps/`:
 | `packages/config` | `@cluesmith/codev-config` | Shared tsconfig base (cross-project) |
 | `packages/artifact-canvas` | `@cluesmith/codev-artifact-canvas` | Reusable React surface for rendering/reviewing Codev markdown artifacts |
 | `apps/web` | `@cluesmith/codev-web` | React dashboard SPA (built into codev package) |
+| `apps/v2` | `@cluesmith/codev-v2` | Live hierarchy at `/v2/`. Types from `@cluesmith/codev-types` only — no SDK behaviour. Built into `packages/codev/v2-dist` |
 | `apps/vscode` | `codev-vscode` (Marketplace: `cluesmith.codev-vscode`) | VS Code extension |
 | `apps/streamdeck` | `@cluesmith/codev-streamdeck` (private; Elgato plugin UUID `com.cluesmith.codev`) | Stream Deck plugin — outside-in controller: overview reads + SSE + command-relay verbs via the sdk's `controller`/`node` subpaths. Imported from codev-integrations under #1347; packs on demand into a `.sdPlugin` Marketplace bundle (not yet Marketplace-distributed — initial Maker Console submission is a tracked follow-up), versioned in workspace lockstep (manifest `Version` = package version + build segment, pinned by a version-sync test) |
 
@@ -1172,6 +1174,9 @@ codev-core (server: key issuance,   codev-sdk (client: TowerClient, SSE,
 codev (CLI + Tower)                vscode (extension)     dashboard (React SPA)
   imports core + sdk                 imports sdk            imports sdk
   imports types (dev)                imports types (dev)    imports types (dev)
+
+v2 site (apps/v2)
+  imports types only — own fetch, own SSE reader, own reconnect
 
 streamdeck (Elgato plugin)
   imports sdk only (controller + node subpaths; own import-boundary test)
@@ -1326,6 +1331,8 @@ codev/                                  # Project root (pnpm monorepo)
 │   └── tsconfig.base.json
 ├── apps/web/                           # @cluesmith/codev-web (React SPA; end-user surface)
 │   └── src/                           # React 19 + Vite 6 + xterm.js + Recharts
+├── apps/v2/                            # @cluesmith/codev-v2 (live hierarchy at /v2/; types only)
+│   └── src/                           # React 19 + Vite 6; reducer over GET /v2/events
 ├── apps/vscode/                        # VS Code extension (Marketplace: cluesmith.codev-vscode; end-user surface)
 │   └── src/
 │       ├── extension.ts               # Activation, command/view registration
@@ -1404,6 +1411,7 @@ codev/                                  # Project root (pnpm monorepo)
 │   │   ├── porch.js                    # porch command
 │   │   └── generate-image.js           # generate-image command
 │   ├── dashboard-dist/                 # Dashboard build output (copied from apps/web/dist)
+│   ├── v2-dist/                        # v2 site build output (copied from apps/v2/dist)
 │   ├── skeleton/                       # Embedded codev-skeleton (built)
 │   ├── templates/                      # HTML templates
 │   │   ├── tower.html                  # Multi-project overview

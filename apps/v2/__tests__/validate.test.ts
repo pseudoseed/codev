@@ -1,0 +1,133 @@
+import { describe, it, expect } from 'vitest';
+import { escapePreview, parseAndValidate, validateFrame } from '../src/lib/validate.js';
+
+const after = 0;
+
+describe('parseAndValidate', () => {
+  it('invalid JSON reports preview and no seq/type (scenario 29)', () => {
+    const r = parseAndValidate('{nope', after);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.mismatch.how).toBe('invalid-json');
+    expect(r.mismatch.preview).toBe('{nope');
+    expect(r.mismatch.seq).toBeUndefined();
+    expect(r.mismatch.type).toBeUndefined();
+  });
+
+  it('preview is the first 120 UTF-8 bytes, escaped', () => {
+    const euro = '€'.repeat(80);
+    const preview = escapePreview(euro);
+    expect(new TextEncoder().encode(euro).length).toBeGreaterThan(120);
+    expect(preview.startsWith('\\xe2\\x82\\xac')).toBe(true);
+    expect(preview.match(/\\x[0-9a-f]{2}/g)?.length).toBe(120);
+  });
+});
+
+describe('validateFrame read-set (scenario 30)', () => {
+  it('node with no id', () => {
+    const r = validateFrame({ seq: 1, type: 'node', node: { kind: 'builder', parentId: null, name: 'x', status: 'running', flags: { heldMail: false }, lastDataAt: null } }, after);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.mismatch.field).toMatch(/id/);
+      expect(r.mismatch.type).toBe('node');
+      expect(r.mismatch.seq).toBe(1);
+    }
+  });
+
+  it('node with kind machine', () => {
+    const r = validateFrame({
+      seq: 1, type: 'node',
+      node: { id: 'b', kind: 'machine', parentId: null, name: 'x', status: 'running', flags: { heldMail: false }, lastDataAt: null },
+    }, after);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.mismatch.field).toMatch(/kind/);
+  });
+
+  it('node with numeric parentId', () => {
+    const r = validateFrame({
+      seq: 1, type: 'node',
+      node: { id: 'b', kind: 'builder', parentId: 1, name: 'x', status: 'running', flags: { heldMail: false }, lastDataAt: null },
+    }, after);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.mismatch.field).toMatch(/parentId/);
+  });
+
+  it('snapshot nodes not an array', () => {
+    const r = validateFrame({ seq: 0, type: 'snapshot', streamId: 's', resumed: false, nodes: {}, counts: { workspaces: 0, builders: { total: 0, byStatus: {} }, gateWaiting: 0 } }, after);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.mismatch.field).toBe('nodes');
+  });
+
+  it('snapshot with one bad element among good ones', () => {
+    const good = { id: 'w', kind: 'workspace', parentId: null, name: 'a', status: 'running', flags: { heldMail: false }, lastDataAt: null };
+    const r = validateFrame({
+      seq: 0, type: 'snapshot', streamId: 's', resumed: false,
+      nodes: [good, { ...good, id: '', kind: 'builder' }],
+      counts: { workspaces: 1, builders: { total: 0, byStatus: {} }, gateWaiting: 0 },
+    }, after);
+    expect(r.ok).toBe(false);
+  });
+
+  it('snapshot with no counts', () => {
+    const r = validateFrame({ seq: 0, type: 'snapshot', streamId: 's', resumed: false, nodes: [] }, after);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.mismatch.field).toMatch(/counts/);
+  });
+
+  it('counts with a negative total', () => {
+    const r = validateFrame({ seq: 1, type: 'counts', counts: { workspaces: 1, builders: { total: -1, byStatus: {} }, gateWaiting: 0 } }, after);
+    expect(r.ok).toBe(false);
+  });
+
+  it('tick with buckets as an array', () => {
+    const r = validateFrame({ seq: 1, type: 'tick', at: 't', buckets: [] }, after);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.mismatch.field).toBe('buckets');
+  });
+
+  it('tick with a non-numeric value', () => {
+    const r = validateFrame({ seq: 1, type: 'tick', at: 't', buckets: { a: 'x' } }, after);
+    expect(r.ok).toBe(false);
+  });
+
+  it('dark with id that is not workspace:<path>', () => {
+    const r = validateFrame({ seq: 0, type: 'dark', id: 'machine:x', reason: 'unknown' }, after);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.mismatch.field).toBe('id');
+  });
+
+  it('resumed with a bad from', () => {
+    const r = validateFrame({ seq: 1, type: 'resumed', from: -1 }, after);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.mismatch.field).toBe('from');
+  });
+});
+
+describe('seq is a safe non-negative integer (scenario 33)', () => {
+  const base = { type: 'gone', id: 'x' };
+  for (const seq of [NaN, Infinity, 1.5, -1, 2 ** 60]) {
+    it(`rejects ${String(seq)}`, () => {
+      const r = validateFrame({ ...base, seq }, after);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.mismatch.field).toBe('seq');
+    });
+  }
+});
+
+describe('unknown type (scenario 29)', () => {
+  it('reports the type and seq', () => {
+    const r = validateFrame({ seq: 4, type: 'wibble' }, after);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.mismatch.how).toBe('unknown-type');
+    expect(r.mismatch.type).toBe('wibble');
+    expect(r.mismatch.seq).toBe(4);
+  });
+});
+
+describe('fields outside the read-set are ignored (scenario 35)', () => {
+  it('extra unknown field on a gone frame applies', () => {
+    const r = validateFrame({ seq: 1, type: 'gone', id: 'x', extra: { garbage: true } }, after);
+    expect(r.ok).toBe(true);
+  });
+});
