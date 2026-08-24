@@ -167,6 +167,23 @@ development process; squashing destroys it.
 
 ## Working with builders
 
+**Pick the harness from the deliverable, not the difficulty.**
+
+| Work | Harness |
+|---|---|
+| Backend, protocol, front-end **logic**, tests, refactors | `opencode` (Grok) is good and cheap |
+| Anything judged by **how a screen looks** | **Claude.** Not Grok |
+| Trivial visual edits — move an element, change a colour, a one-line CSS rule | Either |
+
+Grok builds a *wireframe of* a design rather than the design. On spec 83 it shipped a client
+that passed 127 client tests, 3,394 server tests and 15/15 Playwright with correct tokens,
+correct containment and correct colour discipline — and was unusable, because it dropped every
+label prefix, the header bar, and rendered idle sparklines as invisible dots (#112).
+
+**A green test suite cannot detect design infidelity.** Before approving any UI PR, open the
+mockup image and the rendered page side by side and compare them. Component tests that assert
+"the name renders" pass happily while the thing that made the name legible is gone.
+
 Architects create specs and plans and review work; builders implement in isolated worktrees
 under `.builders/<id>/`. Commit everything before `afx spawn` — builders branch from HEAD, so
 uncommitted work is invisible to them.
