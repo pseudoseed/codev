@@ -1,0 +1,22 @@
+id: '107'
+title: apps-v2-playwright-is-not-in-t
+protocol: air
+phase: verified
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: approved
+    requested_at: '2026-08-24T23:06:30.581Z'
+    approved_at: '2026-08-24T23:06:50.415Z'
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-24T22:30:02.767Z'
+updated_at: '2026-08-24T23:06:52.322Z'
+pr_history:
+  - phase: pr
+    pr_number: 138
+    branch: builder/air-107
+    created_at: '2026-08-24T23:02:37.629Z'
+pr_ready_for_human: false

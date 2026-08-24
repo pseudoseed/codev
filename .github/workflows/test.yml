@@ -292,3 +292,37 @@ jobs:
         working-directory: packages/codev
         run: node scripts/verify-install.mjs cluesmith-codev-*.tgz ../core/cluesmith-codev-core-*.tgz ../sdk/cluesmith-codev-sdk-*.tgz ../types/cluesmith-codev-types-*.tgz
 
+  v2-playwright:
+    name: v2 Playwright
+    runs-on: ubuntu-latest
+    # Same fixture as local `pnpm test:e2e` (127.0.0.1:4173). No Tower.
+    # Healthy runs finish in a few minutes; bound so a stall fails (#1502).
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build types package
+        working-directory: packages/types
+        run: pnpm build
+
+      - name: Install Playwright Chromium
+        working-directory: apps/v2
+        run: pnpm exec playwright install chromium
+
+      - name: Run v2 Playwright tests
+        working-directory: apps/v2
+        run: pnpm test:e2e
+
