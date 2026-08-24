@@ -128,13 +128,28 @@ html, body, #root {
   border: 1px solid var(--ink);
 }
 
+/*
+ * Issue #111. A row grid is as tall as its tallest cell, so one workspace with
+ * twenty-seven builders left a crater across the three columns beside it —
+ * align-items: start stopped the stretching but not the hole. Column flow has
+ * no rows to be trapped in: plots pack down each column and the page ends at
+ * the tallest plot rather than at the sum of the row heights.
+ *
+ * The trade is ordering. Multicol reads top-to-bottom then across, where the
+ * grid read across then down. Nothing on this page is ranked, so there is no
+ * order to lose.
+ */
 .plot-grid {
-  display: grid;
-  /* Issue #111: the default stretch made every plot as tall as the tallest in
-     its row, so one busy workspace padded three empty ones. */
-  align-items: start;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 16px;
+  column-width: 300px;
+  column-gap: 16px;
+}
+
+.plot-grid > * {
+  /* Without this a plot is sliced across the column boundary and its border
+     is drawn twice, once around each half. */
+  -webkit-column-break-inside: avoid;
+  break-inside: avoid;
+  margin-bottom: 16px;
 }
 
 .ws-plot {

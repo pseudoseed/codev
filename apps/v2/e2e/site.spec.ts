@@ -157,31 +157,80 @@ test('every node kind carries its prefix in the browser', async ({ page }) => {
   await expect(page.getByTestId('site-register')).toContainText('58 builders');
 });
 
-test('plots size to their content instead of the tallest in the row', async ({ page }) => {
-  // Issue #111. The tall workspace must not pad the short one beside it.
-  await openSite(page);
-  await push([
-    {
-      type: 'node',
-      node: {
-        id: 'workspace:/tmp/beta',
-        kind: 'workspace',
-        parentId: null,
-        name: 'beta',
-        status: 'running',
-        flags: { heldMail: false },
-        lastDataAt: null,
-      },
+function ws(name: string) {
+  return {
+    type: 'node',
+    node: {
+      id: `workspace:/tmp/${name}`,
+      kind: 'workspace',
+      parentId: null,
+      name,
+      status: 'running',
+      flags: { heldMail: false },
+      lastDataAt: null,
     },
-  ]);
-  const grid = page.locator('.plot-grid');
-  await expect.poll(async () => grid.evaluate((el) => getComputedStyle(el).alignItems)).toBe('start');
+  };
+}
+
+function builderIn(host: string, n: number) {
+  return {
+    type: 'node',
+    node: {
+      id: `builder:${host}-${n}`,
+      kind: 'builder',
+      parentId: `workspace:/tmp/${host}`,
+      name: `${host}-${n}`,
+      status: 'running',
+      flags: { heldMail: false },
+      lastDataAt: null,
+    },
+  };
+}
+
+test('plots size to their content instead of the tallest in the row', async ({ page }) => {
+  await openSite(page);
+  await push([ws('beta')]);
   await expect(page.locator('[data-id="workspace:/tmp/beta"]')).toBeVisible();
   const heights = await page
     .locator('.plot-grid > [data-kind="workspace"]')
     .evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
-  expect(heights.length).toBe(2);
   expect(Math.min(...heights)).toBeLessThan(Math.max(...heights));
+});
+
+test('one tall workspace does not leave a row-height crater beside it', async ({ page }) => {
+  /*
+   * Issue #111, and the half that align-items: start did not fix. A row grid is
+   * as tall as its tallest cell, so a workspace with dozens of builders left
+   * every short plot in its row floating over dead space. Needs more plots than
+   * there are columns — the one-workspace fixture cannot show this, which is
+   * why it got past spec 83.
+   */
+  await openSite(page);
+  const frames: unknown[] = [];
+  for (const name of ['b1', 'b2', 'b3', 'b4', 'b5', 'tall']) frames.push(ws(name));
+  for (let i = 0; i < 12; i += 1) frames.push(builderIn('tall', i));
+  await push(frames);
+  await expect(page.locator('[data-id="builder:tall-11"]')).toBeVisible();
+
+  const m = await page.evaluate(() => {
+    const grid = document.querySelector('.plot-grid') as HTMLElement;
+    const plots = [...document.querySelectorAll('.plot-grid > *')];
+    const rects = plots.map((el) => el.getBoundingClientRect());
+    return {
+      grid: grid.getBoundingClientRect().height,
+      tallest: Math.max(...rects.map((r) => r.height)),
+      shortest: Math.min(...rects.map((r) => r.height)),
+      columns: new Set(rects.map((r) => Math.round(r.left))).size,
+      plots: plots.length,
+    };
+  });
+
+  // Several plots and more than one column: the shape the crater needs.
+  expect(m.plots).toBeGreaterThan(4);
+  expect(m.columns).toBeGreaterThan(1);
+  // The lot ends at its tallest plot. Under a row grid it ended at the sum of
+  // the row heights, which is what left the hole.
+  expect(m.grid).toBeLessThan(m.tallest + m.shortest);
 });
 
 test('gone removes the row', async ({ page }) => {
