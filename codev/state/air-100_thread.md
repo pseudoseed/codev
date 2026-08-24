@@ -17,3 +17,11 @@ The 13 orphans already on this workspace are not touched. That is the human's ca
 https://github.com/pseudoseed/codev/pull/117
 
 Review (comment 5398986469): git `--force` was unconditional (untracked work deleted); `orphanDirMatches` dropped the protocol prefix (`-p experiment-62` could hit `air-62`); merge check used workspace HEAD. All three addressed. 18 tests.
+
+## Merged
+
+PR #117 merged 2026-08-24T17:45:40Z as 3e40b4080. Architect re-verified all three findings against the built code.
+
+porch approve then porch done. Protocol complete, phase verified. Two porch state commits sat on builder/air-100 and were not in the PR (expected, #57). Did not open a follow-up PR.
+
+Architect cherry-picked the 3 porch commits onto main as PR #119 (merged). `porch status 100` from main now reads verified. Worktree cleanup is Chris's call; builder/air-100 left in place.
