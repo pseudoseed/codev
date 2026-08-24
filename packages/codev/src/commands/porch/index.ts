@@ -49,6 +49,9 @@ import {
   type CheckEnv,
 } from './checks.js';
 import { loadCheckOverrides, resolveConsultationModels } from './config.js';
+import { findUnlandedCommits, completionReport } from './unlanded.js';
+import { resolveDefaultBranch } from '../../lib/default-branch.js';
+
 import { notifyTerminal, gateApprovedMessage } from './notify.js';
 import { loadConfig } from '../../lib/config.js';
 import { version } from '../../version.js';
@@ -655,6 +658,35 @@ export async function done(workspaceRoot: string, projectId: string, resolver?: 
   await advanceProtocolPhase(workspaceRoot, state, protocol, statusPath, scopedResolver);
 }
 
+/**
+ * The completion banner, told the truth (issue #57).
+ *
+ * `porch done` writes state commits AFTER the PR it was tracking has merged, so
+ * the branch is ahead of its base at the exact moment porch says the protocol
+ * is complete. Observed on a BUGFIX run: two porch commits stranded on the
+ * builder branch, banner clean.
+ *
+ * That signal is what a builder stops on. One that trusted it stopped with work
+ * unlanded; one that did not trust it improvised a second PR that no phase
+ * owned, no gate covered, and no notification was attached to -- so the
+ * architect was never told anyone was waiting, and the worktree sat idle with
+ * nothing reporting a problem.
+ *
+ * Three outcomes, three renderings. "Could not check" is NOT folded into
+ * "clean": they lead to opposite actions.
+ */
+function reportCompletion(workspaceRoot: string, state: ProjectState): void {
+  const base = resolveDefaultBranch(workspaceRoot);
+  const landing = findUnlandedCommits(workspaceRoot, base);
+  const { severity, lines } = completionReport(state.id, state.protocol, base, landing);
+
+  const paint = severity === 'complete' ? chalk.green.bold : chalk.yellow.bold;
+  console.log(paint(lines[0]));
+  for (const line of lines.slice(1)) {
+    console.log(/^\s{4}(git |afx )/.test(line) ? chalk.cyan(line) : line);
+  }
+}
+
 async function advanceProtocolPhase(workspaceRoot: string, state: ProjectState, protocol: Protocol, statusPath: string, resolver?: ArtifactResolver): Promise<void> {
   const nextPhase = getNextPhase(protocol, state.phase);
 
@@ -662,8 +694,11 @@ async function advanceProtocolPhase(workspaceRoot: string, state: ProjectState, 
     state.phase = 'verified';
     await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} protocol complete`);
     console.log('');
-    console.log(chalk.green.bold('🎉 PROTOCOL COMPLETE'));
-    console.log(`\n  Project ${state.id} has completed the ${state.protocol} protocol.`);
+    // Issue #57: the check runs AFTER that commit, deliberately. That commit is
+    // itself one of the unlanded ones -- along with the `PR #N merged` commit
+    // that `done --merged` wrote after the PR closed -- and the whole point is
+    // that the banner has been printing over the top of them.
+    reportCompletion(workspaceRoot, state);
     return;
   }
 
