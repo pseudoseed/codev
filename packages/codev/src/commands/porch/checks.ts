@@ -24,6 +24,9 @@ const execFileAsync = promisify(execFile);
  */
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
+/** Grace period between the timeout's SIGTERM and the SIGKILL that follows it. */
+const SIGKILL_ESCALATION_MS = 5000;
+
 // ============================================================================
 // Check Execution
 // ============================================================================
@@ -58,6 +61,13 @@ export async function runCheck(
 
     const proc = spawn(executable, args, {
       cwd,
+      // `detached` makes the child a process-group leader so the timeout can
+      // signal the GROUP (issue #8). Under `shell: true` the child is `sh -c
+      // "<command>"`, and signalling that pid alone reaches the shell, not
+      // whatever it spawned -- `npm test` forks a test runner, the runner keeps
+      // the stdio pipes open, and `close` never fires. The check then outlives
+      // its own timeout by however long the real work takes.
+      detached: true,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
@@ -67,15 +77,38 @@ export async function runCheck(
       },
     });
 
+    let exited = false;
+
+    /**
+     * Signal the whole process group, falling back to the direct child.
+     *
+     * ESRCH means it is already gone, which is the outcome we wanted.
+     */
+    const signalGroup = (signal: NodeJS.Signals): void => {
+      if (exited || proc.pid === undefined) return;
+      try {
+        process.kill(-proc.pid, signal);
+      } catch {
+        try {
+          proc.kill(signal);
+        } catch {
+          // Already reaped.
+        }
+      }
+    };
+
     // Set up timeout
     const timeout = setTimeout(() => {
       killed = true;
-      proc.kill('SIGTERM');
+      signalGroup('SIGTERM');
       setTimeout(() => {
-        if (!proc.killed) {
-          proc.kill('SIGKILL');
-        }
-      }, 5000);
+        // `proc.killed` only reports that a signal was SENT, so the old
+        // `if (!proc.killed)` guard here was false on every path that reached
+        // it and the SIGKILL escalation could never fire. A check that ignores
+        // SIGTERM -- which is exactly the hung check a timeout exists for --
+        // ran to completion regardless of its bound.
+        if (!exited) signalGroup('SIGKILL');
+      }, SIGKILL_ESCALATION_MS);
     }, timeoutMs);
 
     proc.stdout.on('data', (data) => {
@@ -87,6 +120,7 @@ export async function runCheck(
     });
 
     proc.on('close', (code) => {
+      exited = true;
       clearTimeout(timeout);
       const duration = Date.now() - startTime;
 
@@ -119,6 +153,7 @@ export async function runCheck(
     });
 
     proc.on('error', (err) => {
+      exited = true;
       clearTimeout(timeout);
       resolve({
         name,

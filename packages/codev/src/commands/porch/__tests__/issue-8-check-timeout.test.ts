@@ -155,6 +155,28 @@ describe('#8: the runner honours the per-check bound', () => {
     expect(results[0].passed).toBe(true);
   }, KILL_ESCALATION_HEADROOM_MS);
 
+  it('kills a check whose shell FORKED, which is every real check command', async () => {
+    // The CI failure that found this. A pipeline makes the shell fork rather
+    // than exec, so signalling the child pid reaches `sh` and not `sleep`; the
+    // grandchild holds the stdio pipes open and `close` never fires. That is
+    // the shape of every real check -- `npm test` forks a runner -- so before
+    // the process-group kill, a timed-out check ran to completion regardless of
+    // its bound.
+    //
+    // 30s of sleep under a 100ms bound, asserted inside 15s: passing means it
+    // was killed, not that it finished.
+    const started = Date.now();
+    const results = await runPhaseChecks(
+      { forking: { command: 'sleep 30 | cat', timeout_ms: 100 } },
+      process.cwd(),
+      { PROJECT_ID: '8', PROJECT_TITLE: 'timeout' },
+    );
+
+    expect(results[0].passed).toBe(false);
+    expect(results[0].error).toContain('Timed out');
+    expect(Date.now() - started).toBeLessThan(15_000);
+  }, KILL_ESCALATION_HEADROOM_MS);
+
   it('still applies the phase default to a check with no bound of its own', async () => {
     const results = await runPhaseChecks(
       { slow: { command: 'sleep 30' } },
