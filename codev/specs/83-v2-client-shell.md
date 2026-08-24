@@ -8,7 +8,7 @@ validated: [codex]
 - **Issue:** #83
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Approved, rev. 11
+- **Status:** Approved, rev. 12
 - **Depends on:** spec 52 (v2 server events), merged
 
 ## Problem Statement
@@ -44,12 +44,12 @@ Rev. 1 said the contract "has never been consumed by anything." At rev. 4 it has
 | 1 | `V2NodeKind` emits `workspace \| architect \| builder`. **No machine node, ever.** | D10. Criterion 1 was unimplementable as written. |
 | 2 | Scope of 1 workspace → 16 nodes, but `counts` said `{workspaces: 22, builders: {total: 58}}` | D11. `counts` is machine-wide, not the scope's rollup — off by 45 builders in the observed case. |
 | 3 | `encodeURIComponent(paths.join(','))` → **HTTP 200**, `nodes: []`, and a `dark` frame | D12. `parseScope` splits the raw value before decoding. The failure is silent and renders as a plausible empty machine. |
-| 4 | All 13 builders returned `parentId: "workspace:<path>"`. **Zero architect parents.** | D13. FR-3 is not satisfiable from this stream. |
+| 4 | ~~All 13 builders returned `parentId: "workspace:<path>"`. Zero architect parents.~~ **Retracted at rev. 12 — the measurement was sound and the conclusion was not.** | D13. FR-3 **is** satisfiable and is mostly satisfied. |
 | 5 | A dark workspace appeared in a `dark` frame **and not in `nodes`** | D5, D1. `darkPaths` must be a separate store; there is no node to mark. |
 | 6 | A live tick arrived as `{"seq":1,"type":"tick","at":"…","buckets":{}}` | D1. `buckets` is `number[]` on a node and `Record<id,number>` on a tick — one name, two shapes. The empty object is the common case. |
 | 7 | `darkPaths` is computed once at connect and `inScopeSet` excludes it (`v2-routes.ts:302-314`) | D5. Dark can never clear on a live connection, in either direction. Filed as **#98**. |
 
-Findings 1, 2, 4 and 7 are properties of the shipped contract. C2 stands — they are reported, not patched from here. Two are filed: **#97** (FR-3 unmet) and **#98** (dark decided once per connection).
+Findings 1, 2 and 7 are properties of the shipped contract. C2 stands — they are reported, not patched from here. **#98** (dark decided once per connection) is filed. **#97 was closed as already-working**; what it actually found is filed as **#100**.
 
 ## Desired State
 
@@ -60,7 +60,7 @@ Findings 1, 2, 4 and 7 are properties of the shipped contract. C2 stands — the
 1. `apps/v2` exists as a fork-owned workspace and builds.
 2. The stream is consumed correctly, every frame type handled.
 3. The site view renders per the approved design, using the shipped tokens.
-4. FR-1, FR-4, FR-41 and FR-42 are satisfied and demonstrable in a browser. **FR-3 is not** (D13). **FR-15 is deferred, not satisfied** (D5).
+4. FR-1, FR-3, FR-4, FR-41 and FR-42 are satisfied and demonstrable in a browser. **FR-15 is deferred, not satisfied** (D5).
 5. **The wire contract is exercised by a real client**, and any place it fails a renderer is reported rather than worked around.
 
 ## Non-Goals
@@ -354,16 +354,22 @@ scope=<encodeURIComponent(path1)>,<encodeURIComponent(path2)>
 
 Scenario 18 asserts the encoding directly rather than trusting a round-trip that "looks right."
 
-### D13 — FR-3 cannot be satisfied here, and the client renders the flat truth
+### D13 — Render the parent the wire sends, and never infer one
 
-FR-3 requires a builder to appear under the architect that spawned it. **The stream cannot express it.**
+**The client behaviour in this decision is unchanged from rev. 4. Only its justification was wrong, and rev. 12 corrects it.**
 
-Measured against the live stream: all 13 builders in a real workspace returned `parentId: "workspace:<path>"`. Zero had an architect parent. The cause is upstream of the stream — `discoverBuilders` hardcodes `spawnedByArchitect: null` (`overview.ts:602, 662, 697`), so the projection has nothing to attach a builder to.
+Rev. 4 measured 13 builders in a real workspace all returning `parentId: "workspace:<path>"`, zero with an architect parent, and concluded FR-3 was unsatisfiable. **The measurement was taken when that workspace had no live builders**, so every row was an orphaned worktree, and a missing `global.db` row read as a missing feature.
 
-Two things follow, and both are required:
+Re-measured with live builders present: **15 builders, 2 parented to `architect:<path>#uiv2`, 13 to the workspace.** The 2 are the only rows in `global.db.builders`; the 13 are orphaned worktrees with no row and no session. `v2-projection.ts:95` joins `getBuilders().spawnedByArchitect`, **not** `discoverBuilders`, so the null in `discoverBuilders` (`overview.ts:602, 662, 697`) never reaches the wire. **FR-3 works.**
 
-1. **The client renders what the wire says**: builders sit under the workspace, beside the architect header, not under it. **It does not invent a parent** by name-matching a builder to an architect. A guessed hierarchy that is right most of the time is worse than a flat one that is honest.
-2. **This is reported as a finding, per C2 and goal 5.** Filed as **#97** against `discoverBuilders`, not patched from this unit. FR-3 stays a MUST in the FRD; it is simply unmet until the server can carry it.
+What the client does, unchanged:
+
+1. **Render the `parentId` the wire sends.** A builder with an architect parent nests under that architect; one with a workspace parent sits beside the architect header. Both shapes are real and both appear in one tree.
+2. **Never invent a parent** by name-matching a builder to an architect. This is the rule that matters most and it survives the correction intact — a guessed hierarchy that is right most of the time is worse than a flat one that is honest. It is also what would have hidden this: name-matching those 13 orphans to `uiv2` would have produced a plausible tree and buried the real defect.
+
+The orphans are the actual finding, filed as **#100**: a worktree with no `global.db` row can be seen by every surface and removed by none — `afx cleanup` reports "Builder not found" and `git worktree remove` is forbidden. They render as offline builders, which is honest, and they accumulate forever.
+
+**#97 is closed as already-working.** Found by `builder-bugfix-97`, which investigated the filed cause, measured it against the live stream, and reported that the prescribed fix was a no-op before writing any code.
 
 ### D14 — `/v2/` must survive `npm pack`, not just `pnpm dev`
 
@@ -506,7 +512,8 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 |---|---:|---|---|
 | The wire contract fails a real renderer | ~~Medium~~ **Confirmed** — 5 findings on first consumption | High | Each is now a locked decision (D10–D13). C2 forbids patching the server from here |
 | Scope encoded as `encodeURIComponent(join(','))` | High — it is the idiomatic line to write | High — HTTP 200 with an empty tree and a dark frame, no error anywhere | D12 with the measurement; scenario 18 |
-| A builder given an inferred architect parent to satisfy FR-3 | Medium — the names often match | High — a guessed hierarchy that is usually right is worse than a flat honest one | D13 |
+| A builder given an inferred architect parent to satisfy FR-3 | Medium — the names often match | High — a guessed hierarchy that is usually right is worse than a flat honest one. It would also have hidden #100 behind a plausible tree | D13 |
+| A tree measured while nothing is running, read as a broken feature | **Confirmed — it produced #97** | Medium — a false bug filed against working code, and a spec decision built on it | D13's retraction; measure with live builders present |
 | `counts` rendered as the drawn tree's rollup | High — the fields invite it | Medium — authoritative-looking numbers off by 45 | D11; criterion 17 |
 | Cursor advanced only on snapshots | Medium | Medium — a reconnect replays every delta since the snapshot | D1; scenario 19 |
 | A bad frame dropped and the next one applied | High — it is the forgiving thing to do | High — a corrupt tree that looks right, and a resume that replays the bad frame forever | D1's terminal rule; scenario 28 |
