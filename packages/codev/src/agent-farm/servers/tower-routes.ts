@@ -2249,6 +2249,11 @@ function handleInboxShow(
     workspacePath: row.workspace_path,
     toAgent: row.to_agent,
     fromAgent: row.from_agent,
+    // #47: the columns exist so a misroute can be attributed, which requires that
+    // they be READABLE. Both may be null on rows enqueued before the migration, or
+    // by an older CLI — the CLI renders that as "not recorded", never as a guess.
+    fromAgentName: row.from_agent_name,
+    requestedTo: row.requested_to,
     fromWorkspace: row.from_workspace,
     status: row.status,
     reason: row.reason,

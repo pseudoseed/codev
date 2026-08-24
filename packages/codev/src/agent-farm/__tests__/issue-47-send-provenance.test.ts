@@ -132,3 +132,69 @@ describe('#47: the query the issue could not run', () => {
     expect(rows[0].from_agent_name).toBe('uiv2');
   });
 });
+
+/**
+ * The columns are only worth having if a human can read them. `afx inbox show`
+ * is where someone goes when a message landed somewhere unexpected, so that is
+ * where the two fields have to surface — and where a null has to stay legible
+ * as "not recorded" rather than collapsing into the same blank a recorded value
+ * would leave.
+ */
+describe('#47: the projection a human actually reads', () => {
+  /** Mirrors the render rules in `inboxShow` (commands/inbox.ts). */
+  function extraLines(row: {
+    fromAgent: string | null;
+    fromAgentName: string | null;
+    toAgent: string;
+    requestedTo: string | null;
+  }): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (row.fromAgentName !== row.fromAgent) {
+      out['Sender identity'] = row.fromAgentName ?? '— (not recorded)';
+    }
+    if (row.requestedTo !== row.toAgent) {
+      out['Addressed as'] = row.requestedTo ?? '— (not recorded)';
+    }
+    return out;
+  }
+
+  it('names the architect that sent, where the line above says only "architect"', () => {
+    const lines = extraLines({
+      fromAgent: 'architect',
+      fromAgentName: 'uiv2',
+      toAgent: 'main',
+      requestedTo: 'architect:main',
+    });
+
+    expect(lines['Sender identity']).toBe('uiv2');
+    expect(lines['Addressed as']).toBe('architect:main');
+  });
+
+  it('shows the bare form, which is the one the resolved target hides', () => {
+    // `architect` and `architect:main` both resolve to `main`. Which was typed
+    // is the difference the anti-spoofing rules turn on.
+    expect(extraLines({ fromAgent: 'architect', fromAgentName: 'uiv2', toAgent: 'main', requestedTo: 'architect' })['Addressed as']).toBe('architect');
+  });
+
+  it('stays quiet when neither field adds anything', () => {
+    // A builder's identity IS its kind, and a direct send is its own resolution.
+    const lines = extraLines({
+      fromAgent: 'builder-spir-52',
+      fromAgentName: 'builder-spir-52',
+      toAgent: 'uiv2',
+      requestedTo: 'uiv2',
+    });
+
+    expect(lines).toEqual({});
+  });
+
+  it('says "not recorded" for a pre-migration row instead of rendering a blank', () => {
+    // The lesson this repo keeps relearning: "I could not tell" must not be
+    // spelled the same way as a value. A silent blank here would read as an
+    // architect with no name.
+    const lines = extraLines({ fromAgent: 'architect', fromAgentName: null, toAgent: 'main', requestedTo: null });
+
+    expect(lines['Sender identity']).toBe('— (not recorded)');
+    expect(lines['Addressed as']).toBe('— (not recorded)');
+  });
+});
