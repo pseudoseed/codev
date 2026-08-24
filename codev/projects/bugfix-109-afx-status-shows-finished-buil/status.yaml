@@ -7,13 +7,15 @@ current_plan_phase: null
 gates:
   pr:
     status: pending
+    requested_at: '2026-08-24T23:04:42.942Z'
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-24T22:29:57.157Z'
-updated_at: '2026-08-24T23:04:34.306Z'
+updated_at: '2026-08-24T23:04:42.943Z'
 pr_history:
   - phase: pr
     pr_number: 136
     branch: builder/bugfix-109
     created_at: '2026-08-24T23:04:34.305Z'
+pr_ready_for_human: true
