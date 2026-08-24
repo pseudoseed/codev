@@ -1,9 +1,24 @@
 id: '83'
 title: v2-client-shell-apps-v2-render
 protocol: spir
-phase: plan
-plan_phases: []
-current_plan_phase: null
+phase: implement
+plan_phases:
+  - id: phase_1
+    title: Workspace and /v2/ static serving
+    status: in_progress
+  - id: phase_2
+    title: Frame validation and reducer
+    status: pending
+  - id: phase_3
+    title: Bootstrap, stream reader, reconnect
+    status: pending
+  - id: phase_4
+    title: Site view
+    status: pending
+  - id: phase_5
+    title: Playwright fixture proof
+    status: pending
+current_plan_phase: phase_1
 gates:
   spec-approval:
     status: approved
@@ -17,7 +32,10 @@ gates:
   verify-approval:
     status: pending
 iteration: 1
-build_complete: true
+build_complete: false
 history: []
 started_at: '2026-08-24T06:44:19.322Z'
-updated_at: '2026-08-24T07:12:44.608Z'
+updated_at: '2026-08-24T07:12:46.426Z'
+context_refreshes:
+  - boundary: enter:implement
+    at: '2026-08-24T07:12:46.426Z'
