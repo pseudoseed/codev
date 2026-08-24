@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gate</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        canvas: '#0B0D0F', panel: '#111417', panel2: '#161A1E',
+        line: '#242A30', line2: '#2E353D', ink: '#E7EAED',
+        sub: '#8B939C', sub2: '#5C646D', accent: '#3B82F6',
+        red: '#EF4444', amber: '#F59E0B', green: '#22C55E',
+      },
+      fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #0B0D0F; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #2E353D; border-radius: 4px; } ::-webkit-scrollbar-track { background: transparent; }
+  .row-hover:hover { background: #161A1E; }
+  .dot { width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0; }
+</style>
+</head>
+<body class="text-ink font-sans text-[13px]">
+
+<div class="h-[1024px] flex flex-col">
+
+  <!-- TOP BAR -->
+  <header id="header" class="border-b border-line bg-panel flex items-center justify-between px-4 h-12 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <div class="w-5 h-5 rounded bg-accent flex items-center justify-center">
+          <i class="fa-solid fa-diagram-project text-white text-[10px]"></i>
+        </div>
+        <span class="font-semibold text-[13px]">Porch</span>
+      </div>
+      <div class="h-4 w-px bg-line"></div>
+      <div class="flex items-center gap-1 text-[12px]">
+        <a href="#" class="text-sub hover:text-ink">Site</a>
+        <span class="text-sub2">/</span>
+        <span class="text-ink font-medium">pay-2201</span>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="flex items-center gap-2 h-7 px-2.5 rounded bg-panel2 border border-line text-[12px] text-sub">
+        <i class="fa-solid fa-magnifying-glass text-[11px]"></i><span>Find</span>
+        <span class="px-1 py-0.5 rounded bg-canvas border border-line text-[10px] font-mono text-sub2">⌘K</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="flex flex-1 min-h-0">
+
+    <!-- GATE QUEUE RAIL -->
+    <aside class="w-[280px] shrink-0 border-r border-line bg-panel flex flex-col">
+      <div class="h-9 flex items-center justify-between px-3 border-b border-line shrink-0">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-sub">Needs you · 3</span>
+      </div>
+      <div class="flex-1 overflow-y-auto">
+        <div class="flex flex-col gap-0.5 px-3 py-2 border-b border-line border-l-2 border-l-red bg-red/5">
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-[12px] font-medium">pay-2201</span>
+            <span class="font-mono text-[10px] text-red">24m</span>
+          </div>
+          <span class="text-[11px] text-sub truncate">Delete legacy refund table or keep for audit?</span>
+          <span class="text-[10px] text-sub2 font-mono">checkout / payments-arch</span>
+        </div>
+        <a href="#" class="flex flex-col gap-0.5 px-3 py-2 border-b border-line row-hover border-l-2 border-l-transparent">
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-[12px] font-medium">air-22</span>
+            <span class="font-mono text-[10px] text-sub2">9m</span>
+          </div>
+          <span class="text-[11px] text-sub truncate">Approve new snapshot baseline?</span>
+          <span class="text-[10px] text-sub2 font-mono">marketing-site / redesign-arch</span>
+        </a>
+        <a href="#" class="flex flex-col gap-0.5 px-3 py-2 border-b border-line row-hover border-l-2 border-l-transparent">
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-[12px] font-medium">bugfix-1455</span>
+            <span class="font-mono text-[10px] text-sub2">3m</span>
+          </div>
+          <span class="text-[11px] text-sub truncate">Use prod rate-limit value?</span>
+          <span class="text-[10px] text-sub2 font-mono">api-core / rate-limits-arch</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- GATE DETAIL: compact, no fake terminal, no fluff -->
+    <main class="flex-1 overflow-y-auto bg-canvas">
+
+      <div class="max-w-[760px] mx-auto px-6 py-6">
+
+        <!-- header -->
+        <div class="flex items-start justify-between mb-4">
+          <div>
+            <div class="flex items-center gap-2 mb-1.5">
+              <span class="font-mono text-[15px] font-semibold">pay-2201</span>
+              <span class="px-1.5 py-0.5 rounded bg-red/15 text-red text-[10px] font-medium uppercase">Gate</span>
+            </div>
+            <div class="text-[11px] text-sub2 font-mono">tower-01 / checkout / payments-arch</div>
+          </div>
+          <div class="text-right">
+            <div class="font-mono text-[18px] font-semibold text-red">24:07</div>
+            <div class="text-[10px] text-sub2 uppercase">held</div>
+          </div>
+        </div>
+
+        <!-- the issue title — this is the primary content -->
+        <div class="border border-line rounded-md bg-panel px-4 py-3.5 mb-3">
+          <div class="text-[10px] uppercase tracking-wide text-sub2 mb-1.5">Issue</div>
+          <div class="text-[15px] font-medium leading-snug">Delete legacy refunds_legacy table, or keep it for audit purposes?</div>
+        </div>
+
+        <!-- context: just the essentials, no transcript theatre -->
+        <div class="border border-line rounded-md bg-panel px-4 py-3.5 mb-3">
+          <div class="text-[10px] uppercase tracking-wide text-sub2 mb-2">Context</div>
+          <ul class="space-y-1.5 text-[12.5px] text-sub leading-relaxed">
+            <li class="flex gap-2"><span class="text-sub2">·</span><span>3 foreign keys reference this table: audit_log, disputes, payouts</span></li>
+            <li class="flex gap-2"><span class="text-amber">·</span><span class="text-amber">Dropping now would orphan audit_log.refund_ref</span></li>
+            <li class="flex gap-2"><span class="text-sub2">·</span><span>Compliance requires 7yr audit retention on refunds</span></li>
+          </ul>
+        </div>
+
+        <!-- diff link, not a full transcript -->
+        <button class="flex items-center gap-2 text-[12px] text-sub hover:text-ink mb-5">
+          <i class="fa-solid fa-terminal text-[11px]"></i>
+          <span>View full output</span>
+          <span class="font-mono text-sub2">(18 commits this run)</span>
+          <i class="fa-solid fa-chevron-right text-[9px]"></i>
+        </button>
+
+        <!-- decision -->
+        <div class="border border-line rounded-md bg-panel">
+          <div class="px-4 py-3 border-b border-line">
+            <input type="text" placeholder="Add a note (optional)…" class="w-full bg-transparent outline-none text-[13px] placeholder:text-sub2">
+          </div>
+          <div class="flex items-center gap-2 px-4 py-3">
+            <button class="flex items-center gap-2 px-3.5 py-2 rounded bg-panel2 border border-line hover:border-line2 text-[12.5px] font-medium">
+              <i class="fa-solid fa-box-archive text-[11px] text-sub"></i> Keep for audit
+            </button>
+            <button class="flex items-center gap-2 px-3.5 py-2 rounded bg-accent hover:bg-accent/90 text-[12.5px] font-medium text-white ml-auto">
+              <i class="fa-solid fa-check text-[11px]"></i> Approve drop
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <footer class="h-6 shrink-0 border-t border-line bg-panel flex items-center justify-between px-4 text-[10px] font-mono text-sub2">
+    <div class="flex items-center gap-3">
+      <span>3 machines</span><span>5 architects</span><span>11 builders</span>
+    </div>
+    <span class="text-red">3 gates open</span>
+  </footer>
+</div>
+
+</body>
+</html>

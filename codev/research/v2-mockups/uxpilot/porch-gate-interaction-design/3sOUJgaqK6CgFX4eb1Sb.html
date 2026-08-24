@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gate</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        bone: '#EDE8DE', chalk: '#F6F3EB', concrete: '#DAD3C4',
+        ink: '#221F1A', graphite: '#4A463D', rust: '#B5502A',
+        ochre: '#C08A2E', moss: '#5C6B4F',
+      },
+      fontFamily: {
+        display: ['Fraunces', 'serif'],
+        sans: ['Space Grotesk', 'sans-serif'],
+        mono: ['IBM Plex Mono', 'monospace'],
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #EDE8DE; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #DAD3C4; } ::-webkit-scrollbar-track { background: transparent; }
+  .lbl { font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.06em; }
+  .term { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; line-height: 1.7; }
+  .dot { width: 7px; height: 7px; flex-shrink: 0; }
+  .hatch {
+    background-image: repeating-linear-gradient(135deg, #221F1A 0 1.5px, transparent 1.5px 9px);
+  }
+  .torn {
+    position: relative;
+  }
+  .torn::after {
+    content: '';
+    position: absolute; left: 0; right: 0; bottom: -7px; height: 7px;
+    background-image: linear-gradient(135deg, #EDE8DE 50%, transparent 50%), linear-gradient(45deg, #EDE8DE 50%, transparent 50%);
+    background-size: 14px 14px;
+    background-position: 0 0;
+  }
+</style>
+</head>
+<body class="text-ink font-sans text-[13px]">
+
+<!-- LANDSCAPE iPad canvas -->
+<div id="app" class="w-[1366px] h-[1024px] flex bg-bone">
+
+  <!-- GATE STRIP: collapsed queue, not a permanent 280px rail — this is a compact context strip within the ruling flow -->
+  <aside id="gate-context-strip" class="w-[80px] shrink-0 border-r-[1.5px] border-ink bg-chalk flex flex-col items-center py-4">
+    <button class="w-11 h-11 flex items-center justify-center border-[1.5px] border-ink mb-4 text-graphite">
+      <i class="fa-solid fa-arrow-left text-[13px]"></i>
+    </button>
+    <div class="w-11 h-11 bg-rust text-chalk flex items-center justify-center font-mono text-[13px] font-bold mb-2">3</div>
+    <span class="lbl text-[8px] text-graphite text-center leading-tight">gates<br>open</span>
+    <div class="flex-1"></div>
+    <div class="flex flex-col items-center gap-2.5">
+      <button class="w-11 h-11 flex items-center justify-center border-[1.5px] border-concrete text-graphite"><i class="fa-solid fa-chevron-up text-[12px]"></i></button>
+      <span class="lbl text-[8px] text-graphite">2/3</span>
+      <button class="w-11 h-11 flex items-center justify-center border-[1.5px] border-concrete text-graphite"><i class="fa-solid fa-chevron-down text-[12px]"></i></button>
+    </div>
+  </aside>
+
+  <!-- GATE DETAIL -->
+  <main class="flex-1 flex flex-col min-w-0">
+
+    <div class="pt-3 shrink-0"></div>
+
+    <!-- header -->
+    <header class="border-b-[1.5px] border-ink bg-chalk flex items-center justify-between px-6 h-14 shrink-0">
+      <div class="flex items-center gap-3">
+        <div class="w-7 h-7 border-[1.5px] border-ink flex items-center justify-center bg-ink">
+          <i class="fa-solid fa-house-chimney text-chalk text-[13px]"></i>
+        </div>
+        <span class="font-display font-semibold text-[17px]">Porch</span>
+        <div class="h-5 w-px bg-concrete"></div>
+        <span class="lbl text-[10px] text-graphite">tower-01 / checkout / payments-arch</span>
+      </div>
+      <button class="flex items-center gap-2 h-10 px-3 border-[1.5px] border-ink bg-bone">
+        <i class="fa-solid fa-magnifying-glass text-[12px]"></i>
+        <span class="lbl text-[11px]">Find</span>
+        <span class="px-1.5 py-0.5 bg-ink text-chalk text-[9px] font-mono">⌘K</span>
+      </button>
+    </header>
+
+    <div class="flex-1 overflow-y-auto px-8 py-6">
+      <div class="max-w-[1120px] mx-auto grid grid-cols-[1fr_420px] gap-8">
+
+        <!-- LEFT COLUMN: question + terminal -->
+        <div>
+          <!-- gate header w/ torn-ticket rule -->
+          <div class="torn pb-4 mb-5">
+            <div class="flex items-start justify-between">
+              <div>
+                <div class="flex items-center gap-2.5 mb-1.5">
+                  <span class="font-mono text-[20px] font-bold">pay-2201</span>
+                  <span class="px-2 py-0.5 bg-rust text-chalk lbl text-[9px] font-bold">gate</span>
+                </div>
+                <span class="lbl text-[10px] text-graphite">builder/pay-2201</span>
+              </div>
+              <div class="text-right">
+                <div class="font-display font-semibold text-[28px] text-rust leading-none">24:07</div>
+                <div class="lbl text-[9px] text-graphite mt-1">held</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- the question -->
+          <div class="border-[1.5px] border-ink bg-chalk px-5 py-4 mb-4">
+            <div class="lbl text-[10px] text-graphite mb-2">The question</div>
+            <div class="font-display text-[22px] font-medium leading-snug">Delete legacy refunds_legacy table, or keep it for audit purposes?</div>
+          </div>
+
+          <!-- last terminal output -->
+          <div class="border-[1.5px] border-ink bg-ink mb-4">
+            <div class="flex items-center gap-2 h-9 px-3 border-b-[1.5px] border-graphite">
+              <i class="fa-solid fa-terminal text-[10px] text-[#8C8672]"></i>
+              <span class="lbl text-[9px] text-[#8C8672]">last output</span>
+            </div>
+            <div class="p-4 term text-[#D8D2C2]">
+              <span class="text-[#8C8672]">$</span> migrate --dry-run refunds_legacy<br>
+              checking foreign key constraints…<br>
+              <span class="text-[#D9B871]">⚠ 3 FKs still reference this table:</span><br>
+              &nbsp;&nbsp;audit_log.refund_ref<br>
+              &nbsp;&nbsp;disputes.refund_id<br>
+              &nbsp;&nbsp;payouts.refund_source<br><br>
+              <span class="text-[#F0EAD8] font-medium">? delete legacy refund table or keep for audit</span>
+            </div>
+          </div>
+
+          <button class="flex items-center gap-2 text-[12.5px] text-graphite font-medium">
+            <i class="fa-solid fa-code-compare text-[11px]"></i>
+            <span>View full output</span>
+            <span class="font-mono text-graphite/70">(18 commits this run)</span>
+            <i class="fa-solid fa-chevron-right text-[9px]"></i>
+          </button>
+        </div>
+
+        <!-- RIGHT COLUMN: consequences + ruling -->
+        <div class="space-y-4">
+
+          <div class="border-[1.5px] border-ink bg-chalk">
+            <div class="lbl text-[10px] text-graphite px-4 pt-3 pb-2">If you rule each way</div>
+            <div class="border-t-[1.5px] border-concrete px-4 py-3">
+              <div class="flex items-center gap-2 mb-1">
+                <i class="fa-solid fa-box-archive text-[11px] text-graphite"></i>
+                <span class="text-[12.5px] font-semibold">Keep for audit</span>
+              </div>
+              <p class="text-[12px] text-graphite leading-relaxed">Table stays, renamed to <span class="font-mono">refunds_legacy_archived</span>. All 3 FKs remain valid. No data loss.</p>
+            </div>
+            <div class="border-t-[1.5px] border-concrete px-4 py-3">
+              <div class="flex items-center gap-2 mb-1">
+                <i class="fa-solid fa-trash text-[11px] text-rust"></i>
+                <span class="text-[12.5px] font-semibold">Approve drop</span>
+              </div>
+              <p class="text-[12px] text-graphite leading-relaxed">Table is dropped this run. <span class="text-rust font-medium">Orphans audit_log.refund_ref</span> — builder will need a follow-up migration.</p>
+            </div>
+          </div>
+
+          <div class="border-[1.5px] border-ink bg-chalk px-4 py-3.5">
+            <div class="lbl text-[10px] text-graphite mb-2">Context</div>
+            <ul class="space-y-1.5 text-[12px] text-graphite leading-relaxed">
+              <li class="flex gap-2"><span>·</span><span>Compliance requires 7yr audit retention on refunds</span></li>
+              <li class="flex gap-2"><span>·</span><span>Last touched by builder/pay-2189, 3 days ago</span></li>
+            </ul>
+          </div>
+
+          <!-- decision -->
+          <div class="border-[1.5px] border-ink bg-chalk">
+            <div class="px-4 py-3 border-b-[1.5px] border-concrete">
+              <input type="text" placeholder="Add a note (optional)…" class="w-full bg-transparent outline-none text-[13px] placeholder:text-graphite/50">
+            </div>
+            <div class="flex flex-col gap-2.5 p-4">
+              <button class="flex items-center justify-center gap-2 h-12 border-[1.5px] border-ink bg-bone text-[13px] font-semibold">
+                <i class="fa-solid fa-box-archive text-[12px]"></i> Keep for audit
+              </button>
+              <button class="flex items-center justify-center gap-2 h-12 border-[1.5px] border-rust bg-rust text-chalk text-[13px] font-bold">
+                <i class="fa-solid fa-trash text-[12px]"></i> Approve drop
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </div>
+
+    <footer class="h-10 shrink-0 border-t-[1.5px] border-ink bg-chalk flex items-center justify-between px-6 lbl text-[10px] text-graphite">
+      <div class="flex items-center gap-4">
+        <span>2 machines</span><span>5 architects</span><span>11 builders</span>
+      </div>
+      <span class="text-rust font-bold">● 3 gates open</span>
+    </footer>
+
+    <div class="pb-2 shrink-0"></div>
+  </main>
+
+</div>
+
+</body>
+</html>

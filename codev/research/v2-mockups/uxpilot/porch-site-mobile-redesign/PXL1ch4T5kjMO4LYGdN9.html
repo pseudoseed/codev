@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Site</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        bone: '#EDE8DE', chalk: '#F6F3EB', concrete: '#DAD3C4',
+        ink: '#221F1A', graphite: '#4A463D', rust: '#B5502A',
+        ochre: '#C08A2E', moss: '#5C6B4F',
+      },
+      fontFamily: {
+        display: ['Fraunces', 'serif'],
+        sans: ['Space Grotesk', 'sans-serif'],
+        mono: ['IBM Plex Mono', 'monospace'],
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #EDE8DE; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #DAD3C4; } ::-webkit-scrollbar-track { background: transparent; }
+  .lbl { font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.06em; }
+  .term { font-family: 'IBM Plex Mono', monospace; font-size: 11px; line-height: 1.65; }
+  .dot { width: 7px; height: 7px; flex-shrink: 0; }
+  .blueprint {
+    background-image: linear-gradient(#DAD3C4 1px, transparent 1px), linear-gradient(90deg, #DAD3C4 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  /* MACHINE LOT: bounded rectangle, corner tick, straddling tab label */
+  .lot { position: relative; border: 1.5px solid #221F1A; }
+  .lot-tick { position: absolute; top: -1.5px; left: -1.5px; width: 9px; height: 9px; border-top: 1.5px solid #221F1A; border-left: 1.5px solid #221F1A; }
+  .lot-tab { position: absolute; top: -9px; left: 14px; background: #EDE8DE; padding: 0 6px; }
+  /* sparkline canvas-free bars */
+  .spark { display: flex; align-items: flex-end; gap: 1.5px; height: 14px; }
+  .spark i { width: 2.5px; background: currentColor; display: block; }
+</style>
+</head>
+<body class="text-ink font-sans text-[13px]">
+
+<div id="app" class="w-[1024px] h-[1366px] flex flex-col bg-bone">
+
+  <div class="pt-3 shrink-0"></div>
+
+  <!-- TOP BAR -->
+  <header id="header" class="border-b-[1.5px] border-ink bg-chalk flex items-center justify-between px-4 h-14 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <div class="w-7 h-7 border-[1.5px] border-ink flex items-center justify-center bg-ink">
+          <i class="fa-solid fa-compass-drafting text-chalk text-[13px]"></i>
+        </div>
+        <span class="font-display font-semibold text-[17px] tracking-tight">Porch</span>
+      </div>
+      <div class="h-5 w-px bg-concrete"></div>
+      <span class="text-[12px] text-graphite">foreman-hq</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="flex items-center gap-2 h-10 px-3 border-[1.5px] border-rust bg-rust text-chalk">
+        <i class="fa-solid fa-hand text-[12px]"></i>
+        <span class="lbl text-[11px] font-semibold">3 gates</span>
+      </button>
+      <button class="flex items-center gap-2 h-10 px-3 border-[1.5px] border-ink bg-chalk">
+        <i class="fa-solid fa-magnifying-glass text-[12px]"></i>
+        <span class="lbl text-[11px]">Find</span>
+        <span class="px-1.5 py-0.5 bg-ink text-chalk text-[9px] font-mono">⌘K</span>
+      </button>
+      <button class="flex items-center gap-2 h-10 px-3 border-[1.5px] border-ink bg-ink text-chalk">
+        <i class="fa-solid fa-plus text-[11px]"></i>
+        <span class="lbl text-[11px] font-semibold">Machine</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- BODY: lots run across the top, panes fill below -->
+  <div class="flex-1 min-h-0 flex flex-col">
+
+    <!-- SURVEYED GROUND: blueprint grid holding the machine lots -->
+    <section id="lots-region" class="shrink-0 border-b-[1.5px] border-ink blueprint px-5 pt-6 pb-4">
+      <div class="flex items-center justify-between mb-3 px-1">
+        <span class="lbl text-[10px] text-graphite">Site plan · 2 machines surveyed</span>
+        <span class="lbl text-[10px] text-graphite">11 builders</span>
+      </div>
+
+      <div class="grid grid-cols-2 gap-5">
+
+        <!-- MACHINE LOT: tower-01 -->
+        <div id="lot-tower-01" class="lot bg-chalk/40 px-4 pt-5 pb-4">
+          <div class="lot-tick"></div>
+          <span class="lot-tab lbl text-[9px] font-semibold text-graphite">Machine lot</span>
+
+          <div class="flex items-center justify-between mb-3">
+            <span class="font-display font-semibold text-[16px] tracking-tight">tower-01</span>
+            <span class="flex items-center gap-1.5">
+              <span class="dot bg-moss"></span>
+              <span class="lbl text-[9px] text-moss font-bold">online</span>
+            </span>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+
+            <!-- WORKSPACE PLOT: checkout -->
+            <div id="plot-checkout" class="border-[1.5px] border-ink bg-bone px-2.5 py-2.5">
+              <div class="lbl text-[9px] text-graphite mb-1.5">Workspace · checkout</div>
+
+              <!-- ARCHITECT: payments-arch -->
+              <div class="flex items-center gap-1.5 mb-1.5">
+                <i class="fa-solid fa-compass-drafting text-[10px] text-graphite"></i>
+                <span class="text-[12px] font-semibold">payments-arch</span>
+              </div>
+
+              <!-- BUILDER ROWS -->
+              <a href="#" class="relative flex items-center gap-2 pl-2.5 pr-1.5 py-1.5 bg-chalk border-l-[3px] border-rust mb-1">
+                <span class="dot bg-rust"></span>
+                <span class="font-mono text-[11px] font-bold">pay-2201</span>
+                <span class="spark text-rust ml-auto">
+                  <i style="height:40%"></i><i style="height:70%"></i><i style="height:30%"></i><i style="height:90%"></i><i style="height:20%"></i>
+                </span>
+                <span class="lbl text-[8px] font-bold text-rust">gate</span>
+              </a>
+              <a href="#" class="relative flex items-center gap-2 pl-2.5 pr-1.5 py-1.5 bg-chalk border-l-[3px] border-moss">
+                <span class="dot bg-moss"></span>
+                <span class="font-mono text-[11px] font-medium">pay-2189</span>
+                <span class="spark text-moss ml-auto">
+                  <i style="height:50%"></i><i style="height:80%"></i><i style="height:60%"></i><i style="height:95%"></i><i style="height:75%"></i>
+                </span>
+                <span class="lbl text-[8px] font-bold text-moss">run</span>
+              </a>
+            </div>
+
+            <!-- WORKSPACE PLOT: api-core -->
+            <div id="plot-api-core" class="border-[1.5px] border-ink bg-bone px-2.5 py-2.5">
+              <div class="lbl text-[9px] text-graphite mb-1.5">Workspace · api-core</div>
+
+              <!-- ARCHITECT: rate-limits-arch -->
+              <div class="flex items-center gap-1.5 mb-1.5">
+                <i class="fa-solid fa-compass-drafting text-[10px] text-graphite"></i>
+                <span class="text-[12px] font-semibold">rate-limits-arch</span>
+              </div>
+
+              <a href="#" class="relative flex items-center gap-2 pl-2.5 pr-1.5 py-1.5 bg-chalk border-l-[3px] border-ochre">
+                <span class="dot bg-ochre"></span>
+                <span class="font-mono text-[11px] font-medium">bugfix-1441</span>
+                <span class="spark text-ochre ml-auto">
+                  <i style="height:20%"></i><i style="height:20%"></i><i style="height:15%"></i><i style="height:20%"></i><i style="height:15%"></i>
+                </span>
+                <span class="lbl text-[8px] font-bold text-ochre">stalled</span>
+              </a>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- MACHINE LOT: tower-02 -->
+        <div id="lot-tower-02" class="lot bg-chalk/40 px-4 pt-5 pb-4">
+          <div class="lot-tick"></div>
+          <span class="lot-tab lbl text-[9px] font-semibold text-graphite">Machine lot</span>
+
+          <div class="flex items-center justify-between mb-3">
+            <span class="font-display font-semibold text-[16px] tracking-tight">tower-02</span>
+            <span class="flex items-center gap-1.5">
+              <span class="dot bg-moss"></span>
+              <span class="lbl text-[9px] text-moss font-bold">online</span>
+            </span>
+          </div>
+
+          <div class="grid grid-cols-1 gap-3">
+
+            <!-- WORKSPACE PLOT: inference-svc -->
+            <div id="plot-inference-svc" class="border-[1.5px] border-ink bg-bone px-2.5 py-2.5">
+              <div class="lbl text-[9px] text-graphite mb-1.5">Workspace · inference-svc</div>
+
+              <!-- ARCHITECT: ml-pipeline-arch -->
+              <div class="flex items-center gap-1.5 mb-1.5">
+                <i class="fa-solid fa-compass-drafting text-[10px] text-graphite"></i>
+                <span class="text-[12px] font-semibold">ml-pipeline-arch</span>
+              </div>
+
+              <a href="#" class="relative flex items-center gap-2 pl-2.5 pr-1.5 py-1.5 bg-chalk border-l-[3px] border-moss mb-1">
+                <span class="dot bg-moss"></span>
+                <span class="font-mono text-[11px] font-medium">infer-04</span>
+                <span class="spark text-moss ml-auto">
+                  <i style="height:60%"></i><i style="height:85%"></i><i style="height:70%"></i><i style="height:95%"></i><i style="height:80%"></i>
+                </span>
+                <span class="lbl text-[8px] font-bold text-moss">run</span>
+              </a>
+              <a href="#" class="relative flex items-center gap-2 pl-2.5 pr-1.5 py-1.5 bg-chalk border-l-[3px] border-concrete opacity-60">
+                <span class="dot bg-concrete"></span>
+                <span class="font-mono text-[11px] font-medium">infer-03</span>
+                <span class="spark text-graphite ml-auto">
+                  <i style="height:10%"></i><i style="height:10%"></i><i style="height:10%"></i><i style="height:10%"></i><i style="height:10%"></i>
+                </span>
+                <span class="lbl text-[8px] font-bold text-graphite">idle</span>
+              </a>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- BELOW: TERMINAL PANES (max two) -->
+    <main id="tile-area" class="flex-1 min-h-0 flex">
+
+      <!-- PANE 1: architect view -->
+      <div id="pane-payments-arch" class="w-1/2 border-r-[1.5px] border-ink flex flex-col min-h-0 overflow-hidden bg-ink">
+        <div class="flex items-center gap-2 h-11 px-3 border-b-[1.5px] border-ink bg-ink shrink-0">
+          <i class="fa-solid fa-compass-drafting text-[11px] text-chalk"></i>
+          <span class="text-[12px] font-bold text-chalk">payments-arch</span>
+          <span class="lbl text-[9px] text-chalk/60">checkout</span>
+          <div class="ml-auto flex items-center gap-1">
+            <button class="w-8 h-8 flex items-center justify-center text-chalk/70 hover:text-chalk"><i class="fa-solid fa-expand text-[11px]"></i></button>
+            <button class="w-8 h-8 flex items-center justify-center text-chalk/70 hover:text-chalk"><i class="fa-solid fa-xmark text-[13px]"></i></button>
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto p-3 space-y-2.5">
+          <div class="border-[1.5px] border-rust bg-rust/10">
+            <div class="flex items-center gap-2 px-2.5 h-8 border-b-[1.5px] border-rust/40">
+              <span class="dot bg-rust"></span>
+              <span class="font-mono text-[11px] font-bold text-[#F0EAE0]">pay-2201</span>
+              <span class="lbl ml-auto text-[9px] font-bold text-rust">gate · 24m</span>
+            </div>
+            <div class="term px-2.5 py-2 text-[#D8D2C2]">
+              <span class="text-[#8C8672]">$</span> migrate --dry-run refunds_legacy<br>
+              <span class="text-[#D9B871]">⚠ 3 FKs still reference this table</span><br>
+              <span class="text-[#F0EAE0] font-medium">? delete legacy refund table or keep for audit</span>
+            </div>
+          </div>
+          <div class="border-[1.5px] border-[#3A362E]">
+            <div class="flex items-center gap-2 px-2.5 h-8 border-b-[1.5px] border-[#3A362E]">
+              <span class="dot bg-moss"></span>
+              <span class="font-mono text-[11px] font-semibold text-[#F0EAE0]">pay-2189</span>
+              <span class="lbl ml-auto text-[9px] text-moss font-bold">running</span>
+            </div>
+            <div class="term px-2.5 py-2 text-[#8C8672]">
+              <span class="text-[#8C8672]">$</span> vitest run src/checkout<br>
+              <span class="text-[#8FAE7C]">✓</span> 22/48 passing…
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PANE 2: single builder — running -->
+      <div id="pane-pay-2189" class="w-1/2 flex flex-col min-h-0 overflow-hidden bg-ink">
+        <div class="flex items-center gap-2 h-11 px-3 border-b-[1.5px] border-ink bg-ink shrink-0">
+          <span class="dot bg-moss"></span>
+          <span class="font-mono text-[12px] font-bold text-chalk">pay-2189</span>
+          <span class="lbl text-[9px] text-chalk/60">checkout</span>
+          <span class="lbl ml-auto text-[9px] text-moss font-bold">running</span>
+          <div class="flex items-center gap-1 ml-1">
+            <button class="w-8 h-8 flex items-center justify-center text-chalk/70 hover:text-chalk"><i class="fa-solid fa-expand text-[11px]"></i></button>
+            <button class="w-8 h-8 flex items-center justify-center text-chalk/70 hover:text-chalk"><i class="fa-solid fa-xmark text-[13px]"></i></button>
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto p-3 term text-[#D8D2C2]">
+          <span class="text-[#8C8672]">foreman@tower-01</span> <span class="text-[#5C6B4F]">~/checkout</span> $ vitest run src/checkout/*.test.ts<br><br>
+          <span class="text-[#8FAE7C]">✓</span> applies promo before tax (14ms)<br>
+          <span class="text-[#8FAE7C]">✓</span> rejects expired promo (9ms)<br>
+          <span class="text-[#8FAE7C]">✓</span> rounds to nearest cent (3ms)<br><br>
+          running 22/48 …<span class="inline-block w-[7px] h-[13px] bg-[#D8D2C2] align-middle ml-0.5 animate-pulse"></span>
+        </div>
+        <div class="h-8 border-t-[1.5px] border-[#3A362E] flex items-center px-3 lbl text-[9px] text-[#8C8672] shrink-0">
+          builder/pay-2189 · uptime 41m
+        </div>
+      </div>
+
+    </main>
+
+  </div>
+
+  <!-- STATUS BAR -->
+  <footer id="footer" class="h-10 shrink-0 border-t-[1.5px] border-ink bg-chalk flex items-center justify-between px-4 lbl text-[10px] text-graphite">
+    <div class="flex items-center gap-3">
+      <span>2 machines</span>
+      <span>5 architects</span>
+      <span>11 builders</span>
+      <span>2 panes open</span>
+    </div>
+    <span class="text-rust font-bold">● 3 gates open</span>
+  </footer>
+
+  <div class="pb-2 shrink-0"></div>
+
+</div>
+
+</body>
+</html>

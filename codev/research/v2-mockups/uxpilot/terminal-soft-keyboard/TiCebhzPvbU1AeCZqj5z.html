@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Terminal</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        bone: '#EDE8DE', chalk: '#F6F3EB', concrete: '#DAD3C4',
+        ink: '#221F1A', graphite: '#4A463D', rust: '#B5502A',
+        ochre: '#C08A2E', moss: '#5C6B4F',
+      },
+      fontFamily: {
+        display: ['Fraunces', 'serif'],
+        sans: ['Space Grotesk', 'sans-serif'],
+        mono: ['IBM Plex Mono', 'monospace'],
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #EDE8DE; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #DAD3C4; } ::-webkit-scrollbar-track { background: transparent; }
+  .lbl { font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.06em; }
+  .term { font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.75; }
+  .dot { width: 7px; height: 7px; flex-shrink: 0; }
+  .key {
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+</style>
+</head>
+<body class="text-ink font-sans text-[13px]">
+
+<div id="app" class="w-[1024px] h-[1366px] flex flex-col bg-bone">
+
+  <div class="pt-3 shrink-0"></div>
+
+  <!-- TOP BAR -->
+  <header id="header" class="border-b-[1.5px] border-ink bg-chalk flex items-center justify-between px-4 h-14 shrink-0">
+    <div class="flex items-center gap-3">
+      <button class="w-10 h-10 flex items-center justify-center text-graphite"><i class="fa-solid fa-arrow-left text-[14px]"></i></button>
+      <div class="h-5 w-px bg-concrete"></div>
+      <span class="font-mono text-[15px] font-semibold">bugfix-1441</span>
+      <span class="lbl text-[10px] text-graphite">api-core</span>
+      <span class="lbl px-2 py-0.5 bg-ochre text-chalk text-[9px] font-bold">stalled</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="w-10 h-10 flex items-center justify-center border-[1.5px] border-ink bg-chalk">
+        <i class="fa-solid fa-arrow-right-arrow-left text-[12px]"></i>
+      </button>
+      <button class="flex items-center gap-2 h-10 px-3 border-[1.5px] border-rust bg-rust text-chalk">
+        <i class="fa-solid fa-hand text-[12px]"></i>
+        <span class="lbl text-[11px] font-semibold">3 gates</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- TERMINAL -->
+  <main class="flex-1 min-h-0 flex flex-col bg-ink">
+    <div class="flex-1 overflow-y-auto p-4 term text-[#D8D2C2]">
+      <span class="text-[#8C8672]">foreman@tower-01</span> <span class="text-[#5C6B4F]">~/api-core</span> $ cargo watch -x test<br><br>
+      Compiling api-core v0.9.2 (/srv/lots/api-core)<br>
+      <span class="text-[#D9B871]">warning: unused import: `std::sync::Arc`</span><br>
+      &nbsp;&nbsp;--&gt; src/rate_limits.rs:4:5<br><br>
+      Finished dev [unoptimized + debuginfo] in 8.41s<br>
+      Running unittests src/lib.rs<br><br>
+      test rate_limits::default_window_ok ... ok<br>
+      test rate_limits::burst_cap_enforced ... ok<br>
+      <span class="text-[#D97A5F]">test rate_limits::prod_constant_mismatch ... FAILED</span><br><br>
+      expected 1000, staging config has 500<br><br>
+      no output for 6m — process idle, no error, no exit<br><br>
+      <span class="text-[#D9B871] font-semibold">⚠ builder has not produced output since 14:02</span><br><br>
+      <span class="text-[#F0EAD8]">foreman@tower-01</span> <span class="text-[#5C6B4F]">~/api-core</span> $ <span class="inline-block w-[7px] h-[14px] bg-[#D8D2C2] align-middle animate-pulse"></span>
+    </div>
+
+    <!-- MODIFIER ROW — docked above soft keyboard -->
+    <div id="modifier-row" class="shrink-0 bg-chalk border-t-[1.5px] border-ink px-2 py-2 flex items-center gap-2 overflow-x-auto">
+      <button class="key h-11 min-w-[52px] px-3 border-[1.5px] border-ink bg-bone text-[11px] font-bold lbl shrink-0">Ctrl</button>
+      <button class="key h-11 min-w-[52px] px-3 border-[1.5px] border-ink bg-bone text-[11px] font-bold lbl shrink-0">Esc</button>
+      <button class="key h-11 min-w-[52px] px-3 border-[1.5px] border-ink bg-bone text-[11px] font-bold lbl shrink-0">Tab</button>
+      <div class="h-7 w-px bg-concrete shrink-0"></div>
+      <button class="key h-11 w-11 border-[1.5px] border-ink bg-bone shrink-0"><i class="fa-solid fa-arrow-left text-[13px]"></i></button>
+      <button class="key h-11 w-11 border-[1.5px] border-ink bg-bone shrink-0"><i class="fa-solid fa-arrow-up text-[13px]"></i></button>
+      <button class="key h-11 w-11 border-[1.5px] border-ink bg-bone shrink-0"><i class="fa-solid fa-arrow-down text-[13px]"></i></button>
+      <button class="key h-11 w-11 border-[1.5px] border-ink bg-bone shrink-0"><i class="fa-solid fa-arrow-right text-[13px]"></i></button>
+      <div class="h-7 w-px bg-concrete shrink-0"></div>
+      <button class="key h-11 min-w-[52px] px-3 border-[1.5px] border-ink bg-bone text-[11px] font-bold lbl shrink-0">C-c</button>
+      <button class="key h-11 min-w-[52px] px-3 border-[1.5px] border-ink bg-bone text-[11px] font-bold lbl shrink-0">C-d</button>
+      <button class="key h-11 min-w-[52px] px-3 border-[1.5px] border-ink bg-bone text-[11px] font-bold lbl shrink-0">C-l</button>
+      <div class="h-7 w-px bg-concrete shrink-0"></div>
+      <button class="key h-11 min-w-[64px] px-3 border-[1.5px] border-ink bg-bone text-[10px] font-bold lbl shrink-0">Paste</button>
+      <button class="key h-11 w-11 border-[1.5px] border-ink bg-bone ml-auto shrink-0"><i class="fa-solid fa-keyboard text-[13px]"></i></button>
+    </div>
+
+    <!-- SOFT KEYBOARD -->
+    <div id="soft-keyboard" class="shrink-0 bg-[#D8D2C2] px-2 pt-2.5 pb-2 space-y-1.5">
+      <div class="flex gap-1.5 justify-center">
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">q</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">w</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">e</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">r</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">t</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">y</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">u</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">i</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">o</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">p</div>
+      </div>
+      <div class="flex gap-1.5 justify-center px-4">
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">a</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">s</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">d</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">f</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">g</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">h</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">j</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">k</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">l</div>
+      </div>
+      <div class="flex gap-1.5 justify-center">
+        <div class="key h-11 flex-[1.5] max-w-[86px] bg-[#C7C0AC] border border-[#B8B29E]"><i class="fa-solid fa-arrow-up-long text-[13px]"></i></div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">z</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">x</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">c</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">v</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">b</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">n</div>
+        <div class="key h-11 flex-1 max-w-[68px] bg-[#F6F3EB] border border-[#B8B29E] text-[13px] font-medium">m</div>
+        <div class="key h-11 flex-[1.5] max-w-[86px] bg-[#C7C0AC] border border-[#B8B29E]"><i class="fa-solid fa-delete-left text-[13px]"></i></div>
+      </div>
+      <div class="flex gap-1.5 justify-center">
+        <div class="key h-11 flex-[1.4] max-w-[80px] bg-[#C7C0AC] border border-[#B8B29E] text-[11px] font-bold lbl">123</div>
+        <div class="key h-11 flex-[1.4] max-w-[80px] bg-[#C7C0AC] border border-[#B8B29E]"><i class="fa-regular fa-face-smile text-[13px]"></i></div>
+        <div class="key h-11 flex-[5] bg-[#F6F3EB] border border-[#B8B29E] text-[13px]">space</div>
+        <div class="key h-11 flex-[1.4] max-w-[80px] bg-[#C7C0AC] border border-[#B8B29E]"><i class="fa-solid fa-turn-down text-[13px]" style="transform: scaleX(-1);"></i></div>
+        <div class="key h-11 flex-[1.4] max-w-[80px] bg-[#C7C0AC] border border-[#B8B29E]"><i class="fa-regular fa-eye-slash text-[13px]"></i></div>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+</body>
+</html>

@@ -4,7 +4,9 @@ Source: `https://uxpilot.ai/a/ui-design?page=SXl8jE8uNyYLwBsG6vsL`
 IDs from `codev/experiments/74-v2-ui-pull-all-27-ux-pilot-des/manifest.json` (written by architect:uiv2).
 Titles in that file are null. Titles below are the visible screen heading from the preview PNG.
 
-**HTML is not pulled.** This harness has no uxpilot MCP. Do not invent markup. Previews only.
+**HTML is pulled.** All 27 designs are on disk beside their previews as `<group-slug>/<design-id>.html`,
+pulled by `architect:uiv2` through the uxpilot MCP (no builder harness has it). The
+"not pulled" cells in the tables below are stale; the files exist.
 
 Existing extracted files (`01-site.html`, `02-gate.html`, `tokens.css`, `tokens-dark.css`) are untouched.
 
@@ -140,3 +142,113 @@ The one genuine phone design is a single-column card stack with a segmented cont
 ## Design a bespoke control surfa (parent)
 
 0 designs. No files. Not a coverage gap; it is a container.
+
+---
+
+# Measured lineage (all 27, in generation order)
+
+**Everything above this line predates the HTML pull and infers viewport from previews. This
+section measures.** Where the two disagree, this one is right. The group names are not
+viewports and the group order is not the design order.
+
+`useCase` is the generation prompt's target and is wrong on 14 of 27 designs — every one of
+them says `desktop (1440x1024)` including the 1024x1366 iPad screens. **Measured `dimensions`
+is the only trustworthy width.** Class below is derived from measured width: phone ≤430,
+tablet ≤1024, desktop above.
+
+## Two design families, and which one governs
+
+The page holds **two incompatible visual languages**, not one evolving design. Measured from
+the pulled HTML — font stack, body ground, and chevron count:
+
+| | Family A — "porch" | Family B — "IDE" |
+|---|---|---|
+| Display / sans / mono | Fraunces / Space Grotesk / IBM Plex Mono | — / Inter / JetBrains Mono |
+| Body ground | `#EDE8DE` throughout | `#0B0D0F` dark or `#F5F1E8` light, inconsistent |
+| Hierarchy | nested lots and plots, **0 chevrons** | left sidebar tree, **10–16 chevrons** |
+| Designs | 11 | 16 |
+| Generated | 00:11–00:24, **and 01:37** | 00:30–01:19 |
+
+**Family A governs. This is a decision, recorded so it can be overridden.**
+
+Three reasons, in order of weight:
+
+1. **The three most recent designs in the page are Family A** — the iPad trio at 01:37
+   (`GyhcwHplwDsZ0ENiyTnI`, `YjOhy7S3Pz06oilXMo6R`, `TiCebhzPvbU1AeCZqj5z`). Family B's last
+   member is the 01:19 phone. The page returned to A after exploring B.
+2. **Every shipped artifact is Family A**: `tokens.css`, `tokens-dark.css`, `01-site.html`,
+   `02-gate.html`. Provenance measured, not assumed — Jaccard token overlap of each local file
+   against all 27 pulled designs:
+
+   | Local file | Best match | Overlap | Runner-up |
+   |---|---|---:|---:|
+   | `01-site.html` | `lxhbQ26SZ1QzUt8vTpUK` (00:22) | **0.830** | 0.385 |
+   | `02-gate.html` | `c6PfQn1i22G2IcFejzaZ` (00:23) | **0.863** | 0.409 |
+
+   Both are unambiguous. The extractions are faithful and neither is an invention.
+3. **The iPad is the MUST-tier target** (FR-7 tiling was promoted from SHOULD to MUST at FRD
+   rev. 6), and all three iPad screens are Family A.
+
+Family B stays in the repo. It is recorded exploration, not dead weight: `alggCr6fYS7YFpxmiGWt`
+(00:58, the last Family B desktop Site) is the strongest argument on record for a conventional
+tree sidebar over containment, and FR-1 rejects it deliberately rather than by omission.
+
+**Do not mix families.** A Family B screen rendered with `tokens.css` is neither design.
+
+## Two build traps in every one of the 27 files
+
+1. **Tailwind arrives from `cdn.tailwindcss.com` and Font Awesome from cdnjs.** These are
+   mockup scaffolding. The v2 client is React 19 + Vite; do not add a CDN script tag to it.
+2. **Family A mockups load Space Grotesk. `tokens.css` ships IBM Plex Sans** — the swap
+   landed in PR #51 and the mockups were never regenerated. `tokens.css` wins; the HTML is
+   stale on that one line.
+
+## The table
+
+| # | Time | ID | Title | Measured | Class | Family | Group |
+|--:|---|---|---|---|---|---|---|
+| 1 | 00:11 | `PXL1ch4T5kjMO4LYGdN9` | Porch - Site | 1024x1366 | tablet | **A** | `porch-site-mobile-redesign` |
+| 2 | 00:12 | `3sOUJgaqK6CgFX4eb1Sb` | Porch - Gate | 1024x1366 | tablet | **A** | `porch-gate-interaction-design` |
+| 3 | 00:12 | `cL4RvRXLrWQEGFt7ugmi` | Porch - Find Node | 1440x1024 | desktop | **A** | `find-node-screen-flow` |
+| 4 | 00:12 | `HOt71AQtECabPPgK5ZNK` | Porch - Add Machine | 1440x1091 | desktop | **A** | `add-machine-to-porch` |
+| 5 | 00:22 | `lxhbQ26SZ1QzUt8vTpUK` | Porch - Site | 1440x1092 | desktop | **A** | `porch-site-mobile-redesign` |
+| 6 | 00:23 | `c6PfQn1i22G2IcFejzaZ` | Porch - Gate | 1440x1125 | desktop | **A** | `porch-gate-interaction-design` |
+| 7 | 00:23 | `nwrrq0r5q6FUBL9HgGad` | Porch - Find Node | 1440x1024 | desktop | **A** | `find-node-screen-flow` |
+| 8 | 00:24 | `qwYWc6topSJn0NbcLFQA` | Porch - Add Machine | 1440x1091 | desktop | **A** | `add-machine-to-porch` |
+| 9 | 00:30 | `GnWkqflXk3dHyEAyMkCe` | Porch - Site | 1440x1024 | desktop | B | `porch-site-mobile-redesign` |
+| 10 | 00:31 | `wtSunFZw8rCeadZpqDW8` | Porch - Gate | 1440x1024 | desktop | B | `porch-gate-interaction-design` |
+| 11 | 00:31 | `fNx6eGEgyV2GDY4ASzod` | Porch - Find Node | 1440x1024 | desktop | B | `find-node-screen-flow` |
+| 12 | 00:31 | `51b1CgYzLv0iRRqgh4G3` | Porch - Add Machine | 1440x1024 | desktop | B | `add-machine-to-porch` |
+| 13 | 00:39 | `9GvvtY66cZ9o588S1ZG6` | Porch - Site | 1440x1024 | desktop | B | `porch-site-mobile-redesign` |
+| 14 | 00:47 | `pcuGTxWBv4S195IB7nXO` | Porch - Site | 1440x1024 | desktop | B | `porch-site-mobile-redesign` |
+| 15 | 00:52 | `JVQ55vBl3KuTQK6MKEnn` | Porch - Site | 1440x1024 | desktop | B | `porch-site-mobile-redesign` |
+| 16 | 00:55 | `da25kSWpzRdJUZGp4dFB` | Porch - Site | 1440x1024 | desktop | B | `porch-site-mobile-redesign` |
+| 17 | 00:58 | `alggCr6fYS7YFpxmiGWt` | Porch - Site | 1440x1024 | desktop | B | `porch-site-mobile-redesign` |
+| 18 | 01:00 | `cI0vQS8yxrTmLcD5gokz` | Porch - Gate | 1440x1024 | desktop | B | `porch-gate-interaction-design` |
+| 19 | 01:00 | `D3UEUmQeN43goRsYxUaJ` | Porch - Find Node | 1440x1024 | desktop | B | `find-node-screen-flow` |
+| 20 | 01:00 | `F9qlq0WzIomyZX3y7L6G` | Porch - Add Machine | 1440x1024 | desktop | B | `add-machine-to-porch` |
+| 21 | 01:19 | `jClfsPTbpz9rne4YAGBh` | Porch - Dashboard Overview | 375x1122 | phone | B | `porch-site-mobile-redesign` |
+| 22 | 01:19 | `EdGJMIYxdc5nlaj5fyxX` | Porch - Pending Gates | 375x892 | phone | B | `porch-gate-interaction-design` |
+| 23 | 01:19 | `CsPhgzxbCUWacaa4xcfW` | Porch - Node Search | 375x840 | phone | B | `find-node-screen-flow` |
+| 24 | 01:19 | `cKttggjpN8Xa2xL5RXD7` | Porch - Add Machine 2 | 375x1466 | phone | B | `add-machine-to-porch` |
+| 25 | 01:37 | `GyhcwHplwDsZ0ENiyTnI` | Porch - Split Terminals | 1024x1366 | tablet | **A** | `split-terminals` |
+| 26 | 01:37 | `YjOhy7S3Pz06oilXMo6R` | Porch - Gate Queue Sheet | 1024x1366 | tablet | **A** | `gate-queue-sheet` |
+| 27 | 01:37 | `TiCebhzPvbU1AeCZqj5z` | Porch - Terminal Soft Keyboard | 1024x1366 | tablet | **A** | `terminal-soft-keyboard` |
+
+Family A rows, in generation order: `PXL1ch4T5kjMO4LYGdN9`, `3sOUJgaqK6CgFX4eb1Sb`,
+`cL4RvRXLrWQEGFt7ugmi`, `HOt71AQtECabPPgK5ZNK`, `lxhbQ26SZ1QzUt8vTpUK`,
+`c6PfQn1i22G2IcFejzaZ`, `nwrrq0r5q6FUBL9HgGad`, `qwYWc6topSJn0NbcLFQA`,
+`GyhcwHplwDsZ0ENiyTnI`, `YjOhy7S3Pz06oilXMo6R`, `TiCebhzPvbU1AeCZqj5z`.
+
+## Corrections to the group summaries above
+
+| Group | Said | Measured |
+|---|---|---|
+| Find Node Screen Flow | "Phone" | 4 desktop 1440, 1 phone 375 |
+| Porch Gate Interaction Design | "Phone" | 1 tablet 1024x1366, 3 desktop 1440, 1 phone 375 |
+| Add Machine To Porch | — | 4 desktop 1440, 1 phone 375 |
+| Porch Site Mobile Redesign | — | 1 tablet 1024x1366, 7 desktop 1440, 1 phone 375 |
+| The three `Group with Porch - *` singles | "iPad" | correct, all 1024x1366 |
+
+Any FR clause scored against a group's assumed viewport needs rescoring against this table.
+That error has already produced one phantom finding (FRD rev. 8, retracted at rev. 9).

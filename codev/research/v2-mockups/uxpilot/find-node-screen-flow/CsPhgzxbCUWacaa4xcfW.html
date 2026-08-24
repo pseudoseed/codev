@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Find Node</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        window.FontAwesomeConfig = { autoReplaceSvg: 'nest' };
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/js/all.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            cream: '#F5F1E8', paper: '#FFFDF7', card: '#FFFFFF',
+            line: '#E4DDC8', line2: '#D8CFAF', ink: '#1F1B16',
+            sub: '#7A7362', sub2: '#A69F8C',
+            yolk: '#F5A623', yolkdark: '#D6870B',
+            moss: '#4C7A54', mossbg: '#E4EFDF',
+            blush: '#E8604C', blushbg: '#FBE3DD',
+            violet: '#7C5CFC', violetbg: '#EDE7FE',
+            sky: '#2F8FD1', skybg: '#E1F0FB',
+          },
+          fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] },
+          boxShadow: { 
+            block: '3px 3px 0 0 rgba(31,27,22,1)', 
+            blocksm: '2px 2px 0 0 rgba(31,27,22,1)',
+            intense: '6px 6px 0 0 rgba(31,27,22,1)'
+          }
+        }
+      }
+    }
+    </script>
+    <style>
+      body { background: #F5F1E8; overflow: hidden; }
+      ::-webkit-scrollbar { display: none; }
+      .dot { width: 8px; height: 8px; border-radius: 999px; flex-shrink: 0; }
+      .scrim { background: rgba(31,27,22,0.6); backdrop-filter: blur(2px); }
+      .active-node { position: relative; z-index: 10; }
+    </style>
+</head>
+<body class="text-ink font-sans text-[13px] antialiased">
+
+<div id="mobile-palette-container" class="w-full h-[800px] relative bg-cream flex flex-col overflow-hidden">
+
+  <!-- Background Layer (Dimmed/Blurred UI) -->
+  <div class="absolute inset-0 opacity-40 select-none pointer-events-none" aria-hidden="true">
+    <header class="border-b-2 border-ink bg-paper flex items-center px-4 h-14">
+      <div class="flex items-center gap-2">
+        <div class="w-7 h-7 rounded-lg bg-ink flex items-center justify-center rotate-[-4deg]">
+            <i class="fa-solid fa-house-chimney text-yolk text-[12px]"></i>
+        </div>
+        <span class="font-extrabold text-[16px]">Porch</span>
+      </div>
+    </header>
+    <div class="p-4 space-y-4">
+      <div class="h-32 rounded-xl border-2 border-ink bg-card shadow-blocksm"></div>
+      <div class="h-32 rounded-xl border-2 border-ink bg-card shadow-blocksm"></div>
+      <div class="h-32 rounded-xl border-2 border-ink bg-card shadow-blocksm"></div>
+    </div>
+  </div>
+
+  <!-- Mobile Command Palette Overlay -->
+  <div class="absolute inset-0 scrim flex flex-col items-center justify-start pt-6 px-4">
+    <div id="main-palette" class="w-full max-w-md rounded-2xl border-2 border-ink bg-paper shadow-intense flex flex-col overflow-hidden">
+      
+      <!-- Search Input Area -->
+      <div class="flex items-center gap-3 px-4 h-16 border-b-2 border-ink bg-white">
+        <i class="fa-solid fa-magnifying-glass text-sub text-lg"></i>
+        <input 
+            type="text" 
+            value="pay" 
+            placeholder="Search nodes..."
+            class="flex-1 bg-transparent outline-none text-base font-bold placeholder:text-sub2 h-full"
+            autofocus
+        >
+        <button class="w-10 h-10 flex items-center justify-center rounded-lg border-2 border-line text-sub">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <!-- Results Area -->
+      <div class="flex-1 overflow-y-auto min-h-0 py-3">
+        
+        <!-- Group: Tower 01 -->
+        <div class="px-4 pt-2 pb-2">
+            <span class="text-[10px] uppercase tracking-widest text-sub2 font-black">tower-01 / checkout / payments-arch</span>
+        </div>
+
+        <div class="space-y-1 px-2">
+            <a href="#" class="flex items-center gap-3 px-3 py-4 rounded-xl border-2 border-blush bg-blushbg active:scale-[0.98] transition-transform">
+                <span class="dot bg-blush animate-pulse"></span>
+                <div class="flex-1">
+                    <div class="font-mono text-sm font-black"><span class="text-violet">pay</span>-2201</div>
+                    <div class="text-[10px] text-blush font-bold uppercase mt-0.5">Decision Required · 24m</div>
+                </div>
+                <i class="fa-solid fa-chevron-right text-blush/40"></i>
+            </a>
+
+            <a href="#" class="flex items-center gap-3 px-3 py-4 rounded-xl border-2 border-transparent hover:bg-cream active:bg-line transition-colors">
+                <span class="dot bg-moss"></span>
+                <div class="flex-1">
+                    <div class="font-mono text-sm font-bold text-ink"><span class="text-violet">pay</span>-2189</div>
+                    <div class="text-[10px] text-moss font-bold uppercase mt-0.5">Running Implementer</div>
+                </div>
+                <i class="fa-solid fa-chevron-right text-line2"></i>
+            </a>
+        </div>
+
+        <!-- Group: Tower 02 (Offline) -->
+        <div class="px-4 pt-6 pb-2">
+            <span class="text-[10px] uppercase tracking-widest text-sub2 font-black">tower-02 / billing-svc (offline)</span>
+        </div>
+
+        <div class="space-y-1 px-2">
+            <a href="#" class="flex items-center gap-3 px-3 py-4 rounded-xl border-2 border-transparent opacity-50 bg-line/20">
+                <span class="dot bg-sub2"></span>
+                <div class="flex-1">
+                    <div class="font-mono text-sm font-medium"><span class="text-violet">pi</span>r-12</div>
+                    <div class="text-[10px] text-sub2 font-bold uppercase mt-0.5">Idle · Connection Lost</div>
+                </div>
+            </a>
+        </div>
+
+        <!-- Group: Other Matches -->
+        <div class="px-4 pt-6 pb-2">
+            <span class="text-[10px] uppercase tracking-widest text-sub2 font-black">Other matches</span>
+        </div>
+
+        <div class="space-y-1 px-2 pb-6">
+            <a href="#" class="flex items-center gap-3 px-3 py-4 rounded-xl border-2 border-transparent hover:bg-cream">
+                <span class="dot bg-yolkdark"></span>
+                <div class="flex-1">
+                    <div class="font-mono text-sm font-bold">bugfix-1441</div>
+                    <div class="text-[10px] text-yolkdark font-bold uppercase mt-0.5">No activity · 6m</div>
+                </div>
+                <i class="fa-solid fa-chevron-right text-line2"></i>
+            </a>
+
+            <a href="#" class="flex items-center gap-3 px-3 py-4 rounded-xl border-2 border-blush bg-blushbg">
+                <span class="dot bg-blush animate-pulse"></span>
+                <div class="flex-1">
+                    <div class="font-mono text-sm font-black">bugfix-1455</div>
+                    <div class="text-[10px] text-blush font-bold uppercase mt-0.5">Gate Waiting · 3m</div>
+                </div>
+                <i class="fa-solid fa-chevron-right text-blush/40"></i>
+            </a>
+
+            <a href="#" class="flex items-center gap-3 px-3 py-4 rounded-xl border-2 border-transparent hover:bg-cream">
+                <div class="w-2 h-2 flex items-center justify-center">
+                    <i class="fa-solid fa-compass-drafting text-[12px] text-violet"></i>
+                </div>
+                <div class="flex-1">
+                    <div class="text-sm font-bold">payments-arch</div>
+                    <div class="text-[10px] text-sub2 font-bold uppercase mt-0.5">Architect Node</div>
+                </div>
+                <i class="fa-solid fa-chevron-right text-line2"></i>
+            </a>
+        </div>
+      </div>
+
+      <!-- Footer Info -->
+      <div class="flex items-center justify-between px-4 h-12 border-t-2 border-line bg-paper text-[11px] font-mono font-bold text-sub">
+        <div class="flex items-center gap-4">
+          <span>6 nodes match 'pay'</span>
+        </div>
+        <div class="flex items-center gap-1 opacity-60">
+            <span>Tap to focus</span>
+        </div>
+      </div>
+
+    </div>
+    
+    <!-- Quick Dismiss Trigger (Mobile Specific) -->
+    <button class="mt-6 px-6 py-3 rounded-full bg-ink text-white font-bold text-xs uppercase tracking-widest shadow-block active:translate-y-0.5 active:shadow-none transition-all">
+        <i class="fa-solid fa-arrow-left mr-2"></i> Return to Site
+    </button>
+  </div>
+
+</div>
+
+<script>
+    // Simple interactions for demonstration
+    document.querySelectorAll('a').forEach(link => {
+        link.addEventListener('click', (e) => {
+            e.preventDefault();
+            // Animation for visual feedback
+            link.classList.add('bg-yolk/10');
+            setTimeout(() => {
+                link.classList.remove('bg-yolk/10');
+            }, 200);
+        });
+    });
+</script>
+</body>
+</html>

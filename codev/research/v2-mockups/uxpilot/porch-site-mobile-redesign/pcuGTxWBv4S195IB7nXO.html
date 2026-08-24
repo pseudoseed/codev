@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Site</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        cream: '#F5F1E8',
+        paper: '#FFFDF7',
+        card: '#FFFFFF',
+        line: '#E4DDC8',
+        line2: '#D8CFAF',
+        ink: '#1F1B16',
+        sub: '#7A7362',
+        sub2: '#A69F8C',
+        yolk: '#F5A623',
+        yolkdark: '#D6870B',
+        moss: '#4C7A54',
+        mossbg: '#E4EFDF',
+        blush: '#E8604C',
+        blushbg: '#FBE3DD',
+        violet: '#7C5CFC',
+        violetbg: '#EDE7FE',
+        sky: '#2F8FD1',
+        skybg: '#E1F0FB',
+      },
+      fontFamily: {
+        sans: ['Inter', 'sans-serif'],
+        mono: ['JetBrains Mono', 'monospace'],
+      },
+      boxShadow: {
+        block: '3px 3px 0 0 rgba(31,27,22,1)',
+        blocksm: '2px 2px 0 0 rgba(31,27,22,1)',
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #F5F1E8; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #D8CFAF; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  .tree-row:hover { background: #EFE9D8; }
+  .tree-row.active { background: #FCEFD9; }
+  .dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
+  .term { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 1.65; }
+  .squiggle { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='6'%3E%3Cpath d='M0 3 Q4 0 8 3 T16 3' stroke='%23F5A623' stroke-width='1.4' fill='none'/%3E%3C/svg%3E"); background-repeat: repeat-x; background-position: bottom; height: 6px; }
+</style>
+</head>
+<body class="text-ink font-sans text-[13px]">
+
+<div id="app" class="h-[1024px] flex flex-col">
+
+  <!-- TOP BAR -->
+  <header id="header" class="border-b-2 border-ink bg-paper flex items-center justify-between px-4 h-12 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <div class="w-6 h-6 rounded-lg bg-ink flex items-center justify-center rotate-[-4deg]">
+          <i class="fa-solid fa-house-chimney text-yolk text-[11px]"></i>
+        </div>
+        <span class="font-extrabold text-[14px] tracking-tight">Porch</span>
+      </div>
+      <div class="h-4 w-px bg-line2"></div>
+      <span class="text-[12px] text-sub">foreman-hq</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="flex items-center gap-2 h-8 px-3 rounded-lg bg-paper border-2 border-ink hover:bg-cream text-[12px] font-medium shadow-blocksm hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
+        <i class="fa-solid fa-magnifying-glass text-[11px]"></i>
+        <span>Find</span>
+        <span class="px-1.5 py-0.5 rounded bg-ink text-cream text-[10px] font-mono">⌘K</span>
+      </button>
+      <button class="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-yolk border-2 border-ink hover:bg-yolkdark text-[12px] font-semibold shadow-blocksm hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
+        <i class="fa-solid fa-plus text-[11px]"></i><span>Machine</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="flex flex-1 min-h-0">
+
+    <!-- LEFT: TREE SIDEBAR -->
+    <aside id="tree-sidebar" class="w-[272px] shrink-0 border-r-2 border-ink bg-paper flex flex-col">
+      <div class="h-9 flex items-center px-3 border-b-2 border-line shrink-0">
+        <span class="text-[10px] font-bold uppercase tracking-wide text-sub">🏗️ Machines</span>
+      </div>
+
+      <div class="flex-1 overflow-y-auto py-1.5">
+
+        <!-- COMPUTER 1 -->
+        <div id="tree-computer-1">
+          <div class="flex items-center gap-1.5 h-7 px-2 mx-1.5 rounded-md tree-row cursor-pointer">
+            <i class="fa-solid fa-chevron-down text-[8px] text-sub2 w-3"></i>
+            <i class="fa-solid fa-desktop text-[11px] text-sub w-3.5"></i>
+            <span class="font-semibold text-[12.5px]">computer-1</span>
+            <span class="dot bg-moss ml-auto"></span>
+          </div>
+
+          <div class="ml-4 border-l-2 border-line">
+            <div class="flex items-center gap-1.5 h-[26px] px-2 pl-3 mx-1.5 rounded-md tree-row cursor-pointer">
+              <i class="fa-solid fa-chevron-down text-[8px] text-sub2 w-3"></i>
+              <i class="fa-regular fa-folder text-[11px] text-yolkdark w-3.5"></i>
+              <span class="text-[12px] text-sub">checkout</span>
+            </div>
+
+            <div class="ml-4 border-l-2 border-line">
+              <div class="flex items-center gap-1.5 h-[26px] px-2 pl-3 mx-1.5 rounded-md tree-row cursor-pointer">
+                <i class="fa-solid fa-chevron-down text-[8px] text-sub2 w-3"></i>
+                <i class="fa-solid fa-compass-drafting text-[10px] text-violet w-3.5"></i>
+                <span class="text-[12px] font-medium">payments-arch</span>
+              </div>
+              <div class="ml-4 border-l-2 border-line pb-1">
+                <a href="#" class="flex items-center gap-1.5 h-[27px] px-2 pl-3 mx-1.5 rounded-md tree-row active cursor-pointer">
+                  <span class="w-3"></span>
+                  <span class="dot bg-blush"></span>
+                  <span class="font-mono text-[11.5px] font-medium">pay-2201</span>
+                  <span class="ml-auto text-[9px] uppercase text-blush font-bold">blocked</span>
+                </a>
+                <a href="#" class="flex items-center gap-1.5 h-[27px] px-2 pl-3 mx-1.5 rounded-md tree-row cursor-pointer">
+                  <span class="w-3"></span>
+                  <span class="dot bg-moss"></span>
+                  <span class="font-mono text-[11.5px]">pay-2189</span>
+                  <span class="ml-auto text-[9px] uppercase text-sub2 font-semibold">running</span>
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <div class="ml-4 border-l-2 border-line">
+            <div class="flex items-center gap-1.5 h-[26px] px-2 pl-3 mx-1.5 rounded-md tree-row cursor-pointer">
+              <i class="fa-solid fa-chevron-down text-[8px] text-sub2 w-3"></i>
+              <i class="fa-regular fa-folder text-[11px] text-yolkdark w-3.5"></i>
+              <span class="text-[12px] text-sub">api-core</span>
+            </div>
+            <div class="ml-4 border-l-2 border-line">
+              <div class="flex items-center gap-1.5 h-[26px] px-2 pl-3 mx-1.5 rounded-md tree-row cursor-pointer">
+                <i class="fa-solid fa-chevron-down text-[8px] text-sub2 w-3"></i>
+                <i class="fa-solid fa-compass-drafting text-[10px] text-violet w-3.5"></i>
+                <span class="text-[12px] font-medium">rate-limits-arch</span>
+              </div>
+              <div class="ml-4 border-l-2 border-line pb-1">
+                <a href="#" class="flex items-center gap-1.5 h-[27px] px-2 pl-3 mx-1.5 rounded-md tree-row active cursor-pointer">
+                  <span class="w-3"></span>
+                  <span class="dot bg-blush"></span>
+                  <span class="font-mono text-[11.5px] font-medium">bugfix-1455</span>
+                  <span class="ml-auto text-[9px] uppercase text-blush font-bold">blocked</span>
+                </a>
+                <a href="#" class="flex items-center gap-1.5 h-[27px] px-2 pl-3 mx-1.5 rounded-md tree-row cursor-pointer">
+                  <span class="w-3"></span>
+                  <span class="dot bg-yolkdark"></span>
+                  <span class="font-mono text-[11.5px]">bugfix-1441</span>
+                  <span class="ml-auto text-[9px] uppercase text-yolkdark font-semibold">waiting</span>
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <div class="ml-4 border-l-2 border-line">
+            <div class="flex items-center gap-1.5 h-[26px] px-2 pl-3 mx-1.5 rounded-md tree-row cursor-pointer">
+              <i class="fa-solid fa-chevron-right text-[8px] text-sub2 w-3"></i>
+              <i class="fa-regular fa-folder text-[11px] text-yolkdark w-3.5"></i>
+              <span class="text-[12px] text-sub">marketing-site</span>
+              <span class="ml-auto text-[9px] font-mono text-sub2 bg-cream px-1.5 rounded">3</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- COMPUTER 2 -->
+        <div id="tree-computer-2" class="mt-1.5">
+          <div class="flex items-center gap-1.5 h-7 px-2 mx-1.5 rounded-md tree-row cursor-pointer">
+            <i class="fa-solid fa-chevron-down text-[8px] text-sub2 w-3"></i>
+            <i class="fa-solid fa-desktop text-[11px] text-sub w-3.5"></i>
+            <span class="font-semibold text-[12.5px]">computer-2</span>
+            <span class="dot bg-moss ml-auto"></span>
+          </div>
+
+          <div class="ml-4 border-l-2 border-line">
+            <div class="flex items-center gap-1.5 h-[26px] px-2 pl-3 mx-1.5 rounded-md tree-row cursor-pointer">
+              <i class="fa-solid fa-chevron-down text-[8px] text-sub2 w-3"></i>
+              <i class="fa-regular fa-folder text-[11px] text-yolkdark w-3.5"></i>
+              <span class="text-[12px] text-sub">inference-svc</span>
+            </div>
+            <div class="ml-4 border-l-2 border-line">
+              <div class="flex items-center gap-1.5 h-[26px] px-2 pl-3 mx-1.5 rounded-md tree-row cursor-pointer">
+                <i class="fa-solid fa-chevron-down text-[8px] text-sub2 w-3"></i>
+                <i class="fa-solid fa-compass-drafting text-[10px] text-violet w-3.5"></i>
+                <span class="text-[12px] font-medium">ml-pipeline-arch</span>
+              </div>
+              <div class="ml-4 border-l-2 border-line pb-1">
+                <a href="#" class="flex items-center gap-1.5 h-[27px] px-2 pl-3 mx-1.5 rounded-md tree-row cursor-pointer">
+                  <span class="w-3"></span>
+                  <span class="dot bg-moss"></span>
+                  <span class="font-mono text-[11.5px]">infer-04</span>
+                  <span class="ml-auto text-[9px] uppercase text-sub2 font-semibold">running</span>
+                </a>
+                <a href="#" class="flex items-center gap-1.5 h-[27px] px-2 pl-3 mx-1.5 rounded-md tree-row cursor-pointer opacity-50">
+                  <span class="w-3"></span>
+                  <span class="dot bg-sub2"></span>
+                  <span class="font-mono text-[11.5px]">infer-03</span>
+                  <span class="ml-auto text-[9px] uppercase text-sub2">idle</span>
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="h-9 flex items-center px-3 border-t-2 border-line shrink-0 text-[10px] font-mono text-sub2">
+        2 machines · 5 architects · 11 builders
+      </div>
+    </aside>
+
+    <!-- CENTER: TILED PANES -->
+    <main id="tile-area" class="flex-1 min-w-0 bg-cream p-3 grid grid-cols-2 grid-rows-2 gap-3">
+
+      <!-- PANE 1: architect view -->
+      <div id="pane-payments-arch" class="border-2 border-ink rounded-xl bg-card shadow-block flex flex-col min-h-0 overflow-hidden">
+        <div class="flex items-center gap-2 h-9 px-3 border-b-2 border-ink bg-violetbg shrink-0">
+          <i class="fa-solid fa-compass-drafting text-[11px] text-violet"></i>
+          <span class="text-[12px] font-bold">payments-arch</span>
+          <span class="text-[10px] text-sub font-mono">checkout</span>
+          <div class="ml-auto flex items-center gap-1.5">
+            <button class="w-5 h-5 flex items-center justify-center text-sub hover:text-ink"><i class="fa-solid fa-expand text-[10px]"></i></button>
+            <button class="w-5 h-5 flex items-center justify-center text-sub hover:text-ink"><i class="fa-solid fa-xmark text-[12px]"></i></button>
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto p-2.5 space-y-2">
+          <div class="rounded-lg border-2 border-blush bg-blushbg">
+            <div class="flex items-center gap-2 px-2.5 h-7">
+              <span class="dot bg-blush"></span>
+              <span class="font-mono text-[11px] font-bold">pay-2201</span>
+              <span class="ml-auto text-[9px] uppercase text-blush font-bold">blocked · 24m</span>
+            </div>
+            <div class="term px-2.5 pb-2.5 text-ink/70">
+              <span class="text-sub2">$</span> migrate --dry-run refunds_legacy<br>
+              <span class="text-yolkdark">⚠ 3 FKs still reference this table</span><br>
+              <span class="text-ink font-medium">? delete legacy refund table or keep for audit</span>
+            </div>
+          </div>
+          <div class="rounded-lg border-2 border-line">
+            <div class="flex items-center gap-2 px-2.5 h-7">
+              <span class="dot bg-moss"></span>
+              <span class="font-mono text-[11px] font-semibold">pay-2189</span>
+              <span class="ml-auto text-[9px] uppercase text-sub2 font-semibold">running</span>
+            </div>
+            <div class="term px-2.5 pb-2.5 text-sub">
+              <span class="text-sub2">$</span> vitest run src/checkout<br>
+              ✓ 22/48 passing…
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PANE 2: single builder — blocked, decision buttons -->
+      <div id="pane-bugfix-1455" class="border-2 border-blush rounded-xl bg-card shadow-block flex flex-col min-h-0 overflow-hidden">
+        <div class="flex items-center gap-2 h-9 px-3 border-b-2 border-blush bg-blushbg shrink-0">
+          <span class="dot bg-blush"></span>
+          <span class="font-mono text-[12px] font-bold">bugfix-1455</span>
+          <span class="text-[10px] text-sub font-mono">api-core</span>
+          <span class="ml-auto px-2 py-0.5 rounded-full bg-blush text-white text-[9px] font-bold uppercase">blocked</span>
+          <div class="flex items-center gap-1.5 ml-1">
+            <button class="w-5 h-5 flex items-center justify-center text-sub hover:text-ink"><i class="fa-solid fa-expand text-[10px]"></i></button>
+            <button class="w-5 h-5 flex items-center justify-center text-sub hover:text-ink"><i class="fa-solid fa-xmark text-[12px]"></i></button>
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto p-3 term text-ink/70">
+          <span class="text-sub2">$</span> cargo test rate_limits::<br>
+          FAIL rate_limits::prod_constant_mismatch<br>
+          expected 1000, staging config has 500<br><br>
+          <span class="text-ink font-medium">? use prod rate-limit value (1000) or match staging (500)?</span>
+        </div>
+        <div class="flex items-center gap-2 px-3 py-2.5 border-t-2 border-line shrink-0">
+          <button class="flex-1 h-8 rounded-lg bg-paper border-2 border-ink text-[11px] font-semibold shadow-blocksm hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] transition-all">Match staging</button>
+          <button class="flex-1 h-8 rounded-lg bg-yolk border-2 border-ink text-[11px] font-bold shadow-blocksm hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] transition-all">Use prod value</button>
+        </div>
+      </div>
+
+      <!-- PANE 3: single builder — running -->
+      <div id="pane-pay-2189" class="border-2 border-ink rounded-xl bg-card shadow-block flex flex-col min-h-0 overflow-hidden">
+        <div class="flex items-center gap-2 h-9 px-3 border-b-2 border-ink bg-mossbg shrink-0">
+          <span class="dot bg-moss"></span>
+          <span class="font-mono text-[12px] font-bold">pay-2189</span>
+          <span class="text-[10px] text-sub font-mono">checkout</span>
+          <span class="ml-auto text-[9px] uppercase text-moss font-bold">running</span>
+          <div class="flex items-center gap-1.5 ml-1">
+            <button class="w-5 h-5 flex items-center justify-center text-sub hover:text-ink"><i class="fa-solid fa-expand text-[10px]"></i></button>
+            <button class="w-5 h-5 flex items-center justify-center text-sub hover:text-ink"><i class="fa-solid fa-xmark text-[12px]"></i></button>
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto p-3 term text-sub">
+          <span class="text-sub2">$</span> vitest run src/checkout/*.test.ts<br>
+          <span class="text-moss">✓</span> applies promo before tax (14ms)<br>
+          <span class="text-moss">✓</span> rejects expired promo (9ms)<br>
+          <span class="text-moss">✓</span> rounds to nearest cent (3ms)<br>
+          running 22/48 …
+        </div>
+      </div>
+
+      <!-- PANE 4: empty tile -->
+      <div id="pane-empty" class="border-2 border-dashed border-line2 rounded-xl flex flex-col items-center justify-center gap-2 text-sub2 cursor-pointer hover:border-yolk hover:text-yolkdark hover:bg-paper transition-colors">
+        <i class="fa-solid fa-plus text-[16px]"></i>
+        <span class="text-[11.5px] font-medium">Open a builder or architect</span>
+      </div>
+
+    </main>
+
+    <!-- RIGHT: COLLAPSIBLE STATUS RAIL -->
+    <aside id="status-rail" class="w-[248px] shrink-0 border-l-2 border-ink bg-paper flex flex-col">
+      <div class="h-9 flex items-center justify-between px-3 border-b-2 border-line shrink-0">
+        <span class="text-[10px] font-bold uppercase tracking-wide text-sub">✨ Activity</span>
+        <button class="w-5 h-5 flex items-center justify-center text-sub hover:text-ink">
+          <i class="fa-solid fa-chevron-right text-[10px]"></i>
+        </button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto">
+
+        <div class="px-3 pt-3 pb-1.5 text-[10px] uppercase tracking-wide text-sub font-bold flex items-center justify-between">
+          <span>Gates</span>
+          <span class="w-4 h-4 rounded-full bg-blush text-white text-[9px] font-bold flex items-center justify-center">3</span>
+        </div>
+        <a href="#" class="flex items-start gap-2 mx-2 my-1 px-2 py-2 rounded-lg hover:bg-blushbg border-l-[3px] border-l-blush">
+          <span class="dot bg-blush mt-1"></span>
+          <div class="min-w-0">
+            <div class="font-mono text-[11px] font-bold">pay-2201</div>
+            <div class="text-[10.5px] text-sub2 truncate">24m · checkout</div>
+          </div>
+        </a>
+        <a href="#" class="flex items-start gap-2 mx-2 my-1 px-2 py-2 rounded-lg hover:bg-blushbg border-l-[3px] border-l-blush">
+          <span class="dot bg-blush mt-1"></span>
+          <div class="min-w-0">
+            <div class="font-mono text-[11px] font-bold">air-22</div>
+            <div class="text-[10.5px] text-sub2 truncate">9m · marketing-site</div>
+          </div>
+        </a>
+        <a href="#" class="flex items-start gap-2 mx-2 my-1 px-2 py-2 rounded-lg hover:bg-blushbg border-l-[3px] border-l-blush">
+          <span class="dot bg-blush mt-1"></span>
+          <div class="min-w-0">
+            <div class="font-mono text-[11px] font-bold">bugfix-1455</div>
+            <div class="text-[10.5px] text-sub2 truncate">3m · api-core</div>
+          </div>
+        </a>
+
+        <div class="px-3 pt-3 pb-1.5 text-[10px] uppercase tracking-wide text-sub font-bold flex items-center justify-between">
+          <span>Open PRs</span>
+          <span class="text-sub2 font-mono text-[10px]">4</span>
+        </div>
+        <a href="#" class="flex items-start gap-2 mx-2 my-1 px-2 py-2 rounded-lg hover:bg-mossbg">
+          <i class="fa-solid fa-code-pull-request text-[11px] text-moss mt-0.5"></i>
+          <div class="min-w-0">
+            <div class="text-[11.5px] truncate font-medium">Fix promo rounding edge case</div>
+            <div class="text-[10.5px] text-sub2 font-mono">pay-2189 · #482</div>
+          </div>
+        </a>
+        <a href="#" class="flex items-start gap-2 mx-2 my-1 px-2 py-2 rounded-lg hover:bg-mossbg">
+          <i class="fa-solid fa-code-pull-request text-[11px] text-moss mt-0.5"></i>
+          <div class="min-w-0">
+            <div class="text-[11.5px] truncate font-medium">Hero snapshot baseline update</div>
+            <div class="text-[10.5px] text-sub2 font-mono">air-19 · #481</div>
+          </div>
+        </a>
+        <a href="#" class="flex items-start gap-2 mx-2 my-1 px-2 py-2 rounded-lg hover:bg-mossbg">
+          <i class="fa-solid fa-code-pull-request text-[11px] text-yolkdark mt-0.5"></i>
+          <div class="min-w-0">
+            <div class="text-[11.5px] truncate font-medium">Benchmark inference latency</div>
+            <div class="text-[10.5px] text-sub2 font-mono">infer-04 · #479</div>
+          </div>
+        </a>
+
+        <div class="px-3 pt-3 pb-1.5 text-[10px] uppercase tracking-wide text-sub font-bold flex items-center justify-between">
+          <span>Open issues</span>
+          <span class="text-sub2 font-mono text-[10px]">2</span>
+        </div>
+        <a href="#" class="flex items-start gap-2 mx-2 my-1 px-2 py-2 rounded-lg hover:bg-skybg">
+          <i class="fa-regular fa-circle-dot text-[11px] text-sky mt-0.5"></i>
+          <div class="min-w-0">
+            <div class="text-[11.5px] truncate font-medium">Rate limit mismatch prod/staging</div>
+            <div class="text-[10.5px] text-sub2 font-mono">api-core · #217</div>
+          </div>
+        </a>
+        <a href="#" class="flex items-start gap-2 mx-2 my-1 px-2 py-2 rounded-lg hover:bg-skybg">
+          <i class="fa-regular fa-circle-dot text-[11px] text-sky mt-0.5"></i>
+          <div class="min-w-0">
+            <div class="text-[11.5px] truncate font-medium">Legacy refunds table cleanup</div>
+            <div class="text-[10.5px] text-sub2 font-mono">checkout · #209</div>
+          </div>
+        </a>
+
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- STATUS BAR -->
+  <footer id="footer" class="h-8 shrink-0 border-t-2 border-ink bg-paper flex items-center justify-between px-4 text-[10px] font-mono text-sub shrink-0">
+    <div class="flex items-center gap-3">
+      <span>2 machines</span>
+      <span>5 architects</span>
+      <span>11 builders</span>
+      <span>4 panes open</span>
+    </div>
+    <span class="text-blush font-bold">● 3 gates open</span>
+  </footer>
+
+</div>
+
+</body>
+</html>

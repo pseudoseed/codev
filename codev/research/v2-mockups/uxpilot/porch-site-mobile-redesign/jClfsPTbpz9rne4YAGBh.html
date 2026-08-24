@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        window.FontAwesomeConfig = { autoReplaceSvg: 'nest' };
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/js/all.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+          theme: {
+            extend: {
+              colors: {
+                cream: '#F5F1E8',
+                paper: '#FFFDF7',
+                card: '#FFFFFF',
+                line: '#E4DDC8',
+                line2: '#D8CFAF',
+                ink: '#1F1B16',
+                sub: '#7A7362',
+                sub2: '#A69F8C',
+                yolk: '#F5A623',
+                yolkdark: '#D6870B',
+                moss: '#4C7A54',
+                mossbg: '#E4EFDF',
+                blush: '#E8604C',
+                blushbg: '#FBE3DD',
+                violet: '#7C5CFC',
+                violetbg: '#EDE7FE',
+                sky: '#2F8FD1',
+                skybg: '#E1F0FB',
+              },
+              fontFamily: {
+                sans: ['Inter', 'sans-serif'],
+                mono: ['JetBrains Mono', 'monospace'],
+              },
+              boxShadow: {
+                block: '3px 3px 0 0 rgba(31,27,22,1)',
+                blocksm: '2px 2px 0 0 rgba(31,27,22,1)',
+              }
+            }
+          }
+        }
+    </script>
+    <style>
+        body { background: #F5F1E8; -webkit-tap-highlight-color: transparent; }
+        ::-webkit-scrollbar { display: none; }
+        .dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
+        .term { font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.6; }
+        .tab-active { border-bottom: 3px solid #1F1B16; font-weight: 700; color: #1F1B16; }
+        .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+    </style>
+</head>
+<body class="text-ink font-sans text-[13px] antialiased">
+
+<div id="app" class="flex flex-col min-h-screen bg-cream">
+
+    <!-- TOP NAVIGATION -->
+    <header id="header" class="sticky top-0 z-40 border-b-2 border-ink bg-paper px-4 h-14 flex items-center justify-between shrink-0">
+        <div class="flex items-center gap-3">
+            <button onclick="toggleMenu('sidebar')" class="w-10 h-10 -ml-2 flex items-center justify-center text-ink text-lg">
+                <i class="fa-solid fa-bars-staggered"></i>
+            </button>
+            <div class="flex items-center gap-2">
+                <div class="w-7 h-7 rounded-lg bg-ink flex items-center justify-center rotate-[-4deg] shadow-blocksm">
+                    <i class="fa-solid fa-house-chimney text-yolk text-[12px]"></i>
+                </div>
+                <span class="font-extrabold text-[16px] tracking-tight">Porch</span>
+            </div>
+        </div>
+        <div class="flex items-center gap-2">
+            <button class="w-10 h-10 rounded-lg bg-paper border-2 border-ink flex items-center justify-center shadow-blocksm active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all">
+                <i class="fa-solid fa-magnifying-glass"></i>
+            </button>
+            <button class="h-10 px-3 rounded-lg bg-yolk border-2 border-ink font-bold shadow-blocksm active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all">
+                <i class="fa-solid fa-plus mr-1"></i> Machine
+            </button>
+        </div>
+    </header>
+
+    <!-- MOBILE TABS -->
+    <nav class="sticky top-14 z-30 bg-paper border-b-2 border-ink flex overflow-x-auto no-scrollbar scroll-smooth">
+        <button onclick="switchTab('panes')" id="tab-panes" class="flex-none px-5 h-12 flex items-center gap-2 text-sub font-medium tab-active transition-all">
+            <i class="fa-solid fa-layer-group text-[11px]"></i>
+            <span>Active Panes</span>
+        </button>
+        <button onclick="switchTab('activity')" id="tab-activity" class="flex-none px-5 h-12 flex items-center gap-2 text-sub font-medium transition-all">
+            <i class="fa-solid fa-bolt text-[11px]"></i>
+            <span>Activity</span>
+            <span class="bg-blush text-white text-[9px] px-1.5 py-0.5 rounded-full">3</span>
+        </button>
+        <button onclick="switchTab('issues')" id="tab-issues" class="flex-none px-5 h-12 flex items-center gap-2 text-sub font-medium transition-all">
+            <i class="fa-solid fa-code-pull-request text-[11px]"></i>
+            <span>PRs & Issues</span>
+        </button>
+    </nav>
+
+    <!-- MAIN CONTENT AREA -->
+    <main id="main-content" class="flex-1 overflow-y-auto p-4 space-y-6">
+
+        <!-- PANES VIEW (DEFAULT) -->
+        <div id="view-panes" class="space-y-4">
+            
+            <!-- BLOCK: pay-2201 (Blocked Gate) -->
+            <section id="pane-bugfix-1455" class="border-2 border-blush rounded-xl bg-card shadow-block flex flex-col overflow-hidden">
+                <div class="flex items-center gap-2 h-11 px-4 border-b-2 border-blush bg-blushbg shrink-0">
+                    <span class="dot bg-blush animate-pulse"></span>
+                    <span class="font-mono text-[13px] font-bold">bugfix-1455</span>
+                    <span class="ml-auto px-2 py-0.5 rounded-full bg-blush text-white text-[10px] font-bold uppercase tracking-wider">Gate</span>
+                </div>
+                <div class="p-4 space-y-3">
+                    <div class="term text-ink bg-cream/50 p-3 rounded-lg border border-line">
+                        <span class="text-sub2">$</span> cargo test rate_limits::<br>
+                        FAIL rate_limits::prod_constant_mismatch<br>
+                        expected 1000, staging config has 500<br><br>
+                        <span class="text-ink font-bold text-[12px]">? use prod rate-limit value (1000) or match staging (500)?</span>
+                    </div>
+                    <div class="flex flex-col gap-2 pt-2">
+                        <button class="w-full h-12 rounded-xl bg-yolk border-2 border-ink text-[13px] font-bold shadow-blocksm active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all">Use prod value (1000)</button>
+                        <button class="w-full h-12 rounded-xl bg-paper border-2 border-ink text-[13px] font-semibold shadow-blocksm active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all">Match staging (500)</button>
+                    </div>
+                </div>
+                <div class="px-4 py-2 bg-paper border-t border-line text-[11px] text-sub font-mono flex justify-between">
+                    <span>api-core</span>
+                    <span>3m ago</span>
+                </div>
+            </section>
+
+            <!-- BLOCK: payments-arch (Architect Group) -->
+            <section id="pane-payments-arch" class="border-2 border-ink rounded-xl bg-card shadow-block flex flex-col overflow-hidden">
+                <div class="flex items-center gap-2 h-11 px-4 border-b-2 border-ink bg-violetbg shrink-0">
+                    <i class="fa-solid fa-compass-drafting text-[13px] text-violet"></i>
+                    <span class="text-[13px] font-bold">payments-arch</span>
+                    <span class="text-[11px] text-sub font-mono">checkout</span>
+                    <button class="ml-auto w-8 h-8 flex items-center justify-center text-sub hover:text-ink"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+                </div>
+                <div class="p-3 space-y-3">
+                    <!-- Builder 1 -->
+                    <div class="rounded-lg border-2 border-blush bg-blushbg/30 p-2.5">
+                        <div class="flex items-center gap-2 mb-1.5">
+                            <span class="dot bg-blush"></span>
+                            <span class="font-mono text-[12px] font-bold">pay-2201</span>
+                            <span class="ml-auto text-[10px] text-blush font-bold">BLOCKED</span>
+                        </div>
+                        <div class="term text-ink/80 text-[10px] pl-4 border-l-2 border-blush/30">
+                            <span class="text-yolkdark">⚠ 3 FKs still reference table</span>
+                        </div>
+                    </div>
+                    <!-- Builder 2 -->
+                    <div class="rounded-lg border-2 border-line p-2.5">
+                        <div class="flex items-center gap-2 mb-1.5">
+                            <span class="dot bg-moss"></span>
+                            <span class="font-mono text-[12px] font-semibold">pay-2189</span>
+                            <span class="ml-auto text-[10px] text-sub font-semibold">RUNNING</span>
+                        </div>
+                        <div class="term text-sub text-[10px] pl-4 border-l-2 border-line">
+                            ✓ 22/48 passing…
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- BLOCK: pay-2189 (Running Terminal) -->
+            <section id="pane-pay-2189" class="border-2 border-ink rounded-xl bg-card shadow-block flex flex-col overflow-hidden">
+                <div class="flex items-center gap-2 h-11 px-4 border-b-2 border-ink bg-mossbg shrink-0">
+                    <span class="dot bg-moss"></span>
+                    <span class="font-mono text-[13px] font-bold">pay-2189</span>
+                    <span class="text-[11px] text-sub font-mono">checkout</span>
+                    <span class="ml-auto text-[10px] uppercase text-moss font-bold">running</span>
+                </div>
+                <div class="p-4 term text-sub bg-ink text-cream/90 min-h-[140px] max-h-[240px] overflow-y-auto">
+                    <span class="text-sub2">$</span> vitest run src/checkout/*.test.ts<br>
+                    <span class="text-green-400">✓</span> applies promo before tax (14ms)<br>
+                    <span class="text-green-400">✓</span> rejects expired promo (9ms)<br>
+                    <span class="text-green-400">✓</span> rounds to nearest cent (3ms)<br>
+                    <span class="text-green-400">✓</span> handles currency edge cases (21ms)<br>
+                    <span class="text-moss">... processing suite</span><br>
+                    running 22/48 …
+                </div>
+            </section>
+
+            <button class="w-full py-6 border-2 border-dashed border-line2 rounded-xl flex flex-col items-center justify-center gap-2 text-sub hover:bg-paper transition-colors">
+                <i class="fa-solid fa-plus text-xl"></i>
+                <span class="font-bold text-[14px]">Add to board</span>
+            </button>
+        </div>
+
+        <!-- ACTIVITY VIEW (HIDDEN INITIALLY) -->
+        <div id="view-activity" class="hidden space-y-4">
+            <h3 class="text-[11px] font-bold uppercase tracking-widest text-sub px-1">Attention Required</h3>
+            <div class="space-y-3">
+                <div class="p-4 rounded-xl border-2 border-blush bg-blushbg shadow-blocksm">
+                    <div class="flex justify-between items-start mb-2">
+                        <div class="flex items-center gap-2">
+                            <i class="fa-solid fa-hand-holding-hand text-blush"></i>
+                            <span class="font-bold text-[14px]">Gate: pay-2201</span>
+                        </div>
+                        <span class="text-[10px] font-bold text-blush">24m ago</span>
+                    </div>
+                    <p class="text-[12px] text-sub mb-3">Decision pending on legacy refund table migration policy.</p>
+                    <button class="w-full h-10 bg-white border-2 border-ink rounded-lg font-bold">Open Decision</button>
+                </div>
+                <!-- More activity items... -->
+                <div class="p-4 rounded-xl border-2 border-line bg-paper">
+                    <div class="flex items-center gap-2 mb-1">
+                        <i class="fa-solid fa-circle-check text-moss"></i>
+                        <span class="font-bold">infer-04 finished</span>
+                    </div>
+                    <p class="text-[12px] text-sub">Benchmarking of inference latency completed successfully.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ISSUES VIEW (HIDDEN INITIALLY) -->
+        <div id="view-issues" class="hidden space-y-4">
+             <h3 class="text-[11px] font-bold uppercase tracking-widest text-sub px-1">Active Pull Requests</h3>
+             <div class="space-y-2">
+                <a href="#" class="block p-4 bg-white border-2 border-ink rounded-xl shadow-blocksm">
+                    <div class="flex items-center gap-2 mb-1">
+                        <i class="fa-solid fa-code-pull-request text-moss"></i>
+                        <span class="font-bold text-[13px]">Fix promo rounding edge case</span>
+                    </div>
+                    <div class="text-[11px] text-sub font-mono">pay-2189 · #482 · <span class="text-moss font-bold">Approved</span></div>
+                </a>
+                <a href="#" class="block p-4 bg-white border-2 border-ink rounded-xl shadow-blocksm">
+                    <div class="flex items-center gap-2 mb-1">
+                        <i class="fa-solid fa-code-pull-request text-yolkdark"></i>
+                        <span class="font-bold text-[13px]">Benchmark inference latency</span>
+                    </div>
+                    <div class="text-[11px] text-sub font-mono">infer-04 · #479 · <span class="text-sub2 font-bold">Pending</span></div>
+                </a>
+             </div>
+        </div>
+
+    </main>
+
+    <!-- FOOTER STATUS -->
+    <footer id="footer" class="h-10 bg-paper border-t-2 border-ink flex items-center justify-between px-4 text-[10px] font-mono text-sub safe-bottom">
+        <div class="flex items-center gap-3">
+            <span>5 architects</span>
+            <span>11 builders</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-blush"></span>
+            <span class="text-blush font-bold">3 GATES OPEN</span>
+        </div>
+    </footer>
+
+    <!-- MOBILE SIDEBAR / DRAWER -->
+    <div id="sidebar-overlay" onclick="toggleMenu('sidebar')" class="fixed inset-0 bg-ink/60 z-[60] hidden transition-opacity"></div>
+    <aside id="sidebar" class="fixed left-0 top-0 bottom-0 w-[85%] max-w-[320px] bg-paper border-r-2 border-ink z-[70] translate-x-[-100%] transition-transform duration-300 ease-in-out flex flex-col">
+        <div class="h-14 flex items-center justify-between px-4 border-b-2 border-ink shrink-0">
+            <span class="font-extrabold text-[16px]">Machines</span>
+            <button onclick="toggleMenu('sidebar')" class="w-8 h-8 flex items-center justify-center text-sub">
+                <i class="fa-solid fa-xmark text-lg"></i>
+            </button>
+        </div>
+        <div class="flex-1 overflow-y-auto py-4">
+            <!-- Machine 1 -->
+            <div class="mb-6">
+                <div class="flex items-center gap-2 px-4 h-10 bg-cream/50 mb-1">
+                    <i class="fa-solid fa-desktop text-sub"></i>
+                    <span class="font-bold">computer-1</span>
+                    <span class="dot bg-moss ml-auto"></span>
+                </div>
+                <div class="space-y-1">
+                    <div class="pl-8 py-2 flex items-center gap-2 border-l-2 border-line ml-4 text-sub">
+                        <i class="fa-regular fa-folder text-yolkdark"></i>
+                        <span>checkout</span>
+                    </div>
+                    <div class="pl-12 py-1.5 flex items-center gap-2 border-l-2 border-line ml-4 text-ink font-medium">
+                        <i class="fa-solid fa-compass-drafting text-violet"></i>
+                        <span>payments-arch</span>
+                    </div>
+                    <div class="pl-16 py-1 flex items-center gap-2 border-l-2 border-line ml-4">
+                        <span class="dot bg-blush"></span>
+                        <span class="font-mono text-[11px]">pay-2201</span>
+                    </div>
+                </div>
+            </div>
+            <!-- Machine 2 -->
+            <div>
+                <div class="flex items-center gap-2 px-4 h-10 bg-cream/50 mb-1">
+                    <i class="fa-solid fa-desktop text-sub"></i>
+                    <span class="font-bold">computer-2</span>
+                    <span class="dot bg-moss ml-auto"></span>
+                </div>
+            </div>
+        </div>
+        <div class="p-4 border-t-2 border-line bg-cream/30 safe-bottom">
+            <button class="w-full h-11 bg-paper border-2 border-ink rounded-xl font-bold shadow-blocksm flex items-center justify-center gap-2">
+                <i class="fa-solid fa-gear"></i>
+                <span>Settings</span>
+            </button>
+        </div>
+    </aside>
+
+</div>
+
+<script>
+    function toggleMenu(id) {
+        const menu = document.getElementById(id);
+        const overlay = document.getElementById('sidebar-overlay');
+        const isHidden = menu.style.transform === 'translateX(0%)';
+        
+        if (isHidden) {
+            menu.style.transform = 'translateX(-100%)';
+            overlay.classList.add('hidden');
+        } else {
+            menu.style.transform = 'translateX(0%)';
+            overlay.classList.remove('hidden');
+        }
+    }
+
+    function switchTab(tab) {
+        // Reset all views
+        document.getElementById('view-panes').classList.add('hidden');
+        document.getElementById('view-activity').classList.add('hidden');
+        document.getElementById('view-issues').classList.add('hidden');
+        
+        // Reset all buttons
+        document.querySelectorAll('nav button').forEach(btn => btn.classList.remove('tab-active'));
+
+        // Show selected
+        document.getElementById('view-' + tab).classList.remove('hidden');
+        document.getElementById('tab-' + tab).classList.add('tab-active');
+        
+        // Scroll main to top
+        document.getElementById('main-content').scrollTop = 0;
+    }
+</script>
+
+</body>
+</html>

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Add Machine</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        canvas: '#0B0D0F', panel: '#111417', panel2: '#161A1E',
+        line: '#242A30', line2: '#2E353D', ink: '#E7EAED',
+        sub: '#8B939C', sub2: '#5C646D', accent: '#3B82F6',
+        red: '#EF4444', amber: '#F59E0B', green: '#22C55E',
+      },
+      fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #0B0D0F; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #2E353D; border-radius: 4px; } ::-webkit-scrollbar-track { background: transparent; }
+  .qr {
+    background-image:
+      repeating-linear-gradient(0deg, #E7EAED 0 6px, transparent 6px 12px),
+      repeating-linear-gradient(90deg, #E7EAED 0 6px, transparent 6px 12px);
+    background-blend-mode: screen;
+    opacity: 0.9;
+  }
+  .blink { animation: blink 1.4s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0.3; } }
+</style>
+</head>
+<body class="text-ink font-sans text-[13px]">
+
+<div class="h-[1024px] flex flex-col bg-canvas">
+
+  <header id="header" class="border-b border-line bg-panel flex items-center justify-between px-4 h-12 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <div class="w-5 h-5 rounded bg-accent flex items-center justify-center"><i class="fa-solid fa-diagram-project text-white text-[10px]"></i></div>
+        <span class="font-semibold text-[13px]">Porch</span>
+      </div>
+      <div class="h-4 w-px bg-line"></div>
+      <div class="flex items-center gap-1 text-[12px]">
+        <a href="#" class="text-sub hover:text-ink">Site</a>
+        <span class="text-sub2">/</span>
+        <span class="text-ink font-medium">Add machine</span>
+      </div>
+    </div>
+    <button class="flex items-center gap-2 h-7 px-2.5 rounded bg-panel2 border border-line text-[12px] text-sub">
+      <i class="fa-solid fa-magnifying-glass text-[11px]"></i><span>Find</span>
+      <span class="px-1 py-0.5 rounded bg-canvas border border-line text-[10px] font-mono text-sub2">⌘K</span>
+    </button>
+  </header>
+
+  <main class="flex-1 overflow-y-auto px-6 py-8">
+    <div class="max-w-[880px] mx-auto">
+
+      <h1 class="text-[18px] font-semibold mb-1">Add a machine</h1>
+      <p class="text-[12.5px] text-sub mb-6">Install the agent, then pair it with this site.</p>
+
+      <div class="grid grid-cols-[1fr_300px] gap-6">
+
+        <!-- steps -->
+        <div class="space-y-3">
+
+          <div class="border border-line rounded-md bg-panel px-4 py-3.5">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="w-5 h-5 rounded-full bg-accent text-white text-[10px] font-semibold flex items-center justify-center">1</span>
+              <span class="text-[13px] font-medium">Install the agent</span>
+            </div>
+            <div class="flex items-center justify-between rounded bg-canvas border border-line px-3 py-2">
+              <code class="font-mono text-[12px] text-sub">curl -fsSL porch.dev/install.sh | sh</code>
+              <button class="text-[11px] text-sub2 hover:text-ink"><i class="fa-regular fa-copy"></i></button>
+            </div>
+          </div>
+
+          <div class="border border-line rounded-md bg-panel px-4 py-3.5">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="w-5 h-5 rounded-full bg-accent text-white text-[10px] font-semibold flex items-center justify-center">2</span>
+              <span class="text-[13px] font-medium">Pair with this site</span>
+            </div>
+            <div class="flex items-center justify-between rounded bg-canvas border border-line px-3 py-2">
+              <code class="font-mono text-[12px] text-sub">porch pair --site=foreman-hq</code>
+              <button class="text-[11px] text-sub2 hover:text-ink"><i class="fa-regular fa-copy"></i></button>
+            </div>
+          </div>
+
+          <div class="border border-line rounded-md bg-panel px-4 py-3.5 opacity-50">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="w-5 h-5 rounded-full bg-panel2 border border-line text-sub2 text-[10px] font-semibold flex items-center justify-center">3</span>
+              <span class="text-[13px] font-medium">Name it</span>
+            </div>
+            <input type="text" disabled placeholder="e.g. tower-03" class="w-full bg-canvas border border-line rounded px-3 py-2 text-[12px] text-sub2 placeholder:text-sub2">
+          </div>
+
+          <div class="pt-2">
+            <div class="text-[10px] uppercase tracking-wide text-sub2 mb-2">Already on site</div>
+            <div class="space-y-1">
+              <div class="flex items-center gap-2 px-3 py-2 rounded border border-line bg-panel text-[12px]">
+                <span class="dot bg-green"></span><span>tower-01</span><span class="text-sub2 ml-auto font-mono text-[11px]">online</span>
+              </div>
+              <div class="flex items-center gap-2 px-3 py-2 rounded border border-line bg-panel text-[12px] opacity-50">
+                <span class="dot bg-sub2"></span><span>tower-02</span><span class="text-sub2 ml-auto font-mono text-[11px]">offline</span>
+              </div>
+              <div class="flex items-center gap-2 px-3 py-2 rounded border border-line bg-panel text-[12px]">
+                <span class="dot bg-green"></span><span>gpu-box</span><span class="text-sub2 ml-auto font-mono text-[11px]">online</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- pairing card -->
+        <div class="border border-line rounded-md bg-panel h-fit">
+          <div class="flex items-center justify-between px-3.5 py-2.5 border-b border-line">
+            <span class="text-[12px] font-medium">Pairing</span>
+            <span class="flex items-center gap-1.5 text-[10px] text-amber font-mono">
+              <span class="w-1.5 h-1.5 bg-amber rounded-full blink"></span>waiting
+            </span>
+          </div>
+          <div class="p-5 flex flex-col items-center">
+            <div class="w-[160px] h-[160px] qr rounded border border-line2 bg-canvas"></div>
+            <div class="font-mono text-[15px] tracking-[0.2em] font-semibold mt-4 px-3 py-1.5 rounded bg-canvas border border-line">7F3K-91QD</div>
+            <div class="text-[10px] text-sub2 font-mono mt-2">expires in <span class="text-red">04:52</span></div>
+          </div>
+          <div class="px-3.5 py-3 border-t border-line space-y-1.5">
+            <div class="flex items-center gap-2 text-[11px] text-sub"><i class="fa-solid fa-check text-green text-[9px] w-3"></i>agent installed</div>
+            <div class="flex items-center gap-2 text-[11px] text-sub"><i class="fa-solid fa-check text-green text-[9px] w-3"></i>tunnel opened</div>
+            <div class="flex items-center gap-2 text-[11px] font-medium"><i class="fa-solid fa-spinner text-[9px] w-3"></i>waiting for pairing…</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <footer class="h-6 shrink-0 border-t border-line bg-panel flex items-center justify-between px-4 text-[10px] font-mono text-sub2">
+    <span>3 machines</span>
+    <span>pairing session active</span>
+  </footer>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Add Machine</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        bone: '#EDE8DE', chalk: '#F6F3EB', concrete: '#DAD3C4',
+        ink: '#221F1A', graphite: '#4A463D', rust: '#B5502A',
+        rustdark: '#8C3D1F', ochre: '#C08A2E', moss: '#5C6B4F',
+      },
+      fontFamily: {
+        display: ['Fraunces', 'serif'], sans: ['Space Grotesk', 'sans-serif'], mono: ['IBM Plex Mono', 'monospace'],
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #EDE8DE; }
+  .stamp { font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.06em; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #C7BFAC; } ::-webkit-scrollbar-track { background: transparent; }
+  .qr {
+    background-image:
+      repeating-linear-gradient(0deg, #221F1A 0 8px, transparent 8px 16px),
+      repeating-linear-gradient(90deg, #221F1A 0 8px, transparent 8px 16px);
+    background-blend-mode: multiply;
+  }
+  .step-line { border-left: 1.5px dashed #4A463D; }
+  .blink { animation: blink 1.4s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0.25; } }
+</style>
+</head>
+<body class="text-ink font-sans">
+
+<div class="min-h-[900px] flex flex-col">
+
+  <!-- TOP BAR -->
+  <header id="header" class="border-b-[1.5px] border-ink bg-chalk flex items-center justify-between px-6 h-16 shrink-0">
+    <div class="flex items-center gap-4">
+      <div class="flex items-center gap-2.5">
+        <div class="w-8 h-8 border-[1.5px] border-ink flex items-center justify-center bg-ink">
+          <i class="fa-solid fa-compass-drafting text-chalk text-sm"></i>
+        </div>
+        <div class="font-display font-semibold text-lg tracking-tight">Porch</div>
+      </div>
+      <div class="h-8 w-px bg-concrete mx-1"></div>
+      <a href="#" class="stamp text-[11px] text-graphite uppercase hover:text-ink"><i class="fa-solid fa-arrow-left mr-1.5"></i>Back to site</a>
+    </div>
+    <div class="flex items-center gap-3">
+      <button class="flex items-center gap-2 h-9 px-3 border-[1.5px] border-ink bg-chalk stamp text-xs uppercase">
+        <i class="fa-solid fa-magnifying-glass text-[11px]"></i><span>Find node</span>
+        <span class="ml-2 px-1.5 py-0.5 bg-ink text-chalk text-[10px]">⌘K</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="flex-1 px-10 py-10">
+    <div class="max-w-[1080px] mx-auto">
+
+      <div class="mb-8">
+        <div class="stamp text-[10px] uppercase text-graphite tracking-wider mb-1.5">Site Register · Add Machine</div>
+        <h1 class="font-display font-semibold text-3xl tracking-tight">Break ground on a new machine</h1>
+        <p class="stamp text-[12px] text-graphite mt-2 max-w-[560px] leading-relaxed">Install the Porch agent on the target machine and pair it with this site. Once paired it appears in the register as a new lot.</p>
+      </div>
+
+      <div class="grid grid-cols-[1fr_400px] gap-8">
+
+        <!-- LEFT: steps -->
+        <div>
+
+          <div class="flex gap-4 pb-8">
+            <div class="flex flex-col items-center">
+              <div class="w-8 h-8 border-[1.5px] border-ink bg-ink text-chalk flex items-center justify-center stamp text-xs shrink-0">1</div>
+              <div class="step-line flex-1 mt-1"></div>
+            </div>
+            <div class="pb-2 flex-1">
+              <div class="stamp text-xs uppercase font-medium mb-2">Install the agent</div>
+              <div class="border-[1.5px] border-ink bg-ink px-4 py-3 flex items-center justify-between">
+                <code class="font-mono text-[12.5px] text-chalk/90">curl -fsSL porch.dev/install.sh | sh</code>
+                <button class="stamp text-[10px] uppercase text-chalk/70 hover:text-chalk border border-graphite/50 px-2 py-1">
+                  <i class="fa-regular fa-copy mr-1"></i>copy
+                </button>
+              </div>
+              <p class="stamp text-[11px] text-graphite mt-2 leading-relaxed">Run on macOS, Linux, or WSL. Requires a git identity already configured on the machine.</p>
+            </div>
+          </div>
+
+          <div class="flex gap-4 pb-8">
+            <div class="flex flex-col items-center">
+              <div class="w-8 h-8 border-[1.5px] border-ink bg-ink text-chalk flex items-center justify-center stamp text-xs shrink-0">2</div>
+              <div class="step-line flex-1 mt-1"></div>
+            </div>
+            <div class="pb-2 flex-1">
+              <div class="stamp text-xs uppercase font-medium mb-2">Pair with this site</div>
+              <p class="stamp text-[11px] text-graphite mb-3 leading-relaxed">Scan the code with the Porch mobile companion, or run the pairing command shown and enter the code manually.</p>
+              <div class="border-[1.5px] border-ink bg-bone px-4 py-3 flex items-center justify-between">
+                <code class="font-mono text-[12.5px]">porch pair --site=foreman-hq</code>
+                <button class="stamp text-[10px] uppercase text-graphite hover:text-ink border border-ink/40 px-2 py-1">
+                  <i class="fa-regular fa-copy mr-1"></i>copy
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex gap-4">
+            <div class="flex flex-col items-center">
+              <div class="w-8 h-8 border-[1.5px] border-graphite/40 text-graphite/50 flex items-center justify-center stamp text-xs shrink-0">3</div>
+            </div>
+            <div class="flex-1">
+              <div class="stamp text-xs uppercase font-medium mb-2 text-graphite/60">Name the lot</div>
+              <p class="stamp text-[11px] text-graphite/60 mb-3 leading-relaxed">Once paired, give this machine a name — it appears exactly as typed in the register.</p>
+              <input type="text" disabled placeholder="e.g. tower-03, laptop-rig, gpu-box" class="w-full max-w-[420px] bg-chalk border-[1.5px] border-graphite/30 px-3 py-2.5 stamp text-[12px] text-graphite/50 placeholder:text-graphite/40 cursor-not-allowed">
+            </div>
+          </div>
+
+        </div>
+
+        <!-- RIGHT: connection card with QR -->
+        <div class="border-[1.5px] border-ink bg-chalk h-fit">
+          <div class="px-5 py-3 border-b-[1.5px] border-ink flex items-center justify-between">
+            <span class="stamp text-[11px] uppercase font-medium">Pairing ticket</span>
+            <span class="flex items-center gap-1.5 stamp text-[10px] uppercase text-ochre">
+              <span class="w-1.5 h-1.5 bg-ochre rounded-full blink"></span>waiting
+            </span>
+          </div>
+
+          <div class="p-6 flex flex-col items-center">
+            <div class="w-[220px] h-[220px] qr border-[1.5px] border-ink relative">
+              <div class="absolute inset-0 flex items-center justify-center">
+                <div class="w-11 h-11 bg-chalk border-[1.5px] border-ink flex items-center justify-center">
+                  <i class="fa-solid fa-compass-drafting text-sm"></i>
+                </div>
+              </div>
+            </div>
+            <div class="stamp text-[10px] uppercase text-graphite mt-4 text-center leading-relaxed">Scan with Porch companion<br>or enter code below</div>
+            <div class="mt-3 stamp text-lg tracking-[0.3em] font-medium border-[1.5px] border-ink px-4 py-2 bg-bone">7F3K–91QD</div>
+            <div class="stamp text-[10px] uppercase text-graphite mt-3">expires in <span class="text-rust font-medium">04:52</span></div>
+          </div>
+
+          <div class="px-5 py-4 border-t-[1.5px] border-ink">
+            <div class="stamp text-[10px] uppercase text-graphite tracking-wider mb-2.5">Connection log</div>
+            <div class="space-y-2 stamp text-[11px]">
+              <div class="flex items-center gap-2 text-graphite">
+                <i class="fa-solid fa-check text-moss text-[10px] w-3"></i>
+                <span>agent installed — v2.4.1</span>
+              </div>
+              <div class="flex items-center gap-2 text-graphite">
+                <i class="fa-solid fa-check text-moss text-[10px] w-3"></i>
+                <span>outbound tunnel opened</span>
+              </div>
+              <div class="flex items-center gap-2 text-ink font-medium">
+                <i class="fa-solid fa-spinner text-[10px] w-3"></i>
+                <span>waiting for scan / code entry…</span>
+              </div>
+              <div class="flex items-center gap-2 text-graphite/40">
+                <i class="fa-regular fa-circle text-[10px] w-3"></i>
+                <span>register machine to site</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- currently registered machines, quiet footer context -->
+      <div class="mt-10 border-t border-concrete pt-6">
+        <div class="stamp text-[10px] uppercase text-graphite tracking-wider mb-3">Already on site</div>
+        <div class="grid grid-cols-2 gap-4 max-w-[720px]">
+          <div class="border-[1.5px] border-ink bg-chalk px-4 py-3 flex items-center gap-3">
+            <span class="w-2 h-2 rounded-full bg-moss"></span>
+            <div>
+              <div class="stamp text-[12px] font-medium">tower-01</div>
+              <div class="stamp text-[10px] text-graphite uppercase">Mac Studio · online</div>
+            </div>
+          </div>
+          <div class="border-[1.5px] border-ink bg-chalk px-4 py-3 flex items-center gap-3 opacity-60">
+            <span class="w-2 h-2 rounded-full bg-graphite/40"></span>
+            <div>
+              <div class="stamp text-[12px] font-medium">tower-02</div>
+              <div class="stamp text-[10px] text-graphite uppercase">Linux box · offline</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <footer id="footer" class="border-t-[1.5px] border-ink bg-chalk h-9 shrink-0 flex items-center justify-between px-6 stamp text-[10px] uppercase text-graphite">
+    <div class="flex items-center gap-4">
+      <span><i class="fa-solid fa-server mr-1"></i>2 machines</span>
+      <span>pairing session active</span>
+    </div>
+    <span>foreman: you</span>
+  </footer>
+
+</div>
+
+</body>
+</html>

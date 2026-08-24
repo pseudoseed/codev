@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gate</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        cream: '#F5F1E8', paper: '#FFFDF7', card: '#FFFFFF',
+        line: '#E4DDC8', line2: '#D8CFAF', ink: '#1F1B16',
+        sub: '#7A7362', sub2: '#A69F8C',
+        yolk: '#F5A623', yolkdark: '#D6870B',
+        moss: '#4C7A54', mossbg: '#E4EFDF',
+        blush: '#E8604C', blushbg: '#FBE3DD',
+        violet: '#7C5CFC', violetbg: '#EDE7FE',
+        sky: '#2F8FD1', skybg: '#E1F0FB',
+      },
+      fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] },
+      boxShadow: { block: '3px 3px 0 0 rgba(31,27,22,1)', blocksm: '2px 2px 0 0 rgba(31,27,22,1)' }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #F5F1E8; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: #D8CFAF; border-radius: 4px; } ::-webkit-scrollbar-track { background: transparent; }
+  .dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
+  .term { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 1.65; }
+</style>
+</head>
+<body class="text-ink font-sans text-[13px]">
+
+<div class="h-[1024px] flex flex-col">
+
+  <!-- TOP BAR -->
+  <header id="header" class="border-b-2 border-ink bg-paper flex items-center justify-between px-4 h-12 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <div class="w-6 h-6 rounded-lg bg-ink flex items-center justify-center rotate-[-4deg]">
+          <i class="fa-solid fa-house-chimney text-yolk text-[11px]"></i>
+        </div>
+        <span class="font-extrabold text-[14px] tracking-tight">Porch</span>
+      </div>
+      <div class="h-4 w-px bg-line2"></div>
+      <div class="flex items-center gap-1.5 text-[12px]">
+        <a href="#" class="text-sub hover:text-ink font-medium">Site</a>
+        <span class="text-sub2">/</span>
+        <span class="text-ink font-semibold">pay-2201</span>
+      </div>
+    </div>
+    <button class="flex items-center gap-2 h-8 px-3 rounded-lg bg-paper border-2 border-ink hover:bg-cream text-[12px] font-medium shadow-blocksm hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
+      <i class="fa-solid fa-magnifying-glass text-[11px]"></i><span>Find</span>
+      <span class="px-1.5 py-0.5 rounded bg-ink text-cream text-[10px] font-mono">⌘K</span>
+    </button>
+  </header>
+
+  <div class="flex flex-1 min-h-0">
+
+    <!-- GATE QUEUE RAIL -->
+    <aside class="w-[280px] shrink-0 border-r-2 border-ink bg-paper flex flex-col">
+      <div class="h-9 flex items-center justify-between px-3 border-b-2 border-line shrink-0">
+        <span class="text-[10px] font-bold uppercase tracking-wide text-sub">Needs you</span>
+        <span class="w-4 h-4 rounded-full bg-blush text-white text-[9px] font-bold flex items-center justify-center">3</span>
+      </div>
+      <div class="flex-1 overflow-y-auto p-2 space-y-1.5">
+        <div class="rounded-lg border-2 border-blush bg-blushbg p-2.5">
+          <div class="flex items-center justify-between mb-1">
+            <span class="font-mono text-[12px] font-bold">pay-2201</span>
+            <span class="font-mono text-[10px] font-bold text-blush">24m</span>
+          </div>
+          <span class="text-[11px] text-ink/70 block leading-snug mb-1.5">Delete legacy refund table or keep for audit?</span>
+          <span class="text-[10px] text-sub2 font-mono">checkout / payments-arch</span>
+        </div>
+        <a href="#" class="block rounded-lg border-2 border-line bg-card hover:border-line2 p-2.5 transition-colors">
+          <div class="flex items-center justify-between mb-1">
+            <span class="font-mono text-[12px] font-medium">air-22</span>
+            <span class="font-mono text-[10px] text-sub2">9m</span>
+          </div>
+          <span class="text-[11px] text-sub block leading-snug mb-1.5">Approve new snapshot baseline?</span>
+          <span class="text-[10px] text-sub2 font-mono">marketing-site / redesign-arch</span>
+        </a>
+        <a href="#" class="block rounded-lg border-2 border-line bg-card hover:border-line2 p-2.5 transition-colors">
+          <div class="flex items-center justify-between mb-1">
+            <span class="font-mono text-[12px] font-medium">bugfix-1455</span>
+            <span class="font-mono text-[10px] text-sub2">3m</span>
+          </div>
+          <span class="text-[11px] text-sub block leading-snug mb-1.5">Use prod rate-limit value?</span>
+          <span class="text-[10px] text-sub2 font-mono">api-core / rate-limits-arch</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- GATE DETAIL -->
+    <main class="flex-1 overflow-y-auto bg-cream">
+
+      <div class="max-w-[760px] mx-auto px-6 py-6">
+
+        <!-- header -->
+        <div class="flex items-start justify-between mb-4">
+          <div>
+            <div class="flex items-center gap-2 mb-1.5">
+              <span class="font-mono text-[16px] font-bold">pay-2201</span>
+              <span class="px-2 py-0.5 rounded-full bg-blush text-white text-[9px] font-bold uppercase">Gate</span>
+            </div>
+            <div class="text-[11px] text-sub font-mono">tower-01 / checkout / payments-arch</div>
+          </div>
+          <div class="text-right">
+            <div class="font-mono text-[20px] font-bold text-blush">24:07</div>
+            <div class="text-[10px] text-sub uppercase font-semibold">held</div>
+          </div>
+        </div>
+
+        <!-- the issue title — primary content -->
+        <div class="border-2 border-ink rounded-xl bg-card shadow-block px-4 py-3.5 mb-3.5">
+          <div class="text-[10px] uppercase tracking-wide text-sub font-bold mb-1.5">Issue</div>
+          <div class="text-[16px] font-semibold leading-snug">Delete legacy refunds_legacy table, or keep it for audit purposes?</div>
+        </div>
+
+        <!-- context -->
+        <div class="border-2 border-line rounded-xl bg-card px-4 py-3.5 mb-4">
+          <div class="text-[10px] uppercase tracking-wide text-sub font-bold mb-2">Context</div>
+          <ul class="space-y-1.5 text-[12.5px] text-sub leading-relaxed">
+            <li class="flex gap-2"><span class="text-sub2">·</span><span>3 foreign keys reference this table: audit_log, disputes, payouts</span></li>
+            <li class="flex gap-2"><span class="text-yolkdark font-medium">·</span><span class="text-yolkdark font-medium">Dropping now would orphan audit_log.refund_ref</span></li>
+            <li class="flex gap-2"><span class="text-sub2">·</span><span>Compliance requires 7yr audit retention on refunds</span></li>
+          </ul>
+        </div>
+
+        <!-- diff link -->
+        <button class="flex items-center gap-2 text-[12px] text-sub hover:text-ink mb-5 font-medium">
+          <i class="fa-solid fa-terminal text-[11px]"></i>
+          <span>View full output</span>
+          <span class="font-mono text-sub2">(18 commits this run)</span>
+          <i class="fa-solid fa-chevron-right text-[9px]"></i>
+        </button>
+
+        <!-- decision -->
+        <div class="border-2 border-ink rounded-xl bg-card shadow-block overflow-hidden">
+          <div class="px-4 py-3 border-b-2 border-line">
+            <input type="text" placeholder="Add a note (optional)…" class="w-full bg-transparent outline-none text-[13px] placeholder:text-sub2">
+          </div>
+          <div class="flex items-center gap-2 px-4 py-3">
+            <button class="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-paper border-2 border-ink hover:bg-cream text-[12.5px] font-semibold shadow-blocksm hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
+              <i class="fa-solid fa-box-archive text-[11px]"></i> Keep for audit
+            </button>
+            <button class="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-yolk border-2 border-ink hover:bg-yolkdark text-[12.5px] font-bold ml-auto shadow-blocksm hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
+              <i class="fa-solid fa-check text-[11px]"></i> Approve drop
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <footer class="h-8 shrink-0 border-t-2 border-ink bg-paper flex items-center justify-between px-4 text-[10px] font-mono text-sub">
+    <div class="flex items-center gap-3">
+      <span>2 machines</span><span>5 architects</span><span>11 builders</span>
+    </div>
+    <span class="text-blush font-bold">● 3 gates open</span>
+  </footer>
+</div>
+
+</body>
+</html>

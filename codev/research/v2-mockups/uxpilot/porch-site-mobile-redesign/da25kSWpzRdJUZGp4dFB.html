@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Site</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        // light
+        l_bg: '#F7F5F0',
+        l_surface: '#FFFFFF',
+        l_raised: '#FCFBF8',
+        l_border: '#E8E4DA',
+        l_ink: '#232019',
+        l_sub: '#7C7566',
+        l_faint: '#A8A192',
+        // dark
+        d_bg: '#15141A',
+        d_surface: '#1C1B22',
+        d_raised: '#222129',
+        d_border: '#2E2C36',
+        d_ink: '#EFEDE8',
+        d_sub: '#9E9AA8',
+        d_faint: '#6B6875',
+        // shared accent (indigo/plum, not amber)
+        accent: '#6C5CE7',
+        accentDim: '#584AC4',
+        rose: '#D9506B',
+        amber: '#C98A2E',
+        jade: '#3F9D6E',
+      },
+      fontFamily: {
+        sans: ['Inter', 'sans-serif'],
+        mono: ['JetBrains Mono', 'monospace'],
+      },
+      boxShadow: {
+        soft: '0 1px 2px rgba(35,32,25,0.04), 0 2px 8px rgba(35,32,25,0.05)',
+        softd: '0 1px 2px rgba(0,0,0,0.2), 0 4px 14px rgba(0,0,0,0.28)',
+      }
+    }
+  }
+}
+</script>
+<style>
+  html.light body { background: #F7F5F0; }
+  html.dark body { background: #15141A; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  html.light ::-webkit-scrollbar-thumb { background: #E8E4DA; border-radius: 4px; }
+  html.dark ::-webkit-scrollbar-thumb { background: #2E2C36; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  .tree-row { border-radius: 7px; transition: background-color .12s ease; }
+  html.light .tree-row:hover { background: #EFEBE2; }
+  html.dark .tree-row:hover { background: #222129; }
+  html.light .tree-row.active { background: #EEEAFB; }
+  html.dark .tree-row.active { background: #23212F; }
+  .tree-row.active { position: relative; }
+  html.light .tree-row.active::before { content: ''; position: absolute; left: -11px; top: 5px; bottom: 5px; width: 2.5px; background: #6C5CE7; border-radius: 2px; }
+  html.dark .tree-row.active::before { content: ''; position: absolute; left: -11px; top: 5px; bottom: 5px; width: 2.5px; background: #6C5CE7; border-radius: 2px; }
+
+  .dot { width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0; }
+  .term { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 1.65; letter-spacing: 0.01em; }
+
+  html.light .pane { background: #FFFFFF; border-color: #E8E4DA; box-shadow: 0 1px 2px rgba(35,32,25,0.04), 0 2px 8px rgba(35,32,25,0.05); }
+  html.dark .pane { background: #1C1B22; border-color: #2E2C36; box-shadow: 0 1px 2px rgba(0,0,0,0.2), 0 4px 14px rgba(0,0,0,0.28); }
+
+  .rail-link { border-radius: 7px; transition: background-color .12s ease; }
+  html.light .rail-link:hover { background: #EFEBE2; }
+  html.dark .rail-link:hover { background: #222129; }
+
+  .toggle-track { transition: background-color .15s ease; }
+  .toggle-dot { transition: transform .15s ease; }
+</style>
+</head>
+<body class="font-sans text-[13px]">
+<html class="light"></html>
+<div id="app" class="h-[1024px] flex flex-col light bg-l_bg text-l_ink dark:bg-d_bg dark:text-d_ink">
+
+  <!-- TOP BAR -->
+  <header id="header" class="border-b border-l_border dark:border-d_border bg-l_surface dark:bg-d_surface flex items-center justify-between px-4 h-12 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <div class="w-6 h-6 rounded-md flex items-center justify-center bg-accent">
+          <i class="fa-solid fa-diagram-project text-white text-[10px]"></i>
+        </div>
+        <span class="font-semibold text-[13.5px] tracking-tight">Porch</span>
+      </div>
+      <div class="h-3.5 w-px bg-l_border dark:bg-d_border"></div>
+      <span class="text-[12px] text-l_sub dark:text-d_sub">foreman-hq</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="flex items-center gap-2 h-7 px-2.5 rounded-md bg-l_raised dark:bg-d_raised border border-l_border dark:border-d_border text-[12px] text-l_sub dark:text-d_sub hover:text-l_ink dark:hover:text-d_ink transition-colors">
+        <i class="fa-solid fa-magnifying-glass text-[11px]"></i>
+        <span>Find</span>
+        <span class="px-1.5 py-px rounded bg-l_bg dark:bg-d_bg border border-l_border dark:border-d_border text-[10px] font-mono text-l_faint dark:text-d_faint">⌘K</span>
+      </button>
+
+      <!-- theme toggle -->
+      <button id="theme-toggle" class="relative w-[42px] h-6 rounded-full toggle-track bg-l_border dark:bg-d_border flex items-center px-0.5">
+        <span class="toggle-dot w-5 h-5 rounded-full bg-white dark:bg-d_ink shadow-sm flex items-center justify-center translate-x-0 dark:translate-x-[18px]">
+          <i class="fa-solid fa-sun text-[9px] text-amber dark:hidden"></i>
+          <i class="fa-solid fa-moon text-[9px] text-accent hidden dark:block"></i>
+        </span>
+      </button>
+
+      <button class="flex items-center gap-1.5 h-7 px-3 rounded-md bg-accent hover:bg-accentDim text-[12px] font-medium text-white transition-colors">
+        <i class="fa-solid fa-plus text-[10px]"></i><span>Machine</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="flex flex-1 min-h-0">
+
+    <!-- LEFT: TREE SIDEBAR -->
+    <aside id="tree-sidebar" class="w-[264px] shrink-0 border-r border-l_border dark:border-d_border bg-l_surface dark:bg-d_surface flex flex-col">
+      <div class="h-8 flex items-center px-3 border-b border-l_border dark:border-d_border shrink-0">
+        <span class="text-[10.5px] font-medium uppercase tracking-wider text-l_faint dark:text-d_faint">Machines</span>
+      </div>
+
+      <div class="flex-1 overflow-y-auto py-1.5 px-1.5">
+
+        <!-- COMPUTER 1 -->
+        <div id="tree-computer-1">
+          <div class="flex items-center gap-2 h-7 px-2 tree-row cursor-pointer">
+            <i class="fa-solid fa-chevron-down text-[8px] text-l_faint dark:text-d_faint w-3"></i>
+            <i class="fa-solid fa-desktop text-[11px] text-l_sub dark:text-d_sub w-3.5"></i>
+            <span class="font-medium text-[12.5px]">computer-1</span>
+            <span class="dot bg-jade ml-auto"></span>
+          </div>
+
+          <div class="ml-[15px] border-l border-l_border dark:border-d_border pl-2.5">
+            <div class="flex items-center gap-2 h-[25px] px-2 tree-row cursor-pointer">
+              <i class="fa-solid fa-chevron-down text-[8px] text-l_faint dark:text-d_faint w-3"></i>
+              <i class="fa-regular fa-folder text-[11px] text-l_faint dark:text-d_faint w-3.5"></i>
+              <span class="text-[12px] text-l_sub dark:text-d_sub">checkout</span>
+            </div>
+
+            <div class="ml-[15px] border-l border-l_border dark:border-d_border pl-2.5">
+              <div class="flex items-center gap-2 h-[25px] px-2 tree-row cursor-pointer">
+                <i class="fa-solid fa-chevron-down text-[8px] text-l_faint dark:text-d_faint w-3"></i>
+                <i class="fa-solid fa-diagram-project text-[10px] text-accent w-3.5"></i>
+                <span class="text-[12px]">payments-arch</span>
+              </div>
+              <div class="ml-[15px] border-l border-l_border dark:border-d_border pl-2.5 pb-0.5">
+                <a href="#" class="flex items-center gap-2 h-[26px] px-2 tree-row active cursor-pointer">
+                  <span class="dot bg-rose"></span>
+                  <span class="font-mono text-[11.5px]">pay-2201</span>
+                  <span class="ml-auto text-[9.5px] uppercase text-rose font-medium">blocked</span>
+                </a>
+                <a href="#" class="flex items-center gap-2 h-[26px] px-2 tree-row cursor-pointer">
+                  <span class="dot bg-jade"></span>
+                  <span class="font-mono text-[11.5px] text-l_sub dark:text-d_sub">pay-2189</span>
+                  <span class="ml-auto text-[9.5px] uppercase text-l_faint dark:text-d_faint">running</span>
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <div class="ml-[15px] border-l border-l_border dark:border-d_border pl-2.5">
+            <div class="flex items-center gap-2 h-[25px] px-2 tree-row cursor-pointer">
+              <i class="fa-solid fa-chevron-down text-[8px] text-l_faint dark:text-d_faint w-3"></i>
+              <i class="fa-regular fa-folder text-[11px] text-l_faint dark:text-d_faint w-3.5"></i>
+              <span class="text-[12px] text-l_sub dark:text-d_sub">api-core</span>
+            </div>
+            <div class="ml-[15px] border-l border-l_border dark:border-d_border pl-2.5">
+              <div class="flex items-center gap-2 h-[25px] px-2 tree-row cursor-pointer">
+                <i class="fa-solid fa-chevron-down text-[8px] text-l_faint dark:text-d_faint w-3"></i>
+                <i class="fa-solid fa-diagram-project text-[10px] text-accent w-3.5"></i>
+                <span class="text-[12px]">rate-limits-arch</span>
+              </div>
+              <div class="ml-[15px] border-l border-l_border dark:border-d_border pl-2.5 pb-0.5">
+                <a href="#" class="flex items-center gap-2 h-[26px] px-2 tree-row active cursor-pointer">
+                  <span class="dot bg-rose"></span>
+                  <span class="font-mono text-[11.5px]">bugfix-1455</span>
+                  <span class="ml-auto text-[9.5px] uppercase text-rose font-medium">blocked</span>
+                </a>
+                <a href="#" class="flex items-center gap-2 h-[26px] px-2 tree-row cursor-pointer">
+                  <span class="dot bg-amber"></span>
+                  <span class="font-mono text-[11.5px] text-l_sub dark:text-d_sub">bugfix-1441</span>
+                  <span class="ml-auto text-[9.5px] uppercase text-amber">waiting</span>
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <div class="ml-[15px] border-l border-l_border dark:border-d_border pl-2.5">
+            <div class="flex items-center gap-2 h-[25px] px-2 tree-row cursor-pointer">
+              <i class="fa-solid fa-chevron-right text-[8px] text-l_faint dark:text-d_faint w-3"></i>
+              <i class="fa-regular fa-folder text-[11px] text-l_faint dark:text-d_faint w-3.5"></i>
+              <span class="text-[12px] text-l_sub dark:text-d_sub">marketing-site</span>
+              <span class="ml-auto text-[9.5px] font-mono text-l_faint dark:text-d_faint">3</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- COMPUTER 2 -->
+        <div id="tree-computer-2" class="mt-1">
+          <div class="flex items-center gap-2 h-7 px-2 tree-row cursor-pointer">
+            <i class="fa-solid fa-chevron-down text-[8px] text-l_faint dark:text-d_faint w-3"></i>
+            <i class="fa-solid fa-desktop text-[11px] text-l_sub dark:text-d_sub w-3.5"></i>
+            <span class="font-medium text-[12.5px]">computer-2</span>
+            <span class="dot bg-jade ml-auto"></span>
+          </div>
+
+          <div class="ml-[15px] border-l border-l_border dark:border-d_border pl-2.5">
+            <div class="flex items-center gap-2 h-[25px] px-2 tree-row cursor-pointer">
+              <i class="fa-solid fa-chevron-down text-[8px] text-l_faint dark:text-d_faint w-3"></i>
+              <i class="fa-regular fa-folder text-[11px] text-l_faint dark:text-d_faint w-3.5"></i>
+              <span class="text-[12px] text-l_sub dark:text-d_sub">inference-svc</span>
+            </div>
+            <div class="ml-[15px] border-l border-l_border dark:border-d_border pl-2.5">
+              <div class="flex items-center gap-2 h-[25px] px-2 tree-row cursor-pointer">
+                <i class="fa-solid fa-chevron-down text-[8px] text-l_faint dark:text-d_faint w-3"></i>
+                <i class="fa-solid fa-diagram-project text-[10px] text-accent w-3.5"></i>
+                <span class="text-[12px]">ml-pipeline-arch</span>
+              </div>
+              <div class="ml-[15px] border-l border-l_border dark:border-d_border pl-2.5 pb-0.5">
+                <a href="#" class="flex items-center gap-2 h-[26px] px-2 tree-row cursor-pointer">
+                  <span class="dot bg-jade"></span>
+                  <span class="font-mono text-[11.5px] text-l_sub dark:text-d_sub">infer-04</span>
+                  <span class="ml-auto text-[9.5px] uppercase text-l_faint dark:text-d_faint">running</span>
+                </a>
+                <a href="#" class="flex items-center gap-2 h-[26px] px-2 tree-row cursor-pointer opacity-45">
+                  <span class="dot bg-l_faint dark:bg-d_faint"></span>
+                  <span class="font-mono text-[11.5px] text-l_sub dark:text-d_sub">infer-03</span>
+                  <span class="ml-auto text-[9.5px] uppercase text-l_faint dark:text-d_faint">idle</span>
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="h-8 flex items-center px-3 border-t border-l_border dark:border-d_border shrink-0 text-[10.5px] font-mono text-l_faint dark:text-d_faint">
+        2 machines · 5 architects · 11 builders
+      </div>
+    </aside>
+
+    <!-- CENTER: TILED PANES -->
+    <main id="tile-area" class="flex-1 min-w-0 bg-l_bg dark:bg-d_bg p-2.5 grid grid-cols-2 grid-rows-2 gap-2.5">
+
+      <!-- PANE 1: architect view — stacked builders -->
+      <div id="pane-payments-arch" class="pane border rounded-xl flex flex-col min-h-0 overflow-hidden">
+        <div class="flex items-center gap-2 h-8 px-2.5 border-b border-l_border dark:border-d_border shrink-0">
+          <i class="fa-solid fa-diagram-project text-[10px] text-accent"></i>
+          <span class="text-[12px] font-medium">payments-arch</span>
+          <span class="text-[10.5px] text-l_faint dark:text-d_faint font-mono">checkout</span>
+          <div class="ml-auto flex items-center gap-0.5">
+            <button class="w-6 h-6 rounded flex items-center justify-center text-l_faint dark:text-d_faint hover:text-l_ink dark:hover:text-d_ink hover:bg-l_raised dark:hover:bg-d_raised"><i class="fa-solid fa-expand text-[10px]"></i></button>
+            <button class="w-6 h-6 rounded flex items-center justify-center text-l_faint dark:text-d_faint hover:text-l_ink dark:hover:text-d_ink hover:bg-l_raised dark:hover:bg-d_raised"><i class="fa-solid fa-xmark text-[12px]"></i></button>
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto p-2 space-y-2">
+          <div class="rounded-lg border border-rose/25 bg-rose/[0.05]">
+            <div class="flex items-center gap-2 px-2.5 h-7">
+              <span class="dot bg-rose"></span>
+              <span class="font-mono text-[11px] font-medium">pay-2201</span>
+              <span class="ml-auto text-[9.5px] uppercase text-rose font-medium">blocked · 24m</span>
+            </div>
+            <div class="term px-2.5 pb-2.5 text-l_sub dark:text-d_sub">
+              <span class="text-l_faint dark:text-d_faint">$</span> migrate --dry-run refunds_legacy<br>
+              <span class="text-amber">⚠ 3 FKs still reference this table</span><br>
+              <span>? delete legacy refund table or keep for audit</span>
+            </div>
+          </div>
+          <div class="rounded-lg border border-l_border dark:border-d_border">
+            <div class="flex items-center gap-2 px-2.5 h-7">
+              <span class="dot bg-jade"></span>
+              <span class="font-mono text-[11px]">pay-2189</span>
+              <span class="ml-auto text-[9.5px] uppercase text-l_faint dark:text-d_faint">running</span>
+            </div>
+            <div class="term px-2.5 pb-2.5 text-l_faint dark:text-d_faint">
+              <span>$</span> vitest run src/checkout<br>
+              ✓ 22/48 passing…
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PANE 2: single builder — blocked, decision -->
+      <div id="pane-bugfix-1455" class="pane border border-rose/35 rounded-xl flex flex-col min-h-0 overflow-hidden">
+        <div class="flex items-center gap-2 h-8 px-2.5 border-b border-rose/25 shrink-0">
+          <span class="dot bg-rose"></span>
+          <span class="font-mono text-[12px] font-medium">bugfix-1455</span>
+          <span class="text-[10.5px] text-l_faint dark:text-d_faint font-mono">api-core</span>
+          <span class="ml-auto px-1.5 py-0.5 rounded bg-rose/12 text-rose text-[9.5px] font-medium uppercase">blocked</span>
+          <div class="flex items-center gap-0.5 ml-1">
+            <button class="w-6 h-6 rounded flex items-center justify-center text-l_faint dark:text-d_faint hover:text-l_ink dark:hover:text-d_ink hover:bg-l_raised dark:hover:bg-d_raised"><i class="fa-solid fa-expand text-[10px]"></i></button>
+            <button class="w-6 h-6 rounded flex items-center justify-center text-l_faint dark:text-d_faint hover:text-l_ink dark:hover:text-d_ink hover:bg-l_raised dark:hover:bg-d_raised"><i class="fa-solid fa-xmark text-[12px]"></i></button>
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto p-3 term text-l_sub dark:text-d_sub">
+          <span class="text-l_faint dark:text-d_faint">$</span> cargo test rate_limits::<br>
+          FAIL rate_limits::prod_constant_mismatch<br>
+          expected 1000, staging config has 500<br><br>
+          <span class="text-l_ink dark:text-d_ink">? use prod rate-limit value (1000) or match staging (500)?</span>
+        </div>
+        <div class="flex items-center gap-2 px-2.5 py-2 border-t border-l_border dark:border-d_border shrink-0">
+          <button class="flex-1 h-7 rounded-md bg-l_raised dark:bg-d_raised border border-l_border dark:border-d_border hover:border-accent/50 text-[11.5px] font-medium transition-colors">Match staging</button>
+          <button class="flex-1 h-7 rounded-md bg-accent hover:bg-accentDim text-[11.5px] font-medium text-white transition-colors">Use prod value</button>
+        </div>
+      </div>
+
+      <!-- PANE 3: single builder — running -->
+      <div id="pane-pay-2189" class="pane border border-l_border dark:border-d_border rounded-xl flex flex-col min-h-0 overflow-hidden">
+        <div class="flex items-center gap-2 h-8 px-2.5 border-b border-l_border dark:border-d_border shrink-0">
+          <span class="dot bg-jade"></span>
+          <span class="font-mono text-[12px] font-medium">pay-2189</span>
+          <span class="text-[10.5px] text-l_faint dark:text-d_faint font-mono">checkout</span>
+          <span class="ml-auto text-[9.5px] uppercase text-jade">running</span>
+          <div class="flex items-center gap-0.5 ml-1">
+            <button class="w-6 h-6 rounded flex items-center justify-center text-l_faint dark:text-d_faint hover:text-l_ink dark:hover:text-d_ink hover:bg-l_raised dark:hover:bg-d_raised"><i class="fa-solid fa-expand text-[10px]"></i></button>
+            <button class="w-6 h-6 rounded flex items-center justify-center text-l_faint dark:text-d_faint hover:text-l_ink dark:hover:text-d_ink hover:bg-l_raised dark:hover:bg-d_raised"><i class="fa-solid fa-xmark text-[12px]"></i></button>
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto p-3 term text-l_faint dark:text-d_faint">
+          <span>$</span> vitest run src/checkout/*.test.ts<br>
+          <span class="text-jade">✓</span> applies promo before tax (14ms)<br>
+          <span class="text-jade">✓</span> rejects expired promo (9ms)<br>
+          <span class="text-jade">✓</span> rounds to nearest cent (3ms)<br>
+          running 22/48 …
+        </div>
+      </div>
+
+      <!-- PANE 4: empty tile -->
+      <div id="pane-empty" class="border border-dashed border-l_border dark:border-d_border rounded-xl flex flex-col items-center justify-center gap-2 text-l_faint dark:text-d_faint cursor-pointer hover:border-accent/40 hover:text-accent transition-colors">
+        <i class="fa-solid fa-plus text-[13px]"></i>
+        <span class="text-[11.5px]">Open a builder or architect</span>
+      </div>
+
+    </main>
+
+    <!-- RIGHT: COLLAPSIBLE STATUS RAIL -->
+    <aside id="status-rail" class="w-[236px] shrink-0 border-l border-l_border dark:border-d_border bg-l_surface dark:bg-d_surface flex flex-col">
+      <div class="h-8 flex items-center justify-between px-3 border-b border-l_border dark:border-d_border shrink-0">
+        <span class="text-[10.5px] font-medium uppercase tracking-wider text-l_faint dark:text-d_faint">Activity</span>
+        <button class="w-5 h-5 flex items-center justify-center text-l_faint dark:text-d_faint hover:text-l_ink dark:hover:text-d_ink">
+          <i class="fa-solid fa-chevron-right text-[10px]"></i>
+        </button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto py-1 px-1.5">
+
+        <div class="px-1.5 pt-2 pb-1 text-[10.5px] uppercase tracking-wider text-l_faint dark:text-d_faint flex items-center justify-between">
+          <span>Gates</span>
+          <span class="text-rose font-medium font-mono">3</span>
+        </div>
+        <a href="#" class="rail-link flex items-start gap-2 px-1.5 py-1.5">
+          <span class="dot bg-rose mt-1"></span>
+          <div class="min-w-0">
+            <div class="font-mono text-[11px]">pay-2201</div>
+            <div class="text-[10.5px] text-l_faint dark:text-d_faint truncate">24m · checkout</div>
+          </div>
+        </a>
+        <a href="#" class="rail-link flex items-start gap-2 px-1.5 py-1.5">
+          <span class="dot bg-rose mt-1"></span>
+          <div class="min-w-0">
+            <div class="font-mono text-[11px]">air-22</div>
+            <div class="text-[10.5px] text-l_faint dark:text-d_faint truncate">9m · marketing-site</div>
+          </div>
+        </a>
+        <a href="#" class="rail-link flex items-start gap-2 px-1.5 py-1.5">
+          <span class="dot bg-rose mt-1"></span>
+          <div class="min-w-0">
+            <div class="font-mono text-[11px]">bugfix-1455</div>
+            <div class="text-[10.5px] text-l_faint dark:text-d_faint truncate">3m · api-core</div>
+          </div>
+        </a>
+
+        <div class="px-1.5 pt-3 pb-1 text-[10.5px] uppercase tracking-wider text-l_faint dark:text-d_faint flex items-center justify-between">
+          <span>Open PRs</span>
+          <span class="text-l_sub dark:text-d_sub font-mono">4</span>
+        </div>
+        <a href="#" class="rail-link flex items-start gap-2 px-1.5 py-1.5">
+          <i class="fa-solid fa-code-pull-request text-[11px] text-jade mt-0.5"></i>
+          <div class="min-w-0">
+            <div class="text-[11.5px] truncate">Fix promo rounding edge case</div>
+            <div class="text-[10.5px] text-l_faint dark:text-d_faint font-mono">pay-2189 · #482</div>
+          </div>
+        </a>
+        <a href="#" class="rail-link flex items-start gap-2 px-1.5 py-1.5">
+          <i class="fa-solid fa-code-pull-request text-[11px] text-jade mt-0.5"></i>
+          <div class="min-w-0">
+            <div class="text-[11.5px] truncate">Hero snapshot baseline update</div>
+            <div class="text-[10.5px] text-l_faint dark:text-d_faint font-mono">air-19 · #481</div>
+          </div>
+        </a>
+        <a href="#" class="rail-link flex items-start gap-2 px-1.5 py-1.5">
+          <i class="fa-solid fa-code-pull-request text-[11px] text-amber mt-0.5"></i>
+          <div class="min-w-0">
+            <div class="text-[11.5px] truncate">Benchmark inference latency</div>
+            <div class="text-[10.5px] text-l_faint dark:text-d_faint font-mono">infer-04 · #479</div>
+          </div>
+        </a>
+
+        <div class="px-1.5 pt-3 pb-1 text-[10.5px] uppercase tracking-wider text-l_faint dark:text-d_faint flex items-center justify-between">
+          <span>Open issues</span>
+          <span class="text-l_sub dark:text-d_sub font-mono">2</span>
+        </div>
+        <a href="#" class="rail-link flex items-start gap-2 px-1.5 py-1.5">
+          <i class="fa-regular fa-circle-dot text-[11px] text-l_sub dark:text-d_sub mt-0.5"></i>
+          <div class="min-w-0">
+            <div class="text-[11.5px] truncate">Rate limit mismatch prod/staging</div>
+            <div class="text-[10.5px] text-l_faint dark:text-d_faint font-mono">api-core · #217</div>
+          </div>
+        </a>
+        <a href="#" class="rail-link flex items-start gap-2 px-1.5 py-1.5">
+          <i class="fa-regular fa-circle-dot text-[11px] text-l_sub dark:text-d_sub mt-0.5"></i>
+          <div class="min-w-0">
+            <div class="text-[11.5px] truncate">Legacy refunds table cleanup</div>
+            <div class="text-[10.5px] text-l_faint dark:text-d_faint font-mono">checkout · #209</div>
+          </div>
+        </a>
+
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- STATUS BAR -->
+  <footer id="footer" class="h-7 shrink-0 border-t border-l_border dark:border-d_border bg-l_surface dark:bg-d_surface flex items-center justify-between px-4 text-[10.5px] font-mono text-l_faint dark:text-d_faint">
+    <div class="flex items-center gap-3">
+      <span>2 machines</span>
+      <span>5 architects</span>
+      <span>11 builders</span>
+      <span>4 panes open</span>
+    </div>
+    <span class="text-rose">3 gates open</span>
+  </footer>
+
+</div>
+
+<script>
+  const toggle = document.getElementById('theme-toggle');
+  const app = document.getElementById('app');
+  toggle.addEventListener('click', () => {
+    app.classList.toggle('dark');
+    app.classList.toggle('light');
+  });
+</script>
+
+</body>
+</html>
