@@ -428,18 +428,23 @@ export async function executeForgeCommand(
   }
 
   const forgeEnv = buildForgeEnv(forgeConfig);
+  const timeout = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const started = Date.now();
 
   try {
     const { stdout } = await execAsync(command, {
       cwd: options?.cwd,
       env: { ...process.env, ...forgeEnv, ...env },
-      timeout: options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      timeout,
       maxBuffer: options?.maxBuffer ?? DEFAULT_MAX_BUFFER,
     });
 
     return parseOutput(stdout, options?.raw);
   } catch (err: unknown) {
     logDebug(concept, err);
+    // #17: the null below is about to be read as "no results" by every caller.
+    // Say that it is not.
+    warnForgeFailure(concept, err, Date.now() - started, timeout, false);
     return null;
   }
 }
@@ -514,20 +519,21 @@ export async function executeForgeCommandDetailed(
     };
   } catch (err: unknown) {
     logDebug(concept, err);
-    const e = err as { code?: number | string; killed?: boolean; signal?: string; stdout?: string; stderr?: string };
-    // `killed` plus a signal is how Node reports the timeout it enforced —
-    // verified during #12 against a command whose grandchild held the stdout
-    // pipe. An exit code alone cannot be read as a timeout: a killed process
-    // can still exit with a status, and a script that times out INTERNALLY (the
-    // shell watchdog in scripts/forge/_timeout.sh) exits non-zero with its own
-    // timeout envelope on stdout, which is why stdout is preserved below.
-    const timedOut = e.killed === true && typeof e.signal === 'string';
+    const e = err as { stdout?: string; stderr?: string };
+    // Classification is shared with the swallowing variants (#17) so the three
+    // entry points cannot drift on what counts as a timeout. `stdout` is
+    // preserved because a script that times out INTERNALLY (the shell watchdog
+    // in scripts/forge/_timeout.sh) exits non-zero with its own timeout
+    // envelope there; discarding it would throw the class of failure away at
+    // the last step. No warning is emitted here — this variant's whole purpose
+    // is to hand the failure to a caller that will report it.
+    const { timedOut, exitCode, message } = classifyForgeError(err);
     return {
       ok: false,
       data: e.stdout ? parseOutput(e.stdout, options?.raw) : null,
       stdout: e.stdout ?? '',
-      stderr: e.stderr ?? (err instanceof Error ? err.message : String(err)),
-      exitCode: typeof e.code === 'number' ? e.code : null,
+      stderr: e.stderr ?? message,
+      exitCode,
       timedOut,
       unavailable: false,
       durationMs: Date.now() - started,
@@ -554,13 +560,15 @@ export function executeForgeCommandSync(
   }
 
   const forgeEnv = buildForgeEnv(forgeConfig);
+  const timeout = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const started = Date.now();
 
   try {
     const stdout = execSync(command, {
       cwd: options?.cwd,
       env: { ...process.env, ...forgeEnv, ...env },
       encoding: 'utf-8',
-      timeout: options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      timeout,
       maxBuffer: options?.maxBuffer ?? DEFAULT_MAX_BUFFER,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -568,6 +576,8 @@ export function executeForgeCommandSync(
     return parseOutput(stdout, options?.raw);
   } catch (err: unknown) {
     logDebug(concept, err, true);
+    // #17: same swallow, same fix — this null is about to read as "no results".
+    warnForgeFailure(concept, err, Date.now() - started, timeout, true);
     return null;
   }
 }
@@ -610,6 +620,111 @@ function parseOutput(stdout: string, raw?: boolean): unknown | null {
 }
 
 /** Log concept failure at debug level. */
+/**
+ * How a forge command failed (issue #17).
+ *
+ * `killed` plus a signal is how Node reports the timeout it enforced -- verified
+ * during #12 against a command whose grandchild held the stdout pipe. An exit
+ * code alone cannot be read as a timeout: a killed process can still exit with a
+ * status, and a script that times out INTERNALLY (the shell watchdog in
+ * scripts/forge/_timeout.sh) exits non-zero with its own timeout envelope on
+ * stdout.
+ */
+export function classifyForgeError(err: unknown): {
+  timedOut: boolean;
+  exitCode: number | null;
+  message: string;
+} {
+  const e = err as {
+    code?: number | string;
+    status?: number | null;
+    killed?: boolean;
+    signal?: string;
+    stderr?: string;
+  };
+
+  // The two APIs report the same facts in different fields, measured directly:
+  //   exec    exit 3   -> { code: 3 }
+  //   exec    timeout  -> { killed: true, signal: 'SIGTERM' }
+  //   execSync exit 3  -> { status: 3, signal: null }
+  //   execSync timeout -> { code: 'ETIMEDOUT', status: null, signal: 'SIGTERM' }
+  // Reading only `code` therefore lost every sync exit status and every sync
+  // timeout, which is how the sync variant stayed silent about both.
+  const exitCode = typeof e.code === 'number'
+    ? e.code
+    : typeof e.status === 'number' ? e.status : null;
+
+  const timedOut =
+    (e.killed === true && typeof e.signal === 'string')
+    || e.code === 'ETIMEDOUT';
+
+  return {
+    timedOut,
+    exitCode,
+    message: (e.stderr || (err instanceof Error ? err.message : String(err))).trim(),
+  };
+}
+
+/**
+ * Concepts already warned about, so a poll loop reports a breakage once rather
+ * than every tick. Keyed by concept + failure kind: a concept that starts timing
+ * out after having merely errored is new information and says so.
+ */
+const warnedForgeFailures = new Set<string>();
+
+/** Test seam — the set is process-global and would leak between cases. */
+export function _resetForgeFailureWarnings(): void {
+  warnedForgeFailures.clear();
+}
+
+/**
+ * Say that a forge concept BROKE, rather than letting it read as empty (#17).
+ *
+ * `executeForgeCommand` returns `null` for a timeout, a non-zero exit and an
+ * unparseable body alike, and every caller reads `null` as "no results". A
+ * `recently-merged` that timed out on page one rendered as an empty merged
+ * panel with clean stderr, on every `afx status` and every dashboard poll, for
+ * as long as that repo had enough PRs -- and nobody noticed, because empty
+ * looks like a valid answer.
+ *
+ * Written to stderr, not behind CODEV_DEBUG: a failure nobody is told about is
+ * the defect. Once per concept+kind per process, because the callers here are
+ * poll loops on a 30s TTL and a warning every tick would be its own kind of
+ * unreadable. Silence it entirely with CODEV_FORGE_QUIET=1.
+ */
+function warnForgeFailure(
+  concept: string,
+  err: unknown,
+  durationMs: number,
+  timeoutMs: number,
+  sync: boolean,
+): void {
+  if (process.env.CODEV_FORGE_QUIET) return;
+
+  const { timedOut, exitCode, message } = classifyForgeError(err);
+  const kind = timedOut ? 'timeout' : exitCode !== null ? `exit-${exitCode}` : 'error';
+  const key = `${concept}:${kind}`;
+  if (warnedForgeFailures.has(key)) return;
+  warnedForgeFailures.add(key);
+
+  const where = sync ? ' (sync)' : '';
+  // Sub-second values must not round to `0s`. A warning that reads
+  // "timed out after 0s (limit 0s)" describes nothing.
+  const secs = (ms: number): string => (ms < 1000 ? `${Math.round(ms)}ms` : `${Math.round(ms / 1000)}s`);
+  const detail = timedOut
+    ? `timed out after ${secs(durationMs)} (limit ${secs(timeoutMs)})`
+    : exitCode !== null
+      ? `exited ${exitCode}`
+      : 'failed';
+  const firstLine = message.split('\n')[0].slice(0, 200);
+
+  process.stderr.write(
+    `\x1b[33m[forge] '${concept}'${where} ${detail} — reporting NO RESULTS, which is not the same as none.` +
+    (firstLine ? `\n        ${firstLine}` : '') +
+    `\n        Further '${concept}' ${kind} failures this process are silent. CODEV_FORGE_QUIET=1 to silence entirely.\x1b[0m\n`,
+  );
+}
+
 function logDebug(concept: string, err: unknown, sync = false): void {
   if (process.env.CODEV_DEBUG) {
     const msg = err instanceof Error ? err.message : String(err);
