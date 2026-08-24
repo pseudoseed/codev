@@ -3,7 +3,7 @@
 - **Issue:** #83
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 5
+- **Status:** Draft, rev. 6
 - **Depends on:** spec 52 (v2 server events), merged
 
 ## Problem Statement
@@ -42,8 +42,9 @@ Rev. 1 said the contract "has never been consumed by anything." At rev. 4 it has
 | 4 | All 13 builders returned `parentId: "workspace:<path>"`. **Zero architect parents.** | D13. FR-3 is not satisfiable from this stream. |
 | 5 | A dark workspace appeared in a `dark` frame **and not in `nodes`** | D5, D1. `darkPaths` must be a separate store; there is no node to mark. |
 | 6 | A live tick arrived as `{"seq":1,"type":"tick","at":"…","buckets":{}}` | D1. `buckets` is `number[]` on a node and `Record<id,number>` on a tick — one name, two shapes. The empty object is the common case. |
+| 7 | `darkPaths` is computed once at connect and `inScopeSet` excludes it (`v2-routes.ts:302-314`) | D5. Dark can never clear on a live connection, in either direction. Filed as **#98**. |
 
-Findings 1, 2 and 4 are properties of the shipped contract. C2 stands — they are reported, not patched from here.
+Findings 1, 2, 4 and 7 are properties of the shipped contract. C2 stands — they are reported, not patched from here. Two are filed: **#97** (FR-3 unmet) and **#98** (dark decided once per connection).
 
 ## Desired State
 
@@ -176,7 +177,17 @@ Three distinct renderings, and conflating any two of them is a defect:
 
 The unreachable case is the one with no wire signal, so it is the one that will default to looking empty. It must not. A page that cannot reach Tower and a machine with nothing running are opposite facts.
 
-**A dark workspace has no `Node`, and this is measured, not inferred.** Against the live stream, a scope naming one unreadable path returned `"nodes":[]` *and* a `dark` frame for that path in the same snapshot. So `darkPaths` is a separate store, and rendering a dark plot means constructing it from the encoded id — there is nothing in `nodes` to mark. A snapshot replaces `darkPaths` wholesale alongside `nodes`; a workspace that recovers simply stops appearing in the next snapshot's dark frames, and the client must clear it rather than leaving a stale dark plot on screen forever.
+**A dark workspace has no `Node`, and this is measured, not inferred.** Against the live stream, a scope naming one unreadable path returned `"nodes":[]` *and* a `dark` frame for that path in the same snapshot. So `darkPaths` is a separate store, and rendering a dark plot means constructing it from the encoded id — there is nothing in `nodes` to mark.
+
+**Dark is decided once per connection and never re-evaluated. Rev. 5 claimed a recovering workspace clears itself; it cannot.** `handleV2Route` computes `darkPaths` and `inScope` in one pass at connect time (`v2-routes.ts:302-314`), and `inScopeSet` — what the watcher and projection use — excludes the dark paths. `deps.isReadable(p)` is never called again on that connection. Both directions are broken: a workspace that becomes readable stays dark forever, and one that becomes unreadable never goes dark, so it reads as live-but-quiet.
+
+Filed as **#98**. The client's obligation is narrow and it is all the client can honestly do:
+
+- Replace `darkPaths` wholesale on every `snapshot`, which is the only frame that can clear one.
+- **Do not poll to refresh readability.** C4 forbids it and reconnecting to force a snapshot is polling with extra steps.
+- Do not claim more freshness in the UI than the contract carries. The dark plot's label says what the server said and when.
+
+FR-15 is therefore true at connect and decays after. That is a contract limitation, recorded, not a client bug to code around.
 
 ### D6 — Serving the page, and how the key gets into it
 
@@ -214,6 +225,7 @@ Three outcomes, three renderings:
 | 200, one or more workspaces | those paths | open the stream |
 | 200, zero workspaces | none | the empty site (D5). **Do not open the stream** — an empty `scope` takes a 400 and would read as a connection failure |
 | non-200, or the fetch throws | unknown | the unreachable state (D5), and retry with D2's backoff |
+| **200 with a body that is not what it claims** — invalid JSON, no `workspaces` field, or `workspaces` not an array | unknown | the unreachable state **and** a contract mismatch, then retry. **Never the empty state.** A 200 whose body cannot be read is still "I could not tell", and the status code is not permission to guess |
 
 ### D9 — `/v2/` and its assets must be public routes
 
@@ -322,7 +334,7 @@ Required: a `copy-v2` script into its own published directory, that directory ad
 
 ## Solution Approaches
 
-**A. Chosen — React 19 + Vite in a new `apps/v2` workspace, one reducer over the frame stream.** Matches the house stack, reuses `packages/sdk`, and the reducer makes every frame type's handling explicit and testable without a browser.
+**A. Chosen — React 19 + Vite in a new `apps/v2` workspace, one reducer over the frame stream.** Matches the house stack, and the reducer makes every frame type's handling explicit and testable without a browser. **It imports no SDK behaviour** — C3 and D7 explain why; rev. 5 said "reuses `packages/sdk`" and that was left over from rev. 1.
 
 **B. Vanilla TS, no framework.** Rejected. `tower.html` is the cautionary example: 1,894 lines of hand-rolled HTML with an inline script is one of the three structural causes the FRD names for the current UI being replaced.
 
@@ -352,7 +364,20 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 7. **Dark vs empty vs unreachable.** Three cases, three renderings: a `dark` frame for one `workspace:<path>` leaves the others live; `nodes: []` renders the empty site; a failing `fetch` renders a connection state and never an empty tree.
 8. **Two-client convergence.** Drive 50 frames into two reducer instances; assert identical final state.
 9. **No polling.** Static check: **zero** `setInterval` in `apps/v2/src`, and exactly one `setTimeout`, at the named reconnect-backoff call site.
-10. **Live browser.** Playwright at 1440: load, spawn a builder, assert its row appears without reload.
+10. **Live browser, the full set.** Playwright at 1440. One scenario per browser-facing criterion, because the reducer tests prove the state transition and not the rendering:
+    - load and render the real hierarchy (criterion 1)
+    - spawn a builder, its row appears with no reload (criterion 2)
+    - a gate-waiting builder renders rust with a `GATE` stamp, and rust appears **nowhere else on the page** (criterion 3, D3)
+    - a builder past `IDLE_WAITING_THRESHOLD_MS` renders ochre and `STALLED` (criterion 4)
+    - a sparkline advances on `tick` and flattens to zero for a silent builder (criterion 5)
+    - `afx cleanup` removes the row (criterion 6)
+    - kill the socket and restore it: state recovers with **no page reload**, both on an honoured resume and on a refused one (criterion 7)
+    - a `dark` workspace renders dark while its siblings keep streaming (criterion 8)
+    - unreachable Tower and zero workspaces render **differently** (criterion 9)
+    - two tabs on one scope converge (criterion 10)
+    - `counts` sits in the footer and is not presented as the tree's rollup (criterion 17)
+    - a builder sits under its workspace beside the architect header (criterion 18)
+    - cold load under 2s and idle under 1 KB/s, measured in the browser rather than asserted (criteria 12, 13)
 11. **Non-regression.** `git diff --stat` on the frozen C1 files, including `tower-routes.ts`, is empty.
 12. **Key injection, three properties.** Malformed key yields no injection; the HTML response has no `Access-Control-Allow-Origin` or `Vary`; the script precedes `</head>`.
 13. **Scope bootstrap.** `/api/workspaces` is requested once; a reconnect reuses the cached scope and does not re-request it.
@@ -364,10 +389,11 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 19. **Cursor advances on deltas.** Feed a snapshot then 5 `node` frames; assert a reconnect uses the last delta's `seq`, not the snapshot's.
 20. **Degenerate frames.** Invalid JSON, an unknown `type`, a clean EOF, and a non-2xx — each produces D1's stated answer, and none advances the cursor except where stated.
 21. **Dark has no node.** A snapshot with `nodes: []` plus a `dark` frame renders one dark plot built from the id. A later snapshot without that dark frame clears it.
-22. **A dark workspace recovers.** Assert the stale dark plot disappears rather than persisting.
+22. **A dark workspace clears only on a snapshot.** Assert a `dark` plot survives every delta frame and is cleared by a replacement `snapshot` that omits it. Assert **no** polling is introduced to chase recovery (#98).
 23. **`buckets` two shapes.** A node with `buckets: number[]` and a tick with `buckets: {}` in the same session; assert neither path throws and the trace advances by one zero.
 24. **Counts from the snapshot alone.** Feed a snapshot and no `counts` delta; assert the footer shows the snapshot's totals.
 25. **Bootstrap retries, then stops.** A 500 then a 200: assert two requests total, and that a later reconnect makes none.
+26. **A 200 that lies.** Four bodies — invalid JSON, `{}`, `{"workspaces": null}`, `{"workspaces": "nope"}` — each produces the unreachable state and a retry, and **none** produces the empty state.
 
 ## Risks and Mitigation
 
@@ -385,14 +411,16 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 | A charting library added for 20 bars | Medium — `recharts` is already in the monorepo | Medium — bundle and a dependency for a flexbox job | Assumption 4; `.spark` already exists in `tokens.css` |
 | Rust used for something other than gates | High without a rule | High — the colour discipline is the design | D3 states it; review the diff for `--rust` uses |
 | A second `/v2/` mount added | Medium | High — defeats the one-insertion-point seam | Criterion 14 makes it falsifiable |
-| Reconnect implemented as page reload | Medium — it is the easy path | High — discards the reason for the stream | D2 states it; scenario 7 asserts no reload |
+| Reconnect implemented as page reload | Medium — it is the easy path | High — discards the reason for the stream | D2 states it; criterion 7 and scenarios 4 and 5 |
 | Polling creeps in for something the stream lacks | Medium | High — reproduces the problem v2 exists to solve | C4 and criterion 11; if the stream lacks it, that is a finding |
 | Scope re-derived on every reconnect | Medium — it looks like correctness | Medium — polling by another name | D7; scenario 13 |
-| The copied key injection drifts from `injectWebKey` | Medium — two copies of a security rule | High — stored XSS, or a key readable cross-origin | D6's three tested properties; cross-reference comments both ways |
+| The copied key injection drifts from `injectWebKey` | Medium — two copies of a security rule | High — stored XSS, or a key readable cross-origin | D6's three tested properties; `v2-static.ts` carries the cross-reference (`tower-routes.ts` is frozen) |
 | Unreachable Tower renders as an empty tree | High — it is the default behaviour of a failed fetch | High — inverts FR-15 | D5's three-state table; scenario 7 |
 | `subscribeEvents` reused for the v2 stream | Medium — it is right there in the SDK | High — silently mis-parses every frame, wrong endpoint and wrong envelope | C3 names it |
 | `listWorkspaces()` used for the bootstrap | High — it is the obvious SDK call and rev. 2 asked for it | High — collapses 401, 500 and a dead socket into `[]`, so unreachable renders as empty | D7 states it with the line number; scenario 17 |
-| `isPublicRoute` widened further than two `GET` shapes | Medium | High — `/v2/events` or a future `/v2/` write path becomes unauthenticated | D9 and criterion 18; scenario 16 asserts `/v2/events` still 401s |
+| `isPublicRoute` widened further than two `GET` shapes | Medium | High — `/v2/events` or a future `/v2/` write path becomes unauthenticated | D9 and criterion 15; scenario 16 asserts `/v2/events` still 401s |
+| A malformed 200 from `/api/workspaces` read as an empty machine | Medium — the status code says success | High — the same failure D7 exists to prevent, one layer in | D7's fourth row; scenario 26 |
+| Dark staleness worked around with a refresh timer | Medium — #98 makes it tempting | High — reintroduces polling to paper over a server gap | D5 forbids it; scenario 22 asserts no polling |
 | Later-unit chrome stubbed into the site view | Medium | Medium — a disabled control reads as broken | D8 |
 
 ## References
