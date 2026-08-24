@@ -4,7 +4,7 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import type { Builder, Config } from '../types.js';
 import { getConfig } from '../utils/index.js';
@@ -118,6 +118,113 @@ export interface CleanupOptions {
   issue?: number;
   task?: string;
   force?: boolean;
+}
+
+export type OrphanLookup =
+  | { status: 'none' }
+  | { status: 'one'; dirName: string; worktreePath: string }
+  | { status: 'ambiguous'; dirNames: string[] };
+
+export class UnmergedOrphanError extends Error {
+  constructor(readonly worktreePath: string) {
+    super(
+      `Branch is not merged. Use --force to remove the orphan worktree anyway: ${worktreePath}`,
+    );
+    this.name = 'UnmergedOrphanError';
+  }
+}
+
+function trailingNumericId(value: string): string | null {
+  const match = value.match(/(\d+)$/);
+  if (!match) return null;
+  return String(Number(match[1]));
+}
+
+export function orphanDirMatches(dirName: string, projectId: string): boolean {
+  if (dirName === projectId) return true;
+  const wanted = trailingNumericId(projectId);
+  if (wanted === null) return false;
+  const prefixed = dirName.match(/^(?:[a-z]+-)?0*(\d+)(?:-|$)/);
+  return prefixed !== null && prefixed[1] === wanted;
+}
+
+export function isLiveBuilderWorktree(
+  builders: ReadonlyArray<{ worktree: string }>,
+  worktreePath: string,
+): boolean {
+  const dirName = basename(worktreePath);
+  return builders.some((b) => b.worktree === worktreePath || basename(b.worktree) === dirName);
+}
+
+export function findOrphanWorktree(workspaceRoot: string, projectId: string): OrphanLookup {
+  const buildersDir = join(workspaceRoot, '.builders');
+  if (!existsSync(buildersDir)) return { status: 'none' };
+
+  let entries;
+  try {
+    entries = readdirSync(buildersDir, { withFileTypes: true });
+  } catch {
+    return { status: 'none' };
+  }
+
+  const matches = entries
+    .filter((entry) => entry.isDirectory() && orphanDirMatches(entry.name, projectId))
+    .map((entry) => ({ dirName: entry.name, worktreePath: join(buildersDir, entry.name) }));
+
+  if (matches.length === 0) return { status: 'none' };
+  if (matches.length === 1) return { status: 'one', ...matches[0] };
+  return { status: 'ambiguous', dirNames: matches.map((m) => m.dirName) };
+}
+
+export async function isWorktreeMerged(workspaceRoot: string, worktreePath: string): Promise<boolean> {
+  try {
+    const { stdout: sha } = await run('git rev-parse HEAD', { cwd: worktreePath });
+    await run(`git merge-base --is-ancestor ${sha} HEAD`, { cwd: workspaceRoot });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function worktreeBranch(worktreePath: string): Promise<string | null> {
+  try {
+    const { stdout } = await run('git rev-parse --abbrev-ref HEAD', { cwd: worktreePath });
+    if (!stdout || stdout === 'HEAD') return null;
+    return stdout;
+  } catch {
+    return null;
+  }
+}
+
+export async function removeOrphanWorktree(
+  workspaceRoot: string,
+  worktreePath: string,
+  force?: boolean,
+): Promise<void> {
+  const merged = await isWorktreeMerged(workspaceRoot, worktreePath);
+  if (!merged && !force) {
+    throw new UnmergedOrphanError(worktreePath);
+  }
+
+  const branch = await worktreeBranch(worktreePath);
+
+  if (existsSync(worktreePath)) {
+    await run(`git worktree remove "${worktreePath}" --force`, { cwd: workspaceRoot });
+  }
+
+  if (branch && branch !== 'main' && branch !== 'master') {
+    try {
+      await run(`git branch -D "${branch}"`, { cwd: workspaceRoot });
+    } catch {
+      // Branch may already be gone
+    }
+  }
+
+  try {
+    await run('git worktree prune', { cwd: workspaceRoot });
+  } catch {
+    // Non-fatal
+  }
 }
 
 /**
@@ -234,6 +341,17 @@ export async function cleanup(options: CleanupOptions): Promise<void> {
       if (byName) {
         return cleanupBuilder(byName, options.force, options.issue);
       }
+
+      const orphan = findOrphanWorktree(config.workspaceRoot, projectId);
+      if (orphan.status === 'ambiguous') {
+        fatal(
+          `Multiple orphan worktrees match project ${projectId}: ${orphan.dirNames.join(', ')}`,
+        );
+      }
+      if (orphan.status === 'one' && !isLiveBuilderWorktree(state.builders, orphan.worktreePath)) {
+        return cleanupOrphan(orphan.dirName, orphan.worktreePath, options.force);
+      }
+
       fatal(`Builder not found for project: ${projectId}`);
     }
   } else {
@@ -241,6 +359,48 @@ export async function cleanup(options: CleanupOptions): Promise<void> {
   }
 
   await cleanupBuilder(builder, options.force, options.issue);
+}
+
+async function cleanupOrphan(dirName: string, worktreePath: string, force?: boolean): Promise<void> {
+  const config = getConfig();
+  logger.header(`Cleaning up orphan worktree ${dirName}`);
+  logger.kv('Worktree', worktreePath);
+
+  const shellpersKilled = await killShellperProcesses(worktreePath);
+  if (shellpersKilled > 0) {
+    logger.info(`Killed ${shellpersKilled} shellper process(es)`);
+  }
+
+  try {
+    const db = getGlobalDb();
+    const deleted = deleteFileTabsByPathPrefix(db, worktreePath);
+    if (deleted > 0) {
+      logger.info(`Removed ${deleted} stale file tab(s)`);
+    }
+    closeGlobalDb();
+  } catch {
+    // Non-fatal
+  }
+
+  try {
+    await removeOrphanWorktree(config.workspaceRoot, worktreePath, force);
+  } catch (error) {
+    if (error instanceof UnmergedOrphanError) {
+      fatal(error.message);
+    }
+    fatal(`Failed to remove orphan worktree: ${error instanceof Error ? error.message : error}`);
+  }
+  logger.info('Worktree removed');
+
+  try {
+    const client = new TowerClient();
+    await client.refreshOverview();
+  } catch {
+    // Tower not running
+  }
+
+  logger.blank();
+  logger.success(`Orphan worktree ${dirName} cleaned up!`);
 }
 
 async function cleanupBuilder(builder: Builder, force?: boolean, issueNumber?: number): Promise<void> {
