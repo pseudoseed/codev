@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import {
+  DirtyOrphanError,
   findOrphanWorktree,
   isLiveBuilderWorktree,
   orphanDirMatches,
@@ -63,6 +64,13 @@ describe('orphanDirMatches', () => {
     expect(orphanDirMatches('air-78', '7')).toBe(false);
     expect(orphanDirMatches('experiment-62', '6')).toBe(false);
   });
+
+  it('does not match across protocol prefixes', () => {
+    expect(orphanDirMatches('air-62', 'experiment-62')).toBe(false);
+    expect(orphanDirMatches('experiment-62', 'air-62')).toBe(false);
+    expect(orphanDirMatches('air-62', 'pir-62')).toBe(false);
+    expect(orphanDirMatches('bugfix-1455', 'air-1455')).toBe(false);
+  });
 });
 
 describe('findOrphanWorktree', () => {
@@ -97,7 +105,31 @@ describe('findOrphanWorktree', () => {
       dirName: 'experiment-62',
       worktreePath: join(root, '.builders', 'experiment-62'),
     });
-    expect(findOrphanWorktree(root, 'experiment-62').status).toBe('one');
+    expect(findOrphanWorktree(root, 'experiment-62')).toEqual({
+      status: 'one',
+      dirName: 'experiment-62',
+      worktreePath: join(root, '.builders', 'experiment-62'),
+    });
+  });
+
+  it('does not resolve air-62 to a lone experiment-62 directory', () => {
+    mkdirSync(join(root, '.builders', 'experiment-62'), { recursive: true });
+    expect(findOrphanWorktree(root, 'air-62')).toEqual({ status: 'none' });
+  });
+
+  it('targets only the named protocol when both share the number', () => {
+    mkdirSync(join(root, '.builders', 'air-62'), { recursive: true });
+    mkdirSync(join(root, '.builders', 'experiment-62'), { recursive: true });
+    expect(findOrphanWorktree(root, 'experiment-62')).toEqual({
+      status: 'one',
+      dirName: 'experiment-62',
+      worktreePath: join(root, '.builders', 'experiment-62'),
+    });
+    expect(findOrphanWorktree(root, 'air-62')).toEqual({
+      status: 'one',
+      dirName: 'air-62',
+      worktreePath: join(root, '.builders', 'air-62'),
+    });
   });
 
   it('returns ambiguous when two directories share the number', () => {
@@ -211,5 +243,40 @@ describe('removeOrphanWorktree', () => {
 
     expect(existsSync(worktreePath)).toBe(false);
     expect(eventsBuilderNames(repo)).not.toContain('air-78');
+  });
+
+  it('refuses a merged orphan that holds uncommitted work without --force', async () => {
+    writeFileSync(join(worktreePath, 'wip.txt'), 'untracked\n');
+
+    await expect(removeOrphanWorktree(repo, worktreePath)).rejects.toBeInstanceOf(DirtyOrphanError);
+    expect(existsSync(join(worktreePath, 'wip.txt'))).toBe(true);
+    expect(existsSync(worktreePath)).toBe(true);
+  });
+
+  it('removes a merged orphan that holds only .builder-* scaffold without --force', async () => {
+    writeFileSync(join(worktreePath, '.builder-prompt.txt'), 'scaffold\n');
+
+    await removeOrphanWorktree(repo, worktreePath);
+
+    expect(existsSync(worktreePath)).toBe(false);
+  });
+
+  it('removes a dirty merged orphan when --force is set', async () => {
+    writeFileSync(join(worktreePath, 'wip.txt'), 'untracked\n');
+
+    await removeOrphanWorktree(repo, worktreePath, true);
+
+    expect(existsSync(worktreePath)).toBe(false);
+  });
+
+  it('refuses when commits are on workspace HEAD but not the default branch', async () => {
+    writeFileSync(join(worktreePath, 'done.txt'), 'merged\n');
+    git('add done.txt', worktreePath);
+    git('commit -q -m done', worktreePath);
+    git('checkout -b other');
+    git('merge --no-ff builder/air-78 -m merge');
+
+    await expect(removeOrphanWorktree(repo, worktreePath)).rejects.toBeInstanceOf(UnmergedOrphanError);
+    expect(existsSync(worktreePath)).toBe(true);
   });
 });

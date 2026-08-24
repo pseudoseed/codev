@@ -17,6 +17,7 @@ import { deleteFileTabsByPathPrefix } from '../utils/file-tabs.js';
 import { dismissHeldForAgent } from '../db/mailbox.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 import { executeForgeCommand } from '../../lib/forge.js';
+import { resolveDefaultBranch } from '../../lib/default-branch.js';
 
 /**
  * Clean porch review artifacts for a project from codev/projects/,
@@ -134,18 +135,30 @@ export class UnmergedOrphanError extends Error {
   }
 }
 
-function trailingNumericId(value: string): string | null {
-  const match = value.match(/(\d+)$/);
-  if (!match) return null;
-  return String(Number(match[1]));
+export class DirtyOrphanError extends Error {
+  constructor(readonly worktreePath: string, readonly details: string) {
+    super(
+      `Worktree has uncommitted changes (${details}). Use --force to remove the orphan worktree anyway: ${worktreePath}`,
+    );
+    this.name = 'DirtyOrphanError';
+  }
+}
+
+function parseWorktreeId(value: string): { prefix: string | null; id: string } | null {
+  const bare = value.match(/^0*(\d+)$/);
+  if (bare) return { prefix: null, id: bare[1] };
+  const prefixed = value.match(/^([a-z]+)-0*(\d+)(?:-|$)/);
+  if (prefixed) return { prefix: prefixed[1], id: prefixed[2] };
+  return null;
 }
 
 export function orphanDirMatches(dirName: string, projectId: string): boolean {
   if (dirName === projectId) return true;
-  const wanted = trailingNumericId(projectId);
-  if (wanted === null) return false;
-  const prefixed = dirName.match(/^(?:[a-z]+-)?0*(\d+)(?:-|$)/);
-  return prefixed !== null && prefixed[1] === wanted;
+  const wanted = parseWorktreeId(projectId);
+  const have = parseWorktreeId(dirName);
+  if (!wanted || !have || wanted.id !== have.id) return false;
+  if (wanted.prefix === null) return true;
+  return wanted.prefix === have.prefix;
 }
 
 export function isLiveBuilderWorktree(
@@ -179,7 +192,8 @@ export function findOrphanWorktree(workspaceRoot: string, projectId: string): Or
 export async function isWorktreeMerged(workspaceRoot: string, worktreePath: string): Promise<boolean> {
   try {
     const { stdout: sha } = await run('git rev-parse HEAD', { cwd: worktreePath });
-    await run(`git merge-base --is-ancestor ${sha} HEAD`, { cwd: workspaceRoot });
+    const defaultBranch = resolveDefaultBranch(workspaceRoot);
+    await run(`git merge-base --is-ancestor ${sha} "${defaultBranch}"`, { cwd: workspaceRoot });
     return true;
   } catch {
     return false;
@@ -206,10 +220,16 @@ export async function removeOrphanWorktree(
     throw new UnmergedOrphanError(worktreePath);
   }
 
+  const { dirty, scaffoldOnly, details } = await hasUncommittedChanges(worktreePath);
+  if (dirty && !force) {
+    throw new DirtyOrphanError(worktreePath, details);
+  }
+
   const branch = await worktreeBranch(worktreePath);
 
   if (existsSync(worktreePath)) {
-    await run(`git worktree remove "${worktreePath}" --force`, { cwd: workspaceRoot });
+    const gitForce = force || scaffoldOnly ? ' --force' : '';
+    await run(`git worktree remove "${worktreePath}"${gitForce}`, { cwd: workspaceRoot });
   }
 
   if (branch && branch !== 'main' && branch !== 'master') {
@@ -385,7 +405,7 @@ async function cleanupOrphan(dirName: string, worktreePath: string, force?: bool
   try {
     await removeOrphanWorktree(config.workspaceRoot, worktreePath, force);
   } catch (error) {
-    if (error instanceof UnmergedOrphanError) {
+    if (error instanceof UnmergedOrphanError || error instanceof DirtyOrphanError) {
       fatal(error.message);
     }
     fatal(`Failed to remove orphan worktree: ${error instanceof Error ? error.message : error}`);
