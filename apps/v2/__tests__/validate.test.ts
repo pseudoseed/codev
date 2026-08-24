@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseAndValidate, validateFrame } from '../src/lib/validate.js';
+import { escapePreview, parseAndValidate, validateFrame } from '../src/lib/validate.js';
 
 const after = 0;
 
@@ -13,13 +13,25 @@ describe('parseAndValidate', () => {
     expect(r.mismatch.seq).toBeUndefined();
     expect(r.mismatch.type).toBeUndefined();
   });
+
+  it('preview is the first 120 UTF-8 bytes, escaped', () => {
+    const euro = '€'.repeat(80);
+    const preview = escapePreview(euro);
+    expect(new TextEncoder().encode(euro).length).toBeGreaterThan(120);
+    expect(preview.startsWith('\\xe2\\x82\\xac')).toBe(true);
+    expect(preview.match(/\\x[0-9a-f]{2}/g)?.length).toBe(120);
+  });
 });
 
 describe('validateFrame read-set (scenario 30)', () => {
   it('node with no id', () => {
     const r = validateFrame({ seq: 1, type: 'node', node: { kind: 'builder', parentId: null, name: 'x', status: 'running', flags: { heldMail: false }, lastDataAt: null } }, after);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.mismatch.field).toMatch(/id/);
+    if (!r.ok) {
+      expect(r.mismatch.field).toMatch(/id/);
+      expect(r.mismatch.type).toBe('node');
+      expect(r.mismatch.seq).toBe(1);
+    }
   });
 
   it('node with kind machine', () => {

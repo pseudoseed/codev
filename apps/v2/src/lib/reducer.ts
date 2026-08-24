@@ -76,7 +76,7 @@ function enterMismatch(state: ReducerState, mismatch: Mismatch): ApplyResult {
   return { state: next, effect: 'halt' };
 }
 
-function applyValidated(state: ReducerState, frame: ValidatedFrame): ReducerState {
+function applyValidated(state: ReducerState, frame: ValidatedFrame, now: string): ReducerState {
   const next = cloneState(state);
 
   if (frame.type === 'snapshot') {
@@ -112,7 +112,6 @@ function applyValidated(state: ReducerState, frame: ValidatedFrame): ReducerStat
     }
     case 'gone':
       next.nodes.delete(frame.id);
-      next.darkPaths.delete(frame.id);
       break;
     case 'counts':
       next.counts = frame.counts;
@@ -131,7 +130,7 @@ function applyValidated(state: ReducerState, frame: ValidatedFrame): ReducerStat
       break;
     }
     case 'dark':
-      next.darkPaths.set(frame.id, { reason: frame.reason, at: '' });
+      next.darkPaths.set(frame.id, { reason: frame.reason, at: now });
       break;
   }
 
@@ -139,18 +138,13 @@ function applyValidated(state: ReducerState, frame: ValidatedFrame): ReducerStat
   return next;
 }
 
-export function applyFrame(state: ReducerState, raw: string): ApplyResult {
+export function applyFrame(state: ReducerState, raw: string, now = new Date().toISOString()): ApplyResult {
   const parsed = parseAndValidate(raw, state.cursor.seq);
-  if (!parsed.ok) {
-    if (state.mismatch !== null && state.mismatchAttempts >= 1) {
-      return enterMismatch(state, parsed.mismatch);
-    }
-    return enterMismatch(state, parsed.mismatch);
-  }
-  return applyValidatedFrame(state, parsed.frame);
+  if (!parsed.ok) return enterMismatch(state, parsed.mismatch);
+  return applyValidatedFrame(state, parsed.frame, now);
 }
 
-export function applyValidatedFrame(state: ReducerState, frame: ValidatedFrame): ApplyResult {
+export function applyValidatedFrame(state: ReducerState, frame: ValidatedFrame, now = new Date().toISOString()): ApplyResult {
   if (state.mismatch !== null && frame.type !== 'snapshot') {
     return { state, effect: 'none' };
   }
@@ -168,13 +162,13 @@ export function applyValidatedFrame(state: ReducerState, frame: ValidatedFrame):
     });
   }
 
-  return { state: applyValidated(state, frame), effect: 'none' };
+  return { state: applyValidated(state, frame, now), effect: 'none' };
 }
 
-export function applyUnknown(state: ReducerState, obj: unknown): ApplyResult {
+export function applyUnknown(state: ReducerState, obj: unknown, now = new Date().toISOString()): ApplyResult {
   const parsed = validateFrame(obj, state.cursor.seq);
   if (!parsed.ok) return enterMismatch(state, parsed.mismatch);
-  return applyValidatedFrame(state, parsed.frame);
+  return applyValidatedFrame(state, parsed.frame, now);
 }
 
 export function serialise(state: ReducerState): unknown {

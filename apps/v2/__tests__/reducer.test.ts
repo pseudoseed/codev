@@ -207,6 +207,26 @@ describe('dark store (scenarios 21, 22, 41)', () => {
     expect(s.darkPaths.get('workspace:/gone')?.reason).toBe('unreadable');
   });
 
+  it('gone does not clear a dark path (scenario 22)', () => {
+    const s = run([
+      snap(),
+      JSON.stringify({ seq: 0, type: 'dark', id: 'workspace:/gone', reason: 'unknown' }),
+      JSON.stringify({ seq: 1, type: 'gone', id: 'workspace:/gone' }),
+    ]);
+    expect(s.darkPaths.has('workspace:/gone')).toBe(true);
+    expect(s.nodes.has('workspace:/gone')).toBe(false);
+  });
+
+  it('dark records the injected arrival time', () => {
+    const s0 = run([snap()]);
+    const s = applyFrame(
+      s0,
+      JSON.stringify({ seq: 1, type: 'dark', id: 'workspace:/gone', reason: 'unknown' }),
+      '2026-08-24T12:00:00.000Z',
+    ).state;
+    expect(s.darkPaths.get('workspace:/gone')?.at).toBe('2026-08-24T12:00:00.000Z');
+  });
+
   it('dark survives deltas and is cleared by a replacement snapshot', () => {
     const s0 = run([
       snap(),
@@ -256,6 +276,15 @@ describe('mismatch budget (scenarios 28, 37)', () => {
     expect(r1.effect).toBe('recover-fresh');
     const r2 = applyFrame(r1.state, '@@@');
     expect(r2.effect).toBe('halt');
+  });
+
+  it('while in mismatch, a valid delta is ignored', () => {
+    const s0 = run([snap()]);
+    const r1 = applyFrame(s0, '@@@');
+    const r2 = applyFrame(r1.state, JSON.stringify({ seq: 1, type: 'tick', at: 't', buckets: {} }));
+    expect(r2.effect).toBe('none');
+    expect(r2.state.cursor.seq).toBe(0);
+    expect(r2.state.mismatch?.how).toBe('invalid-json');
   });
 
   it('valid snapshot clears mismatch and resets the budget', () => {

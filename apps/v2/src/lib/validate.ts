@@ -85,11 +85,15 @@ function fail(afterSeq: number, field: string, obj: Record<string, unknown>): Va
   };
 }
 
-function escapePreview(s: string): string {
-  return s.slice(0, 120).replace(/[^\x20-\x7e]/g, (ch) => {
-    const hex = ch.charCodeAt(0).toString(16).padStart(2, '0');
-    return `\\x${hex}`;
-  });
+export function escapePreview(s: string): string {
+  const bytes = new TextEncoder().encode(s).subarray(0, 120);
+  let out = '';
+  for (const b of bytes) {
+    out += b >= 0x20 && b <= 0x7e
+      ? String.fromCharCode(b)
+      : `\\x${b.toString(16).padStart(2, '0')}`;
+  }
+  return out;
 }
 
 function validateCounts(raw: unknown): ClientCounts | string {
