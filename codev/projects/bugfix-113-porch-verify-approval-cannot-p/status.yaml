@@ -1,0 +1,14 @@
+id: bugfix-113
+title: porch-verify-approval-cannot-p
+protocol: bugfix
+phase: investigate
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: pending
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-24T22:29:49.851Z'
+updated_at: '2026-08-24T22:29:49.854Z'
