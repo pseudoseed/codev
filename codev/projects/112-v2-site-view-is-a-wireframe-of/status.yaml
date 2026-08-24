@@ -1,0 +1,14 @@
+id: '112'
+title: v2-site-view-is-a-wireframe-of
+protocol: air
+phase: implement
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: pending
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-24T15:48:21.800Z'
+updated_at: '2026-08-24T15:48:21.801Z'
