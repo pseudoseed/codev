@@ -8,4 +8,6 @@ Iter 1 reviews: gemini skipped, claude COMMENT, opencode COMMENT, codex REQUEST_
 
 Plan-approval: architect:uiv2 under standing delegation. Refresh at enter:implement refused (opencode has no in-session clear). Continuing.
 
-Phase 1 implementing: apps/v2 scaffold, v2-static, isPublicRoute, copy-v2. Frozen C1/C2 files unchanged (git diff --stat empty). New v2 unit tests + existing v2 suite 86/86. Full codev suite needs `pnpm --filter @cluesmith/codev build` first (skeleton/dist); that is porch's build check.
+Phase 1 done: `2c9777a0b` plus NODE_ENV fix `8489c45ca`. Reviews: gemini skip, codex APPROVE, claude COMMENT (fixed), opencode APPROVE.
+
+Phase 2: validate.ts + reducer.ts. 47 client tests green. `passWithNoTests` removed.
