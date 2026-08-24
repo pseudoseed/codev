@@ -1,11 +1,12 @@
 import type { AppState } from '../lib/stream.js';
 
-type Props = { state: AppState; kind: 'unreachable' | 'mismatch' | 'reconnecting' };
+type Props = { state: AppState; kind: 'unreachable' | 'mismatch' };
 
+/*
+ * The whole-page statement, for when there is no tree to keep (#106). A
+ * connection failure over a drawn tree is a ConnectionStrip instead.
+ */
 export function ConnectionBanner({ state, kind }: Props) {
-  if (kind === 'reconnecting') {
-    return <div className="reconnecting stamp">Reconnecting</div>;
-  }
   if (kind === 'unreachable') {
     const auth = state.connectionWhy === 'auth';
     return (

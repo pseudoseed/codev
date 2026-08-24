@@ -267,6 +267,92 @@ describe('EOF and HTTP classification (scenarios 20, 40)', () => {
   });
 });
 
+describe('the tree outlives the socket (#106)', () => {
+  it('a thrown mid-stream fetch keeps the nodes and stamps when they were last live', async () => {
+    vi.useFakeTimers();
+    try {
+      const nodes = [
+        {
+          id: 'workspace:/a',
+          kind: 'workspace',
+          parentId: null,
+          name: 'alpha',
+          status: 'running',
+          flags: { heldMail: false },
+          lastDataAt: null,
+        },
+      ];
+      let events = 0;
+      const { fetch } = recordFetch((url) => {
+        if (url.pathname === '/api/workspaces') return jsonRes(200, { workspaces: [{ path: '/a' }] });
+        events += 1;
+        if (events === 1) return sseRes([snap({ nodes })]);
+        throw new TypeError('Failed to fetch');
+      });
+      const s = start(fetch);
+      await settle(s);
+      expect(s.getState().reducer.nodes.size).toBe(1);
+      const liveAt = s.getState().lastLiveAt;
+      expect(liveAt).not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await settle(s);
+      expect(s.getState().connection).toBe('unreachable');
+      expect(s.getState().connectionWhy).toBe('transport');
+      // The point of the issue: the tree is still there to draw.
+      expect(s.getState().reducer.nodes.size).toBe(1);
+      expect(s.getState().reducer.nodes.get('workspace:/a')?.name).toBe('alpha');
+      // And the stamp still names the last moment it was true, not now.
+      expect(s.getState().lastLiveAt).toBe(liveAt);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a 5xx mid-stream keeps the nodes too', async () => {
+    vi.useFakeTimers();
+    try {
+      const nodes = [
+        {
+          id: 'workspace:/a',
+          kind: 'workspace',
+          parentId: null,
+          name: 'alpha',
+          status: 'running',
+          flags: { heldMail: false },
+          lastDataAt: null,
+        },
+      ];
+      let events = 0;
+      const { fetch } = recordFetch((url) => {
+        if (url.pathname === '/api/workspaces') return jsonRes(200, { workspaces: [{ path: '/a' }] });
+        events += 1;
+        if (events === 1) return sseRes([snap({ nodes })]);
+        return statusRes(503);
+      });
+      const s = start(fetch);
+      await settle(s);
+      await vi.advanceTimersByTimeAsync(1000);
+      await settle(s);
+      expect(s.getState().connection).toBe('unreachable');
+      expect(s.getState().reducer.nodes.size).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lastLiveAt stays null while nothing has ever been live', async () => {
+    const { fetch } = recordFetch((url) => {
+      if (url.pathname === '/api/workspaces') throw new TypeError('Failed to fetch');
+      return statusRes(503);
+    });
+    const s = start(fetch);
+    await settle(s);
+    expect(s.getState().connection).toBe('unreachable');
+    expect(s.getState().lastLiveAt).toBeNull();
+  });
+});
+
 describe('bad frame recovery (scenario 28)', () => {
   it('one recover-fresh without since/stream; second bad frame opens no third', async () => {
     const { fetch, urls } = recordFetch((url) => {

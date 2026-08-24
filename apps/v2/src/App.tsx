@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ConnectionBanner } from './components/ConnectionBanner.js';
+import { ConnectionStrip } from './components/ConnectionStrip.js';
 import { MachineFooter } from './components/MachineFooter.js';
 import { MachineRow } from './components/MachineRow.js';
 import { SiteHeader } from './components/SiteHeader.js';
@@ -11,21 +12,21 @@ export function Page({ state, hostname }: { state: AppState; hostname: string })
   const kind = viewKind(state);
   if (kind === 'unreachable') {
     return (
-      <div className="page">
+      <div className="page" data-connection={state.connection}>
         <ConnectionBanner state={state} kind="unreachable" />
       </div>
     );
   }
   if (kind === 'mismatch') {
     return (
-      <div className="page">
+      <div className="page" data-connection={state.connection}>
         <ConnectionBanner state={state} kind="mismatch" />
       </div>
     );
   }
   if (kind === 'empty') {
     return (
-      <div className="page">
+      <div className="page" data-connection={state.connection}>
         <SiteHeader counts={state.reducer.counts} />
         <main className="site-main grid-bg">
           <MachineRow hostname={hostname} connection={state.connection} />
@@ -39,7 +40,7 @@ export function Page({ state, hostname }: { state: AppState; hostname: string })
   }
   if (kind === 'loading') {
     return (
-      <div className="page">
+      <div className="page" data-connection={state.connection}>
         <SiteHeader counts={state.reducer.counts} />
         <main className="site-main grid-bg">
           <MachineRow hostname={hostname} connection={state.connection} />
@@ -48,11 +49,15 @@ export function Page({ state, hostname }: { state: AppState; hostname: string })
       </div>
     );
   }
+  /*
+   * #106: the tree outlives the socket. `reconnecting` (a clean EOF) and
+   * `unreachable` (a thrown fetch or a 5xx) are both expressed on a strip
+   * above the tree that is already drawn, rather than replacing it.
+   */
+  const off = state.connection === 'reconnecting' || state.connection === 'unreachable';
   return (
-    <div className="page">
-      {state.connection === 'reconnecting' ? (
-        <ConnectionBanner state={state} kind="reconnecting" />
-      ) : null}
+    <div className="page" data-connection={state.connection}>
+      {off ? <ConnectionStrip state={state} /> : null}
       <SiteView state={state} hostname={hostname} />
     </div>
   );

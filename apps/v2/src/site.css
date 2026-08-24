@@ -92,6 +92,7 @@ html, body, #root {
 
 .machine-status.online { color: var(--moss); }
 .machine-status.off { color: var(--graphite); }
+.machine-status.lost { color: var(--ochre); border-color: var(--ochre); }
 
 .dot {
   width: 9px;
@@ -309,13 +310,47 @@ html, body, #root {
   font-size: 13px;
 }
 
-.reconnecting {
+/* Connection strip (#106). The tree stays; the strip says the tree is stale.
+   Rust is reserved for gates, so a lost connection is ochre — something may be
+   wrong, nobody is blocked. A clean EOF stays graphite: it is routine. */
+.conn-strip {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   padding: 8px 24px;
   background: var(--chalk);
   border-bottom: 1px solid var(--concrete);
   font-size: 11px;
   text-transform: uppercase;
   color: var(--graphite);
+}
+
+.conn-strip .dot {
+  align-self: center;
+}
+
+.conn-strip-msg { color: var(--graphite); }
+
+.conn-strip-stale {
+  margin-left: auto;
+  color: var(--graphite);
+  opacity: 0.8;
+  text-transform: none;
+}
+
+.conn-strip-lost {
+  border-bottom: var(--rule) solid var(--ochre);
+  box-shadow: inset 0 2px 0 var(--ochre);
+}
+
+.conn-strip-lost .conn-strip-msg {
+  color: var(--ochre);
+  font-weight: 600;
+}
+
+.dot-lost {
+  background: var(--ochre);
+  opacity: 1;
 }
 
 .empty-copy {

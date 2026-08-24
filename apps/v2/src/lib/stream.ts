@@ -17,6 +17,12 @@ export type AppState = {
   bootstrap: BootstrapPhase;
   bootstrapMismatch: BootstrapMismatch | null;
   httpMismatch: HttpMismatch | null;
+  /*
+   * When the stream was last live (#106). A tree kept on screen through a
+   * dropped connection is last-known, not current, and a stale tree that does
+   * not say when it was last true reads as a live one.
+   */
+  lastLiveAt: string | null;
   reducer: ReducerState;
 };
 
@@ -46,6 +52,7 @@ export function initialAppState(): AppState {
     bootstrap: 'pending',
     bootstrapMismatch: null,
     httpMismatch: null,
+    lastLiveAt: null,
     reducer: initialReducerState(),
   };
 }
@@ -190,6 +197,7 @@ export function connect(deps: StreamDeps): Session {
           state.connection = 'live';
           state.connectionWhy = null;
           state.httpMismatch = null;
+          state.lastLiveAt = now();
           resetDelay();
         }
         if (result.state.mismatch !== null) leaveUnreachable();

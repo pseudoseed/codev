@@ -222,6 +222,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/__fixture/unreachable') {
       state.unreachable = true;
+      // An unreachable Tower has no live streams either. Destroying the socket
+      // (rather than ending the response) is what makes the client's fetch
+      // throw, which is the failure #106 is about.
+      for (const c of state.clients) {
+        c.closed = true;
+        c.res.socket?.destroy();
+      }
+      state.clients = [];
       json(res, 200, { ok: true });
       return;
     }
