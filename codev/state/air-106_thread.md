@@ -61,7 +61,21 @@ Tests alone cannot see this one, so it was photographed against the **live Tower
 | stream cut, every retry throws | tree kept (87 → 87 nodes), ochre `CANNOT REACH TOWER. RETRYING.` strip, `last seen 13:39:16`, machine row `UNREACHABLE` in ochre, no reload (page sentinel survived) |
 | same cut, code at HEAD | 87 → **0** nodes, whole-page banner — the bug |
 
-Suites: apps/v2 unit 14 files, e2e 21 Playwright tests, packages/codev vitest.
+Suites: apps/v2 unit 166 tests, e2e 21 Playwright tests, packages/codev vitest
+6013 passed / 0 failed (306 files, 3 skipped).
+
+## A measurement I got wrong
+
+A full-suite run at 19:49 UTC reported 78 failures across 16 files, and I called
+them pre-existing. I had A/B'd them with my server changes reverted — identical
+count, identical files — but that only proves *not caused by this diff*, which is
+a different claim. The architect checked main independently: green at the same
+SHA my branch sits on. Re-run with no concurrent suite: green here too. The cause
+was contention — two full suites sharing one `~/.agent-farm`, one Tower on 4100
+and one port range, over exactly the areas that failed (spawn-*, session-manager,
+update/adopt, consult lanes).
+
+Nothing about it reached the PR body.
 
 ## Flaky Tests
 
