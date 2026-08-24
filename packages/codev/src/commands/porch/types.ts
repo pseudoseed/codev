@@ -56,6 +56,12 @@ export interface ProtocolPhase {
 export interface CheckDef {
   command: string;             // Command to run (e.g., "npm run build")
   cwd?: string;               // Working directory relative to project root (e.g., "packages/codev")
+  /**
+   * Per-check wall-clock bound in MILLISECONDS. Absent = the runner's default
+   * (5 minutes). Set from a `porch.checks.<name>.timeout` override, which is
+   * expressed in seconds because the config file is hand-authored (issue #8).
+   */
+  timeout_ms?: number;
 }
 
 /**
@@ -66,6 +72,20 @@ export interface CheckOverride {
   command?: string;    // Replace the protocol's check command
   cwd?: string;        // Replace the protocol's working directory
   skip?: boolean;      // Omit this check entirely when true
+  /**
+   * Wall-clock bound for this check, in SECONDS (issue #8).
+   *
+   * The runner's 300s default is not enough for every suite, and without this
+   * key the only way past a slow-but-passing suite was `skip: true` — which
+   * turns the check off for every project in the workspace, permanently and
+   * silently. A slow suite should be able to raise its own bound instead of
+   * disabling the check.
+   *
+   * Seconds, not milliseconds: this file is hand-authored, and `"timeout": 900`
+   * reading as 0.9s would be a footgun of exactly the kind this key exists to
+   * remove.
+   */
+  timeout?: number;
 }
 
 /** Map of check name → override, from .codev/config.json `porch.checks` */

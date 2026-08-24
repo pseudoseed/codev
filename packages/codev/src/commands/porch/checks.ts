@@ -14,7 +14,14 @@ import { executeForgeCommand, getForgeCommand, loadForgeConfig } from '../../lib
 
 const execFileAsync = promisify(execFile);
 
-/** Default timeout for checks: 5 minutes */
+/**
+ * Default timeout for checks: 5 minutes.
+ *
+ * Deliberately left at 5 minutes rather than raised (issue #8). Raising it
+ * would fix the one suite that tripped it and leave the next slow suite in the
+ * same trap; a check that needs longer raises its own bound with
+ * `porch.checks.<name>.timeout` (seconds) in `.codev/config.json`.
+ */
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 // ============================================================================
@@ -329,7 +336,13 @@ export async function runPhaseChecks(
       continue;
     }
 
-    const result = await runCheck(name, command, checkCwd, env, timeoutMs);
+    // Issue #8: a per-check bound beats one bound for the phase. `timeoutMs`
+    // stays the fallback for every check that does not set its own.
+    const checkTimeoutMs = typeof checkVal === 'object' && checkVal.timeout_ms !== undefined
+      ? checkVal.timeout_ms
+      : timeoutMs;
+
+    const result = await runCheck(name, command, checkCwd, env, checkTimeoutMs);
     results.push(result);
 
     // Stop on first failure

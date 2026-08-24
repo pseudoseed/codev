@@ -58,3 +58,36 @@ porch pending                  # List all gates waiting for approval
 ## State storage
 
 Project state lives in `codev/projects/<id>-<name>/status.yaml`, managed automatically by porch. The status file tracks current phase, gate states, consultation results, and timestamps.
+
+## Language-agnostic checks (`porch.checks` override)
+
+Protocol check commands default to the **npm** toolchain (`npm run build`, `npm test`, etc.) baked into each `protocol.json`. A non-Node project (Python/uv, Go, Rust) will BLOCK at the first implement-phase check because `npm` can never pass there — even when the code is green under its real test runner.
+
+**You do NOT need to fork `protocol.json`.** Override check commands per-name in `.codev/config.json` under `porch.checks`. Each entry takes `command` (replace), `cwd` (replace), `timeout` (seconds), and/or `skip: true`. This covers both phase checks **and** the `phase_completion` predicates (`build_succeeds` / `tests_pass`).
+
+```jsonc
+// .codev/config.json — Python/uv example
+{
+  "porch": {
+    "checks": {
+      "build":          { "command": "uv build" },
+      "test":           { "command": "uv run pytest" },
+      "build_succeeds": { "command": "uv build" },
+      "tests_pass":     { "command": "uv run pytest" },
+      "e2e_tests":      { "skip": true }
+    }
+  }
+}
+```
+
+### `timeout` — for a suite that is slow, not broken
+
+Checks are bounded at **300 seconds**. A suite that passes in 305s is reported as a *failed check*, and before `timeout` existed the only way past that was `skip: true` — which turns the check off for every project in the workspace, permanently and silently. Raise the bound instead:
+
+```jsonc
+{ "porch": { "checks": { "tests": { "timeout": 1200 } } } }
+```
+
+**Seconds, not milliseconds.** A value that is not a positive number is rejected with a warning and the default bound stays in force; it is never clamped, because a clamp would apply a bound nobody asked for. The `⚠ Check "…" overridden` line reports the bound that actually applied, so a rejected value cannot read as an accepted one.
+
+Keys are the **check names** from the protocol: `build` / `test` / `e2e_tests` live in phases; `build_succeeds` / `tests_pass` live in `phase_completion`. An override key that matches no check in the protocol prints a warning. Shipped by Spec #550.
