@@ -205,7 +205,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/spir-83/codev/projects/83-v2-client-shell-apps-v2-render/83-phase_5-iter2-opencode.txt
         stated: true
 started_at: '2026-08-24T06:44:19.322Z'
-updated_at: '2026-08-24T11:29:30.778Z'
+updated_at: '2026-08-24T11:30:00.038Z'
 context_refreshes:
   - boundary: enter:implement
     at: '2026-08-24T07:12:46.426Z'
@@ -237,3 +237,5 @@ pr_history:
     pr_number: 104
     branch: builder/spir-83
     created_at: '2026-08-24T11:29:30.777Z'
+    merged: true
+    merged_at: '2026-08-24T11:30:00.037Z'
