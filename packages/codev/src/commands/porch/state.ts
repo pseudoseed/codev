@@ -283,7 +283,11 @@ function findProjectInDir(projectsDir: string, projectId: string): string | null
  * Spec 653: in multi-PR workflows, early phases merge status.yaml to main,
  * which becomes stale. Worktree copies are always the most recent.
  */
-export function findStatusPath(workspaceRoot: string, projectId: string): string | null {
+export function findStatusPath(
+  workspaceRoot: string,
+  projectId: string,
+  opts?: { alias?: boolean },
+): string | null {
   // 1. Search builder worktrees first (.builders/*/codev/projects/)
   // These have the most up-to-date state in multi-PR workflows.
   const buildersDir = path.join(workspaceRoot, '.builders');
@@ -300,7 +304,44 @@ export function findStatusPath(workspaceRoot: string, projectId: string): string
   const localResult = findProjectInDir(path.join(workspaceRoot, PROJECTS_DIR), projectId);
   if (localResult) return localResult;
 
+  // 3. Bare issue number → unique prefixed porch id (bugfix-109, experiment-63, …).
+  // Exact `109` / `109-*` already won above. Alias only when that miss is unique.
+  // Off for existence checks (`porch init`): a leftover bugfix-109 on main
+  // must not block `porch init pir 109`.
+  if ((opts?.alias ?? true) && /^\d+$/.test(projectId)) {
+    const aliases = listPrefixedAliases(workspaceRoot, projectId);
+    if (aliases.length === 1) return aliases[0].statusPath;
+  }
+
   return null;
+}
+
+function isPrefixedNumericId(id: string, numericId: string): boolean {
+  const dash = id.lastIndexOf('-');
+  if (dash <= 0) return false;
+  const prefix = id.slice(0, dash);
+  const rest = id.slice(dash + 1);
+  return /^[a-z]+$/i.test(prefix) && rest === numericId;
+}
+
+export function listPrefixedAliases(
+  workspaceRoot: string,
+  numericId: string,
+): Array<{ id: string; statusPath: string }> {
+  return listAllProjects(workspaceRoot)
+    .filter((p) => isPrefixedNumericId(p.state.id, numericId))
+    .map((p) => ({ id: p.state.id, statusPath: p.statusPath }));
+}
+
+export function projectNotFoundMessage(workspaceRoot: string, projectId: string): string {
+  const aliases = /^\d+$/.test(projectId)
+    ? listPrefixedAliases(workspaceRoot, projectId).map((a) => a.id)
+    : [];
+  if (aliases.length > 0) {
+    const quoted = aliases.map((id) => `'${id}'`).join(' or ');
+    return `Project ${projectId} not found. Did you mean ${quoted}?`;
+  }
+  return `Project ${projectId} not found.\nRun 'porch init' to create a new project.`;
 }
 
 /**

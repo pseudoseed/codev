@@ -1,9 +1,8 @@
 /**
  * Tests for notifyTerminal — the builder wake-up after gate approval.
  *
- * Architect-bound notifications were removed deliberately; the only caller
- * of notifyTerminal today is the gate-approve path, which wakes the builder
- * so its idle Claude session advances on the next turn.
+ * Callers: gate-approve wakes the builder; protocol-complete tells the
+ * architect cleanup is due (issue #109).
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -18,13 +17,20 @@ vi.mock('node:child_process', () => ({
   spawnSync: vi.fn(),
 }));
 
+const mockIsUnderTestRunner = vi.fn(() => false);
+vi.mock('../../../lib/test-env.js', () => ({
+  isUnderTestRunner: (...args: unknown[]) => mockIsUnderTestRunner(...args),
+}));
+
 import { execFile } from 'node:child_process';
-import { notifyTerminal, gateApprovedMessage } from '../notify.js';
+import { notifyTerminal, gateApprovedMessage, protocolCompleteMessage, notifyProtocolComplete } from '../notify.js';
 
 const mockExecFile = vi.mocked(execFile);
 
 describe('notifyTerminal', () => {
   beforeEach(() => {
+    mockIsUnderTestRunner.mockReset();
+    mockIsUnderTestRunner.mockReturnValue(false);
     mockExecFile.mockReset();
     mockExecFile.mockImplementation(
       (_cmd: any, _args: any, _opts: any, cb: any) => {
@@ -115,6 +121,21 @@ describe('notifyTerminal', () => {
     const args = mockExecFile.mock.calls[0][1]!;
     expect(args[0]).toMatch(/bin\/afx\.js$/);
   });
+
+  it('no-ops under a test runner so a failed afx cannot log after teardown (#109)', () => {
+    mockIsUnderTestRunner.mockReturnValue(true);
+    notifyTerminal({ target: 'architect', message: 'x', worktreeDir: '/p' });
+    notifyProtocolComplete('/p', 'bugfix-147');
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it('protocol-complete notify targets architect (#109)', () => {
+    notifyProtocolComplete('/projects/test', 'bugfix-147');
+    const args = mockExecFile.mock.calls[0][1]!;
+    expect(args).toContain('send');
+    expect(args[args.indexOf('send') + 1]).toBe('architect');
+    expect(args).toContain(protocolCompleteMessage('bugfix-147'));
+  });
 });
 
 describe('gateApprovedMessage', () => {
@@ -122,5 +143,14 @@ describe('gateApprovedMessage', () => {
     const msg = gateApprovedMessage('dev-approval');
     expect(msg).toContain('dev-approval');
     expect(msg).toContain('porch next');
+  });
+});
+
+describe('protocolCompleteMessage (issue #109)', () => {
+  it('names the project and cleanup', () => {
+    const msg = protocolCompleteMessage('bugfix-147');
+    expect(msg).toContain('bugfix-147');
+    expect(msg).toMatch(/protocol complete/i);
+    expect(msg).toMatch(/cleanup/i);
   });
 });

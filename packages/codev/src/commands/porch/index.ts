@@ -16,6 +16,7 @@ import {
   writeStateAndCommit,
   createInitialState,
   findStatusPath,
+  projectNotFoundMessage,
   getArtifactRoot,
   getProjectDir,
   getStatusPath,
@@ -52,7 +53,7 @@ import { loadCheckOverrides, resolveConsultationModels } from './config.js';
 import { findUnlandedCommits, completionReport } from './unlanded.js';
 import { resolveDefaultBranch } from '../../lib/default-branch.js';
 
-import { notifyTerminal, gateApprovedMessage } from './notify.js';
+import { notifyTerminal, gateApprovedMessage, notifyProtocolComplete } from './notify.js';
 import { loadConfig } from '../../lib/config.js';
 import { version } from '../../version.js';
 
@@ -248,11 +249,12 @@ export async function status(
 ): Promise<void> {
   const statusPath = findStatusPath(workspaceRoot, projectId);
   if (!statusPath) {
+    const msg = projectNotFoundMessage(workspaceRoot, projectId);
     if (options?.json) {
-      console.error(`Project ${projectId} not found.`);
+      console.error(msg);
       process.exit(1);
     }
-    throw new Error(`Project ${projectId} not found.\nRun 'porch init' to create a new project.`);
+    throw new Error(msg);
   }
 
   const state = readState(statusPath);
@@ -410,7 +412,7 @@ export async function status(
 export async function check(workspaceRoot: string, projectId: string, resolver?: ArtifactResolver): Promise<void> {
   const statusPath = findStatusPath(workspaceRoot, projectId);
   if (!statusPath) {
-    throw new Error(`Project ${projectId} not found.`);
+    throw new Error(projectNotFoundMessage(workspaceRoot, projectId));
   }
 
   // Scope artifact reads + check cwd to the worktree that owns this status.yaml.
@@ -468,7 +470,7 @@ export async function check(workspaceRoot: string, projectId: string, resolver?:
 export async function done(workspaceRoot: string, projectId: string, resolver?: ArtifactResolver, options?: { pr?: number; branch?: string; merged?: number }): Promise<void> {
   const statusPath = findStatusPath(workspaceRoot, projectId);
   if (!statusPath) {
-    throw new Error(`Project ${projectId} not found.`);
+    throw new Error(projectNotFoundMessage(workspaceRoot, projectId));
   }
 
   let state = readState(statusPath);
@@ -693,6 +695,7 @@ async function advanceProtocolPhase(workspaceRoot: string, state: ProjectState, 
   if (!nextPhase) {
     state.phase = 'verified';
     await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} protocol complete`);
+    notifyProtocolComplete(getArtifactRoot(statusPath), state.id);
     console.log('');
     // Issue #57: the check runs AFTER that commit, deliberately. That commit is
     // itself one of the unlanded ones -- along with the `PR #N merged` commit
@@ -756,7 +759,7 @@ async function advanceProtocolPhase(workspaceRoot: string, state: ProjectState, 
 export async function gate(workspaceRoot: string, projectId: string, resolver?: ArtifactResolver): Promise<void> {
   const statusPath = findStatusPath(workspaceRoot, projectId);
   if (!statusPath) {
-    throw new Error(`Project ${projectId} not found.`);
+    throw new Error(projectNotFoundMessage(workspaceRoot, projectId));
   }
 
   const state = readState(statusPath);
@@ -825,7 +828,7 @@ export async function approve(
 ): Promise<void> {
   const statusPath = findStatusPath(workspaceRoot, projectId);
   if (!statusPath) {
-    throw new Error(`Project ${projectId} not found.`);
+    throw new Error(projectNotFoundMessage(workspaceRoot, projectId));
   }
 
   // Scope artifact reads + check cwd to the worktree that owns this status.yaml
@@ -981,7 +984,7 @@ export async function rollback(
 ): Promise<void> {
   const statusPath = findStatusPath(workspaceRoot, projectId);
   if (!statusPath) {
-    throw new Error(`Project ${projectId} not found.`);
+    throw new Error(projectNotFoundMessage(workspaceRoot, projectId));
   }
 
   const state = readState(statusPath);
@@ -1092,7 +1095,7 @@ export async function init(
   }
 
   // Also check if a project with this ID exists under a different name
-  const existingPath = findStatusPath(workspaceRoot, projectId);
+  const existingPath = findStatusPath(workspaceRoot, projectId, { alias: false });
   if (existingPath) {
     const existingState = readState(existingPath);
     console.log('');
@@ -1399,7 +1402,7 @@ export async function cli(args: string[]): Promise<void> {
         if (!skipReason || skipReason.startsWith('--')) throw new Error('--skip requires a reason');
         const pid = getProjectId(verifyProjectId);
         const sp = findStatusPath(workspaceRoot, pid);
-        if (!sp) throw new Error(`Project ${pid} not found.`);
+        if (!sp) throw new Error(projectNotFoundMessage(workspaceRoot, pid));
         const st = readState(sp);
         if (st.phase !== 'verify') {
           throw new Error(`porch verify --skip can only be used in the verify phase (current: ${st.phase}). The PR must be merged first.`);
@@ -1407,6 +1410,7 @@ export async function cli(args: string[]): Promise<void> {
         st.phase = 'verified';
         st.context = { ...st.context, verify_skip_reason: skipReason };
         await writeStateAndCommit(sp, st, `chore(porch): ${st.id} verify skipped: ${skipReason}`);
+        notifyProtocolComplete(getArtifactRoot(sp), st.id);
         console.log('');
         console.log(chalk.green(`VERIFIED (skipped): ${st.id}`));
         console.log(`  Reason: ${skipReason}`);
