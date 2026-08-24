@@ -11,3 +11,7 @@ No baked decisions on the issue.
 PR #118. CMAP: gemini skipped (agy exit 1), codex REQUEST_CHANGES, claude COMMENT.
 
 Follow-up: hoist `listWorkspaces` + `isReadable` to once per compare (shared across scopes). Mid-stream dark is only `unreadable`; a dropped workspace stays children-first `gone` and does not become a phantom dark plot. Merged origin/main (air-100, no overlap).
+
+PR #118 merged 2026-08-24. Architect notes (not blocking, not done here): (1) `isReadable` defaults to `() => true` in sampler and v2-routes; if bindProduction drops `productionReadable`, dark detection dies silent. Make the hook required. (2) tests copy `isReadable` instead of importing `productionReadable`.
+
+Protocol complete. 3 porch state commits unlanded on this branch. Did not open a follow-up PR. Waiting on architect.
