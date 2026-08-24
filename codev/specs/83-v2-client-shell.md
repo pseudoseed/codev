@@ -3,7 +3,7 @@
 - **Issue:** #83
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 2
+- **Status:** Draft, rev. 3
 - **Depends on:** spec 52 (v2 server events), merged
 
 ## Problem Statement
@@ -50,6 +50,8 @@ Tiling (FR-7), terminals (FR-27), gates UI (FR-43 to FR-48), pairing (FR-16), th
 
 **C1 — Additive only, and these files are byte-unchanged.** `apps/web`, `packages/codev/templates/tower.html`, `apps/vscode`, `apps/streamdeck`, `tower-server.ts`, `pty-session.ts`, **and `tower-routes.ts`**. The `/v2/` prefix branch at `tower-routes.ts:282` already hands everything under `/v2/` to `handleV2Route`; adding a second insertion point defeats the seam.
 
+**One exception, and it is bounded:** `isPublicRoute` in `server-utils.ts` gains `GET /v2/` and `GET /v2/assets/*`. See D9 — without it the page 401s before it can be served.
+
 **C2 — The wire contract is frozen; the dispatch is not.**
 
 Frozen, no edits: `v2-events.ts`, `v2-sampler.ts`, `v2-projection.ts`, `v2-status.ts`, `v2-ids.ts`, `packages/types/src/v2-events.ts`. If the contract cannot be rendered, that is a finding to report, not an edit to make.
@@ -70,7 +72,7 @@ This is a correction to rev. 1, which froze both files that own `/v2/`. `handleV
 
 1. `fetch` + `ReadableStream` carries the `codev-tower-key` header where `EventSource` cannot. **Verified**: `useSSE.ts:8-12` documents exactly this and cites GHSA-xvjp-7748-v88v.
 2. React 19 + Vite + Vitest is the house stack. **Verified** against `apps/web/package.json`. Reuse it; this is not the place to introduce a framework.
-3. The `/v2/` prefix authenticates like every other route, since `isRequestAllowed` runs before dispatch and `/v2/` is not in `isPublicRoute`. **Verified** during spec 52.
+3. ~~The `/v2/` prefix authenticates like every other route, since `isRequestAllowed` runs before dispatch and `/v2/` is not in `isPublicRoute`.~~ **Correct for `/v2/events`, and it is exactly why the page could not be served.** Rev. 3 keeps the fact and drops the conclusion. See D9.
 4. `recharts` is already a dependency of `apps/web`. **The sparkline does not need it.** FR-41's trace is 20 integers; `.spark` in `tokens.css` renders it with flexbox and `<i>` elements. Do not add a charting library for 20 bars.
 
 ## Locked Structural Decisions
@@ -158,13 +160,36 @@ Three properties are load-bearing and each gets a test, because a copied securit
 
 Both implementations carry a comment naming the other.
 
-### D7 — Scope is required, and it is fetched exactly once
+### D7 — Scope is required, fetched exactly once, and **not** through `listWorkspaces()`
 
 `GET /v2/events` without `scope` is a 400 (`v2-routes.ts:260-264`). Rev. 1 never said where the client gets scope paths.
 
-One bootstrap `GET /api/workspaces` via the SDK's `listWorkspaces()`, at startup. Its workspace paths become the `scope`. **That fetch is not polled and is not repeated on reconnect** — reconnect reuses the scope it already has, because re-deriving scope on every reconnect is polling wearing a different hat (C4).
+One bootstrap `GET /api/workspaces` at startup, with the key header, **as a raw `fetch` in `apps/v2` that branches on HTTP status**. Its workspace paths become the `scope`. It is not polled and is not repeated on reconnect — reconnect reuses the scope it already has, because re-deriving scope on every reconnect is polling wearing a different hat (C4).
 
-Zero workspaces: render the empty site view from D5 and **do not open the stream**. Opening it with an empty scope would take a 400 and render as a connection failure, which is the wrong story for a machine that simply has nothing running.
+**Rev. 2 said to use the SDK's `listWorkspaces()`. That was wrong and it broke D5.** The method returns `[]` when `result.ok` is false (`tower-client.ts:400-403`), so 401, 403, 500 and a dead socket all arrive as an empty list. D5 requires unreachable and empty to be distinguishable; through that method they are the same value. This is the general rule, not a local quirk: **"I could not tell" must never be spelled the same way as "no."** C3 forbids changing the SDK, so the client does its own fetch — the same reason it writes its own stream reader.
+
+Three outcomes, three renderings:
+
+| Bootstrap result | Scope | Render |
+|---|---|---|
+| 200, one or more workspaces | those paths | open the stream |
+| 200, zero workspaces | none | the empty site (D5). **Do not open the stream** — an empty `scope` takes a 400 and would read as a connection failure |
+| non-200, or the fetch throws | unknown | the unreachable state (D5), and retry with D2's backoff |
+
+### D9 — `/v2/` and its assets must be public routes
+
+`isRequestAllowed` runs before dispatch and `isPublicRoute` (`server-utils.ts:142`) does not list `/v2/`. A browser navigating to `/v2/` sends no `codev-tower-key` header, and neither do the `<script>` and `<link>` tags the shell emits. Under rev. 2 the page 401s before `v2-static.ts` is ever reached, and D6's key injection can never run.
+
+**The precedent is already in that function and it is the same shape.** The annotator's HTML shell and its `vendor/` libraries are public "because iframe navigation and `<script>`/`<link>` tags that cannot carry the key header" load them, while every data sub-route stays keyed (`server-utils.ts:156-165`). `/v2/` is that case exactly.
+
+The change is two clauses:
+
+- `GET /v2/` → public. Carries no secret until injection, and injection only ever happens on a same-origin navigation.
+- `GET /v2/assets/*` → public. Built JS and CSS, extension-allowlisted, no traversal.
+
+**`/v2/events` stays keyed.** It carries live state and the shell fetches it with the key. Every other path under `/v2/` stays keyed too.
+
+The Host guard, origin checks and the rest of `isRequestAllowed` are untouched — this widens `isPublicRoute` only, and only for two `GET` shapes.
 
 ### D8 — What of the design ships here
 
@@ -195,12 +220,14 @@ Zero workspaces: render the empty site view from D5 and **do not open the stream
 12. Cold load under 2s to interactive on LAN (Part 5).
 13. Idle network under 1 KB/s with nothing happening (Part 5), measured in devtools.
 14. `GET /v2/` serves the app with `window.__CODEV_TOWER_KEY__` set, and the response carries **no** `Access-Control-Allow-Origin`.
+15. **A browser navigating to `/v2/` with no header gets the page, not a 401.** `GET /v2/events` with no header still gets a 401.
+16. A failing bootstrap and a zero-workspace bootstrap produce different renderings — asserted against a 401, a 500, a thrown fetch, and a 200 with `[]`.
 
 ### Non-regression
 
-15. `apps/web`, `tower.html`, `apps/vscode`, `apps/streamdeck`, `tower-server.ts`, `pty-session.ts` and **`tower-routes.ts`** are byte-unchanged. `git diff --stat` proves it.
-16. The only change to `v2-routes.ts` is the dispatch prologue. The frozen files in C2 are byte-unchanged.
-17. Existing test suites pass untouched, including spec 52's 57 v2 tests.
+17. `apps/web`, `tower.html`, `apps/vscode`, `apps/streamdeck`, `tower-server.ts`, `pty-session.ts` and **`tower-routes.ts`** are byte-unchanged. `git diff --stat` proves it.
+18. The only change to `v2-routes.ts` is the dispatch prologue. The only change to `server-utils.ts` is the two `GET /v2/` clauses in `isPublicRoute`. The frozen files in C2 are byte-unchanged.
+19. Existing test suites pass untouched, including spec 52's 57 v2 tests and the existing `isPublicRoute` cases.
 
 ## Solution Approaches
 
@@ -212,7 +239,11 @@ Zero workspaces: render the empty site view from D5 and **do not open the stream
 
 **D. Server-rendered.** Rejected. The stream is a live push contract; server rendering re-introduces a request cycle for state that arrives on its own.
 
-## Resolved Questions
+## Open Questions
+
+**N/A — all previously open questions are resolved in D6, D7 and below.**
+
+### Resolved
 
 Both were open at rev. 1 and are now decided. Neither is a builder decision.
 
@@ -236,6 +267,8 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 13. **Scope bootstrap.** `/api/workspaces` is requested once; a reconnect reuses the cached scope and does not re-request it.
 14. **Zero workspaces.** `listWorkspaces()` returns `[]`; assert the stream is never opened and the empty site renders.
 15. **Static serving.** `GET /v2/assets/../../etc/passwd` is refused; a non-allowlisted extension is refused; `GET /v2/nonsense` is 404.
+16. **Public vs keyed.** No-header `GET /v2/` → 200; no-header `GET /v2/assets/index.js` → 200; no-header `GET /v2/events?scope=…` → 401; no-header `POST /v2/` → not public.
+17. **Bootstrap failure is not emptiness.** Four cases — 401, 500, thrown fetch, and 200 with `[]` — produce the unreachable state for the first three and the empty state for the fourth.
 
 ## Risks and Mitigation
 
@@ -252,6 +285,8 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 | The copied key injection drifts from `injectWebKey` | Medium — two copies of a security rule | High — stored XSS, or a key readable cross-origin | D6's three tested properties; cross-reference comments both ways |
 | Unreachable Tower renders as an empty tree | High — it is the default behaviour of a failed fetch | High — inverts FR-15 | D5's three-state table; scenario 7 |
 | `subscribeEvents` reused for the v2 stream | Medium — it is right there in the SDK | High — silently mis-parses every frame, wrong endpoint and wrong envelope | C3 names it |
+| `listWorkspaces()` used for the bootstrap | High — it is the obvious SDK call and rev. 2 asked for it | High — collapses 401, 500 and a dead socket into `[]`, so unreachable renders as empty | D7 states it with the line number; scenario 17 |
+| `isPublicRoute` widened further than two `GET` shapes | Medium | High — `/v2/events` or a future `/v2/` write path becomes unauthenticated | D9 and criterion 18; scenario 16 asserts `/v2/events` still 401s |
 | Later-unit chrome stubbed into the site view | Medium | Medium — a disabled control reads as broken | D8 |
 
 ## References
