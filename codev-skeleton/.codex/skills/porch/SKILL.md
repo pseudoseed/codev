@@ -90,4 +90,23 @@ Checks are bounded at **300 seconds**. A suite that passes in 305s is reported a
 
 **Seconds, not milliseconds.** A value that is not a positive number is rejected with a warning and the default bound stays in force; it is never clamped, because a clamp would apply a bound nobody asked for. The `⚠ Check "…" overridden` line reports the bound that actually applied, so a rejected value cannot read as an accepted one.
 
+### `byProtocol` — when one map cannot fit every protocol
+
+Protocols do not declare the same check names. `regression_test` is BUGFIX's alone; `e2e_tests` is absent from BUGFIX, PIR and MAINTAIN. A flat override for one of those is *required* by the protocol that has it and warned on every `porch status` for every protocol that does not.
+
+Two things changed. A flat override naming a check that **some** protocol declares no longer warns — it is applicable config that this protocol happens not to use. Only a name no protocol anywhere declares warns, and that one is a typo.
+
+And per-protocol overrides can be stated directly, merged field-by-field over the flat map with the per-protocol value winning:
+
+```jsonc
+{
+  "porch": {
+    "checks":     { "build": { "command": "./infra/render.sh" } },
+    "byProtocol": { "bugfix": { "checks": { "regression_test": { "skip": true } } } }
+  }
+}
+```
+
+Keyed by protocol name or alias; an alias and its canonical name are the same entry, so `spir` and `spider` cannot silently disagree.
+
 Keys are the **check names** from the protocol: `build` / `test` / `e2e_tests` live in phases; `build_succeeds` / `tests_pass` live in `phase_completion`. An override key that matches no check in the protocol prints a warning. Shipped by Spec #550.

@@ -381,8 +381,8 @@ export async function status(
   }
 
   // Show checks status (apply overrides so display matches what will actually run)
-  const statusOverrides = loadCheckOverrides(workspaceRoot);
-  const checks = getPhaseChecks(protocol, state.phase, statusOverrides ?? undefined);
+  const statusOverrides = loadCheckOverrides(workspaceRoot, state.protocol);
+  const checks = getPhaseChecks(protocol, state.phase, statusOverrides ?? undefined, workspaceRoot);
   if (Object.keys(checks).length > 0) {
     const checkLines = Object.keys(checks).map(name => `  ○ ${name} (not yet run)`);
     console.log(section('CRITERIA', checkLines.join('\n')));
@@ -421,10 +421,10 @@ export async function check(workspaceRoot: string, projectId: string, resolver?:
 
   const state = readState(statusPath);
   const protocol = loadProtocol(workspaceRoot, state.protocol);
-  const overrides = loadCheckOverrides(workspaceRoot);
+  const overrides = loadCheckOverrides(workspaceRoot, state.protocol);
   const phaseConfig = getPhaseConfig(protocol, state.phase);
   const phaseCheckNames = phaseConfig?.checks ?? [];
-  const checks = getPhaseChecks(protocol, state.phase, overrides ?? undefined);
+  const checks = getPhaseChecks(protocol, state.phase, overrides ?? undefined, workspaceRoot);
 
   if (Object.keys(checks).length === 0 && phaseCheckNames.length === 0) {
     console.log(chalk.dim('No checks defined for this phase.'));
@@ -507,10 +507,10 @@ export async function done(workspaceRoot: string, projectId: string, resolver?: 
   }
 
   const protocol = loadProtocol(workspaceRoot, state.protocol);
-  const overrides = loadCheckOverrides(workspaceRoot);
+  const overrides = loadCheckOverrides(workspaceRoot, state.protocol);
   const phaseConfig = getPhaseConfig(protocol, state.phase);
   const phaseCheckNames = phaseConfig?.checks ?? [];
-  const checks = getPhaseChecks(protocol, state.phase, overrides ?? undefined);
+  const checks = getPhaseChecks(protocol, state.phase, overrides ?? undefined, workspaceRoot);
 
   // Scope artifact reads + check cwd to the worktree that owns this status.yaml
   // (bugfix #676 — see check() for rationale).
@@ -874,10 +874,10 @@ export async function approve(
 
   // Run phase checks before approving
   const protocol = loadProtocol(workspaceRoot, state.protocol);
-  const overrides = loadCheckOverrides(workspaceRoot);
+  const overrides = loadCheckOverrides(workspaceRoot, state.protocol);
   const phaseConfig = getPhaseConfig(protocol, state.phase);
   const phaseCheckNames = phaseConfig?.checks ?? [];
-  const checks = getPhaseChecks(protocol, state.phase, overrides ?? undefined);
+  const checks = getPhaseChecks(protocol, state.phase, overrides ?? undefined, workspaceRoot);
 
   if (phaseCheckNames.length > 0) {
     const checkEnv: CheckEnv = { PROJECT_ID: state.id, PROJECT_TITLE: resolveArtifactBaseName(artifactRoot, state.id, state.title, scopedResolver) };

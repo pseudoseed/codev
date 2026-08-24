@@ -47,7 +47,26 @@ export interface CodevConfig {
   }>;
   porch?: {
     autoOpenArtifacts?: boolean;
+    /**
+     * Check overrides applied to EVERY protocol. Per-protocol overrides live in
+     * `byProtocol.<name>.checks` and win field-by-field over these (#33).
+     */
     checks?: Record<string, CheckOverride>;
+    /**
+     * Per-protocol porch settings (#33).
+     *
+     * `checks` above is one flat map applied to every protocol, and protocols do
+     * not declare the same check names: overriding `test` is required for BUGFIX
+     * and AIR in a repo with no package.json, and SPIR has no `test`. There was
+     * no way to satisfy both — dropping the override broke BUGFIX and AIR,
+     * keeping it warned on every SPIR `porch status`.
+     *
+     * Keyed by protocol name or alias; an alias and its canonical name are the
+     * same entry.
+     */
+    byProtocol?: Record<string, {
+      checks?: Record<string, CheckOverride>;
+    }>;
     /**
      * Which lanes run a consultation. Precedence, highest first:
      *   byProtocol[P].modelsByType[T] > byProtocol[P].models > modelsByType[T] > models

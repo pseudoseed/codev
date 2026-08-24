@@ -8,7 +8,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Protocol, ProtocolPhase, BuildConfig, VerifyConfig, OnCompleteConfig, CheckDef, CheckOverrides, ContextRefreshConfig } from './types.js';
-import { resolveCodevFile, getSkeletonDir } from '../../lib/skeleton.js';
+import { resolveCodevFile, getSkeletonDir, listAllCheckNames } from '../../lib/skeleton.js';
 
 // ============================================================================
 // Protocol Loading
@@ -424,7 +424,8 @@ export function resolveCheckTimeoutMs(
 export function getPhaseChecks(
   protocol: Protocol,
   phaseId: string,
-  overrides?: CheckOverrides
+  overrides?: CheckOverrides,
+  workspaceRoot?: string,
 ): Record<string, CheckDef> {
   const phase = getPhaseConfig(protocol, phaseId);
   if (!phase || !phase.checks) {
@@ -439,11 +440,19 @@ export function getPhaseChecks(
       ...Object.keys(protocol.checks ?? {}),
       ...Object.keys(protocol.phase_completion ?? {}),
     ]);
+    // #33: a name this protocol does not declare is not necessarily WRONG.
+    // `porch.checks` is one flat map applied to every protocol, and protocols do
+    // not share check names: overriding `test` is required for BUGFIX and AIR in
+    // a repo with no package.json, and SPIR has no `test`, so a correct and
+    // necessary override warned on every `porch status`. Warn only for a name no
+    // protocol anywhere declares — that one really is a typo.
+    const knownAnywhere = workspaceRoot ? listAllCheckNames(workspaceRoot) : null;
     for (const name of Object.keys(overrides)) {
       if (phaseNames.has(name)) continue; // In this phase — normal case
       if (allProtocolChecks.has(name)) continue; // Valid elsewhere in protocol
+      if (knownAnywhere?.has(name)) continue; // Valid in a DIFFERENT protocol (#33)
       process.stderr.write(
-        `\x1b[33m  ⚠ Unknown check override "${name}" (not found in protocol)\x1b[0m\n`
+        `\x1b[33m  ⚠ Unknown check override "${name}" (not declared by any protocol)\x1b[0m\n`
       );
     }
   }
@@ -497,7 +506,8 @@ export function isPhased(protocol: Protocol, phaseId: string): boolean {
  */
 export function getPhaseCompletionChecks(
   protocol: Protocol,
-  overrides?: CheckOverrides
+  overrides?: CheckOverrides,
+  workspaceRoot?: string,
 ): Record<string, string> {
   const base = protocol.phase_completion ?? {};
   if (!overrides) return base;
@@ -507,10 +517,14 @@ export function getPhaseCompletionChecks(
     ...Object.keys(protocol.checks ?? {}),
     ...Object.keys(protocol.phase_completion ?? {}),
   ]);
+  // #33: same rule as getPhaseChecks — a name another protocol declares is
+  // applicable config, not a typo.
+  const knownAnywhere = workspaceRoot ? listAllCheckNames(workspaceRoot) : null;
   for (const name of Object.keys(overrides)) {
     if (allProtocolChecks.has(name)) continue;
+    if (knownAnywhere?.has(name)) continue;
     process.stderr.write(
-      `\x1b[33m  ⚠ Unknown check override "${name}" (not found in protocol)\x1b[0m\n`
+      `\x1b[33m  ⚠ Unknown check override "${name}" (not declared by any protocol)\x1b[0m\n`
     );
   }
 
