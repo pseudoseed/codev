@@ -12,6 +12,7 @@ import {
   writeStateAndCommit,
   createInitialState,
   findStatusPath,
+  projectNotFoundMessage,
   detectProjectId,
   detectProjectIdFromCwd,
   resolveProjectId,
@@ -345,6 +346,49 @@ updated_at: "${state.updated_at}"
 
       const result = findStatusPath(testDir, 'bugfix-999');
       expect(result).toBeNull();
+    });
+
+    it('resolves a bare issue number to a unique bugfix-N project (#109)', () => {
+      const projectDir = path.join(projectsDir, 'bugfix-109-afx-status-shows-finished-buil');
+      fs.mkdirSync(projectDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(projectDir, 'status.yaml'),
+        'id: "bugfix-109"\nprotocol: bugfix\nphase: verified\n',
+      );
+
+      const result = findStatusPath(testDir, '109');
+      expect(result).not.toBeNull();
+      expect(result).toContain('bugfix-109-afx-status-shows-finished-buil');
+    });
+
+    it('prefers an exact numeric project over a prefixed alias (#109)', () => {
+      const airDir = path.join(projectsDir, '109-some-air-feature');
+      fs.mkdirSync(airDir, { recursive: true });
+      fs.writeFileSync(path.join(airDir, 'status.yaml'), 'id: "109"\nprotocol: air\nphase: pr\n');
+
+      const bugDir = path.join(projectsDir, 'bugfix-109-other');
+      fs.mkdirSync(bugDir, { recursive: true });
+      fs.writeFileSync(path.join(bugDir, 'status.yaml'), 'id: "bugfix-109"\nprotocol: bugfix\nphase: fix\n');
+
+      const result = findStatusPath(testDir, '109');
+      expect(result).toContain('109-some-air-feature');
+    });
+
+    it('does not pick when two prefixed aliases share the same number (#109)', () => {
+      const bugDir = path.join(projectsDir, 'bugfix-109-a');
+      fs.mkdirSync(bugDir, { recursive: true });
+      fs.writeFileSync(path.join(bugDir, 'status.yaml'), 'id: "bugfix-109"\nprotocol: bugfix\nphase: fix\n');
+
+      const expDir = path.join(projectsDir, 'experiment-109-b');
+      fs.mkdirSync(expDir, { recursive: true });
+      fs.writeFileSync(path.join(expDir, 'status.yaml'), 'id: "experiment-109"\nprotocol: experiment\nphase: run\n');
+
+      expect(findStatusPath(testDir, '109')).toBeNull();
+      const msg = projectNotFoundMessage(testDir, '109');
+      expect(msg).toContain('Did you mean');
+      expect(msg).toContain("'bugfix-109'");
+      expect(msg).toContain("'experiment-109'");
+      expect(msg).not.toContain('porch init');
     });
 
     it('should skip non-directory entries in .builders (bugfix #622)', () => {
