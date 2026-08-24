@@ -2,6 +2,8 @@
  * Issue #106, rendered. The tree must survive a dropped connection, and the
  * page must still say — visibly — that what it is showing is last-known.
  */
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Page } from '../src/App.js';
@@ -51,6 +53,7 @@ describe('a thrown fetch keeps the drawn tree (#106)', () => {
 
   it('says the tree is last-known and when it was last live', () => {
     const s = drawnState();
+    s.lastLiveAt = new Date().toISOString(); // today, so the stamp is the bare clock
     s.connection = 'unreachable';
     render(<Page state={s} hostname="box" />);
     const strip = screen.getByTestId('connection-lost');
@@ -65,7 +68,8 @@ describe('a thrown fetch keeps the drawn tree (#106)', () => {
     render(<Page state={s} hostname="box" />);
     const strip = screen.getByTestId('connection-lost');
     expect(strip.textContent).toMatch(/Auth failed/);
-    expect(strip.textContent).toMatch(/Not retrying/);
+    // The stream loop has stopped, so the copy must name the way out.
+    expect(strip.textContent).toMatch(/Reload to retry/);
     expect(screen.getByText('alpha')).toBeTruthy();
   });
 
@@ -135,11 +139,21 @@ describe('the states stay distinct (D5)', () => {
     expect(screen.queryByTestId('reconnecting')).toBeNull();
   });
 
-  it('keeps rust off the strip — it belongs to gates', () => {
-    const s = drawnState();
-    s.connection = 'unreachable';
-    const { container } = render(<Page state={s} hostname="box" />);
-    expect(container.querySelector('[data-testid="connection-lost"]')?.innerHTML).not.toMatch(/rust/);
+  /*
+   * Read the stylesheet, not the markup. The colour lives in a CSS rule, so an
+   * assertion over rendered innerHTML would pass unchanged if `.conn-strip-lost`
+   * started using var(--rust) — it would be a test that names one thing and
+   * checks another.
+   */
+  it('keeps rust off every strip rule — rust belongs to gates', () => {
+    const css = readFileSync(path.resolve(__dirname, '../src/site.css'), 'utf8');
+    const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .map(([, selector, body]) => ({ selector: selector.trim(), body }))
+      .filter((r) => r.selector.includes('.conn-strip'));
+    expect(rules.length).toBeGreaterThanOrEqual(5);
+    for (const r of rules) {
+      expect(`${r.selector} { ${r.body} }`).not.toMatch(/var\(--rust/);
+    }
   });
 });
 
@@ -149,7 +163,15 @@ describe('lastSeenLabel', () => {
     expect(lastSeenLabel('not-a-date')).toBeNull();
   });
 
-  it('stamps a real moment', () => {
-    expect(lastSeenLabel('2026-08-24T10:20:30.000Z')).toMatch(/^last seen \d\d:\d\d:\d\d$/);
+  it('stamps a clock time for the same day', () => {
+    const at = new Date(2026, 7, 24, 10, 20, 30);
+    expect(lastSeenLabel(at.toISOString(), new Date(2026, 7, 24, 18, 0, 0))).toBe('last seen 10:20:30');
+  });
+
+  it('carries the date once the outage crosses a day, so it cannot read as today', () => {
+    const at = new Date(2026, 7, 22, 9, 5, 1);
+    expect(lastSeenLabel(at.toISOString(), new Date(2026, 7, 24, 18, 0, 0))).toBe(
+      'last seen 2026-08-22 09:05:01',
+    );
   });
 });

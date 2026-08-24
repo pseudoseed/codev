@@ -343,6 +343,9 @@ test('a dropped stream keeps the drawn tree and marks it stale', async ({ page }
 
   await expect(page.getByTestId('connection-lost')).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId('connection-lost')).toContainText(/last known tree/i);
+  // The page states its own connection, so a screenshot or a DOM dump says which
+  // of the two trees you are looking at without inferring it from the strip.
+  await expect(page.locator('.page')).toHaveAttribute('data-connection', 'unreachable');
   await expect(page.getByTestId('unreachable')).toHaveCount(0);
   await expect(page.getByTestId('empty-site')).toHaveCount(0);
   await expect(page.locator('[data-id="builder:1"]')).toBeVisible();
@@ -359,6 +362,7 @@ test('the tree comes back live when the stream returns', async ({ page }) => {
 
   await reset();
   await expect(page.getByTestId('connection-lost')).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.locator('.page')).toHaveAttribute('data-connection', 'live');
   await expect(page.locator('[data-id="builder:1"]')).toBeVisible();
   await expect(page.getByTestId('machine-row')).toContainText('online');
   expect(await sentinelAlive(page)).toBe(1);

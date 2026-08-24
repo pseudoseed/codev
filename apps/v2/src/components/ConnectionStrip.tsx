@@ -12,24 +12,33 @@ type Props = { state: AppState };
  * lost connection is ochre — something may be wrong, nobody is blocked.
  */
 
-function clockTime(iso: string): string | null {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  return `${hh}:${mm}:${ss}`;
+function pad(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+function sameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
 }
 
 /**
  * "last seen HH:MM:SS", or nothing at all. A tree with no recorded live moment
  * gets no stamp rather than an invented one — an unknown time and a known one
  * must not be spelled the same way.
+ *
+ * An outage that crosses midnight gets the date as well: a bare clock time on a
+ * two-day-old tree reads as today, which is the same failure in a smaller form.
  */
-export function lastSeenLabel(lastLiveAt: string | null): string | null {
+export function lastSeenLabel(lastLiveAt: string | null, now: Date = new Date()): string | null {
   if (!lastLiveAt) return null;
-  const t = clockTime(lastLiveAt);
-  return t ? `last seen ${t}` : null;
+  const d = new Date(lastLiveAt);
+  if (Number.isNaN(d.getTime())) return null;
+  const clock = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  if (sameDay(d, now)) return `last seen ${clock}`;
+  return `last seen ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${clock}`;
 }
 
 export function ConnectionStrip({ state }: Props) {
@@ -38,7 +47,10 @@ export function ConnectionStrip({ state }: Props) {
   const stamp = lastSeenLabel(state.lastLiveAt);
 
   let message: string;
-  if (auth) message = 'Auth failed. The tower key was rejected. Not retrying.';
+  // An auth rejection ends the stream loop, so nothing here will clear on its
+  // own. The copy has to say what will: the whole-page banner used to make that
+  // unmissable, and a strip that only said "not retrying" would not.
+  if (auth) message = 'Auth failed. The tower key was rejected. Reload to retry.';
   else if (lost) message = 'Cannot reach Tower. Retrying.';
   else message = 'Reconnecting';
 
