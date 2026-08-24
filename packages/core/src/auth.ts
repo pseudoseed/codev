@@ -52,8 +52,26 @@ export function ensureLocalKey(): string {
 
   if (!existsSync(LOCAL_KEY_PATH)) {
     const key = randomBytes(32).toString('hex');
-    writeFileSync(LOCAL_KEY_PATH, key, { mode: 0o600 });
-    return key;
+    try {
+      // Exclusive create (issue #6). The previous check-then-write let two
+      // concurrent callers each pass `existsSync`, each generate a different
+      // key, and each write it — so the file ended up holding the LOSER's key
+      // while the winner returned its own. Whoever started a Tower with the
+      // returned value then failed to authenticate against the file, and every
+      // request 401'd.
+      //
+      // Invisible on a warm machine, because the file already exists and the
+      // branch never runs. It shows up on a cold CI runner where several e2e
+      // suites start in parallel with no `~/.agent-farm` at all: `Tower
+      // Integration Tests` failed with `expected 401 to be 404` across 13 of 16
+      // cases, intermittently, on code that passes locally and upstream.
+      writeFileSync(LOCAL_KEY_PATH, key, { mode: 0o600, flag: 'wx' });
+      return key;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      // Someone else created it first. THEIR key is the shared one — fall
+      // through and read it, rather than returning a value nothing else holds.
+    }
   }
 
   // Repair permissions on an existing key file: `mode` on writeFileSync only
