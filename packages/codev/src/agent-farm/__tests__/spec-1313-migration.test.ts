@@ -216,6 +216,9 @@ describe('Spec 1313 — mailbox table migration (v15)', () => {
     // would introduce, and it caught it.
     db.exec(`ALTER TABLE mailbox ADD COLUMN from_agent_name TEXT`);
     db.exec(`ALTER TABLE mailbox ADD COLUMN requested_to TEXT`);
+    // v20 (#21) ADDs the gate-detail column. Same reasoning as v19 above:
+    // extending the chain rather than relaxing the assertion.
+    db.exec(`ALTER TABLE mailbox ADD COLUMN hold_detail TEXT`);
     const migratedCols = mailboxColumns();
     const migratedIdx = mailboxIndexes();
 
@@ -470,6 +473,9 @@ describe('Spec 1313 round 3 — mailbox not_before column migration (v17)', () =
     // would introduce, and it caught it.
     db.exec(`ALTER TABLE mailbox ADD COLUMN from_agent_name TEXT`);
     db.exec(`ALTER TABLE mailbox ADD COLUMN requested_to TEXT`);
+    // v20 (#21) ADDs the gate-detail column. Same reasoning as v19 above:
+    // extending the chain rather than relaxing the assertion.
+    db.exec(`ALTER TABLE mailbox ADD COLUMN hold_detail TEXT`);
     const migratedCols = mailboxCols();
 
     const fresh = new Database(resolve(testDir, 'fresh.db'));

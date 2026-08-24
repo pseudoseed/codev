@@ -113,6 +113,14 @@ export interface DbMailbox {
   from_agent_name: string | null;
   /** The target string the caller typed, before resolution (#47). */
   requested_to: string | null;
+  /**
+   * The gate's `detail` for why this row is held (#21).
+   *
+   * `reason` is 'busy' for every not-clean verdict. This says which one, and the
+   * distinction changes the remedy: `user-text` is an abandoned draft a human can
+   * clear, `busy-indicator` is a live turn that must not be touched.
+   */
+  hold_detail: string | null;
   from_workspace: string | null;
   body: string;
   formatted_message: string;
