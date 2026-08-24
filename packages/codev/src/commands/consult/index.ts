@@ -329,6 +329,48 @@ function loadDotenv(workspaceRoot: string): void {
 }
 
 /**
+ * Drop a SECONDARY artifact that was only guessed at (#65).
+ *
+ * A spec review attaches the plan for context, and a plan review attaches the
+ * spec. Nobody asked for that second document — it is offered because it usually
+ * helps. When the id resolves only through the zero-stripping fallback, it
+ * usually does not: `codev/plans/` held `0083-protocol-agnostic-spawn.md` and no
+ * `83-*`, so eleven consecutive `consult --type spec --issue 83` rounds each
+ * attached a stale January draft about a different subject, and every reviewer
+ * spent part of its answer saying the plan looked unrelated.
+ *
+ * `artifactHeading` already warns on an inexact match, and that warning WORKED —
+ * the reviewers all flagged it. It just does not help: the round is spent either
+ * way. For a document nobody requested, omitting a guess costs nothing and
+ * attaching one costs a review.
+ *
+ * The PRIMARY artifact keeps the lenient fallback plus its warning. There you
+ * asked for it by id, refusing would block the review outright, and a genuinely
+ * zero-padded legacy project must still resolve.
+ *
+ * 82 project ids in this repo have only a zero-padded plan, so this is not a
+ * one-file collision — renumbering the colliding artifact would fix #83 alone.
+ */
+export function dropIfGuessed(
+  ref: ContentRef | null,
+  kind: 'plan' | 'spec',
+  id: string,
+): ContentRef | null {
+  if (!ref) return null;
+  if (matchesProjectIdExact(ref.label, id)) return ref;
+  // Nothing numeric to compare means the label is not an id-prefixed artifact
+  // name (e.g. the bare id fallback); leave those alone.
+  if (!/^\d/.test(ref.label)) return ref;
+
+  console.error(
+    `Not attaching a ${kind} for context: '${ref.label}' matched ${id} only by zero-stripping, ` +
+    `so it is probably a different project's ${kind} that collides on the number (#65). ` +
+    `Pass --${kind}-file to attach one explicitly.`,
+  );
+  return null;
+}
+
+/**
  * Find spec content by project ID using the artifact resolver.
  * Returns a ContentRef with content and label, or null if not found.
  *
@@ -2586,7 +2628,7 @@ function resolveBuilderQuery(workspaceRoot: string, type: string, options: Consu
     case 'spec': {
       const spec = findSpecContent(workspaceRoot, projectId);
       if (!spec) throw new Error(`Spec ${projectId} not found`);
-      const plan = findPlanContent(workspaceRoot, projectId);
+      const plan = dropIfGuessed(findPlanContent(workspaceRoot, projectId), 'plan', projectId);
       console.error(`Spec: ${spec.label}`);
       if (plan) console.error(`Plan: ${plan.label}`);
       return buildSpecQuery(spec, plan);
@@ -2595,15 +2637,15 @@ function resolveBuilderQuery(workspaceRoot: string, type: string, options: Consu
     case 'plan': {
       const plan = findPlanContent(workspaceRoot, projectId);
       if (!plan) throw new Error(`Plan ${projectId} not found`);
-      const spec = findSpecContent(workspaceRoot, projectId);
+      const spec = dropIfGuessed(findSpecContent(workspaceRoot, projectId), 'spec', projectId);
       console.error(`Plan: ${plan.label}`);
       if (spec) console.error(`Spec: ${spec.label}`);
       return buildPlanQuery(plan, spec);
     }
 
     case 'impl': {
-      const spec = findSpecContent(workspaceRoot, projectId);
-      const plan = findPlanContent(workspaceRoot, projectId);
+      const spec = dropIfGuessed(findSpecContent(workspaceRoot, projectId), 'spec', projectId);
+      const plan = dropIfGuessed(findPlanContent(workspaceRoot, projectId), 'plan', projectId);
       console.error(`Project: ${projectId}`);
       if (spec) console.error(`Spec: ${spec.label}`);
       if (plan) console.error(`Plan: ${plan.label}`);
@@ -2622,8 +2664,8 @@ function resolveBuilderQuery(workspaceRoot: string, type: string, options: Consu
       if (!currentPhase) {
         throw new Error('No current plan phase detected. Use --plan-phase to specify.');
       }
-      const spec = findSpecContent(workspaceRoot, projectId);
-      const plan = findPlanContent(workspaceRoot, projectId);
+      const spec = dropIfGuessed(findSpecContent(workspaceRoot, projectId), 'spec', projectId);
+      const plan = dropIfGuessed(findPlanContent(workspaceRoot, projectId), 'plan', projectId);
       console.error(`Phase: ${currentPhase}`);
       if (spec) console.error(`Spec: ${spec.label}`);
       if (plan) console.error(`Plan: ${plan.label}`);
@@ -2713,7 +2755,7 @@ function resolveArchitectQuery(workspaceRoot: string, type: string, options: Con
       const { resolver, sourceLabel } = resolveArtifactSource(workspaceRoot, issueId, options.branch);
       const spec = findSpecContent(workspaceRoot, issueId, resolver);
       if (!spec) throw new Error(`Spec ${issueId} not found at ${sourceLabel}`);
-      const plan = findPlanContent(workspaceRoot, issueId, resolver);
+      const plan = dropIfGuessed(findPlanContent(workspaceRoot, issueId, resolver), 'plan', issueId);
       console.error(`Source: ${sourceLabel}`);
       console.error(`Spec: ${spec.label}`);
       if (plan) console.error(`Plan: ${plan.label}`);
@@ -2724,7 +2766,7 @@ function resolveArchitectQuery(workspaceRoot: string, type: string, options: Con
       const { resolver, sourceLabel } = resolveArtifactSource(workspaceRoot, issueId, options.branch);
       const plan = findPlanContent(workspaceRoot, issueId, resolver);
       if (!plan) throw new Error(`Plan ${issueId} not found at ${sourceLabel}`);
-      const spec = findSpecContent(workspaceRoot, issueId, resolver);
+      const spec = dropIfGuessed(findSpecContent(workspaceRoot, issueId, resolver), 'spec', issueId);
       console.error(`Source: ${sourceLabel}`);
       console.error(`Plan: ${plan.label}`);
       if (spec) console.error(`Spec: ${spec.label}`);
@@ -2794,8 +2836,8 @@ function resolveArchitectQuery(workspaceRoot: string, type: string, options: Con
       // change diff scope, only artifact source — cmap-3 finding).
       const ref = options.branch ?? `origin/${pr.headRefName}`;
       const resolver = new GitRefResolver(workspaceRoot, ref);
-      const spec = findSpecContent(workspaceRoot, issueId, resolver);
-      const plan = findPlanContent(workspaceRoot, issueId, resolver);
+      const spec = dropIfGuessed(findSpecContent(workspaceRoot, issueId, resolver), 'spec', issueId);
+      const plan = dropIfGuessed(findPlanContent(workspaceRoot, issueId, resolver), 'plan', issueId);
       console.error(`Project: ${issueId} (PR #${pr.number}, ${pr.headRefName} → ${pr.baseRefName})`);
       console.error(`Source: ${ref}`);
       if (spec) console.error(`Spec: ${spec.label}`);
