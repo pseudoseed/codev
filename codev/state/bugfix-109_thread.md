@@ -60,4 +60,10 @@ Regression: `bugfix-109-status.test.ts` fails without the overlay map (`implemen
 
 ## PR
 
-https://github.com/pseudoseed/codev/pull/136 — CMAP in flight.
+https://github.com/pseudoseed/codev/pull/136
+
+CMAP r1: gemini skipped (agy quota). Codex+Claude REQUEST_CHANGES: overlay took first status.yaml (0087 complete). Fixed: match builder porch id.
+
+CMAP r2: opencode APPROVE. Codex REQUEST_CHANGES on task/protocol spawn ids — out of issue scope, rebutted. Claude REQUEST_CHANGES: alias reached porch init. Fixed: `findStatusPath(..., { alias: false })` on init.
+
+Live check on this worktree (290 project dirs): overlay reports `pr/pr`, not 0087 `complete`.
