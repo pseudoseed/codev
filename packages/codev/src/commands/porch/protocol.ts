@@ -377,6 +377,39 @@ export function getNextPhase(protocol: Protocol, currentPhaseId: string): Protoc
 }
 
 /**
+ * Resolve a check's wall-clock bound from its `porch.checks.<name>.timeout`
+ * override (issue #8).
+ *
+ * The override is in SECONDS; the runner takes milliseconds. Returns undefined
+ * when there is nothing to apply, which leaves the runner on its default.
+ *
+ * A malformed value WARNS and falls back rather than being silently ignored.
+ * Silently falling back is the shape of the bug this key exists to fix: a
+ * config that says 900 and a runner that stops at 300 reports a passing suite
+ * as a failed check, with nothing anywhere saying the number was rejected.
+ * Rejected outright rather than clamped, because a clamp would report a bound
+ * the operator never asked for.
+ */
+export function resolveCheckTimeoutMs(
+  checkName: string,
+  overrideSeconds: number | undefined,
+  baseTimeoutMs: number | undefined,
+): number | undefined {
+  if (overrideSeconds === undefined) return baseTimeoutMs;
+
+  if (typeof overrideSeconds !== 'number' || !Number.isFinite(overrideSeconds) || overrideSeconds <= 0) {
+    process.stderr.write(
+      `\x1b[33m  \u26a0 Ignoring invalid timeout for check "${checkName}": `
+      + `${JSON.stringify(overrideSeconds)} (expected a positive number of seconds). `
+      + `Using the default bound instead.\x1b[0m\n`
+    );
+    return baseTimeoutMs;
+  }
+
+  return Math.round(overrideSeconds * 1000);
+}
+
+/**
  * Get check definitions for a phase, optionally merging in .codev/config.json overrides.
  *
  * Override semantics (applied per check name):
@@ -423,9 +456,11 @@ export function getPhaseChecks(
     const override = overrides?.[checkName];
     if (override) {
       if (override.skip) continue; // Omit this check
+      const timeoutMs = resolveCheckTimeoutMs(checkName, override.timeout, base.timeout_ms);
       result[checkName] = {
         command: override.command ?? base.command,
         cwd: override.cwd ?? base.cwd,
+        ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
       };
     } else {
       result[checkName] = base;

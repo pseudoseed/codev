@@ -141,6 +141,8 @@ export interface CheckOverride {
   command?: string;
   cwd?: string;
   skip?: boolean;
+  /** Wall-clock bound for this check, in SECONDS (issue #8). */
+  timeout?: number;
 }
 
 // ---------------------------------------------------------------------------

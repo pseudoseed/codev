@@ -188,11 +188,18 @@ function logCheckOverrides(
 
     if (override.skip) {
       console.log(chalk.yellow(`  ⚠ Check "${name}" skipped (.codev/config.json)`));
-    } else if (override.command || override.cwd) {
+    } else if (override.command || override.cwd || override.timeout !== undefined) {
       const parts: string[] = [];
       if (override.command) parts.push(resolvedChecks[name]?.command ?? override.command);
       if (override.cwd) parts.push(`cwd: ${override.cwd}`);
-      console.log(chalk.yellow(`  ⚠ Check "${name}" overridden: ${parts.join(', ')}`));
+      // Issue #8: report the bound that was actually applied, not the one asked
+      // for. A rejected value has already warned on stderr and left the default
+      // in place, and this line must not then claim it took effect.
+      const appliedMs = resolvedChecks[name]?.timeout_ms;
+      if (appliedMs !== undefined) parts.push(`timeout: ${Math.round(appliedMs / 1000)}s`);
+      if (parts.length > 0) {
+        console.log(chalk.yellow(`  ⚠ Check "${name}" overridden: ${parts.join(', ')}`));
+      }
     }
   }
 }
