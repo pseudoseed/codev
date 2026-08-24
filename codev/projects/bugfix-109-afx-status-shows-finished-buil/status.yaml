@@ -1,7 +1,7 @@
 id: bugfix-109
 title: afx-status-shows-finished-buil
 protocol: bugfix
-phase: pr
+phase: verified
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -13,7 +13,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-24T22:29:57.157Z'
-updated_at: '2026-08-24T23:46:29.990Z'
+updated_at: '2026-08-24T23:46:35.484Z'
 pr_history:
   - phase: pr
     pr_number: 136
