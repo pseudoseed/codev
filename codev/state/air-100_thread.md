@@ -9,3 +9,7 @@ Did not change how discoverBuilders reports row-less worktrees. That stays a rec
 When no project row matches, cleanup now scans `.builders/` for a directory whose name is the project id or `{protocol}-{id}`. One match and no live builder row owns that worktree (exact path or basename): treat it as an orphan and remove it. Two matches: refuse and name both. Unmerged without `--force`: refuse. Merged, or `--force`: `git worktree remove` plus local branch delete.
 
 The 13 orphans already on this workspace are not touched. That is the human's call.
+
+## PR
+
+https://github.com/pseudoseed/codev/pull/117
