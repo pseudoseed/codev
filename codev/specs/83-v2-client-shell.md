@@ -3,7 +3,7 @@
 - **Issue:** #83
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 10
+- **Status:** Draft, rev. 11
 - **Depends on:** spec 52 (v2 server events), merged
 
 ## Problem Statement
@@ -103,9 +103,9 @@ The stream is the source of truth. The client holds `Map<nodeId, Node>` plus `Co
 
 | Frame | Client action |
 |---|---|
-| `snapshot` | Replace `nodes` and `darkPaths` wholesale. Store `streamId`, `seq`, `buckets`, **and `counts`**. |
+| `snapshot` | Replace `nodes` wholesale, **each node carrying its own trace** — there is no top-level `buckets` on the frame. **Clear `darkPaths` first**, then apply that snapshot's own `dark` frames. Store `streamId`, `seq` and `counts`. |
 | `resumed` | Nothing to the map. Confirms the resume was honoured; clears any "reconnecting" state. |
-| `node` | Upsert by `id`. **Do not touch `buckets`** — they are absent on upserts by contract. |
+| `node` | Upsert by `id`. **Never overwrite an existing trace**, but **initialize one to 20 zeros when the builder is new.** See below. |
 | `gone` | Delete by `id`. |
 | `counts` | Replace `Counts`. |
 | `tick` | Advance every in-scope builder's trace: append the frame's value for that id, or **zero if the id is absent**, then drop the oldest. |
@@ -122,7 +122,18 @@ Four degenerate cases, each with a defined answer, because the natural handling 
 | A frame that is not valid JSON | **Terminal for this connection.** See below. Never treat a parse failure as a `gone`. |
 | A frame with an unknown `type` | **Terminal for this connection.** See below. There is no silent ignore. |
 | Stream EOF (server closed cleanly) | Reconnect with `since` and `stream` per D2. Not an error state, not an empty tree. |
-| Non-2xx on the stream request | The unreachable state (D5) plus backoff. A 400 here means the client built a bad `scope` — see D12 — and must say so rather than render empty. |
+| Non-2xx on the stream request | **Classified, not lumped.** See the table below — rev. 10 sent every non-2xx to unreachable-plus-backoff while also calling a 400 a client bug, which would retry a request guaranteed to fail identically, forever. |
+
+**Stream response classification.** Retry only what a retry can fix:
+
+| Response | State | Retry |
+|---|---|---|
+| `400` | **contract mismatch**, naming the likely cause | **None.** The client built this request; the same bytes fail the same way. D12's encoding trap is the first thing to check |
+| `401`, `403` | unreachable, **labelled as an auth failure** | **None.** The key does not appear on its own, and a silent retry loop hides the real problem |
+| `404`, `405` | contract mismatch | **None.** The route or method is wrong, which is a build or wiring fault |
+| `5xx`, or the fetch throws | unreachable | **Indefinitely, on backoff.** Tower restarting is the normal case and the whole reason D2 exists |
+
+A 400 is the one worth stating twice: it is almost always D12's `encodeURIComponent(paths.join(','))`, and a page that retries it forever shows a spinner instead of the answer.
 
 **A bad frame is terminal, and recovery is bounded at one attempt.** Rev. 6 said to drop the frame and not advance the cursor. That is unsafe two ways: frame `N+1` then applies on top of a tree that silently missed `N`, giving a corrupt-but-plausible render; and a reconnect resumes from before `N`, so the server replays the same bad frame forever.
 
@@ -173,6 +184,12 @@ Rev. 9's rule alone would have killed the page on every refused resume. Measured
 **One deliberate exception, and it is not a validation failure.** A structurally valid node carrying a `status` outside the four ships as D3 says: rendered **visibly wrong**, not terminal, not defaulted to `running`. The distinction is the point — an unexpected *value* in a well-formed frame is a contract drift the page should show and keep running through; a malformed *frame* is a contract the client cannot read at all.
 
 **`tick` is the only writer of `buckets` after the snapshot.** That is contract, not preference: `node` frames carry no buckets precisely so two clients cannot diverge.
+
+**A newly spawned builder arrives with no trace, and it still needs one.** `v2-sampler.ts:196` emits every node delta as `stripBuckets(node)` — deliberately, so two clients cannot diverge. Only the snapshot paths call `withBuckets` (`v2-routes.ts:233, 361, 376`).
+
+So the builder in criterion 2 — the one that appears when you spawn — arrives via a `node` frame with `buckets` absent, and rev. 10's "do not touch `buckets`" left it with no trace at all. Criteria 2 and 5 contradicted each other on the same builder.
+
+The rule that satisfies both: on a `node` upsert, **if the id is already known, leave its trace exactly as it is; if it is new and its `kind` is `builder`, create a trace of 20 zeros.** That does not violate "`tick` is the only writer" — a zero-filled trace is the empty state, not data. The first `tick` then fills it, and an absent id contributes a zero (below), so a freshly spawned builder that produces nothing reads as flat rather than as missing.
 
 **`buckets` is two different shapes under one name.** On a node it is `number[]` — a 20-length trace (`v2-events.ts:13`). On a `tick` it is `Record<builderId, number>` — one value per builder (`v2-events.ts:54`). A reducer that treats them alike breaks on the first tick. Confirmed on the wire: a live tick arrived as `{"seq":1,"type":"tick","at":"…","buckets":{}}`.
 
@@ -461,7 +478,7 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 23. **`buckets` two shapes.** A node with `buckets: number[]` and a tick with `buckets: {}` in the same session; assert neither path throws and the trace advances by one zero.
 24. **Counts from the snapshot alone.** Feed a snapshot and no `counts` delta; assert the footer shows the snapshot's totals.
 25. **Bootstrap retries, then stops.** A 500 then a 200: assert two requests total, and that a later reconnect makes none.
-26. **A 200 that lies.** Four bodies — invalid JSON, `{}`, `{"workspaces": null}`, `{"workspaces": "nope"}` — each produces the unreachable state and a retry, and **none** produces the empty state.
+26. **A 200 that lies.** Four bodies — invalid JSON, `{}`, `{"workspaces": null}`, `{"workspaces": "nope"}` — each produces the **contract mismatch** state, one retry, then stop. **None** produces the empty state, and none produces the unreachable state (D7, scenario 38). Rev. 10 said unreachable here and contradicted its own D7.
 27. **Transport framing.** The reader is hand-written, so the reducer tests prove nothing about it. Feed a scripted `ReadableStream` and assert identical results for: one frame split across 3 chunks; **a chunk that splits a multi-byte UTF-8 character** (`TextDecoder` must be constructed with `{stream: true}` semantics and reused, not per-chunk); 4 frames arriving in one chunk; a chunk ending mid-frame with the remainder arriving later; `\r\n` as well as `\n` line endings; a trailing partial frame at EOF, which must **not** be applied. A reader that passes every reducer test and fails this is the expected failure mode, not an unlikely one.
 28. **Bad frame is terminal and bounded.** A malformed frame mid-stream: assert frames stop applying, exactly **one** reconnect happens and it carries **no** `since`/`stream`, and a second bad frame produces **no third connection**.
 29. **The mismatch state claims only what it decoded.** Three cases: invalid JSON reports `invalid JSON after cursor <N>` and a byte preview and **does not** invent a `seq` or `type`; an unknown `type` reports the type; a known type with a bad field reports type, `seq` and the failing field.
@@ -471,6 +488,9 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 36. **A new stream resets the baseline.** A `snapshot` with a new `streamId` and `seq: 0` arriving after a cursor of 500 is **accepted**, not terminal. Measured: consecutive connections returned different `streamId`s both starting at `seq: 0`, so every refused resume hits this path.
 37. **Mismatch is a state, not a latch.** After a bad frame and its one recovery attempt, a valid fresh snapshot clears the mismatch state, normal reducing resumes, and the one-attempt budget resets — a second unrelated bad frame later gets its own recovery attempt.
 38. **Bootstrap retry policy splits by cause.** A 500 retries indefinitely on backoff; a 200 with an unreadable body retries **once** and stops in the mismatch state. Assert the two render differently.
+39. **A new builder gets a trace.** A `node` frame for an unknown builder id with `buckets` absent: assert a 20-zero trace is created and the row shows a flat sparkline. Then a `node` frame for a builder that already has a non-zero trace: assert the trace is **unchanged**.
+40. **Stream response classification.** One case per row: `400` is a mismatch with no retry; `401` is an auth-labelled unreachable with no retry; `404` is a mismatch with no retry; `503` retries on backoff. Assert the no-retry cases open **exactly one** connection.
+41. **Snapshot clears dark before its own dark frames.** A snapshot naming 2 dark workspaces, following a connection that had 3: assert exactly the 2 render dark and the third is gone.
 35. **Fields outside the read-set are ignored.** A frame carrying an extra unknown field, and a node carrying garbage in a field nothing reads, both apply normally. The validation is narrow on purpose and must not become a schema lock.
 31. **Unknown status is not a validation failure.** A structurally valid node with `status: "reticulating"` renders visibly wrong, does **not** default to `running`, and does **not** enter the mismatch state. This is the one place a surprising value keeps the page running (D3).
 32. **Bootstrap entry validation.** `{"workspaces": [{}]}`, `{"workspaces": [{"path": 42}]}` and `{"workspaces": [{"path": ""}]}` each produce a contract mismatch for the whole bootstrap — not a partial scope, and not a dark workspace.
@@ -494,7 +514,9 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 | Ordering enforced as strictly increasing | High — it is the intuitive invariant | High — the real snapshot-plus-`dark` pair shares a `seq` and would be rejected as corrupt | D1, measured; scenario 34 |
 | The cursor compared across `streamId`s | High — rev. 9 required it | High — **every** refused resume arrives at `seq: 0` and would be declared terminal, killing the page on a Tower restart | D1's per-stream rule, measured; scenario 36 |
 | Mismatch implemented as a latch | Medium — "terminal" reads that way | Medium — one bad frame poisons the tab until a reload, which is what D2 exists to avoid | D1 step 4; scenario 37 |
-| A malformed bootstrap 200 shown as unreachable | Medium — rev. 9 said both | Medium — collapses two states D5 requires to differ, and retries garbage forever | D7's split; scenario 38 |
+| A malformed bootstrap 200 shown as unreachable | Medium — rev. 9 said both | Medium — collapses two states D5 requires to differ, and retries garbage forever | D7's split; scenarios 26 and 38 |
+| A new builder left with no trace | High — "do not touch `buckets`" reads as "leave it absent" | High — the freshly spawned builder of criterion 2 has no sparkline, failing criterion 5 on the same row | D1's initialize-on-new rule, with the `stripBuckets` line; scenario 39 |
+| Every non-2xx retried on backoff | High — one branch is the simple code | Medium — a 400 or 401 spins forever behind a spinner and hides a client bug | D1's classification table; scenario 40 |
 | Validation hardened into a full schema lock | Medium — the terminal rule invites it | Medium — a harmless added server field kills the page | D1's read-set is closed; scenario 35 |
 | A browser test destroying a real builder worktree | Medium — `afx cleanup` is the honest end-to-end path | High — an irreversible act moved from a human to a test runner | Scenario 10 uses a `gone` fixture; the real path is verified by hand |
 | `buckets` treated as one shape | High — the field name is identical | High — breaks on the first tick, which is also the first thing that arrives after the snapshot | D1 with both line numbers |
