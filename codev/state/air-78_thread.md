@@ -13,4 +13,6 @@ Tick, the 100ms compare loop, and `not_before` still call `compare()` directly.
 
 ## Status
 
-Implement committed (`3ec95ce6d`). 27/27 `v2-sampler` tests green, including the spec 52 suite plus burst / max-wait / tick-not-debounced / 500ms-cap cases. Build check passed. PR phase.
+Implement committed (`3ec95ce6d`). 27/27 `v2-sampler` tests green, including the spec 52 suite plus burst / max-wait / tick-not-debounced / 500ms-cap cases. Build check passed.
+
+PR #81: https://github.com/pseudoseed/codev/pull/81
