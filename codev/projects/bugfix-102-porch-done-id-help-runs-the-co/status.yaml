@@ -1,7 +1,7 @@
 id: bugfix-102
 title: porch-done-id-help-runs-the-co
 protocol: bugfix
-phase: fix
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-24T22:30:09.918Z'
-updated_at: '2026-08-24T22:35:28.113Z'
+updated_at: '2026-08-24T22:51:01.195Z'
