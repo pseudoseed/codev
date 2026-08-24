@@ -146,6 +146,8 @@ Theme switching (`prefers-color-scheme`, a toggle) is out of scope. The client-s
 
 If the look is accepted, `apps/v2` takes `tokens-dark.css` as the dark `:root`. Keep `--well`. Do not invert `tokens.css` in a media query.
 
+PR #68 merged. experiment-complete approved 2026-08-23.
+
 ```
 open codev/research/v2-mockups/01-site-dark.html
 open codev/research/v2-mockups/02-gate-dark.html
