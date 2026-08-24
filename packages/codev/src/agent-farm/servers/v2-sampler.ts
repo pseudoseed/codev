@@ -20,6 +20,7 @@ export interface SamplerTimers {
 export interface SamplerHooks {
   watch?: (dir: string, wake: () => void) => () => void;
   nextNotBefore?: (now: number) => number | null;
+  isReadable?: (workspacePath: string) => boolean;
 }
 
 const realTimers: SamplerTimers = {
@@ -90,8 +91,10 @@ export class V2Sampler {
   private readonly timers: SamplerTimers;
   private readonly watch: (dir: string, wake: () => void) => () => void;
   private readonly nextNotBefore: ((now: number) => number | null) | undefined;
+  private readonly isReadable: (workspacePath: string) => boolean;
   private readonly scopes = new Map<string, string[]>();
   private readonly filterByScope = new Map<string, string[]>();
+  private readonly darkByScope = new Map<string, Map<string, string>>();
   private readonly lastByScope = new Map<string, Map<string, V2Node>>();
   private lastCounts: V2Counts | null = null;
   private readonly rings = new Map<string, number[]>();
@@ -116,6 +119,7 @@ export class V2Sampler {
     this.timers = opts.timers ?? realTimers;
     this.watch = opts.hooks?.watch ?? (() => () => {});
     this.nextNotBefore = opts.hooks?.nextNotBefore;
+    this.isReadable = opts.hooks?.isReadable ?? (() => true);
   }
 
   start(): void {
@@ -158,6 +162,7 @@ export class V2Sampler {
     if (!this.scopes.has(key)) {
       this.scopes.set(key, [...paths]);
       this.filterByScope.set(key, [...filterPaths]);
+      this.rememberDark(key, paths);
     }
   }
 
@@ -166,6 +171,7 @@ export class V2Sampler {
     this.scopes.set(key, [...paths]);
     const prev = this.filterByScope.get(key) ?? [];
     this.filterByScope.set(key, [...new Set([...prev, ...filterPaths])]);
+    this.rememberDark(key, paths);
     if (!this.lastByScope.has(key)) {
       this.lastByScope.set(key, new Map(nodes.map((n) => [n.id, n])));
     }
@@ -182,6 +188,7 @@ export class V2Sampler {
     const projection = projectHierarchy(now, this.deps);
 
     for (const [key, paths] of this.scopes) {
+      this.syncReadability(key, paths, now);
       const scoped = scopeFilter(projection.nodes, this.filterByScope.get(key) ?? paths);
       const scopedMap = new Map(scoped.map((n) => [n.id, n]));
       const last = this.lastByScope.get(key);
@@ -263,6 +270,35 @@ export class V2Sampler {
     }
 
     this.compare();
+  }
+
+  private rememberDark(key: string, paths: string[]): void {
+    if (this.darkByScope.has(key)) return;
+    this.darkByScope.set(key, this.classify(paths).dark);
+  }
+
+  private classify(paths: string[]): { live: string[]; dark: Map<string, string> } {
+    const known = new Set(this.deps.listWorkspaces());
+    const live: string[] = [];
+    const dark = new Map<string, string>();
+    for (const p of paths) {
+      if (!known.has(p)) dark.set(p, 'unknown');
+      else if (!this.isReadable(p)) dark.set(p, 'unreadable');
+      else live.push(p);
+    }
+    return { live, dark };
+  }
+
+  private syncReadability(key: string, paths: string[], now: number): void {
+    const { live, dark } = this.classify(paths);
+    const prev = this.darkByScope.get(key) ?? new Map();
+    for (const [path, reason] of dark) {
+      if (prev.get(path) !== reason) {
+        this.bus.emit(key, { type: 'dark', id: workspaceId(path), reason }, now);
+      }
+    }
+    this.darkByScope.set(key, dark);
+    this.filterByScope.set(key, live);
   }
 
   private syncWatchers(): void {

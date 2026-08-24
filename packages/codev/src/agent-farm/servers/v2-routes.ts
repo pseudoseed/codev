@@ -224,7 +224,11 @@ function bindProduction(): void {
   sampler = new V2Sampler({
     bus,
     deps: v2,
-    hooks: { watch: watchBuildersDir, nextNotBefore: nextMailboxNotBefore },
+    hooks: {
+      watch: watchBuildersDir,
+      nextNotBefore: nextMailboxNotBefore,
+      isReadable: productionReadable,
+    },
   });
   sampler.start();
   deps = {

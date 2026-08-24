@@ -1,4 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { IDLE_WAITING_THRESHOLD_MS } from '@cluesmith/codev-sdk/builder-helpers';
 import type { V2Counts, V2Frame, V2Node } from '@cluesmith/codev-types';
 import { architectId, builderId, workspaceId } from '../servers/v2-ids.js';
@@ -136,12 +139,13 @@ function makeSampler(world: World, bus: ScopeBus, extra?: {
   watch?: (dir: string, wake: () => void) => () => void;
   nextNotBefore?: (now: number) => number | null;
   timers?: SamplerTimers;
+  isReadable?: (workspacePath: string) => boolean;
 }): V2Sampler {
   const sampler = new V2Sampler({
     bus,
     deps: world.deps(),
     timers: extra?.timers ?? { now: () => world.now, setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {} },
-    hooks: { watch: extra?.watch, nextNotBefore: extra?.nextNotBefore },
+    hooks: { watch: extra?.watch, nextNotBefore: extra?.nextNotBefore, isReadable: extra?.isReadable },
   });
   samplers.push(sampler);
   return sampler;
@@ -755,6 +759,80 @@ describe('V2Sampler', () => {
     world.now += V2_TICK_MS;
     intervals[0].fn();
     expect(frames.some((f) => f.type === 'tick')).toBe(true);
+    unsub();
+  });
+
+  it('live path going unreadable emits dark; restore emits node; sibling stays live', () => {
+    const world = new World();
+    world.workspaces = [WS_A, WS_B];
+    world.builders[WS_B] = [];
+    world.addLiveBuilder('spir-52');
+    const readable = new Set([WS_A, WS_B]);
+    const bus = new ScopeBus();
+    const sampler = makeSampler(world, bus, { isReadable: (p) => readable.has(p) });
+    const snap = world.projection();
+    sampler.seedScope([WS_A, WS_B], snap.nodes, snap.counts);
+    const { frames, unsub } = collect(bus, [WS_A, WS_B]);
+
+    readable.delete(WS_A);
+    sampler.compare();
+    expect(frames.some((f) => f.type === 'dark' && f.id === workspaceId(WS_A) && f.reason === 'unreadable')).toBe(true);
+    expect(frames.some((f) => f.type === 'gone' && f.id === workspaceId(WS_A))).toBe(true);
+    expect(frames.some((f) => f.type === 'dark' && f.id === workspaceId(WS_B))).toBe(false);
+
+    const afterDark = frames.length;
+    readable.add(WS_A);
+    sampler.compare();
+    const recovered = frames.slice(afterDark);
+    expect(recovered.some((f) => f.type === 'node' && f.node.id === workspaceId(WS_A))).toBe(true);
+    expect(recovered.some((f) => f.type === 'dark')).toBe(false);
+    unsub();
+  });
+
+  it('chmod 000 then restore emits dark then node on one subscription', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'v2-dark-'));
+    const isReadable = (p: string): boolean => {
+      try {
+        fs.accessSync(p, fs.constants.R_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      const world = new World();
+      world.workspaces = [dir];
+      world.builders[dir] = [];
+      const bus = new ScopeBus();
+      const sampler = makeSampler(world, bus, { isReadable });
+      const snap = world.projection();
+      sampler.seedScope([dir], snap.nodes, snap.counts);
+      const { frames, unsub } = collect(bus, [dir]);
+
+      fs.chmodSync(dir, 0o000);
+      sampler.compare();
+      expect(frames.some((f) => f.type === 'dark' && f.id === workspaceId(dir) && f.reason === 'unreadable')).toBe(true);
+
+      const afterDark = frames.length;
+      fs.chmodSync(dir, 0o755);
+      sampler.compare();
+      expect(frames.slice(afterDark).some((f) => f.type === 'node' && f.node.id === workspaceId(dir))).toBe(true);
+      unsub();
+    } finally {
+      try { fs.chmodSync(dir, 0o755); } catch { /* already restored */ }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not re-emit connect-time dark on the first compare', () => {
+    const world = new World();
+    const bus = new ScopeBus();
+    const sampler = makeSampler(world, bus, { isReadable: () => false });
+    const snap = world.projection();
+    sampler.seedScope([WS_A], snap.nodes, snap.counts);
+    const { frames, unsub } = collect(bus, [WS_A]);
+    sampler.compare();
+    expect(frames.some((f) => f.type === 'dark')).toBe(false);
     unsub();
   });
 });
