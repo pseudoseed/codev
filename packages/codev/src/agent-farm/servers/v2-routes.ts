@@ -15,6 +15,7 @@ import {
 } from './tower-terminals.js';
 import { projectHierarchy, type V2Deps, type V2Projection } from './v2-projection.js';
 import { V2Sampler, V2_BUCKET_SLOTS } from './v2-sampler.js';
+import { serveV2Static } from './v2-static.js';
 
 export const V2_EVENTS_PATH = '/v2/events';
 export const V2_MAX_CLIENTS = 50;
@@ -248,8 +249,7 @@ export async function handleV2Route(
   url: URL,
 ): Promise<void> {
   if (url.pathname !== V2_EVENTS_PATH) {
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('Not found');
+    serveV2Static(req, res, url);
     return;
   }
   if (req.method !== 'GET') {

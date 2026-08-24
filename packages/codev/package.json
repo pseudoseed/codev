@@ -17,19 +17,21 @@
     "skeleton",
     "templates",
     "dashboard-dist",
+    "v2-dist",
     "scripts/forge",
     "scripts/postinstall.mjs"
   ],
   "scripts": {
     "clean": "rm -rf dist",
     "build": "pnpm --filter \"@cluesmith/codev^...\" build && pnpm clean && tsc && pnpm bundle-assets",
-    "bundle-assets": "pnpm copy-dashboard && pnpm copy-skeleton && node ./scripts/copy-three.mjs",
+    "bundle-assets": "pnpm copy-dashboard && pnpm copy-v2 && pnpm copy-skeleton && node ./scripts/copy-three.mjs",
     "copy-dashboard": "rm -rf dashboard-dist && cp -r ../../apps/web/dist dashboard-dist",
+    "copy-v2": "pnpm --filter @cluesmith/codev-v2 build && rm -rf v2-dist && cp -r ../../apps/v2/dist v2-dist",
     "dev:dashboard": "cd ../../apps/web && pnpm dev",
     "copy-skeleton": "rm -rf skeleton && cp -r ../../codev-skeleton skeleton",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
-    "test": "vitest",
+    "test": "vitest run && pnpm --filter @cluesmith/codev-v2 test",
     "test:e2e": "pnpm build && vitest run --config vitest.e2e.config.ts",
     "test:e2e:watch": "vitest --config vitest.e2e.config.ts",
     "test:e2e:playwright": "pnpm exec playwright test",
@@ -57,6 +59,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@cluesmith/codev-v2": "workspace:*",
     "@cluesmith/codev-web": "workspace:*",
     "@playwright/test": "^1.58.0",
     "@types/better-sqlite3": "^7.6.13",
