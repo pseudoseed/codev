@@ -1,9 +1,14 @@
+---
+approved: 2026-08-24
+validated: [codex]
+---
+
 # Specification: v2 client shell — apps/v2 renders the live hierarchy
 
 - **Issue:** #83
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 11
+- **Status:** Approved, rev. 11
 - **Depends on:** spec 52 (v2 server events), merged
 
 ## Problem Statement
