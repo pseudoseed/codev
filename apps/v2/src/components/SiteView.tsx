@@ -3,6 +3,8 @@ import { buildTree } from '../lib/tree.js';
 import { ArchitectHeader } from './ArchitectHeader.js';
 import { BuilderRow } from './BuilderRow.js';
 import { MachineFooter } from './MachineFooter.js';
+import { MachineRow } from './MachineRow.js';
+import { SiteHeader } from './SiteHeader.js';
 import { WorkspacePlot } from './WorkspacePlot.js';
 
 type Props = { state: AppState; hostname: string };
@@ -12,11 +14,9 @@ export function SiteView({ state, hostname }: Props) {
   const hasOrphans = orphanArchitects.length > 0 || orphanBuilders.length > 0;
   return (
     <>
-      <header className="lot-header">
-        <h1>{hostname}</h1>
-        <span className="stamp">this machine</span>
-      </header>
+      <SiteHeader counts={state.reducer.counts} />
       <main className="site-main grid-bg">
+        <MachineRow hostname={hostname} connection={state.connection} />
         <section className="plot corner lot">
           <span className="stamp lot-tag">Machine Lot</span>
           <div className="plot-grid">
