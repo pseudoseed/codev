@@ -3,7 +3,7 @@
 - **Issue:** #83
 - **Program:** Codev v2 UI (#37)
 - **Protocol:** SPIR
-- **Status:** Draft, rev. 3
+- **Status:** Draft, rev. 4
 - **Depends on:** spec 52 (v2 server events), merged
 
 ## Problem Statement
@@ -18,7 +18,7 @@ Meanwhile `apps/v2` does not exist. FRD Part 0 decided it must: a new fork-owned
 
 | Piece | Where | State |
 |---|---|---|
-| Event stream | `GET /v2/events` (`v2-routes.ts`) | shipped, unconsumed |
+| Event stream | `GET /v2/events` (`v2-routes.ts`) | shipped; **consumed once, by hand, at rev. 4** |
 | Wire types | `packages/types/src/v2-events.ts` | shipped |
 | Mount | one `/v2/` prefix branch, `tower-routes.ts:282` | shipped; **reuse it, do not add a second** |
 | Dispatch | `handleV2Route`, `v2-routes.ts:250` | 404s every path but `GET /v2/events`; needs a prologue (D6) |
@@ -30,6 +30,20 @@ Meanwhile `apps/v2` does not exist. FRD Part 0 decided it must: a new fork-owned
 | Design of record | 27 designs, `codev/research/v2-mockups/uxpilot/` | previews on `main`; HTML not pulled |
 | `apps/v2` | — | does not exist |
 
+## Verified against the live stream
+
+Rev. 1 said the contract "has never been consumed by anything." At rev. 4 it has been, once: a `curl` against the running Tower on port 4100, with the key header, decoding real frames. Five things came back that no reading of the code had produced, and each one changed the spec.
+
+| # | Observed | Consequence |
+|--:|---|---|
+| 1 | `V2NodeKind` emits `workspace \| architect \| builder`. **No machine node, ever.** | D10. Criterion 1 was unimplementable as written. |
+| 2 | Scope of 1 workspace → 16 nodes, but `counts` said `{workspaces: 22, builders: {total: 58}}` | D11. `counts` is machine-wide, not the scope's rollup — off by 45 builders in the observed case. |
+| 3 | `encodeURIComponent(paths.join(','))` → **HTTP 200**, `nodes: []`, and a `dark` frame | D12. `parseScope` splits the raw value before decoding. The failure is silent and renders as a plausible empty machine. |
+| 4 | All 13 builders returned `parentId: "workspace:<path>"`. **Zero architect parents.** | D13. FR-3 is not satisfiable from this stream. |
+| 5 | A dark workspace appeared in a `dark` frame **and not in `nodes`** | D5, D1. `darkPaths` must be a separate store; there is no node to mark. |
+
+Findings 1, 2 and 4 are properties of the shipped contract. C2 stands — they are reported, not patched from here.
+
 ## Desired State
 
 `/v2/` serves one page that opens the stream and draws this machine's hierarchy from the approved site design, updating by push, with no timer anywhere in the client.
@@ -39,7 +53,7 @@ Meanwhile `apps/v2` does not exist. FRD Part 0 decided it must: a new fork-owned
 1. `apps/v2` exists as a fork-owned workspace and builds.
 2. The stream is consumed correctly, every frame type handled.
 3. The site view renders per the approved design, using the shipped tokens.
-4. FR-1, FR-3, FR-4, FR-41, FR-42 and FR-15 are satisfied and demonstrable in a browser.
+4. FR-1, FR-4, FR-41, FR-42 and FR-15 are satisfied and demonstrable in a browser. **FR-3 is not, and D13 says why.**
 5. **The wire contract is exercised by a real client**, and any place it fails a renderer is reported rather than worked around.
 
 ## Non-Goals
@@ -62,9 +76,13 @@ This is a correction to rev. 1, which froze both files that own `/v2/`. `handleV
 
 **C3 — `packages/sdk` unmodified, and its SSE helpers are the wrong tool.** Import from it; do not extend it here.
 
-`subscribeEvents` (`tower-client.ts:1085`) and `parseSseText` (`sse.ts:18`) target `GET /api/events` and a `{type, body}` envelope. **V2 frames are the bare `data:` payload with no envelope.** Reusing those helpers would silently mis-parse every frame. Write the v2 stream reader in `apps/v2`. `listWorkspaces()` (`tower-client.ts:400`) *is* the right SDK call, and D7 is the only place the client uses it.
+`subscribeEvents` (`tower-client.ts:1085`) and `parseSseText` (`sse.ts:18`) target `GET /api/events` and a `{type, body}` envelope. **V2 frames are the bare `data:` payload with no envelope.** Reusing those helpers would silently mis-parse every frame.
 
-**C4 — No polling.** No `setInterval`, no `setTimeout`-driven refetch, no re-fetch on focus. The only timer permitted is reconnect backoff.
+**This unit calls no SDK method at all.** Rev. 2 named `listWorkspaces()` as the right bootstrap call; D7 rev. 3 established that it cannot be, and rev. 4 removes the endorsement here so the two do not disagree. `apps/v2` writes its own stream reader and its own bootstrap fetch. It may import **types** from `packages/types`; it imports no client behaviour.
+
+**C4 — No polling.** No `setInterval` anywhere — **zero occurrences**, not "only in backoff". No `setTimeout`-driven refetch, no re-fetch on focus, no re-fetch on visibility change.
+
+**Exactly one `setTimeout` is permitted**, the reconnect backoff of D2, and it is named as such at its call site. Rev. 3's criterion said `setInterval` "only in reconnect backoff", which contradicted itself: backoff is a one-shot delay and `setTimeout` is its shape.
 
 **C5 — FR-49 from the first line.** A pane is a viewer. Nothing in the client may terminate a session. This unit has no panes; the rule is established before anything can violate it.
 
@@ -90,6 +108,19 @@ The stream is the source of truth. The client holds `Map<nodeId, Node>` plus `Co
 | `counts` | Replace `Counts`. |
 | `tick` | Advance every in-scope builder's trace: append the frame's value for that id, or **zero if the id is absent**, then drop the oldest. |
 | `dark` | Mark the named **`workspace:<path>`** dark, with its `reason`. Keep every other node streaming. See D5. |
+
+The client holds **two** stores, not one. `nodes: Map<nodeId, Node>` and `darkPaths: Map<workspaceId, reason>`, because a dark workspace is **not in `nodes`** (D5). `counts` is a third value and it is not a rollup of either (D11).
+
+**Every accepted frame advances the cursor to its `seq`** — deltas included, not only snapshots. Rev. 3 stated it for `snapshot` alone, which would make a reconnect after 500 deltas resume from the snapshot and replay all of them.
+
+Four degenerate cases, each with a defined answer, because the natural handling of all four is to render something plausible and wrong:
+
+| Case | Answer |
+|---|---|
+| A frame that is not valid JSON | Drop that frame, **do not advance the cursor**, log it. Never treat a parse failure as a `gone`. |
+| A frame with an unknown `type` | Drop it, **do not advance the cursor**, surface it as a contract mismatch. There is no silent ignore. |
+| Stream EOF (server closed cleanly) | Reconnect with `since` and `stream` per D2. Not an error state, not an empty tree. |
+| Non-2xx on the stream request | The unreachable state (D5) plus backoff. A 400 here means the client built a bad `scope` — see D12 — and must say so rather than render empty. |
 
 **`tick` is the only writer of `buckets` after the snapshot.** That is contract, not preference: `node` frames carry no buckets precisely so two clients cannot diverge.
 
@@ -135,9 +166,12 @@ Three distinct renderings, and conflating any two of them is a defect:
 |---|---|---|
 | **Empty** | `snapshot` with `nodes: []`, or zero workspaces from D7 | The site view with no plots, and it says so |
 | **Dark workspace** | A `dark` frame naming `workspace:<path>` | That plot renders dark and labelled with its `reason`; every other plot keeps streaming |
+| | **and there is no `Node` for it** | the plot is built from the id alone — decode the path out of `workspace:<path>` and use its basename as the label |
 | **Unreachable Tower** | The `fetch` fails, or 401/403 — **no frame arrives at all** | A connection state on the whole page, not an empty tree. Reconnect per D2 |
 
 The unreachable case is the one with no wire signal, so it is the one that will default to looking empty. It must not. A page that cannot reach Tower and a machine with nothing running are opposite facts.
+
+**A dark workspace has no `Node`, and this is measured, not inferred.** Against the live stream, a scope naming one unreadable path returned `"nodes":[]` *and* a `dark` frame for that path in the same snapshot. So `darkPaths` is a separate store, and rendering a dark plot means constructing it from the encoded id — there is nothing in `nodes` to mark. A snapshot replaces `darkPaths` wholesale alongside `nodes`; a workspace that recovers simply stops appearing in the next snapshot's dark frames, and the client must clear it rather than leaving a stale dark plot on screen forever.
 
 ### D6 — Serving the page, and how the key gets into it
 
@@ -191,6 +225,53 @@ The change is two clauses:
 
 The Host guard, origin checks and the rest of `isRequestAllowed` are untouched — this widens `isPublicRoute` only, and only for two `GET` shapes.
 
+### D10 — There is no machine on the wire; the machine is the page
+
+`V2NodeKind` is `workspace | architect | builder`. **No machine node is ever emitted.** FR-1 names four levels and the stream carries three.
+
+This unit renders **one** machine — the local one — as the page's own frame: its hostname in the header, and every workspace plot inside it. It is not a node, it is not selectable, and nothing in the reducer represents it. Multi-machine is FR-16 and a later unit; when it lands, the machine level becomes real and this presentation is what it grows out of.
+
+Criterion 1 was written as "renders every machine … the stream reports." The stream reports none. Corrected below.
+
+### D11 — `counts` is machine-wide, and it is not the scope's rollup
+
+**Measured against the live stream**: a scope naming one workspace returned 16 nodes (1 workspace, 2 architects, 13 builders) alongside `counts` of `{workspaces: 22, builders: {total: 58, …}}`.
+
+So `counts` describes the whole machine while `nodes` describes the requested scope. They differ by 45 builders in the observed case. **A client that renders `counts` as the header for the tree it just drew is wrong, and wrong in a way that looks authoritative.**
+
+It renders in the footer, labelled as the machine's totals, visually separate from the tree. `gateWaiting` is the one field that is directly useful — it is the count behind FR-43's queue chip — and it too is machine-wide.
+
+This is an observation about the shipped contract, not a request to change it. C2 stands.
+
+### D12 — Encode each scope path; join with a literal comma
+
+`parseScope` (`v2-routes.ts:80-99`) splits the **raw** query value on `,` and only then percent-decodes each part. So the encoding is:
+
+```
+scope=<encodeURIComponent(path1)>,<encodeURIComponent(path2)>
+```
+
+**`encodeURIComponent(paths.join(','))` is wrong and it fails silently.** Measured: it encodes the separators to `%2C`, the split finds one part, and the server resolves a single nonsense path. The answer is `nodes: []` plus a `dark` frame with `reason: "unknown"` — HTTP 200, no error, and a rendering that looks like a plausible empty machine. This is the exact failure D5 exists to prevent, arriving from the client's own encoding.
+
+Scenario 18 asserts the encoding directly rather than trusting a round-trip that "looks right."
+
+### D13 — FR-3 cannot be satisfied here, and the client renders the flat truth
+
+FR-3 requires a builder to appear under the architect that spawned it. **The stream cannot express it.**
+
+Measured against the live stream: all 13 builders in a real workspace returned `parentId: "workspace:<path>"`. Zero had an architect parent. The cause is upstream of the stream — `discoverBuilders` hardcodes `spawnedByArchitect: null` (`overview.ts:602, 662, 697`), so the projection has nothing to attach a builder to.
+
+Two things follow, and both are required:
+
+1. **The client renders what the wire says**: builders sit under the workspace, beside the architect header, not under it. **It does not invent a parent** by name-matching a builder to an architect. A guessed hierarchy that is right most of the time is worse than a flat one that is honest.
+2. **This is reported as a finding, per C2 and goal 5** — a separate issue against `discoverBuilders`, not a patch from this unit. FR-3 stays a MUST in the FRD; it is simply unmet until the server can carry it.
+
+### D14 — `/v2/` must survive `npm pack`, not just `pnpm dev`
+
+`packages/codev/package.json` publishes `dashboard-dist` (`files`, line 19), built by `copy-dashboard` from `apps/web/dist` (line 27). **There is no equivalent for `apps/v2`.** Without one, `/v2/` works in this repo and 404s from the installed CLI, which is the only place adopters have.
+
+Required: a `copy-v2` script into its own published directory, that directory added to `files`, `v2-static.ts` resolving from it, and **an `npm pack` check that the built assets are in the tarball**. In-repo passing is not evidence.
+
 ### D8 — What of the design ships here
 
 `01-site.html` is the reference and it contains more than this unit builds. The cut is named so it is not argued later.
@@ -203,7 +284,7 @@ The Host guard, origin checks and the rest of `isRequestAllowed` are untouched �
 
 ### Functional
 
-1. `/v2/` loads and renders every machine, workspace, architect and builder the stream reports.
+1. `/v2/` loads and renders every workspace, architect and builder the stream reports, inside the local machine's frame (D10). **The stream reports no machine node; do not wait for one.**
 2. Spawning a builder makes its row appear **with no reload and no client timer**.
 3. A builder entering a gate renders rust with a `GATE` stamp.
 4. A builder silent past `IDLE_WAITING_THRESHOLD_MS` renders ochre and `STALLED`.
@@ -216,18 +297,21 @@ The Host guard, origin checks and the rest of `isRequestAllowed` are untouched �
 
 ### Non-functional
 
-11. **No polling.** `grep` for `setInterval` in `apps/v2/src` returns only reconnect backoff, and that is named as such. `/api/workspaces` is requested exactly once per page load — provable in the devtools network panel.
+11. **No polling.** `grep -r setInterval apps/v2/src` returns **zero** matches. `grep -r setTimeout` returns exactly one, at the named reconnect-backoff call site. `/api/workspaces` is requested exactly once per page load — provable in the devtools network panel.
 12. Cold load under 2s to interactive on LAN (Part 5).
 13. Idle network under 1 KB/s with nothing happening (Part 5), measured in devtools.
 14. `GET /v2/` serves the app with `window.__CODEV_TOWER_KEY__` set, and the response carries **no** `Access-Control-Allow-Origin`.
 15. **A browser navigating to `/v2/` with no header gets the page, not a 401.** `GET /v2/events` with no header still gets a 401.
 16. A failing bootstrap and a zero-workspace bootstrap produce different renderings — asserted against a 401, a 500, a thrown fetch, and a 200 with `[]`.
+17. `counts` renders in the footer as the machine's totals and is never presented as the drawn tree's rollup (D11).
+18. A builder appears under its workspace, beside the architect header — the flat truth the wire carries (D13). No architect parent is inferred.
+19. **`npm pack` on `packages/codev` contains the built `apps/v2` assets** (D14). Passing in-repo is not evidence.
 
 ### Non-regression
 
-17. `apps/web`, `tower.html`, `apps/vscode`, `apps/streamdeck`, `tower-server.ts`, `pty-session.ts` and **`tower-routes.ts`** are byte-unchanged. `git diff --stat` proves it.
-18. The only change to `v2-routes.ts` is the dispatch prologue. The only change to `server-utils.ts` is the two `GET /v2/` clauses in `isPublicRoute`. The frozen files in C2 are byte-unchanged.
-19. Existing test suites pass untouched, including spec 52's 57 v2 tests and the existing `isPublicRoute` cases.
+20. `apps/web`, `tower.html`, `apps/vscode`, `apps/streamdeck`, `tower-server.ts`, `pty-session.ts` and **`tower-routes.ts`** are byte-unchanged. `git diff --stat` proves it.
+21. The only changes outside `apps/v2/` are: the dispatch prologue in `v2-routes.ts`, the two `GET /v2/` clauses in `isPublicRoute`, and the packaging wiring of D14. The frozen files in C2 are byte-unchanged.
+22. Existing test suites pass untouched, including spec 52's 57 v2 tests and the existing `isPublicRoute` cases.
 
 ## Solution Approaches
 
@@ -265,16 +349,26 @@ Both were open at rev. 1 and are now decided. Neither is a builder decision.
 11. **Non-regression.** `git diff --stat` on the frozen C1 files, including `tower-routes.ts`, is empty.
 12. **Key injection, three properties.** Malformed key yields no injection; the HTML response has no `Access-Control-Allow-Origin` or `Vary`; the script precedes `</head>`.
 13. **Scope bootstrap.** `/api/workspaces` is requested once; a reconnect reuses the cached scope and does not re-request it.
-14. **Zero workspaces.** `listWorkspaces()` returns `[]`; assert the stream is never opened and the empty site renders.
+14. **Zero workspaces.** The bootstrap fetch returns 200 with an empty workspace list; assert the stream is never opened and the empty site renders. **Not via `listWorkspaces()`** — see C3 and D7.
 15. **Static serving.** `GET /v2/assets/../../etc/passwd` is refused; a non-allowlisted extension is refused; `GET /v2/nonsense` is 404.
 16. **Public vs keyed.** No-header `GET /v2/` → 200; no-header `GET /v2/assets/index.js` → 200; no-header `GET /v2/events?scope=…` → 401; no-header `POST /v2/` → not public.
 17. **Bootstrap failure is not emptiness.** Four cases — 401, 500, thrown fetch, and 200 with `[]` — produce the unreachable state for the first three and the empty state for the fourth.
+18. **Scope encoding.** Two paths in, assert the query string is `scope=<enc1>,<enc2>` with a **literal** comma. Assert that `encodeURIComponent(join(','))` is not what is produced. Round-trip both through `parseScope`'s own splitting rule.
+19. **Cursor advances on deltas.** Feed a snapshot then 5 `node` frames; assert a reconnect uses the last delta's `seq`, not the snapshot's.
+20. **Degenerate frames.** Invalid JSON, an unknown `type`, a clean EOF, and a non-2xx — each produces D1's stated answer, and none advances the cursor except where stated.
+21. **Dark has no node.** A snapshot with `nodes: []` plus a `dark` frame renders one dark plot built from the id. A later snapshot without that dark frame clears it.
+22. **A dark workspace recovers.** Assert the stale dark plot disappears rather than persisting.
 
 ## Risks and Mitigation
 
 | Risk | Probability | Impact | Mitigation |
 |---|---:|---|---|
-| The wire contract fails a real renderer | Medium — it has never been consumed | High — blocks the client | Report it; C2 forbids patching the server from here |
+| The wire contract fails a real renderer | ~~Medium~~ **Confirmed** — 5 findings on first consumption | High | Each is now a locked decision (D10–D13). C2 forbids patching the server from here |
+| Scope encoded as `encodeURIComponent(join(','))` | High — it is the idiomatic line to write | High — HTTP 200 with an empty tree and a dark frame, no error anywhere | D12 with the measurement; scenario 18 |
+| A builder given an inferred architect parent to satisfy FR-3 | Medium — the names often match | High — a guessed hierarchy that is usually right is worse than a flat honest one | D13 |
+| `counts` rendered as the drawn tree's rollup | High — the fields invite it | Medium — authoritative-looking numbers off by 45 | D11; criterion 17 |
+| Cursor advanced only on snapshots | Medium | Medium — a reconnect replays every delta since the snapshot | D1; scenario 19 |
+| `/v2/` ships in-repo only and 404s from the installed CLI | High — nothing in the build wires it | High — adopters have only the installed CLI | D14; criterion 19 requires `npm pack` |
 | Absent-in-`tick` rendered as unchanged | High — it is the natural reading | High — a stalled builder looks busy, inverting FR-42 | D1 states it; scenario 2 asserts it |
 | A charting library added for 20 bars | Medium — `recharts` is already in the monorepo | Medium — bundle and a dependency for a flexbox job | Assumption 4; `.spark` already exists in `tokens.css` |
 | Rust used for something other than gates | High without a rule | High — the colour discipline is the design | D3 states it; review the diff for `--rust` uses |
