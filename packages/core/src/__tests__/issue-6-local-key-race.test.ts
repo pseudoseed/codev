@@ -126,6 +126,24 @@ describe.runIf(hasDist)('#6: every caller must end up with the key that is on di
 });
 
 describe.runIf(hasDist)('#6: the concurrent case, which is the one CI hit', () => {
+  it('never returns an EMPTY key, which the first fix could still do', async () => {
+    // Round 2 of #6. `writeFileSync(..., { flag: 'wx' })` was exclusive but not
+    // atomic: it creates the file and THEN writes it, so a concurrent caller's
+    // `existsSync` saw a zero-byte file, skipped the create branch, and read
+    // ''. Measured over 25 cold-start rounds of 8 processes, one round returned
+    // lengths 64,0,64,0,64,64,64,64 — two callers got an empty key while the
+    // file on disk held a correct one.
+    //
+    // Asserted separately from "all agree" because agreement alone does not
+    // catch it: '' and '' agree with each other. An empty key is the worse
+    // outcome — it presents as no key at all and every request 401s.
+    const keys = await raceForKey(8);
+
+    for (const key of keys) {
+      expect(key).toMatch(/^[0-9a-f]{64}$/);
+    }
+  }, 60_000);
+
   it('eight cold-start callers all agree, and agree with the file', async () => {
     // The old code could return up to eight DIFFERENT keys here, with the file
     // holding whichever write landed last. One Tower and one client picking
