@@ -12,12 +12,13 @@ export function BuilderRow({ node }: Props) {
     <div className={cls} data-kind="builder" data-id={node.id}>
       <div className="stake-top">
         <span className="stamp stake-name">
+          <span className="kind-prefix">builder/</span>
           {node.name}
           {node.flags.heldMail ? <span className="held-mail">mail</span> : null}
         </span>
         <StatusStamp status={node.status} />
       </div>
-      <Sparkline values={node.buckets} />
+      <Sparkline values={node.buckets} status={node.status} />
     </div>
   );
 }

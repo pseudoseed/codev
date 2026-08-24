@@ -12,26 +12,98 @@ html, body, #root {
   flex-direction: column;
 }
 
+/* ---------- top bar: the mark, then what is on this machine ---------- */
+
 .lot-header {
   border-bottom: var(--rule) solid var(--ink);
   background: var(--chalk);
-  padding: 16px 24px;
+  padding: 0 24px;
+  height: 56px;
   display: flex;
-  align-items: baseline;
-  gap: 12px;
+  align-items: center;
+  gap: 16px;
 }
 
-.lot-header h1 {
-  margin: 0;
+.mark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mark-badge {
+  width: 28px;
+  height: 28px;
+  border: var(--rule) solid var(--ink);
+  background: var(--ink);
+  color: var(--chalk);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mark-name {
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 600;
 }
 
-.lot-header .stamp {
+.mark-rule {
+  width: 1px;
+  align-self: stretch;
+  margin: 14px 0;
+  background: var(--concrete);
+}
+
+.site-register {
   font-size: 11px;
   text-transform: uppercase;
   color: var(--graphite);
+}
+
+/* ---------- the machine this page is about ---------- */
+
+.machine-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.machine-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.machine-meta {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--graphite);
+}
+
+.machine-status {
+  margin-left: auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+}
+
+.machine-status.online { color: var(--moss); }
+.machine-status.off { color: var(--graphite); }
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--graphite);
+  opacity: 0.4;
+}
+
+.dot-online {
+  background: var(--moss);
+  opacity: 1;
 }
 
 .site-main {
@@ -56,10 +128,28 @@ html, body, #root {
   border: 1px solid var(--ink);
 }
 
+/*
+ * Issue #111. A row grid is as tall as its tallest cell, so one workspace with
+ * twenty-seven builders left a crater across the three columns beside it —
+ * align-items: start stopped the stretching but not the hole. Column flow has
+ * no rows to be trapped in: plots pack down each column and the page ends at
+ * the tallest plot rather than at the sum of the row heights.
+ *
+ * The trade is ordering. Multicol reads top-to-bottom then across, where the
+ * grid read across then down. Nothing on this page is ranked, so there is no
+ * order to lose.
+ */
 .plot-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 16px;
+  column-width: 300px;
+  column-gap: 16px;
+}
+
+.plot-grid > * {
+  /* Without this a plot is sliced across the column boundary and its border
+     is drawn twice, once around each half. */
+  -webkit-column-break-inside: avoid;
+  break-inside: avoid;
+  margin-bottom: 16px;
 }
 
 .ws-plot {
@@ -85,8 +175,53 @@ html, body, #root {
 .arch-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-bottom: 8px;
+}
+
+/* The prefix is how four node kinds stay apart at a glance. Muted so the
+   name still leads, present so the kind never has to be inferred from
+   indentation alone. */
+.kind-prefix {
+  color: var(--graphite);
+}
+
+/* The workspace prefix reads as one line — "workspace / checkout" — so its
+   spacing comes from here, not from the header's flex gap. */
+.ws-plot-title .kind-prefix {
+  margin-right: 5px;
+}
+
+.glyph {
+  color: var(--graphite);
+  flex: none;
+}
+
+.ws-plot-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+  margin-left: auto;
+}
+
+/* An unreachable workspace with nothing left standing. Keeps the lot's
+   footprint so the shape of the site does not move when it comes back. */
+.empty-lot {
+  border: 1px dashed var(--graphite);
+  padding: 18px 12px;
+  text-align: center;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--graphite);
 }
 
 .unattached {
@@ -108,6 +243,13 @@ html, body, #root {
 .stake {
   background: var(--chalk);
   padding: 6px 8px 6px 8px;
+}
+
+/* Gate treatment, and the only place rust touches a row. The stake itself
+   turns rust so a waiting builder is findable in a column of forty. */
+.stake.needs-attn {
+  border: 1px solid var(--rust);
+  border-left-width: 3px;
 }
 
 .stake-top {

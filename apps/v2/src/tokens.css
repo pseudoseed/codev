@@ -100,6 +100,14 @@
   width: 3px;
   background: var(--ink);
 }
+/* A zero bucket still draws a floor bar, so an idle trace is a flat baseline
+   rather than an empty box. Muted, because idle is quiet, not alarming. */
+.spark i.idle { background: var(--graphite); opacity: 0.34; }
+/* Colour follows the same discipline as the stamps: moss runs, ochre stalls,
+   and everything else stays ink. Gate rows are deliberately not rust — the
+   rust belongs to the gate stamp, not to a decoration beside it. */
+.spark[data-status='running'] i.live { background: var(--moss); }
+.spark[data-status='stalled'] i.live { background: var(--ochre); }
 
 /* Something needs a human. The only animation in the design. */
 .needs-attn { animation: pulseAttn 2.2s ease-in-out infinite; }

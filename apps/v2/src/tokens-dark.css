@@ -96,6 +96,11 @@
   width: 3px;
   background: var(--ink);
 }
+/* Mirrors tokens.css. Idle is dimmer here than in light: --graphite is
+   already close to --ink on this ground, so it needs the lower alpha. */
+.spark i.idle { background: var(--graphite); opacity: 0.28; }
+.spark[data-status='running'] i.live { background: var(--moss); }
+.spark[data-status='stalled'] i.live { background: var(--ochre); }
 
 .needs-attn { animation: pulseAttn 2.2s ease-in-out infinite; }
 @keyframes pulseAttn {

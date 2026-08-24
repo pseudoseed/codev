@@ -123,15 +123,114 @@ test('stalled is STALLED ochre', async ({ page }) => {
   await expect.poll(async () => stamp.evaluate((el) => getComputedStyle(el).color)).toBe('rgb(192, 138, 46)');
 });
 
+// The idle floor. A zero bucket still draws a bar this tall so a quiet
+// builder reads as quiet rather than as a broken row (issue #112).
+const IDLE = '3px';
+
 test('sparkline advances on tick and silent builder flattens', async ({ page }) => {
   await openSite(page);
   await push([{ type: 'tick', at: 't0', buckets: { 'builder:1': 9, 'builder:2': 9 } }]);
   const busy = page.locator('[data-id="builder:1"] .spark i').last();
   const silent = page.locator('[data-id="builder:2"] .spark i').last();
-  await expect.poll(async () => busy.evaluate((el) => (el as HTMLElement).style.height)).not.toBe('2px');
-  await expect.poll(async () => silent.evaluate((el) => (el as HTMLElement).style.height)).not.toBe('2px');
+  await expect.poll(async () => busy.evaluate((el) => (el as HTMLElement).style.height)).not.toBe(IDLE);
+  await expect.poll(async () => silent.evaluate((el) => (el as HTMLElement).style.height)).not.toBe(IDLE);
   await push([{ type: 'tick', at: 't1', buckets: { 'builder:1': 9 } }]);
-  await expect.poll(async () => silent.evaluate((el) => (el as HTMLElement).style.height)).toBe('2px');
+  await expect.poll(async () => silent.evaluate((el) => (el as HTMLElement).style.height)).toBe(IDLE);
+});
+
+test('an all-zero trace is a flat baseline with real height', async ({ page }) => {
+  await openSite(page);
+  const bars = page.locator('[data-id="builder:2"] .spark i');
+  await expect(bars).toHaveCount(20);
+  const boxes = await bars.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
+  expect(boxes.every((h) => h >= 3)).toBe(true);
+  expect(new Set(boxes).size).toBe(1);
+});
+
+test('every node kind carries its prefix in the browser', async ({ page }) => {
+  await openSite(page);
+  await expect(page.locator('[data-kind="workspace"] .kind-prefix').first()).toHaveText('workspace /');
+  await expect(page.locator('[data-kind="architect"] .kind-prefix').first()).toHaveText('architect/');
+  await expect(page.locator('[data-id="builder:1"] .kind-prefix')).toHaveText('builder/');
+  await expect(page.locator('[data-id="builder:1"] .stake-name')).toHaveText('builder/b1');
+  await expect(page.getByTestId('site-register')).toContainText('22 workspaces');
+  await expect(page.getByTestId('site-register')).toContainText('58 builders');
+});
+
+function ws(name: string) {
+  return {
+    type: 'node',
+    node: {
+      id: `workspace:/tmp/${name}`,
+      kind: 'workspace',
+      parentId: null,
+      name,
+      status: 'running',
+      flags: { heldMail: false },
+      lastDataAt: null,
+    },
+  };
+}
+
+function builderIn(host: string, n: number) {
+  return {
+    type: 'node',
+    node: {
+      id: `builder:${host}-${n}`,
+      kind: 'builder',
+      parentId: `workspace:/tmp/${host}`,
+      name: `${host}-${n}`,
+      status: 'running',
+      flags: { heldMail: false },
+      lastDataAt: null,
+    },
+  };
+}
+
+test('plots size to their content instead of the tallest in the row', async ({ page }) => {
+  await openSite(page);
+  await push([ws('beta')]);
+  await expect(page.locator('[data-id="workspace:/tmp/beta"]')).toBeVisible();
+  const heights = await page
+    .locator('.plot-grid > [data-kind="workspace"]')
+    .evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
+  expect(Math.min(...heights)).toBeLessThan(Math.max(...heights));
+});
+
+test('one tall workspace does not leave a row-height crater beside it', async ({ page }) => {
+  /*
+   * Issue #111, and the half that align-items: start did not fix. A row grid is
+   * as tall as its tallest cell, so a workspace with dozens of builders left
+   * every short plot in its row floating over dead space. Needs more plots than
+   * there are columns — the one-workspace fixture cannot show this, which is
+   * why it got past spec 83.
+   */
+  await openSite(page);
+  const frames: unknown[] = [];
+  for (const name of ['b1', 'b2', 'b3', 'b4', 'b5', 'tall']) frames.push(ws(name));
+  for (let i = 0; i < 12; i += 1) frames.push(builderIn('tall', i));
+  await push(frames);
+  await expect(page.locator('[data-id="builder:tall-11"]')).toBeVisible();
+
+  const m = await page.evaluate(() => {
+    const grid = document.querySelector('.plot-grid') as HTMLElement;
+    const plots = [...document.querySelectorAll('.plot-grid > *')];
+    const rects = plots.map((el) => el.getBoundingClientRect());
+    return {
+      grid: grid.getBoundingClientRect().height,
+      tallest: Math.max(...rects.map((r) => r.height)),
+      shortest: Math.min(...rects.map((r) => r.height)),
+      columns: new Set(rects.map((r) => Math.round(r.left))).size,
+      plots: plots.length,
+    };
+  });
+
+  // Several plots and more than one column: the shape the crater needs.
+  expect(m.plots).toBeGreaterThan(4);
+  expect(m.columns).toBeGreaterThan(1);
+  // The lot ends at its tallest plot. Under a row grid it ended at the sum of
+  // the row heights, which is what left the hole.
+  expect(m.grid).toBeLessThan(m.tallest + m.shortest);
 });
 
 test('gone removes the row', async ({ page }) => {
