@@ -122,41 +122,48 @@ describe('#8: a rejected value must not read as an accepted one', () => {
 });
 
 describe('#8: the runner honours the per-check bound', () => {
+  // These drive real processes. `runCheck` sends SIGTERM at the bound and only
+  // SIGKILLs 5s later, and under `shell: true` the child can outlive the
+  // SIGTERM, so a timing-out check can take the full 5s escalation to close.
+  // Vitest's 5s default sits exactly on that edge and failed in CI while
+  // passing locally — hence an explicit bound well clear of it.
+  const KILL_ESCALATION_HEADROOM_MS = 20_000;
+
   it('kills a check at ITS bound, not at the phase default', async () => {
-    // A 5s sleep under a 300ms bound. If the per-check value were dropped on
-    // the way to `runCheck`, this would pass by running to completion.
+    // A 30s sleep under a 100ms bound. If the per-check value were dropped on
+    // the way to `runCheck`, this would run to completion and pass.
     const results = await runPhaseChecks(
-      { slow: { command: 'sleep 5', timeout_ms: 300 } },
+      { slow: { command: 'sleep 30', timeout_ms: 100 } },
       process.cwd(),
       { PROJECT_ID: '8', PROJECT_TITLE: 'timeout' },
     );
 
     expect(results[0].passed).toBe(false);
     expect(results[0].error).toContain('Timed out');
-  });
+  }, KILL_ESCALATION_HEADROOM_MS);
 
   it('lets a check outlive the phase default when it raises its own bound', async () => {
-    // The whole point: 300ms phase default, a check that needs longer, and it
+    // The whole point: a 100ms phase default, a check that needs longer, and it
     // is allowed to finish rather than being reported as a failure.
     const results = await runPhaseChecks(
-      { slow: { command: 'sleep 1', timeout_ms: 10_000 } },
+      { slow: { command: 'sleep 1', timeout_ms: 15_000 } },
       process.cwd(),
       { PROJECT_ID: '8', PROJECT_TITLE: 'timeout' },
-      300,
+      100,
     );
 
     expect(results[0].passed).toBe(true);
-  });
+  }, KILL_ESCALATION_HEADROOM_MS);
 
   it('still applies the phase default to a check with no bound of its own', async () => {
     const results = await runPhaseChecks(
-      { slow: { command: 'sleep 5' } },
+      { slow: { command: 'sleep 30' } },
       process.cwd(),
       { PROJECT_ID: '8', PROJECT_TITLE: 'timeout' },
-      300,
+      100,
     );
 
     expect(results[0].passed).toBe(false);
     expect(results[0].error).toContain('Timed out');
-  });
+  }, KILL_ESCALATION_HEADROOM_MS);
 });
