@@ -1180,6 +1180,28 @@ function consultSandboxDir(): string {
   return _consultSandboxDir;
 }
 
+/** Gitignored consult dir inside the workspace — opencode can Read here (#103). */
+function opencodeConsultDir(workspaceRoot: string): string {
+  const dir = path.join(workspaceRoot, '.consult');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/**
+ * Copy a sandbox artifact into the workspace when it lives outside it.
+ * opencode auto-rejects `external_directory`; a `-f` of a `/var/folders`
+ * path is still that unreadable pointer (#103).
+ */
+function stageInsideWorkspace(src: string, workspaceRoot: string): string {
+  const root = path.resolve(workspaceRoot);
+  if (path.resolve(src) === root || path.resolve(src).startsWith(root + path.sep)) {
+    return src;
+  }
+  const dest = path.join(opencodeConsultDir(workspaceRoot), path.basename(src));
+  fs.copyFileSync(src, dest);
+  return dest;
+}
+
 /**
  * Sandbox-dir file paths a composed query text points at (#44).
  *
@@ -1662,9 +1684,8 @@ export async function runOpencodeConsultation(
   }
 
   // opencode has no system-prompt flag, so the role folds into the prompt (hermes/agy precedent).
-  const prompt = `${role}\n\n---\n\n${queryText}`;
   let tempFile: string | null = null;
-  let promptArg = prompt;
+  let promptArg = '';
   // Files handed to opencode via `-f`, which ATTACHES their content to the
   // message rather than asking the model to go read a path (#44).
   //
@@ -1688,24 +1709,33 @@ export async function runOpencodeConsultation(
   // nothing.
   //
   // Attaching sidesteps the permission system instead of negotiating with it.
+  //
+  // The file still has to live where opencode is allowed to Read (#103).
+  // `consultSandboxDir()` is under the OS temp root; opencode auto-rejects
+  // `external_directory`, so a `-f` of a `/var/folders/...` path is the same
+  // unreadable pointer as "read this file". Stage everything under
+  // `<workspace>/.consult/` (gitignored; already used for consult history).
   const attachments: string[] = [];
+  let stagedQuery = queryText;
+  for (const src of extractSandboxPaths(queryText)) {
+    const staged = stageInsideWorkspace(src, workspaceRoot);
+    if (staged !== src) stagedQuery = stagedQuery.split(src).join(staged);
+    if (!attachments.includes(staged)) attachments.push(staged);
+  }
+  const stagedPrompt = `${role}\n\n---\n\n${stagedQuery}`;
 
-  if (prompt.length > CLI_PROMPT_INLINE_MAX_CHARS) {
-    tempFile = path.join(consultSandboxDir(), `codev-consult-prompt-${Date.now()}.md`);
-    fs.writeFileSync(tempFile, prompt);
-    attachments.push(tempFile);
+  if (stagedPrompt.length > CLI_PROMPT_INLINE_MAX_CHARS) {
+    tempFile = path.join(opencodeConsultDir(workspaceRoot), `codev-consult-prompt-${Date.now()}.md`);
+    fs.writeFileSync(tempFile, stagedPrompt);
+    attachments.unshift(tempFile);
     promptArg = [
-      'The full consultation prompt is ATTACHED to this message. Read the attachment and',
-      'follow it exactly. Do not proceed on the summary below alone.',
+      `The full consultation prompt is ATTACHED to this message and is also at: ${tempFile}`,
+      'Read the attachment, or that file, and follow it exactly. Do not proceed on this summary alone.',
       '',
       'You also have filesystem access to the repository for surrounding context.',
     ].join('\n');
-  }
-
-  // Attach the PR diff too, when this review has one. `queryText` names the
-  // path; without the attachment the model can see the name and not the bytes.
-  for (const diffPath of extractSandboxPaths(queryText)) {
-    if (!attachments.includes(diffPath)) attachments.push(diffPath);
+  } else {
+    promptArg = stagedPrompt;
   }
 
   const args = buildOpencodeArgs(choice.id, attachments, promptArg);
@@ -1784,7 +1814,7 @@ export async function runOpencodeConsultation(
       // A zero exit with nothing on stdout is the #20 shape exactly: no review, but nothing that
       // looks like a failure either. Refuse to let it pass as one.
       if (raw.length === 0) {
-        fail('opencode produced no review output', 0);
+        fail('opencode produced no review output', 1);
         return;
       }
       // Same shape one step further in: a protocol-mode run that answered, but never stated a
@@ -1801,7 +1831,7 @@ export async function runOpencodeConsultation(
           'opencode produced a review with no VERDICT line. A review that states no verdict is ' +
           'not a verdict — porch would read it as a non-blocking COMMENT and count it as an ' +
           'approval.',
-          0,
+          1,
         );
         return;
       }

@@ -29,6 +29,7 @@ import {
   opencodeReviewHeader,
   resolveLaneModelChoice,
   DEFAULT_OPENCODE_MODEL,
+  _consultSandboxDirForTest,
 } from '../index.js';
 import { findVerdict, parseVerdict } from '../../porch/verdict.js';
 import {
@@ -409,12 +410,36 @@ describe('a prompt too large for argv', () => {
     const tempFile = argv[fileFlag + 1];
     expect(tempFile).toMatch(/\.md$/);
 
+    // #103: the file is inside the workspace, not OS temp. opencode
+    // auto-rejects `external_directory` under `/var/folders`.
+    expect(path.resolve(tempFile).startsWith(path.resolve(dir) + path.sep)).toBe(true);
+    expect(tempFile).toContain(`${path.sep}.consult${path.sep}`);
+    expect(promptArg).toContain(tempFile);
+
     // `--` sits immediately before the prompt: `-f` is a yargs [array] and
     // would otherwise swallow the positional as another filename.
     expect(argv.at(-2)).toBe('--');
 
     // Cleaned up after the run — the file existed only for opencode to read.
     expect(fs.existsSync(tempFile)).toBe(false);
+  });
+
+  it('copies a sandbox-only path into the workspace so opencode can Read it (#103)', async () => {
+    const sandbox = _consultSandboxDirForTest();
+    const src = path.join(sandbox, 'pr-103.diff');
+    fs.writeFileSync(src, 'diff --git a/x b/x\n');
+
+    await _runOpencodeConsultation(`**Diff file**: \`${src}\``, 'role', dir);
+
+    const argv = opencodeArgv();
+    const attached = argv[argv.indexOf('-f') + 1];
+    expect(path.resolve(attached).startsWith(path.resolve(dir) + path.sep)).toBe(true);
+    expect(attached).toContain(`${path.sep}.consult${path.sep}`);
+    expect(attached).not.toBe(src);
+    expect(fs.readFileSync(attached, 'utf-8')).toBe('diff --git a/x b/x\n');
+    // The prompt must name the readable copy, not the /var/folders original.
+    expect(argv.at(-1)!).toContain(attached);
+    expect(argv.at(-1)!).not.toContain(src);
   });
 
   it('keeps a normal prompt inline', async () => {
