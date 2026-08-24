@@ -1,12 +1,13 @@
 id: '83'
 title: v2-client-shell-apps-v2-render
 protocol: spir
-phase: specify
+phase: plan
 plan_phases: []
 current_plan_phase: null
 gates:
   spec-approval:
-    status: pending
+    status: approved
+    approved_at: '2026-08-24T06:44:32.952Z'
   plan-approval:
     status: pending
   pr:
@@ -17,4 +18,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-24T06:44:19.322Z'
-updated_at: '2026-08-24T06:44:19.323Z'
+updated_at: '2026-08-24T06:44:32.953Z'
