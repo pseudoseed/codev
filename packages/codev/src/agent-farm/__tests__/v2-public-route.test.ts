@@ -27,12 +27,16 @@ beforeEach(() => {
 });
 
 describe('v2 public vs keyed (scenario 16)', () => {
-  it('isPublicRoute: GET /v2/ and GET /v2/assets/* only', () => {
+  it('isPublicRoute: GET /v2, GET /v2/ and GET /v2/assets/* only', () => {
     expect(isPublicRoute('GET', '/v2/')).toBe(true);
     expect(isPublicRoute('GET', '/v2/assets/index.js')).toBe(true);
     expect(isPublicRoute('GET', '/v2/assets/app.css')).toBe(true);
+    // #105: the bare URL a person types. Public so it reaches its redirect
+    // instead of 401ing, which reads as a key problem.
+    expect(isPublicRoute('GET', '/v2')).toBe(true);
 
-    expect(isPublicRoute('GET', '/v2')).toBe(false);
+    expect(isPublicRoute('POST', '/v2')).toBe(false);
+    expect(isPublicRoute('GET', '/v22')).toBe(false);
     expect(isPublicRoute('GET', '/v2/events')).toBe(false);
     expect(isPublicRoute('GET', '/v2/events')).toBe(false);
     expect(isPublicRoute('POST', '/v2/')).toBe(false);
@@ -51,6 +55,11 @@ describe('v2 public vs keyed (scenario 16)', () => {
 
   it('isRequestAllowed: keyless POST /v2/ is rejected', () => {
     expect(isRequestAllowed(req('POST', '/v2/'))).toBe(false);
+  });
+
+  it('isRequestAllowed: keyless GET /v2 succeeds, keyless POST /v2 does not', () => {
+    expect(isRequestAllowed(req('GET', '/v2'))).toBe(true);
+    expect(isRequestAllowed(req('POST', '/v2'))).toBe(false);
   });
 
   it('isRequestAllowed: keyed GET /v2/events is allowed', () => {

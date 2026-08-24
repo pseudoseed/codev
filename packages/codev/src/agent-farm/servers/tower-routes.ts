@@ -279,7 +279,10 @@ export async function handleRequest(
     // Pattern-based routes (require regex or prefix matching)
 
     // v2 events: /v2/* (Spec 52). One prefix branch; the module owns the rest.
-    if (url.pathname.startsWith('/v2/')) {
+    // Bare `/v2` joins it (#105) so the URL a person types reaches the module
+    // and gets its redirect, rather than falling through to the generic 404.
+    // Dispatch only — every v2 decision still belongs to handleV2Route.
+    if (url.pathname === '/v2' || url.pathname.startsWith('/v2/')) {
       return await handleV2Route(req, res, url);
     }
 

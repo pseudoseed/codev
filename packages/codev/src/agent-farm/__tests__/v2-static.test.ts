@@ -158,6 +158,27 @@ describe('serveV2Static via handleV2Route', () => {
     expect(out.statusCode()).toBe(404);
   });
 
+  it('301s GET /v2 to /v2/ (#105)', async () => {
+    const out = makeRes();
+    await handleV2Route(makeReq('GET', '/v2'), out.res, urlFor('/v2'));
+    expect(out.statusCode()).toBe(301);
+    expect(out.headers().Location).toBe('/v2/');
+    expect(out.body()).toBe('');
+  });
+
+  it('carries the query string across the /v2 redirect', async () => {
+    const out = makeRes();
+    await handleV2Route(makeReq('GET', '/v2?scope=%2Ftmp%2Falpha'), out.res, urlFor('/v2?scope=%2Ftmp%2Falpha'));
+    expect(out.statusCode()).toBe(301);
+    expect(out.headers().Location).toBe('/v2/?scope=%2Ftmp%2Falpha');
+  });
+
+  it('404s non-GET on /v2 rather than redirecting it', async () => {
+    const out = makeRes();
+    await handleV2Route(makeReq('POST', '/v2'), out.res, urlFor('/v2'));
+    expect(out.statusCode()).toBe(404);
+  });
+
   it('404s GET /v2/nonsense', async () => {
     const out = makeRes();
     await handleV2Route(makeReq('GET', '/v2/nonsense'), out.res, urlFor('/v2/nonsense'));

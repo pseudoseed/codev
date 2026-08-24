@@ -145,6 +145,7 @@ export function isPublicRoute(method: string, pathname: string): boolean {
   if (pathname === '/health') return true;
   if (pathname === '/api/version') return true;
   if (pathname === '/' || pathname === '/index.html') return true;
+  if (pathname === '/v2') return true;
   if (pathname === '/v2/') return true;
   if (pathname.startsWith('/v2/assets/')) return true;
 

@@ -117,6 +117,14 @@ export function serveV2Static(
     notFound(res);
     return;
   }
+  if (url.pathname === '/v2') {
+    // #105: `/v2` is the URL a person types. Without this it 401s (it is not
+    // in the public allowlist) and reads as a key problem. The query string
+    // rides along so a scoped link keeps its scope across the redirect.
+    res.writeHead(301, { Location: `/v2/${url.search}` });
+    res.end();
+    return;
+  }
   if (url.pathname === '/v2/') {
     serveIndex(res);
     return;
