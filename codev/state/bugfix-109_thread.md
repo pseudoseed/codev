@@ -67,3 +67,25 @@ CMAP r1: gemini skipped (agy quota). Codex+Claude REQUEST_CHANGES: overlay took 
 CMAP r2: opencode APPROVE. Codex REQUEST_CHANGES on task/protocol spawn ids — out of issue scope, rebutted. Claude REQUEST_CHANGES: alias reached porch init. Fixed: `findStatusPath(..., { alias: false })` on init.
 
 Live check on this worktree (290 project dirs): overlay reports `pr/pr`, not 0087 `complete`.
+
+## PR review correction (2026-08-24)
+
+Architect review found the new protocol-complete notifications caused CI teardown errors:
+`notifyTerminal` spawned `afx` fire-and-forget, then logged its missing-dist failure after the
+protocol tests had finished. Guarded the shared notification chokepoint with
+`isUnderTestRunner()`, covering both new completion call sites and the existing gate wake-up,
+and added a regression assertion that neither direct nor protocol-complete notification spawns
+under the runner.
+
+Verification:
+
+- notify + both formerly affected full-protocol tests: 3 files / 22 tests passed.
+- full Codev Vitest coverage suite: 309 files passed, 3 skipped; 6,034 tests passed, 48 skipped;
+  `EnvironmentTeardownError` absent (`Errors 0`), exit 0.
+
+### Flaky tests
+
+The first unsandboxed full-suite run had one unrelated transient `ENOTEMPTY` cleanup failure in
+`spawn-gate-profile.test.ts`. It passed immediately in isolation (6/6), and the full-suite rerun
+passed cleanly. The earlier sandboxed attempt was invalid for this suite because Unix socket
+listeners are denied with `EPERM`.

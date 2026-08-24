@@ -15,6 +15,7 @@
 import { execFile } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isUnderTestRunner } from '../../lib/test-env.js';
 
 function resolveAfxBinary(): string {
   const thisDir = dirname(fileURLToPath(import.meta.url));
@@ -54,6 +55,12 @@ export function notifyProtocolComplete(workspaceRoot: string, projectId: string)
  * Errors are logged but never thrown — notification is best-effort.
  */
 export function notifyTerminal(opts: NotifyTerminalOptions): void {
+  // Fire-and-forget execFile's error callback console.errors after the
+  // suite has finished when afx.js cannot load (CI: ERR_MODULE_NOT_FOUND
+  // on dist/agent-farm/cli.js). That is an EnvironmentTeardownError, not
+  // a failed assertion. Same class as #1515: no-op under a test runner.
+  if (isUnderTestRunner()) return;
+
   const afBinary = resolveAfxBinary();
 
   execFile(

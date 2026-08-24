@@ -17,6 +17,11 @@ vi.mock('node:child_process', () => ({
   spawnSync: vi.fn(),
 }));
 
+const mockIsUnderTestRunner = vi.fn(() => false);
+vi.mock('../../../lib/test-env.js', () => ({
+  isUnderTestRunner: (...args: unknown[]) => mockIsUnderTestRunner(...args),
+}));
+
 import { execFile } from 'node:child_process';
 import { notifyTerminal, gateApprovedMessage, protocolCompleteMessage, notifyProtocolComplete } from '../notify.js';
 
@@ -24,6 +29,8 @@ const mockExecFile = vi.mocked(execFile);
 
 describe('notifyTerminal', () => {
   beforeEach(() => {
+    mockIsUnderTestRunner.mockReset();
+    mockIsUnderTestRunner.mockReturnValue(false);
     mockExecFile.mockReset();
     mockExecFile.mockImplementation(
       (_cmd: any, _args: any, _opts: any, cb: any) => {
@@ -113,6 +120,13 @@ describe('notifyTerminal', () => {
 
     const args = mockExecFile.mock.calls[0][1]!;
     expect(args[0]).toMatch(/bin\/afx\.js$/);
+  });
+
+  it('no-ops under a test runner so a failed afx cannot log after teardown (#109)', () => {
+    mockIsUnderTestRunner.mockReturnValue(true);
+    notifyTerminal({ target: 'architect', message: 'x', worktreeDir: '/p' });
+    notifyProtocolComplete('/p', 'bugfix-147');
+    expect(mockExecFile).not.toHaveBeenCalled();
   });
 
   it('protocol-complete notify targets architect (#109)', () => {
