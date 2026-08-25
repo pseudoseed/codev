@@ -8,17 +8,17 @@ plan_phases:
     status: complete
   - id: phase_2
     title: Resolver-delivered gate authoring guidance
-    status: in_progress
+    status: complete
   - id: phase_3
     title: Exact-gate v2 wire projection
-    status: pending
+    status: in_progress
   - id: phase_4
     title: Accessible live gate-detail behavior
     status: pending
   - id: phase_5
     title: Design-faithful gate-detail presentation
     status: pending
-current_plan_phase: phase_2
+current_plan_phase: phase_3
 gates:
   spec-approval:
     status: approved
@@ -33,7 +33,7 @@ gates:
   verify-approval:
     status: pending
 iteration: 1
-build_complete: true
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -84,7 +84,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/spir-128/codev/projects/128-v2-gates-the-approved-design-n/128-phase_1-iter2-opencode.txt
         stated: true
 started_at: '2026-08-25T00:02:43.765Z'
-updated_at: '2026-08-25T09:53:00.981Z'
+updated_at: '2026-08-25T14:27:59.026Z'
 context_refreshes:
   - boundary: enter:plan
     at: '2026-08-25T05:23:52.849Z'
@@ -95,3 +95,5 @@ context_refreshes:
   - boundary: plan-phase:phase_2
     at: '2026-08-25T09:27:30.904Z'
     acknowledged_at: '2026-08-25T09:28:46.667Z'
+  - boundary: plan-phase:phase_3
+    at: '2026-08-25T14:27:59.026Z'
