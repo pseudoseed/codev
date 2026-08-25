@@ -3,10 +3,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { TEST_SUITE_LOCK_PORT } from '../../vitest-global-setup.js';
+import {
+  acquireTestSuiteLock,
+  TEST_SUITE_LOCK_PORT,
+} from '../../vitest-global-setup.js';
 
 const PACKAGE_ROOT = resolve(import.meta.dirname, '../..');
 const LOCK_MODULE = pathToFileURL(resolve(PACKAGE_ROOT, 'vitest-global-setup.ts')).href;
@@ -128,5 +132,24 @@ describe('issue #130 concurrent suite exclusion', () => {
     await successorDone;
     expect(readFileSync(log, 'utf8')).toContain('successor:acquired\n');
   }, 20_000);
+
+  it('fails with an actionable error instead of waiting forever', async () => {
+    const port = TEST_SUITE_LOCK_PORT - 2;
+    const occupant = createServer();
+    await new Promise<void>((resolveListen, reject) => {
+      occupant.once('error', reject);
+      occupant.listen({ port, host: '127.0.0.1', exclusive: true }, resolveListen);
+    });
+
+    try {
+      await expect(acquireTestSuiteLock(port, 50)).rejects.toThrow(
+        `Another Vitest run or unrelated process likely holds it; check with: lsof -i :${port}`,
+      );
+    } finally {
+      await new Promise<void>((resolveClose, reject) => {
+        occupant.close((error) => error ? reject(error) : resolveClose());
+      });
+    }
+  });
 
 });

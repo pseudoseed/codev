@@ -23,3 +23,10 @@ changing every fixed-port contract and fits BUGFIX scope.
 Added the three-config global lock and a real two-process barrier test. Mutation-disabled lock:
 waiter acquired early and the regression failed; restored lock passed. Repeated the original
 parallel tower-api command: both runs passed 16/16 and the second printed the wait diagnostic.
+
+## PR review — 2026-08-25
+
+The architect approved the socket-mutex design but required a bounded wait so a hung suite or
+unrelated listener cannot make later runs look merely slow forever. Added a two-minute deadline
+and an actionable timeout naming the occupied port and `lsof` command, plus a regression that
+holds the port and exercises a short deadline.
