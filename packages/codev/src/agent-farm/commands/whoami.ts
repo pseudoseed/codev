@@ -2,15 +2,16 @@
  * Whoami command — report this terminal's agent identity (Spec 1134).
  *
  * Answers "who am I, from Tower/global.db's perspective?" for any terminal:
- * builders resolve from their worktree cwd against global.db, architects from
- * the Tower-injected CODEV_ARCHITECT_NAME env var. Identity precedence is
- * fixed by the spec: builder-worktree cwd match → CODEV_ARCHITECT_NAME →
- * unknown (exit non-zero). There is deliberately NO implicit fallback to
- * 'main' — an unverified identity misroutes downstream consumers (issue
- * #1094), so unknown must fail loud.
+ * builders resolve from stable launch context (or worktree cwd) against
+ * global.db, architects from the Tower-injected CODEV_ARCHITECT_NAME env var.
+ * Builder identity takes precedence over architect identity. There is
+ * deliberately NO implicit fallback to 'main' — an unverified identity
+ * misroutes downstream consumers (issues #1094 and #47), so unknown must fail
+ * loud.
  *
  * Read-only invariant: this command never opens global.db read-write. Builder
- * resolution reuses detectCurrentBuilderId() (its own read-only connection);
+ * resolution reuses detectCurrentBuilderId() (stable builder launch context,
+ * then worktree cwd; its own read-only connection);
  * all whoami-specific queries share one read-only connection opened here.
  *
  * The identity helpers are imported from ./send.js rather than relocated:
@@ -88,13 +89,13 @@ function workspaceDisplayName(workspaceRoot: string | null, db: Database.Databas
  * Resolve the current terminal's identity per the spec precedence.
  *
  * Throws `BuilderIdResolutionError` when cwd IS a builder worktree whose
- * identity cannot be verified (no fallthrough to the env check — #1094), and
+ * identity cannot be verified (no fallthrough to architect identity — #1094), and
  * `WhoamiError` when no identity signal resolves at all.
  */
 export function resolveIdentity(env: NodeJS.ProcessEnv = process.env): WhoamiIdentity {
-  // 1. Builder-worktree cwd match. A BuilderIdResolutionError propagates
-  //    verbatim: inside a confirmed worktree, an unverifiable identity is an
-  //    error, never a reason to consult the env var.
+  // 1. Stable builder launch context, then builder-worktree cwd. A
+  //    BuilderIdResolutionError propagates verbatim: an unverifiable builder
+  //    identity is an error, never a reason to consult the architect env var.
   const builderId = detectCurrentBuilderId();
   const workspaceRoot = detectWorkspaceRoot();
   const db = openReadonlyGlobalDb();

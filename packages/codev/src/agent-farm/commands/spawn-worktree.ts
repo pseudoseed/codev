@@ -1089,7 +1089,12 @@ export async function startBuilderSession(
   const agentCmd = selection?.modelScriptFragment
     ? `${baseCmd} ${selection.modelScriptFragment}`
     : baseCmd;
-  let envBlock = '';
+  // Issue #47: cwd is mutable, so it cannot be the sole identity of a builder
+  // terminal. These launch-time values survive `cd`; send.ts verifies them
+  // against global.db before using them.
+  let envBlock =
+    `export CODEV_BUILDER_ID='${shellEscapeSingleQuote(builderId)}'\n` +
+    `export CODEV_WORKTREE_ROOT='${shellEscapeSingleQuote(worktreePath)}'\n`;
   let roleFragment = '';
 
   if (roleContent) {
@@ -1105,7 +1110,7 @@ export async function startBuilderSession(
     const envExports = Object.entries(env)
       .map(([k, v]) => `export ${k}='${shellEscapeSingleQuote(v)}'`)
       .join('\n');
-    envBlock = envExports ? `${envExports}\n` : '';
+    if (envExports) envBlock += `${envExports}\n`;
 
     // Write any harness-specific worktree files (e.g., opencode.json for OpenCode,
     // the write-guard hook for Claude — Issue #1018)

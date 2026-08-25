@@ -21,13 +21,25 @@ import { TowerClient } from '../lib/tower-client.js';
 const MAX_FILE_SIZE = 48 * 1024; // 48KB limit per spec
 
 /**
- * Detect workspace root from CWD by walking up to find .git or .codev/config.json.
- * Builder worktrees are at .builders/<id>/ which is inside the workspace root.
+ * Detect workspace root from stable builder-session context, then CWD by
+ * walking up to find .git or .codev/config.json. Builder worktrees are at
+ * .builders/<id>/ which is inside the workspace root.
  *
  * Note: checks for .codev/config.json (not just .codev/) to avoid false
  * positives from ~/.codev/ which exists for global config.
  */
 export function detectWorkspaceRoot(): string | null {
+  // Issue #47: builder identity belongs to the terminal session, not its
+  // current directory. Prefer the launch-time worktree root while that stable
+  // identity is present, so `cd` into the workspace (or elsewhere) cannot
+  // silently change the sender into an architect.
+  const sessionBuilderId = process.env.CODEV_BUILDER_ID?.trim();
+  const sessionWorktree = process.env.CODEV_WORKTREE_ROOT?.trim().replace(/\/+$/, '');
+  if (sessionBuilderId && sessionWorktree) {
+    const sessionMatch = sessionWorktree.match(/^(.+)\/\.builders\/[^/]+$/);
+    if (sessionMatch) return sessionMatch[1];
+  }
+
   let dir = process.cwd();
   // If inside .builders/<id>/, the workspace root is the prefix before the
   // LAST `/.builders/`. Greedy `.+` (not lazy `.+?`) so a nested worktree path
@@ -87,7 +99,7 @@ export function describeStateDbOpenFailure(dbPath: string, worktreeDirName: stri
 }
 
 /**
- * Detect the current builder ID from the worktree path.
+ * Detect the current builder ID from stable launch context or the worktree path.
  *
  * Issue #1118: builders live in the single shared `global.db`, scoped by
  * `workspace_path` (per-workspace `state.db` is retired). This resolves the
@@ -101,19 +113,40 @@ export function describeStateDbOpenFailure(dbPath: string, worktreeDirName: stri
  * in state.ts.
  *
  * Contract:
- *   - Returns `null` when CWD is not inside a builder worktree (not a builder).
+ *   - A complete `CODEV_BUILDER_ID` + `CODEV_WORKTREE_ROOT` pair wins over CWD
+ *     and is verified against global.db, so builder identity survives `cd`.
+ *   - Returns `null` when neither launch context nor CWD identifies a builder.
  *   - Returns the canonical builder ID when it can be verified against global.db.
- *   - **Throws `BuilderIdResolutionError`** when CWD *is* a builder worktree but
- *     the canonical ID cannot be verified (global.db missing, unopenable, or no
- *     matching row). Failing loud here is deliberate: returning a bare,
- *     unverified id silently misroutes `afx send architect` to `main` (#1094).
+ *   - **Throws `BuilderIdResolutionError`** when launch context or CWD identifies
+ *     a builder worktree but the canonical ID cannot be verified (global.db
+ *     missing, unopenable, or no matching row). Failing loud here is deliberate:
+ *     returning a bare, unverified id silently misroutes to `main` (#1094).
  */
 export function detectCurrentBuilderId(): string | null {
-  const cwd = process.cwd();
+  const sessionBuilderId = process.env.CODEV_BUILDER_ID?.trim();
+  const rawSessionWorktree = process.env.CODEV_WORKTREE_ROOT?.trim();
+  if ((sessionBuilderId && !rawSessionWorktree) || (!sessionBuilderId && rawSessionWorktree)) {
+    throw new BuilderIdResolutionError(
+      'Cannot resolve builder identity: CODEV_BUILDER_ID and CODEV_WORKTREE_ROOT must both be set. ' +
+        "Refusing to guess — an incomplete builder session identity could misroute 'afx send architect' (issue #47).",
+    );
+  }
+
+  // The launch-time identity wins over cwd: a builder remains the same sender
+  // after `cd`, including when cwd happens to be another worktree.
+  const identityPath = rawSessionWorktree?.replace(/\/+$/, '') ?? process.cwd();
   // Builder worktrees are at .builders/<dir-name>/. Greedy `.+` (not lazy `.+?`)
   // so a nested worktree resolves the INNER builder (the LAST `/.builders/`).
-  const match = cwd.match(/^(.+)\/\.builders\/([^/]+)/);
-  if (!match) return null;
+  const match = identityPath.match(/^(.+)\/\.builders\/([^/]+)(?:\/.*)?$/);
+  if (!match) {
+    if (sessionBuilderId) {
+      throw new BuilderIdResolutionError(
+        `Cannot resolve builder identity: CODEV_WORKTREE_ROOT '${rawSessionWorktree}' is not a builder worktree. ` +
+          "Refusing to guess — an invalid builder session identity could misroute 'afx send architect' (issue #47).",
+      );
+    }
+    return null;
+  }
 
   const workspacePath = match[1];
   const worktreeDirName = match[2];
@@ -151,11 +184,13 @@ export function detectCurrentBuilderId(): string | null {
       .prepare('SELECT id, worktree FROM builders WHERE workspace_path = ? AND worktree IS NOT NULL')
       .all(ws) as Array<{ id: string; worktree: string }>;
 
-    const exact = rows.find(r => r.worktree === canonicalWorktree);
-    if (exact) return exact.id;
-
-    const tail = rows.find(r => r.worktree.split('/').pop() === worktreeDirName);
-    if (tail) return tail.id;
+    const candidates = rows.filter(
+      r => r.worktree === canonicalWorktree || r.worktree.split('/').pop() === worktreeDirName,
+    );
+    const verified = sessionBuilderId
+      ? candidates.find(r => r.id === sessionBuilderId)
+      : candidates[0];
+    if (verified) return verified.id;
 
     throw new BuilderIdResolutionError(
       `Cannot resolve canonical builder id for worktree '${worktreeDirName}': ` +
