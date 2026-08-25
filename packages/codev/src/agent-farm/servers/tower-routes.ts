@@ -1994,7 +1994,7 @@ async function handleSend(
 
   // Spec 1273: `escape` delivers a bare ESC keystroke and returns. Explicit human
   // bypass — no gate, no mailbox row. ESC ends the running turn so already-queued
-  // messages process; the trailing Enter (default) is what lets them through
+  // messages process; an explicitly requested trailing Enter lets them through
   // (matching the verified recovery `afx send <b> --raw "$(printf '\x1b')"`).
   if (escape) {
     // Awaited: the response must not claim delivery before the ESC and its

@@ -105,13 +105,16 @@ afx interrupt <builder>
 
 | Flag | Description |
 |------|-------------|
-| `--no-enter` | Send ESC alone, without the trailing Enter |
+| `--enter` | Send Enter after ESC so queued messages process; unsafe at unknown dialogs |
+| `--no-enter` | Send ESC alone (the default; retained for compatibility) |
 
 A builder chaining foreground waits inside one turn queues every `afx send` unread — including your order
-to stop. ESC ends the turn so the queue processes. Distinct from `afx send --interrupt` (Ctrl+C).
+to stop. ESC alone is the safe default because Enter can activate a highlighted dialog action. Use
+`--enter` only when the terminal is in a known running turn and the queued messages need to process.
+Distinct from `afx send --interrupt` (Ctrl+C).
 
 ```bash
-afx interrupt 0042
+afx interrupt 0042 --enter
 afx send 0042 "That producer died — stop waiting and report."
 ```
 

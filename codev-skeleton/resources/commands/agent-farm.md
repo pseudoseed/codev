@@ -480,22 +480,25 @@ afx interrupt <builder> [options]
 - `builder` - Target builder. Same addressing as `afx send`.
 
 **Options:**
-- `--no-enter` - Send ESC alone, without the trailing Enter
+- `--enter` - Send Enter after ESC so queued messages process; use only when you know no dialog can consume it
+- `--no-enter` - Send ESC alone (the default; retained for compatibility)
 
 **Description:**
 
 This is the only recovery that reaches a builder **mid-turn**. When a builder chains foreground waits
 inside a single turn, every `afx send` — including your order to stop — queues unread until that turn
-ends. ESC interrupts the running tool and ends the turn, after which the queued messages process. The
-trailing Enter (default) is what lets them through.
+ends. ESC interrupts the running tool and ends the turn. ESC alone is the safe default because Enter
+can activate whatever action an unknown dialog has highlighted. Use `--enter` when ending a known
+running turn and processing its queued messages is worth that risk.
 
 Distinct from `afx send --interrupt`, which sends Ctrl+C.
 
 **Examples:**
 
 ```bash
-# Builder is wedged on a foreground wait and not reading messages
-afx interrupt 0042
+# Builder is wedged on a foreground wait and not reading messages;
+# the explicit Enter submits the now-idle prompt so queued instructions process
+afx interrupt 0042 --enter
 
 # Then the queued instruction lands
 afx send 0042 "That producer died — stop waiting and report."
