@@ -27,3 +27,7 @@
 - Claude also noted, non-blockingly, that Tower's lower-level escape API still defaults to Enter for callers that omit `noEnter`; `afx refresh` intentionally uses that separate path. Kept out of this CLI-scoped BUGFIX rather than changing another command's established semantics.
 - Claude's follow-up re-review APPROVED and pointed out that the exported `interrupt()` function still treated an omitted `noEnter` as Enter even though its sole production caller was safe. Added defense in depth there (`options.noEnter !== false`), corrected its header comment, and pinned both its safe default and explicit false opt-in. Focused suites now pass 41/41.
 - Final review set: Codex GPT-5.6 Sol APPROVE, Claude Opus 5 APPROVE, and fallback Codex GPT-5.5 APPROVE on the final diff. Gemini could not review because every Antigravity model shared an individual quota reset (~79 hours); the configured opencode/Grok fallback was also credit-blocked, and Hermes was not installed. The GPT-5.5 run supplied the third concrete verdict rather than misreporting an unavailable lane as approval.
+
+## PR approval — 2026-08-25
+
+- Human approved PR #141 with all eight checks green and requested one pre-merge clarification: document that Commander's positive/negative option declaration order is load-bearing. Added the short comment directly above `--enter` / `--no-enter`; the CLI regression suite already exercises this order-sensitive default.

@@ -503,6 +503,8 @@ export async function runAgentFarm(args: string[]): Promise<void> {
   program
     .command('interrupt [builder]')
     .description('Interrupt a builder mid-turn (sends ESC to end the running turn)')
+    // Order is load-bearing: declaring --no-enter first makes Commander default
+    // options.enter=true, silently reverting the ESC-alone default.
     .option('--enter', 'Send Enter after ESC so queued messages process (unsafe at dialogs)')
     .option('--no-enter', 'Send ESC alone (default; retained for compatibility)')
     .action(async (builder, options) => {
