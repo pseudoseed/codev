@@ -1,7 +1,7 @@
 id: bugfix-47
 title: afx-send-builder-message-route
 protocol: bugfix
-phase: fix
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-25T05:11:43.249Z'
-updated_at: '2026-08-25T05:22:01.206Z'
+updated_at: '2026-08-25T05:39:48.260Z'
