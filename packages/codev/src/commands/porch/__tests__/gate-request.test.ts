@@ -128,6 +128,25 @@ describe('gate request normalization', () => {
     }).terminalExcerpt).toBe('visible label after text');
   });
 
+  it('strips charset escapes and ST-terminated ANSI string controls with their payloads', () => {
+    expect(normalizeGateRequest({
+      question: 'Continue?',
+      choices: [{ label: 'Yes', consequence: 'Do it' }],
+      terminalExcerpt:
+        '\u001b(BASCII '
+        + '\u001bP1;2|fabricated DCS payload\u001b\\visible '
+        + '\u0098fabricated SOS payload\u009clast',
+    }).terminalExcerpt).toBe('ASCII visible last');
+  });
+
+  it('rejects unterminated ANSI string controls instead of exposing their payloads', () => {
+    expect(() => normalizeGateRequest({
+      question: 'Continue?',
+      choices: [{ label: 'Yes', consequence: 'Do it' }],
+      terminalExcerpt: '\u001b]0;unterminated title',
+    })).toThrow(/terminalExcerpt: contains a prohibited control character/);
+  });
+
   it('accepts exactly five choices and at most one recommendation', () => {
     const choices = Array.from({ length: 5 }, (_, index) => ({
       label: `Choice ${index}`,

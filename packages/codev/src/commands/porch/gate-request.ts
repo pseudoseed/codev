@@ -9,11 +9,15 @@ import {
 const ROOT_FIELDS = new Set(['question', 'choices', 'terminalExcerpt']);
 const CHOICE_FIELDS = new Set(['label', 'consequence', 'recommended']);
 
-// ECMA-48 CSI, OSC (BEL or ST terminated), then simple two-byte escapes.
-// Anything unrecognised keeps its ESC/C1 byte and is rejected as a control.
-const ANSI_OSC = /\u001b\](?:[^\u0007\u001b]|\u001b(?!\\))*(?:\u0007|\u001b\\)/gu;
+// ECMA-48 string controls, CSI, then general ESC sequences. Anything
+// unrecognised keeps its ESC/C1 byte and is rejected as a control.
+const ANSI_OSC = /(?:\u001b\]|\u009d)(?:[^\u0007\u001b\u009c]|\u001b(?!\\))*(?:\u0007|\u001b\\|\u009c)/gu;
+const ANSI_ST_STRING = /(?:\u001b[PX\^_]|[\u0090\u0098\u009e\u009f])(?:[^\u001b\u009c]|\u001b(?!\\))*(?:\u001b\\|\u009c)/gu;
 const ANSI_CSI = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/gu;
-const ANSI_TWO_BYTE = /\u001b[@-_]/gu;
+// Exclude string/CSI introducers from the general final byte. If one is
+// unterminated, its ESC remains and validation rejects it instead of exposing
+// its control payload as fabricated terminal text.
+const ANSI_ESCAPE = /\u001b[ -/]*[0-OQ-WYZ`-~]/gu;
 const BIDI_OVERRIDE_OR_ISOLATE = /[\u202a-\u202e\u2066-\u2069]/u;
 const DECISION_CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
 const TERMINAL_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u;
@@ -79,8 +83,9 @@ function normalizeDecisionText(
 export function stripTerminalAnsi(value: string): string {
   return value
     .replace(ANSI_OSC, '')
+    .replace(ANSI_ST_STRING, '')
     .replace(ANSI_CSI, '')
-    .replace(ANSI_TWO_BYTE, '');
+    .replace(ANSI_ESCAPE, '');
 }
 
 function normalizeTerminalExcerpt(value: unknown): string {
