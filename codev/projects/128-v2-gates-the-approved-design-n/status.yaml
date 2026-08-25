@@ -1,7 +1,7 @@
 id: '128'
 title: v2-gates-the-approved-design-n
 protocol: spir
-phase: specify
+phase: plan
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -16,7 +16,10 @@ gates:
   verify-approval:
     status: pending
 iteration: 1
-build_complete: true
+build_complete: false
 history: []
 started_at: '2026-08-25T00:02:43.765Z'
-updated_at: '2026-08-25T05:23:50.676Z'
+updated_at: '2026-08-25T05:23:52.850Z'
+context_refreshes:
+  - boundary: enter:plan
+    at: '2026-08-25T05:23:52.849Z'
