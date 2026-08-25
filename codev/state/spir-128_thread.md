@@ -33,3 +33,16 @@
 
 - Consultation feedback is incorporated and rebutted. `porch done` checks passed and auto-requested
   `spec-approval`; stopped for explicit human review.
+
+## Plan — initial draft
+
+- Human approval was relayed by architect `uiv2`; `porch approve` passed the spec checks and entered
+  plan. The boundary self-refresh was attempted exactly as requested but refused safely because the
+  Codex harness has no in-session reset; `uiv2` was notified and work continued with context intact.
+- The plan uses four sequential commits: porch record/CLI, resolver-delivered protocol guidance,
+  exact-gate v2 wire, and the accessible content card.
+- Retained the approved 16 KiB terminal cap deliberately: it preserves a complete diagnostic slice,
+  while the 32 KiB request cap bounds state/SSE cost. Phase 1 records actual enriched state size.
+- Visual acceptance names the central `02-gate` content slice exactly and makes a 1440×1080 browser
+  screenshot side-by-side (ticket heading, question, terminal, choices; excluding queue/global
+  chrome/metadata/decision bar) a required step before PR approval.
