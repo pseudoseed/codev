@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { TEST_SUITE_LOCK_PORT } from '../../vitest-global-setup.js';
 
 const PACKAGE_ROOT = resolve(import.meta.dirname, '../..');
 const LOCK_MODULE = pathToFileURL(resolve(PACKAGE_ROOT, 'vitest-global-setup.ts')).href;
@@ -34,11 +35,11 @@ function waitForFile(path: string, timeoutMs = 10_000): Promise<void> {
   });
 }
 
-function lockProcess(label: string, lock: string, log: string, barrier: string) {
+function lockProcess(label: string, port: number, log: string, barrier: string) {
   const script = `
     import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
     const { acquireTestSuiteLock } = await import(${JSON.stringify(LOCK_MODULE)});
-    const release = await acquireTestSuiteLock(${JSON.stringify(lock)});
+    const release = await acquireTestSuiteLock(${port});
     appendFileSync(${JSON.stringify(log)}, ${JSON.stringify(`${label}:acquired\n`)});
     writeFileSync(${JSON.stringify(resolve(testDir!, `${label}.ready`))}, 'ready');
     while (!existsSync(${JSON.stringify(barrier)})) {
@@ -65,6 +66,15 @@ function completed(child: ReturnType<typeof spawn>): Promise<void> {
   });
 }
 
+function waitForStderr(child: ReturnType<typeof spawn>, text: string): Promise<void> {
+  return new Promise((resolveWait, reject) => {
+    child.stderr?.on('data', (chunk) => {
+      if (String(chunk).includes(text)) resolveWait();
+    });
+    child.once('exit', (code) => reject(new Error(`Child exited ${code} before writing ${text}`)));
+  });
+}
+
 describe('issue #130 concurrent suite exclusion', () => {
   it('wires the same global lock into every Codev Vitest entry point', () => {
     for (const config of CONFIGS) {
@@ -75,18 +85,18 @@ describe('issue #130 concurrent suite exclusion', () => {
 
   it('makes a second process wait until the first suite releases shared state', async () => {
     testDir = mkdtempSync(resolve(tmpdir(), 'codev-i130-lock-'));
-    const lock = resolve(testDir, 'suite.lock');
     const log = resolve(testDir, 'order.log');
     const holderBarrier = resolve(testDir, 'holder.release');
     const waiterBarrier = resolve(testDir, 'waiter.release');
 
-    const holder = lockProcess('holder', lock, log, holderBarrier);
+    const port = TEST_SUITE_LOCK_PORT - 1;
+    const holder = lockProcess('holder', port, log, holderBarrier);
     const holderDone = completed(holder);
     await waitForFile(resolve(testDir, 'holder.ready'));
 
-    const waiter = lockProcess('waiter', lock, log, waiterBarrier);
+    const waiter = lockProcess('waiter', port, log, waiterBarrier);
     const waiterDone = completed(waiter);
-    await new Promise((done) => setTimeout(done, 500));
+    await waitForStderr(waiter, 'owns shared Tower state');
     const whileHolderOwnsLock = readFileSync(log, 'utf8');
 
     writeFileSync(holderBarrier, 'release');
@@ -99,4 +109,24 @@ describe('issue #130 concurrent suite exclusion', () => {
       'holder:acquired\nholder:released\nwaiter:acquired\nwaiter:released\n',
     );
   }, 20_000);
+
+  it('releases the lock when its process crashes', async () => {
+    testDir = mkdtempSync(resolve(tmpdir(), 'codev-i130-crash-'));
+    const log = resolve(testDir, 'order.log');
+    const port = TEST_SUITE_LOCK_PORT - 1;
+    const crashed = lockProcess('crashed', port, log, resolve(testDir, 'never'));
+    await waitForFile(resolve(testDir, 'crashed.ready'));
+    const exited = new Promise<void>((done) => crashed.once('exit', () => done()));
+    crashed.kill('SIGKILL');
+    await exited;
+
+    const barrier = resolve(testDir, 'successor.release');
+    const successor = lockProcess('successor', port, log, barrier);
+    const successorDone = completed(successor);
+    await waitForFile(resolve(testDir, 'successor.ready'));
+    writeFileSync(barrier, 'release');
+    await successorDone;
+    expect(readFileSync(log, 'utf8')).toContain('successor:acquired\n');
+  }, 20_000);
+
 });

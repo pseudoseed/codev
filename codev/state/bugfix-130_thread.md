@@ -14,9 +14,9 @@ The broader boundary is the Vitest command: configs do not isolate one invocatio
 another. #1515 isolates each spawned Tower directory, but not fixed ports, the Vitest
 parent's real `~/.agent-farm` (including `ensureLocalKey()` in `vitest-e2e-setup.ts:47`), or
 paths reaching :4100. The issue explicitly permits the focused remedy chosen here: one
-per-user, cross-process Vitest lock wired into all three package configs. A second run waits
-visibly; dead-PID ownership is reclaimed. This avoids changing every fixed-port contract and
-fits BUGFIX scope.
+machine-wide, cross-process Vitest lock wired into all three package configs. A second run
+waits visibly, and the kernel releases the listening-socket mutex on process exit. This avoids
+changing every fixed-port contract and fits BUGFIX scope.
 
 ## Fix — 2026-08-24
 
