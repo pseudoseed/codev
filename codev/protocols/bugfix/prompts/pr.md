@@ -68,6 +68,8 @@ porch done <project-id>
 
 `porch done` fires the `pr` gate and surfaces the PR in Needs Attention. Wait for the architect to approve it (`porch approve <project-id> pr`) — a CMAP APPROVE is not merge authorization. After gate approval, follow the merge task from `porch next` to merge and advance to `verified`.
 
+{{> protocols/shared/gate-request.md}}
+
 ## Signals
 
 - PR created and reviews complete:

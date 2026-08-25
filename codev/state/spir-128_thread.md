@@ -113,3 +113,26 @@
   than fabricating visible payload.
 - Added regressions for charset reset, DCS, C1 SOS/ST, and unterminated OSC. The focused validator
   suite passes 35 tests and the package typecheck passes; details are in the iteration-2 rebuttal.
+
+## Implement — Phase 2: resolver-delivered gate authoring guidance
+
+- Added one byte-identical live/skeleton `protocols/shared/gate-request.md` fragment with the JSON
+  shape, request-file command, optionality, single-line decision rules, terminal cleanup guidance,
+  workspace-relative path behavior, no-approval boundary, and mandatory separate `afx send` notice.
+- Wired it through resolver includes for every bundled human gate: SPIR spec/plan/PR, PIR
+  plan/dev/PR, ASPIR PR, AIR PR, BUGFIX PR. SPIR/ASPIR builder prompts deliver the same fragment for
+  promptless verify-approval, and builder-prompt loading now resolves includes at spawn.
+- Extended the mandatory porch skill discovery surface in both Claude/Codex live and skeleton
+  twins, preserving each existing twin's byte parity. Already-pending gate tasks now explain
+  optional same-cycle augmentation before the hard STOP.
+- New Spec 128 tests cover vocabulary delivery, all live/skeleton protocol twins, skill twins,
+  skeleton-only fresh-install resolution, builder-prompt spawn resolution, and pending-task order.
+  The Codev build passes and 377 targeted resolver/protocol regression tests pass.
+- The first post-fix porch check reported the tests command failed but surfaced no assertion (only
+  npm config warnings). The identical full command immediately passed 6,127 Codev tests and 167 v2
+  tests; no test name was available to annotate or skip. Treat as an unnamed transient unless it
+  reproduces with an identifiable producer.
+- The subsequent porch check passed build and the complete test suite. Phase consultation approved
+  in Codex, Claude, and fallback opencode (`opencode/hy3-free`); Gemini quota-skipped. Non-blocking
+  feedback noted that the shared fragment could advertise byte limits and scratch-file cleanup,
+  but found the delivered contract accurate and the full phase implementation complete.

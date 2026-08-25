@@ -307,7 +307,10 @@ describe('porch next', () => {
     expect(result.status).toBe('gate_pending');
     expect(result.gate).toBe('spec-approval');
     expect(result.tasks).toBeDefined();
-    expect(result.tasks![0].description).toContain('STOP and wait for human approval');
+    const description = result.tasks![0].description;
+    expect(description).toContain('porch gate 0001 --request-file <path>');
+    expect(description).toContain('content-free gate remains valid');
+    expect(description.indexOf('--request-file')).toBeLessThan(description.indexOf('STOP'));
   });
 
   // --------------------------------------------------------------------------

@@ -6,6 +6,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   renderTemplate,
   buildPromptFromTemplate,
@@ -457,6 +459,31 @@ describe('spawn-roles', () => {
       };
       const prompt = buildPromptFromTemplate(makeConfig(), 'spir', ctx);
       expect(prompt).toContain('SPIR prompt for a v3 feature');
+    });
+
+    it('resolves shared includes inside a skeleton-only builder prompt (Spec 128)', () => {
+      fs.mkdirSync(path.join(skeletonRoot, 'protocols', 'shared'), { recursive: true });
+      fs.writeFileSync(
+        path.join(skeletonRoot, 'protocols', 'shared', 'gate-request.md'),
+        'GATE_REQUEST_SENTINEL for project {{project_id}}.',
+      );
+      fs.writeFileSync(
+        path.join(skeletonRoot, 'protocols', 'spir', 'builder-prompt.md'),
+        '# {{protocol_name}}\n\n{{> protocols/shared/gate-request.md}}\n',
+      );
+      const ctx: TemplateContext = {
+        protocol_name: 'SPIR',
+        mode: 'strict',
+        mode_soft: false,
+        mode_strict: true,
+        project_id: '128',
+        input_description: 'a v3 feature',
+      };
+
+      const prompt = buildPromptFromTemplate(makeConfig(), 'spir', ctx);
+
+      expect(prompt).toContain('GATE_REQUEST_SENTINEL for project 128.');
+      expect(prompt).not.toContain('{{>');
     });
 
     it('fills {{protocol_reference}} with protocol.md content fresh at delivery (issue #1011)', async () => {

@@ -33,6 +33,8 @@ Write the plan to `codev/plans/{{artifact_name}}.md` using the template below as
 
 {{> protocols/spir/templates/plan.md}}
 
+{{> protocols/shared/gate-request.md}}
+
 ## Signals
 
 - Draft done:

@@ -23,6 +23,19 @@ porch init <protocol> <id> <name>   Initialize a new project
 
 Project ID auto-detects from worktree path when inside a builder worktree.
 
+## Recording gate decision content
+
+`porch gate` may attach optional structured decision content to the current pending gate:
+
+```bash
+porch gate [id] --request-file <workspace-relative-utf8-json-path>
+```
+
+The request records the question, one-to-five labelled choices and their consequences, an optional
+single recommendation, and optional terminal evidence. It explains the gate but never approves it.
+The existing architect notification is still required; use flag-free `porch gate [id]` when no
+structured content is useful.
+
 ## Gate approvals
 
 Gates are human-only approval checkpoints. The `--a-human-explicitly-approved-this` flag is **required** — it exists to prevent AI agents from auto-approving.
