@@ -1,7 +1,7 @@
 id: bugfix-92
 title: a-mailbox-hold-on-an-abandoned
 protocol: bugfix
-phase: investigate
+phase: fix
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-25T14:20:32.674Z'
-updated_at: '2026-08-25T14:20:32.675Z'
+updated_at: '2026-08-25T14:23:50.037Z'
