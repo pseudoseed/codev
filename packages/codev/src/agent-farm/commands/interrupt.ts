@@ -4,7 +4,8 @@
  * This is the only recovery that reaches a builder *mid-turn*. When a builder
  * chains foreground waits inside one turn, every `afx send` — including the
  * architect's order to stop — queues unread until the turn ends. ESC interrupts
- * the running tool, ends the turn, and the queued messages then process.
+ * the running tool and ends the turn. An explicit Enter opt-in then lets queued
+ * messages process; ESC alone is the safe default for an unknown screen.
  *
  * Verified in production (shannon workspace, 2026-07-27): a builder wedged for
  * 45+ minutes on a wait for a file whose producer had already died resumed
@@ -23,6 +24,7 @@ import { detectWorkspaceRoot, detectCurrentBuilderId } from './send.js';
 
 export async function interrupt(options: InterruptOptions): Promise<void> {
   const target = options.builder;
+  const noEnter = options.noEnter !== false;
 
   if (!target) {
     fatal('Must specify a builder. Usage: afx interrupt <builder>');
@@ -56,7 +58,7 @@ export async function interrupt(options: InterruptOptions): Promise<void> {
       workspace,
       fromWorkspace: workspace,
       escape: true,
-      noEnter: options.noEnter,
+      noEnter,
     });
 
     if (!result.ok) {
@@ -64,7 +66,7 @@ export async function interrupt(options: InterruptOptions): Promise<void> {
     }
 
     logger.success(`Interrupt (ESC) sent to ${result.resolvedTo ?? target}`);
-    if (!options.noEnter) {
+    if (!noEnter) {
       logger.info('Enter followed the ESC — any messages queued during the turn should now process.');
     }
   } catch (error) {

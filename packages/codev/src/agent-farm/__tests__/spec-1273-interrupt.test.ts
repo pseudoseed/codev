@@ -133,7 +133,7 @@ describe('afx interrupt (Spec 1273)', () => {
     mockDetectCurrentBuilderId.mockReturnValue(null);
   });
 
-  it('sends the ESC byte with escape:true', async () => {
+  it('sends the ESC byte alone by default with escape:true', async () => {
     const { interrupt } = await import('../commands/interrupt.js');
 
     await interrupt({ builder: '1273' });
@@ -141,7 +141,19 @@ describe('afx interrupt (Spec 1273)', () => {
     expect(mockSendMessage).toHaveBeenCalledWith(
       '1273',
       '\x1b',
-      expect.objectContaining({ escape: true }),
+      expect.objectContaining({ escape: true, noEnter: true }),
+    );
+  });
+
+  it('allows an explicit Enter opt-in', async () => {
+    const { interrupt } = await import('../commands/interrupt.js');
+
+    await interrupt({ builder: '1273', noEnter: false });
+
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      '1273',
+      '\x1b',
+      expect.objectContaining({ escape: true, noEnter: false }),
     );
   });
 
