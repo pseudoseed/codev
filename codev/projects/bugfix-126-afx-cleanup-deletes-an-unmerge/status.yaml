@@ -1,7 +1,7 @@
 id: bugfix-126
 title: afx-cleanup-deletes-an-unmerge
 protocol: bugfix
-phase: investigate
+phase: fix
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-25T05:11:50.456Z'
-updated_at: '2026-08-25T05:11:50.457Z'
+updated_at: '2026-08-25T05:13:45.282Z'
