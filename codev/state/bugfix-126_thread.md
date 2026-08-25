@@ -27,3 +27,14 @@
   fix returns the targeted test file to green.
 - Validation passed: targeted regression file (18/18), root build, and the full test suite via
   `porch check bugfix-126` (build 15.4s; tests 256.9s).
+
+## PR
+
+- Opened PR #139 with `Fixes #126` in the body.
+- CMAP verdicts: Codex APPROVE (high confidence); Claude APPROVE (high confidence); the Gemini
+  account was quota-exhausted for both Flash and Pro, and the documented opencode fallback was
+  also credit-exhausted, so the Antigravity lane's available GPT-OSS 120B backup performed the
+  third review and APPROVED (high confidence).
+- Claude noted a non-blocking log-parity follow-up: the row-less path does not print the live-row
+  path's `Branch preserved:` line. Addressing that would require widening the `void` return contract;
+  it is outside this destructive-data-loss bug's minimal fix and was not changed.
