@@ -46,3 +46,19 @@
 - Visual acceptance names the central `02-gate` content slice exactly and makes a 1440×1080 browser
   screenshot side-by-side (ticket heading, question, terminal, choices; excluding queue/global
   chrome/metadata/decision bar) a required step before PR approval.
+
+## Plan — consultation iteration 1
+
+- Gemini quota-skipped; Codex and Claude requested changes. The configured opencode/Grok lane was
+  spending-limit blocked, `big-pickle` timed out, and the required lane completed/approved with
+  `opencode/nemotron-3.5-lightning-free`.
+- Accepted the core parser finding: nested request YAML will use `js-yaml`, not extensions to the
+  overview regex parser. Malformed values remain `unknown` through one documented serialization
+  seam so the client can distinguish invalid from absent.
+- Made v2's new `blockedGate` field explicit (required nullable on every node alongside the request),
+  preserved the exported `detectBlocked*` wrappers, and added aggregate 500-frame replay measurement.
+- Resolved the rust mechanics explicitly: a child `.stamp-gate` cannot color its parent. The older
+  solid rust row border becomes neutral while 3px containment, pulse, and rust stamp preserve
+  findability under the newer exactly-one-token constraint.
+- Split the client work into semantic/live behavior and visual/browser-fidelity commits, yielding
+  five machine-readable phases.

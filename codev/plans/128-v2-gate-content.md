@@ -13,10 +13,11 @@ and makes each later phase consume a tested contract rather than inventing a par
 
 The approved 16 KiB `terminalExcerpt` cap is retained deliberately rather than silently: a final
 compiler/test failure can need several kilobytes of stack trace and preceding warnings to remain
-decidable, while the 32 KiB whole-request ceiling bounds both the state addition and each SSE
-projection. Even a worst-case excerpt is only 16 KiB of repeated text per later state blob (and Git
+decidable, while the 32 KiB whole-request ceiling bounds each state addition and per-node wire
+payload. Even a worst-case excerpt is only 16 KiB of repeated text per later state blob (and Git
 compresses/packs repeated blob content), which is a bounded commit-weight trade-off for preserving
-one complete diagnostic slice; porch will reject logs rather than grow without limit.
+one complete diagnostic slice; Phase 3 measures the separate aggregate snapshot/replay-buffer cost
+rather than treating a per-request limit as an aggregate bound.
 
 ## Phases (Machine Readable)
 
@@ -26,7 +27,8 @@ one complete diagnostic slice; porch will reject logs rather than grow without l
     {"id": "phase_1", "title": "Validated porch gate-request record"},
     {"id": "phase_2", "title": "Resolver-delivered gate authoring guidance"},
     {"id": "phase_3", "title": "Exact-gate v2 wire projection"},
-    {"id": "phase_4", "title": "Accessible design-faithful gate detail card"}
+    {"id": "phase_4", "title": "Accessible live gate-detail behavior"},
+    {"id": "phase_5", "title": "Design-faithful gate-detail presentation"}
   ]
 }
 ```
@@ -183,11 +185,16 @@ visible to the client's contract validator.
 - `packages/types/src/v2-events.ts` — add `blockedGate: string | null` and
   `blockedGateRequest: GateRequest | null` to the shared v2 builder-node contract (non-builder
   nodes receive canonical null values where required by the current node shape).
-- `packages/types/src/api.ts` — add `blockedGateRequest` to `OverviewBuilder` so Tower discovery
-  carries the same exact-gate result without a second request shape.
-- `packages/codev/src/agent-farm/servers/overview.ts` — extend lightweight status parsing for the
-  nested request and derive gate name/request in one selection path over the canonical supported
-  gate order; never pair historical, unrequested, or later pending content with another gate.
+- `packages/types/src/api.ts` — add documented `blockedGateRequest: unknown | null` to the internal
+  overview/discovery carrier. `unknown` is intentional at the YAML trust boundary, not a competing
+  request shape; the public valid v2 wire remains the canonical `GateRequest | null`.
+- `packages/codev/src/agent-farm/servers/overview.ts` — keep the existing lightweight scalar parser
+  for legacy overview fields, but decode the `gates` subtree for requests with the already-direct
+  `js-yaml` dependency so block scalars, escapes, Unicode, and YAML-looking literal text follow the
+  same semantics as porch's writer. Store request values as `unknown` at this untrusted ingestion
+  boundary and derive gate name/request in one selection path over canonical supported-gate order.
+  Keep exported `detectBlocked`, `detectBlockedGate`, and `detectBlockedSince` as wrappers over that
+  selection so the existing dashboard/VSCode callers remain source-compatible.
 - `packages/codev/src/agent-farm/servers/v2-projection.ts` and
   `packages/codev/src/agent-farm/servers/v2-routes.ts` — thread the discovered gate name/request
   into snapshot and delta builder nodes while preserving status and bucket behavior.
@@ -197,111 +204,184 @@ visible to the client's contract validator.
   `packages/codev/src/agent-farm/__tests__/v2-routes.test.ts`, and
   `packages/codev/src/agent-farm/__tests__/v2-sampler.test.ts` — full/null projection and delta
   comparison coverage.
-- `apps/v2/src/lib/validate.ts` — validate the canonical nested shape on every builder frame;
-  invalid present content fails the enclosing frame rather than becoming `null`.
+- `apps/v2/src/lib/validate.ts` — add required nullable `blockedGate` and
+  `blockedGateRequest` fields to `ClientNode`; structurally validate the canonical nested shape on
+  every frame and import the shared runtime limits (plus the `GateRequest` return type) from
+  `codev-types` so the hand-written wire validator cannot drift. Invalid present content fails the
+  enclosing frame rather than becoming `null`.
 - `apps/v2/__tests__/validate.test.ts` and `apps/v2/__tests__/reducer.test.ts` — full/null/malformed
   snapshot and node-delta contract cases.
 
 #### Deliverables
 
-- [ ] `blockedGate` keeps its current name/semantics and `blockedGateRequest` is always populated
-      from that same gate entry or is `null`.
+- [ ] Overview's existing `blockedGate` keeps its current name/semantics; v2 adds both required
+      nullable fields. Builder nodes carry the selected canonical gate/request, while every
+      workspace and architect node carries `blockedGate: null` and `blockedGateRequest: null`.
 - [ ] Legacy content-free gates publish `null`; absent, historical, unrequested, or non-selected
       request content never leaks onto the active gate.
-- [ ] A malformed present wire request causes the existing visible contract-mismatch path.
+- [ ] Parsed YAML request values remain `unknown` until the deliberate Tower serialization seam.
+      A malformed present value is projected unchanged (not coerced to `null`) through that
+      explicitly tested unchecked seam, and the client turns the enclosing frame into the existing
+      visible contract-mismatch state. The public valid-wire type remains `GateRequest | null`.
 - [ ] Snapshot, delta, resume, sampler comparison, and reducer paths retain request changes.
-- [ ] Server/client boundaries remain intact: both import the shape only from `codev-types`.
+- [ ] Server/client boundaries remain intact: the server imports the contract from `codev-types`;
+      the client keeps its required structural runtime validation while importing the canonical
+      type and numeric limits from `codev-types`, never from server code.
+- [ ] Aggregate cost is measured rather than inferred: record actual JSON bytes for a maximal
+      request in one node, a maximal realistic snapshot, `lastByScope`, and the 500-frame replay
+      worst case (about 16 MiB per scope if all 500 frames repeat a 32 KiB node) and add a regression
+      assertion or tighter mitigation if measurement exceeds the server's acceptable bound.
 - [ ] Tests for this phase.
 
 #### Acceptance Criteria
 
 - [ ] The exact multiple-entry scenarios in Spec scenarios 1, 7, 9, and 12 produce the expected
       gate/request pair without changing `blockedGate`, `blockedSince`, counts, or status.
+- [ ] `blockedGate` itself is required and validated on every v2 node (`null` for non-builders), and
+      the compatibility card can render the canonical name when its request is `null`.
 - [ ] A request-only node change emits a v2 node delta and survives client reduction.
 - [ ] The client distinguishes an absent request from an invalid request.
+- [ ] Existing `detectBlocked*` exports and their dashboard/VSCode consumers remain unchanged.
+- [ ] The measured maximum snapshot/replay memory result is recorded in the builder thread/review;
+      the test suite locks any buffer-size or projection mitigation chosen from that measurement.
 - [ ] Type-package, Codev/Tower, and v2 client builds pass; targeted server and client tests pass.
 
 #### Test Plan
 
-- Use representative YAML fixtures with canonical gates in competing states and assert one helper
-  returns the selected gate plus only its request.
+- Produce representative YAML fixtures through porch's real `yaml.dump` writer, including block
+  terminal scalars, quoted escapes, Unicode, and YAML-looking literal lines; decode request content
+  through `js-yaml` and assert one selection helper returns the gate plus only its raw request.
 - Exercise `projectHierarchy` and sampler snapshots/deltas with full, null, changed, and malformed
-  requests; verify no server/client cross-import is introduced.
+  requests; verify the documented `unknown` serialization seam, `detectBlocked*` wrappers, and no
+  server/client cross-import.
 - Feed client validation hostile nested values (wrong arrays/types, extra keys, six choices, two
-  recommendations) and assert mismatch identifies `blockedGateRequest`, while `null` validates.
+  recommendations) and assert mismatch identifies `blockedGateRequest`, while required null fields
+  validate on non-builders. Compute serialized byte/memory bounds for maximal nodes, snapshots,
+  `lastByScope`, and 500-frame replay retention.
 
-### Phase 4: Accessible design-faithful gate detail card
+### Phase 4: Accessible live gate-detail behavior
 
 **Dependencies**: Phase 3
 
 #### Objective
 
-Add local page selection and render the approved gate content surface safely and accessibly, then
-verify the running result side-by-side against the exact approved mockup slice rather than relying
-on component-test presence assertions.
+Deliver the complete semantic and live-state behavior of the content card independently of its
+final visual treatment: accessible activation, literal full/fallback rendering, and automatic
+return to the site when the selected builder changes or disappears.
 
 #### Files to Create / Modify
 
-- `apps/v2/src/App.tsx` — own selected-builder local state above the site/detail switch and clear it
-  when live reducer state removes the node or it stops being `gate-waiting`.
+- `apps/v2/src/App.tsx` — own selected-builder id in local state above the site/detail switch,
+  resolve it against the live reducer map, and clear it when absent or no longer gate-waiting.
 - `apps/v2/src/components/SiteView.tsx`, `WorkspacePlot.tsx`, `ArchitectHeader.tsx`, and
   `BuilderRow.tsx` — thread the activation callback through every tree nesting path; expose pointer,
   Enter, and Space activation only for gate-waiting builders with correct button semantics/focus.
 - `apps/v2/src/components/GateDetail.tsx` (new) — Back to site, ticket heading, canonical gate,
   literal question, optional terminal output/timestamp, choices/consequences, recommendation, and
-  explicit no-structured-request compatibility state. No approval control is created.
-- `apps/v2/src/site.css`, `apps/v2/src/tokens.css`, and `apps/v2/src/tokens-dark.css` — implement
-  containment, hatch/ticket/output/choice surfaces, wrapping/overflow, warning/recommendation
-  treatments, responsive layout, and the directed Fraunces / Space Grotesk / IBM Plex Mono on
-  `#EDE8DE`. Remove the existing second direct rust reference so the entire client has exactly one
-  `var(--rust)`, in `.stamp-gate`; any same-surface rust accent inherits/derives via
-  `currentColor`. Add no chevrons.
+  explicit no-structured-request compatibility state. Split terminal content into React text-line
+  nodes only to classify warning lines; create no approval control, HTML/Markdown, or active links.
+- `apps/v2/src/site.css` — add only the minimum layout/focus/overflow rules needed for a usable
+  semantic card; final typography, surfaces, spacing, and mockup fidelity belong to Phase 5.
 - `apps/v2/__tests__/GateDetail.test.tsx` (new) — full/minimal/null/safe-text/warning rendering,
-  omission rules, keyboard activation, Back, and recommendation cases.
-- `apps/v2/__tests__/SiteView.test.tsx` and `apps/v2/__tests__/fidelity.test.tsx` — local-selection
-  lifecycle and exact source-level visual invariants.
-- `apps/v2/e2e/fixture-server.mjs` and `apps/v2/e2e/site.spec.ts` — full request fixture plus real
-  browser activation, live node departure/removal, mismatch, responsive, computed-style, and
-  screenshot verification.
+  omission rules, keyboard activation, Back, recommendation, and timestamp cases.
+- `apps/v2/__tests__/SiteView.test.tsx` and `apps/v2/__tests__/reducer.test.ts` — selection from all
+  nesting paths plus live node update/removal lifecycle.
 
 #### Deliverables
 
-- [ ] Pointer, Enter, and Space on a gate-waiting builder open the selected card; Back restores the
-      live site; `gone` or non-gate updates close stale detail without a reload or router.
-- [ ] Full/minimal requests render only recorded content, `null` renders the explicit compatibility
-      copy, and terminal markup/URLs remain literal inactive text in a preformatted surface.
-- [ ] Warning lines whose first non-whitespace character is `⚠` receive ochre styling without HTML
-      interpretation; `lastDataAt` supplies the terminal timestamp only when present.
-- [ ] No queue rail, global controls, unavailable metadata, decorative choice icons, decision bar,
-      or client-side approval path is stubbed.
+- [ ] Pointer, Enter, and Space on a gate-waiting builder open the selected detail; Back restores the
+      live site without a router or reload.
+- [ ] Selection stores only the node id and resolves the current node every render; a `gone` frame or
+      transition away from `gate-waiting` closes the detail instead of showing stale content.
+- [ ] Full/minimal requests render only recorded content; `null` renders builder, canonical gate, and
+      explicit compatibility copy; missing optional regions are omitted.
+- [ ] Terminal and choice content stays literal inactive React text. Only warning lines whose first
+      non-whitespace character is `⚠` receive a semantic warning class.
+- [ ] No queue, unavailable metadata, decorative inferred icons, decision bar, or approval path is
+      introduced.
+- [ ] Tests for this phase.
+
+#### Acceptance Criteria
+
+- [ ] Full, minimal, compatibility, hostile-text, warning, recommendation, timestamp, and omission
+      scenarios pass in component tests.
+- [ ] Gate rows are keyboard-operable with visible focus and correct button semantics; non-gate rows
+      do not acquire a false action.
+- [ ] Pushing request updates refreshes the open card; pushing non-gate/`gone` frames returns to the
+      current site tree without losing unrelated live state.
+- [ ] `pnpm --filter @cluesmith/codev-v2 build` and targeted client tests pass.
+
+#### Test Plan
+
+- Render full/minimal/null cards with React Testing Library and assert markup-like and URL-like text
+  creates no elements/anchors; assert warning classification does not reinterpret content.
+- Activate gate rows at workspace, architect, and unattached nesting levels by click/Enter/Space;
+  verify Back and focus behavior.
+- Reduce node-update and gone frames while detail is selected and assert current content updates or
+  the site returns with the tree intact.
+
+### Phase 5: Design-faithful gate-detail presentation
+
+**Dependencies**: Phase 4
+
+#### Objective
+
+Apply the approved visual system to the working semantic card and verify the running browser
+side-by-side against the exact named mockup slice, keeping the newer single-rust-token constraint
+explicit even where it supersedes the existing rust row border.
+
+#### Files to Create / Modify
+
+- `apps/v2/src/site.css`, `apps/v2/src/tokens.css`, and `apps/v2/src/tokens-dark.css` — implement
+  hatch/ticket/output/choice surfaces, responsive layout, wrapping/overflow, focus, warnings, and
+  recommendation treatment using directed Fraunces / Space Grotesk / IBM Plex Mono on `#EDE8DE`.
+  Explicitly replace `.stake.needs-attn`'s direct rust border with a neutral `currentColor`/ink
+  border: because `.stamp-gate` is its descendant, the parent border cannot inherit the child's rust.
+  The row remains findable through its 3px containment, attention pulse, and rust gate stamp, but no
+  longer has a solid rust outline. Keep the sole direct `var(--rust)` in `.stamp-gate`; only
+  descendants of that stamp may derive rust through `currentColor`. Add no chevrons.
+- `apps/v2/__tests__/fidelity.test.tsx` and `apps/v2/__tests__/SiteView.test.tsx` — exact source-level
+  typography, scope-exclusion, rust, chevron, and containment invariants.
+- `apps/v2/e2e/fixture-server.mjs` and `apps/v2/e2e/site.spec.ts` — full request fixture plus real
+  browser activation, live departure/removal, mismatch, responsive, computed-style, and screenshot
+  verification.
+
+#### Deliverables
+
 - [ ] The exact approved visual slice is verified in a real browser at 1440×1080: the **central
       content card only** from `codev/research/v2-mockups/02-gate.png` / `02-gate.html` — ticket
       heading (`GATE — WORK HAS STOPPED` plus builder identity), `THE QUESTION`, `LAST TERMINAL
       OUTPUT`, and `WHAT HAPPENS NEXT` choice cards. The left queue rail, global header/footer,
       metadata rows unavailable on the wire, and bottom decision bar are excluded from comparison.
+- [ ] The page uses Fraunces / Space Grotesk / IBM Plex Mono on `#EDE8DE`, containment rather than
+      disclosure chrome, responsive choice layout, legible local terminal overflow, and zero
+      chevrons.
+- [ ] The client contains exactly one direct `var(--rust)`, in `.stamp-gate`. The existing parent
+      gate-row rust outline is intentionally neutralized (not falsely described as inherited from a
+      descendant); findability remains through containment, pulse, and the stamp.
+- [ ] Full/fallback/malformed browser paths preserve the semantic behavior from Phase 4; no later
+      design units or approval controls are stubbed.
 - [ ] Tests for this phase.
 
 #### Acceptance Criteria
 
-- [ ] All gate-detail lifecycle, full/fallback/malformed, hostile-text, optional-content, and
-      accessibility scenarios from the spec pass in component tests and Playwright.
+- [ ] Playwright covers pointer/keyboard activation, Back, live request update, node departure,
+      `gone`, compatibility, malformed mismatch, hostile text, and narrow-viewport overflow.
 - [ ] Source checks find zero chevrons and exactly one direct `var(--rust)` occurrence, whose rule is
-      `.stamp-gate`; computed styles preserve rust for gates, ochre for warnings, and neutral literal
-      terminal text.
-- [ ] A captured browser screenshot of the named central slice is opened beside
-      `02-gate.png` at the same 1440×1080 viewport and manually compared for typography,
-      `#EDE8DE` ground, containment, spacing, hierarchy, terminal contrast, and choice layout. Record
-      the comparison result and screenshot path in the builder thread/review before requesting PR
-      approval so architect `uiv2` can repeat the same comparison.
+      `.stamp-gate`; computed styles preserve rust for the gate stamp, ochre for warnings, and neutral
+      ink containment for the parent gate row.
+- [ ] A captured browser screenshot of the named central slice is opened beside `02-gate.png` at the
+      same 1440×1080 viewport and manually compared for typography, `#EDE8DE` ground, containment,
+      spacing, hierarchy, terminal contrast, and choice layout. Record the comparison result and
+      screenshot path in the builder thread/review before requesting PR approval so architect
+      `uiv2` can repeat the same comparison.
 - [ ] `pnpm --filter @cluesmith/codev-v2 build`, unit tests, and Playwright e2e pass; the root Codev
       build/test regression suite passes.
 
 #### Test Plan
 
-- Render full, minimal, and compatibility cards with React Testing Library. Assert literal hostile
-  strings create no HTML elements/anchors and optional regions are absent, not blank placeholders.
-- Use Playwright against the fixture SSE server: activate by click/Enter/Space, Back, push a request
-  update, push non-gate and `gone` frames, inject malformed content, and verify no page reload.
+- Use Playwright against the fixture SSE server for the complete live lifecycle and safe-text paths;
+  assert no reload and inspect computed font, color, layout, overflow, and focus styles.
 - At a 1440×1080 viewport, capture the central content card and perform an explicit side-by-side
   browser comparison with `codev/research/v2-mockups/02-gate.png` / `02-gate.html`; repeat at a
   narrow viewport for wrapping/overflow and keyboard focus.
@@ -313,13 +393,13 @@ on component-test presence assertions.
 | Risk | Probability | Impact | Mitigation |
 |------|-------------|--------|------------|
 | A 16 KiB terminal excerpt adds weight to every later porch state commit | Medium | Medium | Retain it consciously for complete diagnostic context, cap the whole request at 32 KiB, reject rather than truncate, test boundary sizes, and record actual enriched `status.yaml` size during Phase 1. |
-| Line-based overview YAML parsing associates nested content with the wrong gate | Medium | High | Parse request indentation explicitly and derive gate plus request in one canonical-order helper; use competing historical/pending fixtures. |
+| Overview corrupts a block/escaped terminal scalar or silently turns malformed stored content into absence | Medium | High | Decode the gates subtree with `js-yaml`, retain the selected request as `unknown` through one documented serialization seam, and test writer-produced block/quoted fixtures end-to-end into client mismatch. |
 | Invalid input partially mutates or resets held time | Medium | High | Read/parse/normalize the whole file before touching state, deep-compare normalized content, and assert status bytes/timestamp remain unchanged on every failure/no-op. |
 | Protocol guidance misses a gate or bypasses runtime resolution | Medium | High | One shared resolver include, enumerate every bundled human-gate phase in a test, and enforce live/skeleton parity only where both copies exist. |
 | The card passes DOM tests but misses the approved design | Medium | High | Bind acceptance to the exact `02-gate` central content slice and require a 1440×1080 browser screenshot opened side-by-side before PR review. |
 | Literal terminal/choice content creates markup, links, spoofing, or overflow | Medium | High | Reject prohibited controls at ingress, validate again at the wire, use React text nodes/`pre`, forbid Markdown/HTML/linkification, and test hostile and long strings. |
 | Local selection displays stale content after SSE changes | Medium | High | Store only selected node id, resolve it from the live reducer every render, and clear on `gone` or departure from gate-waiting. |
-| Rust spreads beyond the approved invariant | Medium | High | Remove the existing row-level direct token reference, keep the sole reference in `.stamp-gate`, use `currentColor` only beneath it, and enforce with source plus computed-style tests. |
+| The newer single-rust invariant silently destroys the older row-outline treatment | Medium | High | Explicitly neutralize the parent outline because a child cannot style its ancestor; preserve 3px containment, pulse, and rust stamp, use `currentColor` only below `.stamp-gate`, and verify the trade-off side-by-side. |
 | New wire fields break package isolation or delta comparison | Low | High | Put the shape in `codev-types`, update sampler equality tests, and run existing core/sdk import-boundary suites. |
 
 ## Documentation Updates
