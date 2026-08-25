@@ -227,7 +227,7 @@ export async function cleanupNonEphemeralWorktree(
 ): Promise<NonEphemeralCleanupResult> {
   const merged = await isWorktreeMerged(workspaceRoot, worktreePath);
   if (!merged && !force) return 'preserved-unmerged';
-  await removeOrphanWorktree(workspaceRoot, worktreePath, force, { deleteBranch: merged });
+  await removeOrphanWorktree(workspaceRoot, worktreePath, force);
   return merged ? 'removed-merged' : 'removed-force';
 }
 
@@ -306,7 +306,6 @@ export async function removeOrphanWorktree(
   workspaceRoot: string,
   worktreePath: string,
   force?: boolean,
-  options?: { deleteBranch?: boolean },
 ): Promise<void> {
   const merged = await isWorktreeMerged(workspaceRoot, worktreePath);
   if (!merged && !force) {
@@ -319,14 +318,12 @@ export async function removeOrphanWorktree(
   }
 
   const branch = await worktreeBranch(worktreePath);
-  const deleteBranch = options?.deleteBranch !== false;
-
   if (existsSync(worktreePath)) {
     const gitForce = force || scaffoldOnly ? ' --force' : '';
     await run(`git worktree remove "${worktreePath}"${gitForce}`, { cwd: workspaceRoot });
   }
 
-  if (deleteBranch && branch && branch !== 'main' && branch !== 'master') {
+  if (merged && branch && branch !== 'main' && branch !== 'master') {
     try {
       await run(`git branch -D "${branch}"`, { cwd: workspaceRoot });
     } catch {
