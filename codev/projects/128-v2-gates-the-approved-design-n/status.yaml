@@ -1,9 +1,24 @@
 id: '128'
 title: v2-gates-the-approved-design-n
 protocol: spir
-phase: plan
-plan_phases: []
-current_plan_phase: null
+phase: implement
+plan_phases:
+  - id: phase_1
+    title: Validated porch gate-request record
+    status: in_progress
+  - id: phase_2
+    title: Resolver-delivered gate authoring guidance
+    status: pending
+  - id: phase_3
+    title: Exact-gate v2 wire projection
+    status: pending
+  - id: phase_4
+    title: Accessible live gate-detail behavior
+    status: pending
+  - id: phase_5
+    title: Design-faithful gate-detail presentation
+    status: pending
+current_plan_phase: phase_1
 gates:
   spec-approval:
     status: approved
@@ -18,11 +33,13 @@ gates:
   verify-approval:
     status: pending
 iteration: 1
-build_complete: true
+build_complete: false
 history: []
 started_at: '2026-08-25T00:02:43.765Z'
-updated_at: '2026-08-25T08:32:57.722Z'
+updated_at: '2026-08-25T08:32:59.633Z'
 context_refreshes:
   - boundary: enter:plan
     at: '2026-08-25T05:23:52.849Z'
     acknowledged_at: '2026-08-25T05:24:44.608Z'
+  - boundary: enter:implement
+    at: '2026-08-25T08:32:59.632Z'
