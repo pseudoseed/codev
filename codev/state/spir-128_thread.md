@@ -28,3 +28,8 @@
 - Reviewers found the older mockup/tokens use IBM Plex Sans and multiple rust references. The newer
   explicit architect direction remains controlling: Space Grotesk and exactly one direct
   `var(--rust)` reference in `.stamp-gate`; same-surface accents can derive via `currentColor`.
+
+## Specify — spec-approval gate
+
+- Consultation feedback is incorporated and rebutted. `porch done` checks passed and auto-requested
+  `spec-approval`; stopped for explicit human review.
