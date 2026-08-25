@@ -69,3 +69,47 @@
 - `porch done` checks passed and requested `plan-approval`; stopped for explicit human review.
 - All gate/completion messages continue to target `architect:uiv2` explicitly because bare
   `architect` misroutes to `main` until issue #47 lands.
+
+## Implement — Phase 1: validated porch gate-request record
+
+- Added the neutral `GateRequest` contract and optional porch `GateStatus.request`, retaining the
+  camelCase nested request under existing snake_case gate timestamps.
+- `porch gate [id] --request-file PATH` now parses strict UTF-8 JSON, normalizes and validates the
+  entire request before state mutation, attaches or replaces content without resetting held time,
+  and skips identical writes. Flag-free gate requests and human approval retain attached history.
+- Validation enforces one-to-five choices, recommendation cardinality, unknown-key rejection,
+  field and whole-request UTF-8 byte limits, decision trimming, CRLF/ANSI terminal cleanup, and
+  control/bidi rejection (including prohibited content hidden inside ANSI sequences).
+- Automatic fresh gate cycles and rollback clear stale request content; both explicit and
+  pre-approved artifact approval paths preserve the current cycle's request.
+- Targeted porch coverage passes (157 tests), as do the types and full Codev builds. A full suite
+  run before the final lifecycle assertions passed 6,088 Codev tests and 167 v2 tests; all tests
+  touched after that run were rerun targeted.
+- Commit-weight measurement using porch's exact `js-yaml` dump options: a maximally valid 32,768-byte
+  normalized JSON request adds 29,379 bytes to the representative status YAML (312-byte baseline,
+  29,691 bytes enriched). This supports retaining the 16 KiB excerpt while keeping the explicit
+  whole-request cap; Phase 3 still measures aggregate replay/SSE cost.
+- Phase 1 review noted that the four live/skeleton porch skill copies also need the new CLI flag.
+  Carry those resolver-facing command docs into Phase 2 with the protocol guidance so agents that
+  obey the mandatory skill lookup can discover `--request-file`.
+
+### Phase 1 consultation iteration 1
+
+- Gemini quota-skipped; Claude and the fallback opencode `mimo-v2.5-free` lane approved. Codex
+  found that the first OSC regex could greedily span two ST-terminated sequences and delete an
+  OSC-8 hyperlink's visible label.
+- Accepted and fixed the finding: OSC stripping now stops at the first BEL/ST terminator, with a
+  regression covering an OSC-8 opener/label/closer followed by a consecutive title sequence.
+- The iteration-1 rebuttal records the fix and the focused gate-request suite now passes 33 tests;
+  the post-fix porch checks passed the full build and test suite.
+
+### Phase 1 consultation iteration 2
+
+- Gemini quota-skipped; Claude and fallback opencode approved. Codex correctly identified that
+  OSC/CSI plus a two-byte ESC pattern did not fully sanitize charset and string-control families.
+- Accepted and fixed: DCS/SOS/PM/APC now remove their complete ST-terminated payload in 7-bit and
+  C1 forms, OSC handles 7-bit/C1 terminators, general ESC grammar handles charset selection such
+  as `ESC ( B`, and unterminated strings retain a control byte so validation rejects them rather
+  than fabricating visible payload.
+- Added regressions for charset reset, DCS, C1 SOS/ST, and unterminated OSC. The focused validator
+  suite passes 35 tests and the package typecheck passes; details are in the iteration-2 rebuttal.

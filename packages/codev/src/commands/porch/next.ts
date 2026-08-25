@@ -294,7 +294,11 @@ export async function next(workspaceRoot: string, projectId: string): Promise<Po
         // Auto-approve gate and advance
         const gateName = getPhaseGate(protocol, state.phase);
         if (gateName) {
-          state.gates[gateName] = { status: 'approved', approved_at: new Date().toISOString() };
+          state.gates[gateName] = {
+            ...state.gates[gateName],
+            status: 'approved',
+            approved_at: new Date().toISOString(),
+          };
         }
         // Advance to next phase
         const nextPhase = getNextPhase(protocol, state.phase);

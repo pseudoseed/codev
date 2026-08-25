@@ -7,6 +7,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import chalk from 'chalk';
 import { globSync } from 'glob';
 import type { ProjectState, Protocol, PlanPhase } from './types.js';
@@ -56,6 +57,7 @@ import { resolveDefaultBranch } from '../../lib/default-branch.js';
 import { notifyTerminal, gateApprovedMessage, notifyProtocolComplete } from './notify.js';
 import { loadConfig } from '../../lib/config.js';
 import { version } from '../../version.js';
+import { readGateRequestFile } from './gate-request.js';
 
 // ============================================================================
 // Output Helpers
@@ -756,7 +758,16 @@ async function advanceProtocolPhase(workspaceRoot: string, state: ProjectState, 
  * porch gate <id>
  * Requests human approval for current gate.
  */
-export async function gate(workspaceRoot: string, projectId: string, resolver?: ArtifactResolver): Promise<void> {
+export interface GateOptions {
+  requestFile?: string;
+}
+
+export async function gate(
+  workspaceRoot: string,
+  projectId: string,
+  resolver?: ArtifactResolver,
+  options: GateOptions = {},
+): Promise<void> {
   const statusPath = findStatusPath(workspaceRoot, projectId);
   if (!statusPath) {
     throw new Error(projectNotFoundMessage(workspaceRoot, projectId));
@@ -767,18 +778,39 @@ export async function gate(workspaceRoot: string, projectId: string, resolver?: 
   const gateName = getPhaseGate(protocol, state.phase);
 
   if (!gateName) {
+    if (options.requestFile) {
+      throw new Error(`Cannot attach a gate request: phase ${state.phase} has no approval gate`);
+    }
     console.log(chalk.dim('No gate required for this phase.'));
     console.log(`\n  Run: porch done ${state.id}`);
     return;
   }
 
-  // Mark gate as requested
-  if (!state.gates[gateName]) {
-    state.gates[gateName] = { status: 'pending' };
+  const existingGate = state.gates[gateName];
+  if (options.requestFile && existingGate?.status === 'approved') {
+    throw new Error(`Cannot attach a gate request: ${gateName} is already approved`);
   }
-  if (!state.gates[gateName].requested_at) {
-    state.gates[gateName].requested_at = new Date().toISOString();
-    await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} ${gateName} gate-requested`);
+
+  // Fully read and validate before touching state, so all failures are atomic.
+  const request = options.requestFile
+    ? readGateRequestFile(workspaceRoot, options.requestFile)
+    : undefined;
+
+  // Mark the current gate as requested. A flag-free call deliberately preserves
+  // any existing request for backwards compatibility with old protocol steps.
+  const gateStatus = existingGate ?? { status: 'pending' as const };
+  state.gates[gateName] = gateStatus;
+  const firstRequest = !gateStatus.requested_at;
+  const requestChanged = request !== undefined && !isDeepStrictEqual(gateStatus.request, request);
+  if (firstRequest) {
+    gateStatus.requested_at = new Date().toISOString();
+  }
+  if (requestChanged) {
+    gateStatus.request = request;
+  }
+  if (firstRequest || requestChanged) {
+    const action = firstRequest ? 'gate-requested' : 'gate-request-updated';
+    await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} ${gateName} ${action}`);
   }
 
   console.log('');
@@ -1270,7 +1302,7 @@ function printUsage(): void {
   console.log('  done [id]                Signal build complete (validates checks, advances)');
   console.log('  done [id] --pr N --branch NAME   Record PR creation (no phase advancement)');
   console.log('  done [id] --merged N             Mark PR as merged (no phase advancement)');
-  console.log('  gate [id]                Request human approval');
+  console.log('  gate [id] [--request-file PATH]  Request human approval');
   console.log('  pending                  List all gates awaiting approval across projects');
   console.log('  approve <id> <gate> --a-human-explicitly-approved-this');
   console.log('  verify <id> --skip "reason"      Skip verification and mark as verified');
@@ -1278,11 +1310,34 @@ function printUsage(): void {
   console.log('  init <protocol> <id> <name>  Initialize a new project');
   console.log('');
   console.log('Flags:');
+  console.log('  --request-file PATH      Attach validated JSON content to the current gate');
   console.log('  --version, -v            Print porch (codev) version');
   console.log('  --help, -h               Print this usage and exit 0');
   console.log('');
   console.log('Project ID is auto-detected from worktree path or when exactly one project exists.');
   console.log('');
+}
+
+export function parseGateArgs(args: string[]): { projectIdArg?: string; requestFile?: string } {
+  let projectIdArg: string | undefined;
+  let requestFile: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === '--request-file') {
+      if (requestFile !== undefined) throw new Error('--request-file may only be provided once');
+      const value = args[index + 1];
+      if (!value || value.startsWith('--')) throw new Error('--request-file requires a path');
+      requestFile = value;
+      index += 1;
+    } else if (argument.startsWith('--')) {
+      throw new Error(`Unknown gate option: ${argument}`);
+    } else if (projectIdArg === undefined) {
+      projectIdArg = argument;
+    } else {
+      throw new Error(`Unexpected gate argument: ${argument}`);
+    }
+  }
+  return { projectIdArg, requestFile };
 }
 
 export async function cli(args: string[]): Promise<void> {
@@ -1379,9 +1434,11 @@ export async function cli(args: string[]): Promise<void> {
         break;
       }
 
-      case 'gate':
-        await gate(workspaceRoot, getProjectId(rest[0]), resolver);
+      case 'gate': {
+        const { projectIdArg, requestFile } = parseGateArgs(rest);
+        await gate(workspaceRoot, getProjectId(projectIdArg), resolver, { requestFile });
         break;
+      }
 
       case 'approve':
         if (!rest[0] || !rest[1]) throw new Error('Usage: porch approve <id> <gate> --a-human-explicitly-approved-this');
