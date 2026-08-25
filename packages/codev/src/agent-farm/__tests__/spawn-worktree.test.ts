@@ -359,6 +359,18 @@ describe('spawn-worktree', () => {
       return script.match(new RegExp(`codev_launch_${name}\\(\\) \\{\\n(.*)\\n\\}`))?.[1].trim();
     }
 
+    it('exports a stable builder identity that survives cd (Issue #47)', async () => {
+      await startBuilderSession(
+        { workspaceRoot: '/tmp/ws' } as any,
+        'builder-bugfix-47', '/tmp/ws/.builders/bugfix-47', 'codex',
+        'PROMPT', 'ROLE', 'codev',
+      );
+
+      const script = findScript();
+      expect(script).toContain("export CODEV_BUILDER_ID='builder-bugfix-47'");
+      expect(script).toContain("export CODEV_WORKTREE_ROOT='/tmp/ws/.builders/bugfix-47'");
+    });
+
     it('resume → entry command is the escaped scriptFragment, with no role injection', async () => {
       const resume = { sessionId: 'abc-1234-uuid', scriptFragment: "--resume 'abc-1234-uuid'" };
       await startBuilderSession(
