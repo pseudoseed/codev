@@ -38,8 +38,10 @@ import {
   type EscalationInfo,
   type LivenessInfo,
   type HeldOwnerNoticeInfo,
+  type HeldRecoveryInfo,
 } from './mailbox-delivery.js';
 import type { MailboxEscalationPayload } from '@cluesmith/codev-types';
+import { heldRecoveryAction, heldRecoveryKeystroke } from './mailbox-hold-policy.js';
 
 /**
  * "Recent output" window for the liveness diagnostic (Spec 1313, Phase 7 — spec line
@@ -206,6 +208,7 @@ export function makeDeliveryPorts(log: LogFn): DeliveryPorts {
     onLiveness: (info) => surfaceLiveness(info, log),
     escalateHeldToOwner: (info) => escalateHeldToOwner(info, log),
     clearHeldOwnerNotice: (ws, agent) => clearHeldOwnerNotice(ws, agent),
+    recoverHeld: (info) => recoverHeld(info, log),
     log: (m) => log('INFO', m),
     now: () => Date.now(),
   };
@@ -252,7 +255,8 @@ export function heldRemedy(toAgent: string, detail: string | null): string {
   if (detail === 'user-text') {
     return (
       `${inspect} Its composer is holding TEXT the agent left behind and will not clear on its own. ` +
-      `Clear it with: afx send ${toAgent} --interrupt "<your message>"   ` +
+      `Tower sends one automatic Ctrl+C after the starvation window. If it remains held, ` +
+      `clear it with: afx send ${toAgent} --interrupt "<your message>"   ` +
       `(sends Ctrl+C first, which clears the line — 'afx interrupt' sends ESC, which does not).`
     );
   }
@@ -262,6 +266,14 @@ export function heldRemedy(toAgent: string, detail: string | null): string {
       `${inspect} The agent is MID-TURN, not stuck on a leftover prompt. Do not clear its composer — ` +
       `that corrupts a live turn. Delivery resumes on its own when the turn ends; ` +
       `'afx interrupt ${toAgent}' ends the turn if it is genuinely wedged.`
+    );
+  }
+
+  if (heldRecoveryAction(detail) === 'escape-screen') {
+    return (
+      `${inspect} Delivery is STUCK on a screen problem because the gate cannot read a ready prompt (${detail}); ` +
+      `it will not resolve while that screen stays unchanged. Tower sends one automatic ESC after the starvation window. ` +
+      `If it remains held, inspect the pane and run: afx interrupt ${toAgent} --no-enter.`
     );
   }
 
@@ -388,6 +400,34 @@ function surfaceLiveness(info: LivenessInfo, log: LogFn): void {
     body: `${where} — its screen never classifies as a ready prompt, so held messages will not deliver. A classifier profile may need updating.`,
     workspace: info.workspacePath,
   });
+}
+
+/**
+ * Repair one terminal screen after the drainer proved the SAME deadlocking verdict
+ * stable for the starvation window (#92). This sends only a control byte; the held
+ * message remains in SQLite and still requires a later render-gate CLEAN verdict.
+ */
+function recoverHeld(info: HeldRecoveryInfo, log: LogFn): boolean {
+  const session = resolveLiveSessionForAgent(info.workspacePath, info.toAgent);
+  if (!session) return false;
+  const control = heldRecoveryKeystroke(info.action);
+  if (!session.write(control)) return false;
+
+  const where = `${info.toAgent} @ ${path.basename(info.workspacePath)}`;
+  const recovery = info.action === 'cancel-draft'
+    ? 'Ctrl+C to clear abandoned text'
+    : 'ESC to repaint/end the unreadable screen';
+  log(
+    'WARN',
+    `[mailbox] AUTO-RECOVERY: ${where} remained STUCK (${info.detail}) for ${Math.round(info.stableMs / 1000)}s; sent ${recovery}`,
+  );
+  mailboxBroadcaster?.({
+    type: 'notification',
+    title: 'Mailbox: automatic stuck-screen recovery',
+    body: `${where} — delivery was STUCK (${info.detail}); Tower sent ${recovery}. The message will deliver only after the gate verifies a clean prompt.`,
+    workspace: info.workspacePath,
+  });
+  return true;
 }
 
 // The single backstop drainer instance (replaces the retired SendBuffer). Created

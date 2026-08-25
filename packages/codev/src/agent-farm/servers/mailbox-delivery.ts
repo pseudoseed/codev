@@ -42,6 +42,7 @@ import {
 import type { DbMailbox, MailboxReason } from '../db/types.js';
 import type { GateProfile, GateVerdict } from './render-gate.js';
 import { KeyedSerializer } from './write-queue.js';
+import { heldRecoveryAction, type HeldRecoveryAction } from './mailbox-hold-policy.js';
 
 /**
  * The structural view of a live PTY session the delivery path needs. `PtySession`
@@ -163,6 +164,12 @@ export interface DeliveryPorts {
    * already-delivered notice. OPTIONAL, like {@link escalateHeldToOwner}.
    */
   clearHeldOwnerNotice?(workspacePath: string, toAgent: string): void;
+  /**
+   * Send one bounded recovery keystroke after the same terminally-stuck verdict has
+   * remained stable for the recovery window (#92). Returns true only when the byte
+   * reached a live PTY. Delivery itself still waits for a later clean gate.
+   */
+  recoverHeld?(info: HeldRecoveryInfo): boolean;
   log(message: string): void;
   now(): number;
 }
@@ -191,6 +198,15 @@ export interface HeldOwnerNoticeInfo {
   ageMs: number;
   /** How many eligible held rows are backed up for the agent. */
   heldCount: number;
+}
+
+/** Metadata for one automatic recovery attempt. Never carries the held message body. */
+export interface HeldRecoveryInfo {
+  workspacePath: string;
+  toAgent: string;
+  detail: string;
+  action: HeldRecoveryAction;
+  stableMs: number;
 }
 
 /**
@@ -554,7 +570,16 @@ export class MailboxDrainer {
   private readonly retentionDays: number;
   private readonly escalationMs: number;
   private readonly ownerNoticeMs: number;
+  private readonly recoveryMs: number;
   private readonly notCleanStreak = new Map<string, number>();
+  /** Current recoverable STATIC screen and its first observation; cleared when output changes. */
+  private readonly recoveryState = new Map<string, {
+    detail: string;
+    session: DeliverySession;
+    token: string;
+    since: number;
+    attempted: boolean;
+  }>();
   // Spec 1313 round 3 (change 3): agents for which an owner starvation notice has already been
   // raised this Tower lifetime — so the notice fires ONCE per episode, not once per tick. An
   // entry is cleared when the agent's eligible held set drains (its starvation is over), which
@@ -578,11 +603,12 @@ export class MailboxDrainer {
   // this generation's state.
   private generation = 0;
 
-  constructor(opts: { intervalMs?: number; pruneRetentionDays?: number; escalationMs?: number; ownerNoticeMs?: number } = {}) {
+  constructor(opts: { intervalMs?: number; pruneRetentionDays?: number; escalationMs?: number; ownerNoticeMs?: number; recoveryMs?: number } = {}) {
     this.intervalMs = opts.intervalMs ?? DEFAULT_BACKSTOP_INTERVAL_MS;
     this.retentionDays = opts.pruneRetentionDays ?? DEFAULT_PRUNE_RETENTION_DAYS;
     this.escalationMs = opts.escalationMs ?? DEFAULT_ESCALATION_MS;
     this.ownerNoticeMs = opts.ownerNoticeMs ?? this.escalationMs * DEFAULT_OWNER_NOTICE_MULTIPLE;
+    this.recoveryMs = opts.recoveryMs ?? this.ownerNoticeMs;
   }
 
   start(ports: DeliveryPorts, db: Database.Database): void {
@@ -615,6 +641,7 @@ export class MailboxDrainer {
     // there was NOT harmless.)
     this.verdictMemo.clear();
     this.notCleanStreak.clear();
+    this.recoveryState.clear();
     this.scheduledDrains.clear();
     this.notifiedAgents.clear();
     this.generation++;
@@ -654,6 +681,9 @@ export class MailboxDrainer {
       // otherwise leak for the life of the process. Bounds the memo to |held agents|.
       for (const key of this.verdictMemo.keys()) {
         if (!agents.has(key)) this.verdictMemo.delete(key);
+      }
+      for (const key of this.recoveryState.keys()) {
+        if (!agents.has(key)) this.recoveryState.delete(key);
       }
       for (const [key, { workspacePath, toAgent }] of agents) {
         if (this.generation !== gen) return; // stop() ran mid-tick → bail before more work
@@ -795,10 +825,53 @@ export class MailboxDrainer {
   private recordStreak(key: string, outcome: DeliveryOutcome): void {
     if (outcome.delivered.length > 0 || outcome.reason === null) {
       this.notCleanStreak.delete(key);
+      this.recoveryState.delete(key);
       return;
     }
     const next = (this.notCleanStreak.get(key) ?? 0) + 1;
     this.notCleanStreak.set(key, next);
+
+    // #92: retrying a STATIC abandoned/unreadable screen can never change its verdict.
+    // After the SAME recoverable detail remains stable for the starvation window, send
+    // one control byte: Ctrl+C clears abandoned user text; ESC repaints/ends an unreadable
+    // screen. A detail change resets the clock, and `busy-indicator` is never recoverable.
+    // This is only a screen repair — the next pass must still classify CLEAN before the
+    // held message is written. Arm the once-per-verdict guard only after a live write.
+    const action = heldRecoveryAction(outcome.detail);
+    if (!action || !outcome.detail) {
+      this.recoveryState.delete(key);
+    } else {
+      const now = this.ports?.now() ?? 0;
+      const [workspacePath, toAgent] = key.split('\0');
+      const session = this.ports?.getSessionForAgent(workspacePath, toAgent);
+      if (!session) {
+        this.recoveryState.delete(key);
+      } else {
+        // Input alone does not advance this counter, but ANY app output does. Requiring the
+        // same session + output token for the whole window prevents an unreadable ACTIVE turn
+        // from being interrupted merely because its classifier detail stayed the same.
+        const token = `${session.bytesWritten}:${session.info.cols}x${session.info.rows}`;
+        const current = this.recoveryState.get(key);
+        if (!current || current.detail !== outcome.detail || current.session !== session || current.token !== token) {
+          this.recoveryState.set(key, {
+            detail: outcome.detail,
+            session,
+            token,
+            since: now,
+            attempted: false,
+          });
+        } else if (!current.attempted && now - current.since >= this.recoveryMs) {
+          const attempted = this.ports?.recoverHeld?.({
+            workspacePath,
+            toAgent,
+            detail: outcome.detail,
+            action,
+            stableMs: now - current.since,
+          });
+          if (attempted) current.attempted = true;
+        }
+      }
+    }
     // Liveness telemetry (Spec 1313, Phase 7 — spec line 91; extended in the render-gate
     // hardening): a sustained streak that the gate CANNOT verify means the mail will
     // NEVER deliver on its own — surface it instead of holding silently. Two such classes:

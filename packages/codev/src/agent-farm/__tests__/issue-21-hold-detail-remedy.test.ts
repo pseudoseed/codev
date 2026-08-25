@@ -128,6 +128,8 @@ describe('#21: the alert names a remedy that works', () => {
 
     expect(text).toContain('screen problem');
     expect(text).toContain('no-composer-marker');
+    expect(text).toContain('STUCK');
+    expect(text).toContain('afx interrupt builder-x --no-enter');
     expect(text).not.toContain('--interrupt "');
   });
 
