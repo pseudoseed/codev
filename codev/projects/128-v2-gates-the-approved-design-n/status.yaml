@@ -5,10 +5,10 @@ phase: implement
 plan_phases:
   - id: phase_1
     title: Validated porch gate-request record
-    status: in_progress
+    status: complete
   - id: phase_2
     title: Resolver-delivered gate authoring guidance
-    status: pending
+    status: in_progress
   - id: phase_3
     title: Exact-gate v2 wire projection
     status: pending
@@ -18,7 +18,7 @@ plan_phases:
   - id: phase_5
     title: Design-faithful gate-detail presentation
     status: pending
-current_plan_phase: phase_1
+current_plan_phase: phase_2
 gates:
   spec-approval:
     status: approved
@@ -32,8 +32,8 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 3
-build_complete: true
+iteration: 1
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -84,7 +84,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/spir-128/codev/projects/128-v2-gates-the-approved-design-n/128-phase_1-iter2-opencode.txt
         stated: true
 started_at: '2026-08-25T00:02:43.765Z'
-updated_at: '2026-08-25T09:23:36.173Z'
+updated_at: '2026-08-25T09:27:30.904Z'
 context_refreshes:
   - boundary: enter:plan
     at: '2026-08-25T05:23:52.849Z'
@@ -92,3 +92,5 @@ context_refreshes:
   - boundary: enter:implement
     at: '2026-08-25T08:32:59.632Z'
     acknowledged_at: '2026-08-25T08:33:44.669Z'
+  - boundary: plan-phase:phase_2
+    at: '2026-08-25T09:27:30.904Z'
