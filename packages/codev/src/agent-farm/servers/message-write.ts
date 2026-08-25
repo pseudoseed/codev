@@ -41,9 +41,9 @@ export const ESCAPE_ENTER_DELAY_MS = SIMPLE_ENTER_DELAY_MS;
  * running tool and ends the turn, after which queued messages process. It is the
  * command form of `afx send <builder> --raw "$(printf '\x1b')"`.
  *
- * The trailing Enter is sent by default and is load-bearing, not incidental —
- * it is what lets already-queued input through once ESC has ended the turn. Pass
- * `noEnter` to write ESC alone.
+ * A caller can explicitly request a trailing Enter because it is what lets
+ * already-queued input through once ESC has ended the turn. That opt-in must be
+ * deliberate: Enter can activate a highlighted action on an unknown dialog.
  *
  * Deliberately not routed through `writeMessageToSession`: ESC is a control byte,
  * not text, so line-pacing and paste-detection logic do not apply to it.

@@ -6,8 +6,8 @@
  * within two minutes of receiving an ESC keystroke. These tests pin the pieces
  * that recovery depends on, several of which are otherwise implicit:
  *
- *  - the exact byte sequence (ESC, then Enter by default — the Enter is what
- *    lets messages queued during the wedge process);
+ *  - the exact opt-in byte sequence (ESC, then Enter — the Enter is what lets
+ *    messages queued during the wedge process);
  *  - that a lone `\x1b` survives `handleSend`'s `trim()`/non-empty guard, an
  *    accidental invariant the manual recipe has always relied on;
  *  - that ESC delivery is never deferred by the send buffer — an interrupt that
@@ -38,7 +38,7 @@ describe('writeEscapeToSession (Spec 1273)', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('writes ESC immediately, then Enter after the enter delay', () => {
+  it('writes ESC immediately, then Enter when the caller explicitly requests it', () => {
     const session = makeSession();
 
     const endTime = writeEscapeToSession(session, false);

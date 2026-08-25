@@ -503,7 +503,8 @@ export async function runAgentFarm(args: string[]): Promise<void> {
   program
     .command('interrupt [builder]')
     .description('Interrupt a builder mid-turn (sends ESC to end the running turn)')
-    .option('--no-enter', 'Send ESC alone, without the trailing Enter')
+    .option('--enter', 'Send Enter after ESC so queued messages process (unsafe at dialogs)')
+    .option('--no-enter', 'Send ESC alone (default; retained for compatibility)')
     .action(async (builder, options) => {
       const { interrupt } = await import('./commands/interrupt.js');
       try {
