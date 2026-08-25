@@ -1,0 +1,14 @@
+id: bugfix-93
+title: afx-interrupt-sends-enter-by-d
+protocol: bugfix
+phase: investigate
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: pending
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-25T05:11:57.376Z'
+updated_at: '2026-08-25T05:11:57.377Z'
