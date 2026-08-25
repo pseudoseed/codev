@@ -251,8 +251,29 @@ export function findOrphanWorktree(workspaceRoot: string, projectId: string): Or
   return { status: 'ambiguous', dirNames: matches.map((m) => m.dirName) };
 }
 
-const PORCH_BOOKKEEPING_PREFIXES = ['codev/projects/', 'codev/state/'] as const;
-const PORCH_BOOKKEEPING_EXACT = new Set(['codev/projects', 'codev/state']);
+/**
+ * Paths porch REGENERATES, and therefore may be deleted with the worktree (#127).
+ *
+ * `codev/state/` is deliberately NOT here. It holds each builder's narrative
+ * log, and CLAUDE.md is explicit that the log lives in the worktree in flight
+ * and on `main` only AFTER the PR merges:
+ *
+ *   > Each builder keeps a narrative log at `codev/state/<builder-id>_thread.md`
+ *   > — in-flight at `.builders/<id>/codev/state/`, and on `main` after the PR
+ *   > merges.
+ *
+ * Until it lands, the worktree copy is the ONLY copy. status.yaml is different
+ * in kind: porch owns it and rewrites it, so losing it costs nothing.
+ *
+ * Treating the two alike made a branch whose only unlanded file was its thread
+ * log read as merged, so cleanup removed the worktree with no `--force` and no
+ * warning — and the orphan path deletes the branch too (#126), leaving the log
+ * nowhere. Measured twice in one day: three logs hand-salvaged from orphan
+ * worktrees (#124, #125), and air-106's closing entry stranded on its branch
+ * and rescued by hand (#134).
+ */
+const PORCH_BOOKKEEPING_PREFIXES = ['codev/projects/'] as const;
+const PORCH_BOOKKEEPING_EXACT = new Set(['codev/projects']);
 
 export function isPorchBookkeepingPath(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, '/');
