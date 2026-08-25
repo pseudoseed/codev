@@ -234,7 +234,7 @@ describe('removeOrphanWorktree', () => {
     expect(eventsBuilderNames(repo)).not.toContain('air-78');
   });
 
-  it('removes an unmerged orphan when --force is set', async () => {
+  it('removes an unmerged orphan with --force but preserves its branch', async () => {
     writeFileSync(join(worktreePath, 'wip.txt'), 'unmerged\n');
     git('add wip.txt', worktreePath);
     git('commit -q -m wip', worktreePath);
@@ -243,6 +243,7 @@ describe('removeOrphanWorktree', () => {
 
     expect(existsSync(worktreePath)).toBe(false);
     expect(eventsBuilderNames(repo)).not.toContain('air-78');
+    expect(git('branch --list builder/air-78')).toContain('builder/air-78');
   });
 
   it('refuses a merged orphan that holds uncommitted work without --force', async () => {
