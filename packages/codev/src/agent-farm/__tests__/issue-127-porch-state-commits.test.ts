@@ -24,14 +24,21 @@ function worktreeList(repo: string): string {
 }
 
 describe('isPorchBookkeepingPath', () => {
-  it('accepts only codev/projects and codev/state trees', () => {
+  it('accepts the codev/projects tree, which porch regenerates', () => {
     expect(isPorchBookkeepingPath('codev/projects/120-x/status.yaml')).toBe(true);
-    expect(isPorchBookkeepingPath('codev/state/air-120_thread.md')).toBe(true);
     expect(isPorchBookkeepingPath('codev/projects')).toBe(true);
-    expect(isPorchBookkeepingPath('codev/state')).toBe(true);
     expect(isPorchBookkeepingPath('codev/specs/120-x.md')).toBe(false);
     expect(isPorchBookkeepingPath('packages/codev/src/cli.ts')).toBe(false);
     expect(isPorchBookkeepingPath('codev/projects-backup/x')).toBe(false);
+  });
+
+  it('does NOT accept codev/state — a thread log has no other copy', () => {
+    // CLAUDE.md: the log is in-flight in the worktree and on main only AFTER
+    // the PR merges. Until it lands, the worktree copy is the only copy, so
+    // classifying it as regenerable makes cleanup delete it with no --force
+    // and no warning. status.yaml is different in kind: porch rewrites it.
+    expect(isPorchBookkeepingPath('codev/state/air-120_thread.md')).toBe(false);
+    expect(isPorchBookkeepingPath('codev/state')).toBe(false);
   });
 });
 
@@ -109,7 +116,7 @@ describe('cleanup after porch post-merge state commit', () => {
     expect(worktreeList(repo)).not.toContain(worktreePath);
   });
 
-  it('treats a codev/state-only post-merge commit as merged', async () => {
+  it('PRESERVES a worktree whose only unlanded file is its thread log', async () => {
     writeFileSync(join(worktreePath, 'done.txt'), 'merged\n');
     git('add done.txt', worktreePath);
     git('commit -q -m done', worktreePath);
@@ -122,8 +129,11 @@ describe('cleanup after porch post-merge state commit', () => {
 
     const result = await cleanupNonEphemeralWorktree(repo, worktreePath);
 
-    expect(result).toBe('removed-merged');
-    expect(existsSync(worktreePath)).toBe(false);
+    // Measured twice in one day before this flipped: three logs hand-salvaged
+    // from orphan worktrees (#124, #125), and air-106's closing entry stranded
+    // on its branch and rescued by hand (#134).
+    expect(result).toBe('preserved-unmerged');
+    expect(existsSync(worktreePath)).toBe(true);
   });
 
   it('preserves a branch that still has unmerged real work', async () => {
