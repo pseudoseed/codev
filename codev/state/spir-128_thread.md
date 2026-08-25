@@ -62,3 +62,10 @@
   findability under the newer exactly-one-token constraint.
 - Split the client work into semantic/live behavior and visual/browser-fidelity commits, yielding
   five machine-readable phases.
+
+## Plan — plan-approval gate
+
+- Iteration-1 rebuttals and all accepted review changes are committed in `2cef95880`.
+- `porch done` checks passed and requested `plan-approval`; stopped for explicit human review.
+- All gate/completion messages continue to target `architect:uiv2` explicitly because bare
+  `architect` misroutes to `main` until issue #47 lands.
