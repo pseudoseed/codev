@@ -13,6 +13,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    globalSetup: ['./vitest-global-setup.ts'],
     // Sandboxes the real agy binary and the user-global metrics DB (#1323).
     // Spawned CLI children inherit the pins via `{ ...process.env }`.
     setupFiles: ['./vitest-setup.ts'],
