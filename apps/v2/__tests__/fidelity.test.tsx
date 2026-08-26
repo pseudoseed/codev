@@ -24,6 +24,8 @@ function node(over: Partial<ClientNode> & Pick<ClientNode, 'id' | 'kind'>): Clie
     status: 'running',
     flags: { heldMail: false },
     lastDataAt: null,
+    blockedGate: null,
+    blockedGateRequest: null,
     buckets: FLAT,
     ...over,
   };

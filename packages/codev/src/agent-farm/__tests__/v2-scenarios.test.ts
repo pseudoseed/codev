@@ -29,6 +29,7 @@ function discovered(dir: string): V2DiscoveredBuilder {
     worktreePath: `${WS}/.builders/${dir}`,
     roleId: `builder-${dir.toLowerCase()}`,
     blockedGate: null,
+    blockedGateRequest: null,
   };
 }
 

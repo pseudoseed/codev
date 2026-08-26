@@ -18,6 +18,8 @@ function builderNode(ws: string, dir: string): V2Node {
     status: 'running',
     flags: { heldMail: false },
     lastDataAt: null,
+    blockedGate: null,
+    blockedGateRequest: null,
   };
 }
 

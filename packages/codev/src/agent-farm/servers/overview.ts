@@ -9,6 +9,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import * as yaml from 'js-yaml';
 import { UNCATEGORIZED_AREA } from '@cluesmith/codev-sdk/constants';
 import {
   fetchPRList,
@@ -37,7 +38,7 @@ import { heldSummaryForWorkspace } from '../db/mailbox.js';
 import { normalizeWorkspacePath } from './tower-utils.js';
 
 // =============================================================================
-// Status YAML parser (lightweight, no library dependency)
+// Status YAML parser (lightweight scalars plus targeted nested gate decoding)
 // =============================================================================
 
 interface ParsedStatus {
@@ -49,6 +50,8 @@ interface ParsedStatus {
   gates: Record<string, string>;
   gateRequestedAt: Record<string, string>;
   gateApprovedAt: Record<string, string>;
+  /** Untrusted request values decoded from the gates subtree. */
+  gateRequests: Record<string, unknown>;
   planPhases: PlanPhase[];
   startedAt: string;
   /**
@@ -87,6 +90,7 @@ export function parseStatusYaml(content: string): ParsedStatus {
     gates: {},
     gateRequestedAt: {},
     gateApprovedAt: {},
+    gateRequests: parseGateRequests(content),
     planPhases: [],
     startedAt: '',
     prReadyForHuman: null,
@@ -232,6 +236,31 @@ export function parseStatusYaml(content: string): ParsedStatus {
   return result;
 }
 
+/**
+ * Decode only the nested request values with the same YAML implementation porch
+ * writes with. The rest of overview intentionally stays on its legacy scalar
+ * parser; malformed YAML simply leaves request enrichment unavailable.
+ */
+function parseGateRequests(content: string): Record<string, unknown> {
+  try {
+    const document = yaml.load(content);
+    if (typeof document !== 'object' || document === null || Array.isArray(document)) return {};
+    const gates = (document as Record<string, unknown>).gates;
+    if (typeof gates !== 'object' || gates === null || Array.isArray(gates)) return {};
+
+    const requests: Record<string, unknown> = {};
+    for (const [gate, rawStatus] of Object.entries(gates)) {
+      if (typeof rawStatus !== 'object' || rawStatus === null || Array.isArray(rawStatus)) continue;
+      if (Object.hasOwn(rawStatus, 'request')) {
+        requests[gate] = (rawStatus as Record<string, unknown>).request;
+      }
+    }
+    return requests;
+  } catch {
+    return {};
+  }
+}
+
 function pushPlanPhase(result: ParsedStatus, partial: Partial<PlanPhase>): void {
   if (partial.id) {
     result.planPhases.push({
@@ -351,12 +380,7 @@ const GATE_LABELS: Record<string, string> = {
 };
 
 export function detectBlocked(parsed: ParsedStatus): string | null {
-  for (const [gate, label] of Object.entries(GATE_LABELS)) {
-    if (parsed.gates[gate] === 'pending' && parsed.gateRequestedAt[gate]) {
-      return label;
-    }
-  }
-  return null;
+  return detectBlockedSelection(parsed)?.label ?? null;
 }
 
 /**
@@ -365,12 +389,7 @@ export function detectBlocked(parsed: ParsedStatus): string | null {
  * Returns null if the builder isn't blocked.
  */
 export function detectBlockedGate(parsed: ParsedStatus): string | null {
-  for (const gate of Object.keys(GATE_LABELS)) {
-    if (parsed.gates[gate] === 'pending' && parsed.gateRequestedAt[gate]) {
-      return gate;
-    }
-  }
-  return null;
+  return detectBlockedSelection(parsed)?.gate ?? null;
 }
 
 /**
@@ -382,10 +401,28 @@ export function detectBlockedGate(parsed: ParsedStatus): string | null {
  * previously-separate hardcoded array, which was a silent drift hazard).
  */
 export function detectBlockedSince(parsed: ParsedStatus): string | null {
-  for (const gate of Object.keys(GATE_LABELS)) {
-    if (parsed.gates[gate] === 'pending' && parsed.gateRequestedAt[gate]) {
-      return parsed.gateRequestedAt[gate];
-    }
+  return detectBlockedSelection(parsed)?.since ?? null;
+}
+
+interface BlockedSelection {
+  gate: string;
+  label: string;
+  since: string;
+  request: unknown | null;
+}
+
+/** Select the active gate and its request atomically in canonical gate order. */
+export function detectBlockedSelection(parsed: ParsedStatus): BlockedSelection | null {
+  const requests = parsed.gateRequests ?? {};
+  for (const [gate, label] of Object.entries(GATE_LABELS)) {
+    const since = parsed.gateRequestedAt[gate];
+    if (parsed.gates[gate] !== 'pending' || !since) continue;
+    return {
+      gate,
+      label,
+      since,
+      request: Object.hasOwn(requests, gate) ? requests[gate] : null,
+    };
   }
   return null;
 }
@@ -595,6 +632,7 @@ export function discoverBuilders(workspaceRoot: string): OverviewBuilder[] {
         progress: 0,
         blocked: null,
         blockedGate: null,
+        blockedGateRequest: null,
         blockedSince: null,
         startedAt: null,
         idleMs: 0,
@@ -636,6 +674,7 @@ export function discoverBuilders(workspaceRoot: string): OverviewBuilder[] {
             if (trailingNum) issueId = String(Number(trailingNum[1]));
           }
 
+          const blocked = detectBlockedSelection(parsed);
           builders.push({
             id: parsed.id || entry.name,
             issueId,
@@ -653,9 +692,10 @@ export function discoverBuilders(workspaceRoot: string): OverviewBuilder[] {
             protocol: parsed.protocol,
             planPhases: parsed.planPhases,
             progress: calculateProgress(parsed, workspaceRoot),
-            blocked: detectBlocked(parsed),
-            blockedGate: detectBlockedGate(parsed),
-            blockedSince: detectBlockedSince(parsed),
+            blocked: blocked?.label ?? null,
+            blockedGate: blocked?.gate ?? null,
+            blockedGateRequest: blocked?.request ?? null,
+            blockedSince: blocked?.since ?? null,
             startedAt: parsed.startedAt || null,
             idleMs: computeIdleMs(parsed),
             lastDataAt: null,
@@ -690,6 +730,7 @@ export function discoverBuilders(workspaceRoot: string): OverviewBuilder[] {
         progress: 0,
         blocked: null,
         blockedGate: null,
+        blockedGateRequest: null,
         blockedSince: null,
         startedAt: null,
         idleMs: 0,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { V2Counts, V2Node } from '@cluesmith/codev-types';
+import { GATE_REQUEST_LIMITS, type GateRequest, type V2Counts, type V2Node } from '@cluesmith/codev-types';
 import {
   ScopeBus,
   V2_BUFFER_MAX_AGE_MS,
@@ -18,6 +18,8 @@ function node(id: string): V2Node {
     status: 'running',
     flags: { heldMail: false },
     lastDataAt: null,
+    blockedGate: null,
+    blockedGateRequest: null,
   };
 }
 
@@ -109,5 +111,85 @@ describe('ScopeBus', () => {
     bus.emit(key, { type: 'gone', id: 'x' });
     expect(a).toHaveLength(1);
     expect(b).toHaveLength(1);
+  });
+});
+
+describe('gate request retention budget (Spec 128)', () => {
+  it('retains gate content in buffered node frames and resume replay', () => {
+    const bus = new ScopeBus();
+    const key = scopeKey(['/a']);
+    const request: GateRequest = {
+      question: 'Which path?',
+      choices: [{ label: 'A', consequence: 'Implement A' }],
+    };
+    const changed = {
+      ...node('builder:/a#one'),
+      blockedGate: 'plan-approval',
+      blockedGateRequest: request,
+    };
+    bus.emit(key, { type: 'node', node: changed }, 1_000);
+    const replay = bus.resume(key, 0, bus.streamId(key), 1_001);
+    expect(replay.kind).toBe('resumed');
+    if (replay.kind === 'resumed') {
+      expect(replay.frames[1]).toMatchObject({ type: 'node', node: changed });
+    }
+  });
+
+  it('bounds maximal node, snapshot, lastByScope, and 500-frame replay JSON bytes', () => {
+    const plainRequest: GateRequest = {
+      question: 'q'.repeat(GATE_REQUEST_LIMITS.questionBytes),
+      choices: Array.from({ length: GATE_REQUEST_LIMITS.maxChoices }, (_, index) => ({
+        label: 'l'.repeat(GATE_REQUEST_LIMITS.labelBytes),
+        consequence: 'c'.repeat(GATE_REQUEST_LIMITS.consequenceBytes),
+        ...(index === 0 ? { recommended: true } : {}),
+      })),
+      terminalExcerpt: 't'.repeat(GATE_REQUEST_LIMITS.terminalExcerptBytes),
+    };
+    // Backslashes cost one byte in the field but two in JSON. Use exactly
+    // enough to exercise the whole-request cap rather than merely every field
+    // cap independently.
+    const escapedBytesNeeded = GATE_REQUEST_LIMITS.requestBytes
+      - Buffer.byteLength(JSON.stringify(plainRequest));
+    const request: GateRequest = {
+      ...plainRequest,
+      terminalExcerpt: '\\'.repeat(escapedBytesNeeded)
+        + 't'.repeat(GATE_REQUEST_LIMITS.terminalExcerptBytes - escapedBytesNeeded),
+    };
+    const maximalNode: V2Node = {
+      ...node('maximal'),
+      status: 'gate-waiting',
+      blockedGate: 'plan-approval',
+      blockedGateRequest: request,
+    };
+    // Twenty simultaneous max-content builders is the explicit realistic
+    // loaded-scope model; the replay bound below remains the harder limit.
+    const builders = Array.from({ length: 20 }, (_, index) => ({
+      ...maximalNode,
+      id: `builder:/workspace#maximal-${index}`,
+      name: `maximal-${index}`,
+    }));
+    const requestBytes = Buffer.byteLength(JSON.stringify(request));
+    const nodeFrameBytes = Buffer.byteLength(JSON.stringify({ seq: 1, type: 'node', node: maximalNode }));
+    const snapshotBytes = Buffer.byteLength(JSON.stringify({
+      seq: 0,
+      type: 'snapshot',
+      streamId: '0123456789abcdef',
+      resumed: false,
+      scope: ['/workspace'],
+      nodes: builders,
+      counts: { workspaces: 1, builders: { total: 20, byStatus: { 'gate-waiting': 20 } }, gateWaiting: 20 },
+    }));
+    const lastByScopeBytes = Buffer.byteLength(JSON.stringify(Object.fromEntries(
+      builders.map((builder) => [builder.id, builder]),
+    )));
+    const replay500Bytes = Array.from({ length: V2_BUFFER_MAX_FRAMES }, (_, index) =>
+      Buffer.byteLength(JSON.stringify({ seq: index + 1, type: 'node', node: maximalNode })))
+      .reduce((sum, bytes) => sum + bytes, 0);
+
+    expect(requestBytes).toBe(GATE_REQUEST_LIMITS.requestBytes);
+    expect(nodeFrameBytes).toBeLessThan(33 * 1024);
+    expect(snapshotBytes).toBeLessThan(672 * 1024);
+    expect(lastByScopeBytes).toBeLessThan(672 * 1024);
+    expect(replay500Bytes).toBeLessThan(16 * 1024 * 1024);
   });
 });

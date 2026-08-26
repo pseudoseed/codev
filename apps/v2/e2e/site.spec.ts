@@ -77,6 +77,8 @@ test('new builder appears with no reload', async ({ page }) => {
         status: 'running',
         flags: { heldMail: false },
         lastDataAt: null,
+        blockedGate: null,
+        blockedGateRequest: null,
       },
     },
   ]);
@@ -115,6 +117,8 @@ test('stalled is STALLED ochre', async ({ page }) => {
         status: 'stalled',
         flags: { heldMail: false },
         lastDataAt: null,
+        blockedGate: null,
+        blockedGateRequest: null,
       },
     },
   ]);
@@ -168,6 +172,8 @@ function ws(name: string) {
       status: 'running',
       flags: { heldMail: false },
       lastDataAt: null,
+      blockedGate: null,
+      blockedGateRequest: null,
     },
   };
 }
@@ -183,6 +189,8 @@ function builderIn(host: string, n: number) {
       status: 'running',
       flags: { heldMail: false },
       lastDataAt: null,
+      blockedGate: null,
+      blockedGateRequest: null,
     },
   };
 }
@@ -264,6 +272,8 @@ test('disconnect then honoured resume recovers without reload', async ({ page })
         status: 'running',
         flags: { heldMail: false },
         lastDataAt: null,
+        blockedGate: null,
+        blockedGateRequest: null,
       },
     },
   ]);
@@ -297,6 +307,8 @@ test('disconnect then refused snapshot recovers without reload', async ({ page }
         status: 'running',
         flags: { heldMail: false },
         lastDataAt: null,
+        blockedGate: null,
+        blockedGateRequest: null,
       },
     },
   ]);
@@ -387,6 +399,8 @@ test('two pages on one scope converge', async ({ browser }) => {
         status: 'running',
         flags: { heldMail: false },
         lastDataAt: null,
+        blockedGate: null,
+        blockedGateRequest: null,
       },
     },
   ]);
@@ -425,6 +439,8 @@ test('architect-parented builder nests under that architect', async ({ page }) =
         status: 'running',
         flags: { heldMail: false },
         lastDataAt: null,
+        blockedGate: null,
+        blockedGateRequest: null,
       },
     },
   ]);

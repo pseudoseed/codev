@@ -186,6 +186,12 @@ export interface OverviewBuilder {
    * display label and won't match porch's gate keys.
    */
   blockedGate: string | null;
+  /**
+   * Raw request value attached to exactly `blockedGate`. Tower reads this from
+   * status.yaml, so it remains unknown until the v2 client validates the wire.
+   * Null means no active request (including legacy content-free gates).
+   */
+  blockedGateRequest: unknown | null;
   blockedSince: string | null;
   startedAt: string | null;
   idleMs: number;

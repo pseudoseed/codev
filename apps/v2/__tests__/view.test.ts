@@ -19,6 +19,8 @@ function node(id: string, kind: ClientNode['kind']): ClientNode {
     status: 'running',
     flags: { heldMail: false },
     lastDataAt: null,
+    blockedGate: null,
+    blockedGateRequest: null,
     buckets: Array.from({ length: 20 }, () => 0),
   };
 }

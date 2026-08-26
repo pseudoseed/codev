@@ -38,6 +38,7 @@ function discovered(
     worktreePath: `${ws}/.builders/${dir}`,
     roleId: `builder-${dir.toLowerCase()}`,
     blockedGate: null,
+    blockedGateRequest: null,
     ...extra,
   };
 }
@@ -157,6 +158,30 @@ afterEach(() => {
 });
 
 describe('V2Sampler', () => {
+  it('emits a node delta when only the gate request changes', () => {
+    const world = new World();
+    const builder = world.addLiveBuilder('spir-128');
+    builder.blockedGate = 'plan-approval';
+    builder.blockedGateRequest = null;
+    const bus = new ScopeBus();
+    const sampler = makeSampler(world, bus);
+    const snap = world.projection();
+    sampler.seedScope([WS_A], snap.nodes, snap.counts);
+    const { frames, unsub } = collect(bus, [WS_A]);
+
+    builder.blockedGateRequest = {
+      question: 'Which path?',
+      choices: [{ label: 'A', consequence: 'Implement A' }],
+    };
+    sampler.compare();
+
+    const node = nodeFrames(frames).find((frame) => frame.node.id === builderId(WS_A, 'spir-128'));
+    expect(node?.node.blockedGate).toBe('plan-approval');
+    expect(node?.node.blockedGateRequest).toEqual(builder.blockedGateRequest);
+    expect(frames.some((frame) => frame.type === 'counts')).toBe(false);
+    unsub();
+  });
+
   it('scenario 1: two subscribers see a spawn on the same compare', () => {
     const world = new World();
     const bus = new ScopeBus();

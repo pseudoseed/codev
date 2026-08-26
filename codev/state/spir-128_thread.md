@@ -136,3 +136,36 @@
   in Codex, Claude, and fallback opencode (`opencode/hy3-free`); Gemini quota-skipped. Non-blocking
   feedback noted that the shared fragment could advertise byte limits and scratch-file cleanup,
   but found the delivered contract accurate and the full phase implementation complete.
+
+## Implement — Phase 3: exact-gate v2 wire projection
+
+- Overview now decodes only nested gate request values with `js-yaml` while retaining its legacy
+  scalar parser. One canonical-order selection returns gate, display label, requested time, and the
+  raw request together; the exported `detectBlocked*` functions remain wrappers over that seam.
+- The overview carrier keeps request content `unknown | null`. Projection deliberately casts only
+  at the Tower serialization seam so structurally malformed YAML values remain visible and the v2
+  client rejects the enclosing frame instead of converting it into the legacy-null state.
+- Every v2 node now carries required nullable `blockedGate` and `blockedGateRequest` fields. Builder
+  request-only changes participate in sampler comparison/deltas and buffered resume; workspace and
+  architect nodes always project both as null.
+- The client validator imports `GateRequest` and `GATE_REQUEST_LIMITS` from `codev-types`, rejects
+  missing/extra/hostile nested values and invalid gate/request associations, and returns the
+  canonical request. Reducer cloning preserves request content through snapshot/delta reduction.
+- Aggregate JSON measurement uses a request exactly at the 32,768-byte whole-request cap (3,623
+  backslashes make JSON escaping, rather than independent field caps, load-bearing): one node frame
+  is 32,986 bytes; a realistic heavily loaded 20-builder snapshot is 659,804 bytes; its
+  `lastByScope` map is 660,231 bytes; 500 maximal replay frames total 16,493,892 bytes. This remains
+  below the locked 16 MiB replay bound, so no tighter buffer mitigation is necessary.
+- Verification receipts: 256 targeted Tower/server tests and all 180 v2 tests pass; types tests,
+  v2 production build, and full Codev build pass. The complete package suite passes 6,138 Codev
+  tests (48 skipped) plus all 180 v2 tests.
+- The unnamed porch-check transient from Phase 2 recurred on the first Phase 3 `porch done`: the
+  219-second test command returned nonzero while porch again surfaced only npm config warnings and
+  no failing test. The exact check command was immediately rerun with a complete captured log and
+  passed 6,139 Codev tests (48 skipped) plus 180 v2 tests. There is still no named producer that can
+  responsibly be annotated or skipped.
+- Phase 3 consultation approved in Codex, Claude, and fallback opencode (`opencode/hy3-free`);
+  Gemini quota-skipped. Claude measured the unconditional YAML decode as a non-blocking ~67 µs per
+  current 3.4 KiB status file versus ~6 µs for the scalar scan. The implementation keeps it simple
+  for now: the sampler needs exact nested YAML semantics, atomic porch writes make parse failure
+  exceptional, and the existing comment explicitly documents fallback to unavailable enrichment.

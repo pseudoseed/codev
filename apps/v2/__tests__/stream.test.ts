@@ -280,6 +280,8 @@ describe('the tree outlives the socket (#106)', () => {
           status: 'running',
           flags: { heldMail: false },
           lastDataAt: null,
+          blockedGate: null,
+          blockedGateRequest: null,
         },
       ];
       let events = 0;
@@ -321,6 +323,8 @@ describe('the tree outlives the socket (#106)', () => {
           status: 'running',
           flags: { heldMail: false },
           lastDataAt: null,
+          blockedGate: null,
+          blockedGateRequest: null,
         },
       ];
       let events = 0;

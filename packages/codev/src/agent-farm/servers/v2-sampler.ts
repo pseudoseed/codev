@@ -1,4 +1,5 @@
 import type { V2Counts, V2Node, V2NodeKind, V2Status } from '@cluesmith/codev-types';
+import { isDeepStrictEqual } from 'node:util';
 import { builderId, workspaceId, workspacePathFromId, worktreeDirName } from './v2-ids.js';
 import { ScopeBus, scopeKey } from './v2-events.js';
 import { projectHierarchy, type V2Deps } from './v2-projection.js';
@@ -41,6 +42,8 @@ function tableChanged(prev: V2Node, next: V2Node): boolean {
     || prev.flags.heldMail !== next.flags.heldMail
     || prev.parentId !== next.parentId
     || prev.name !== next.name
+    || prev.blockedGate !== next.blockedGate
+    || !isDeepStrictEqual(prev.blockedGateRequest, next.blockedGateRequest)
   );
 }
 
