@@ -1,12 +1,32 @@
-# CI Health Check — detects broken builds on main
+# CI Health Check — reports broken builds on main.
 #
-# Checks every minute (for testing). Change to "*/30 * * * *" for production.
+# Three outcomes, three signals. A checker that cannot reach the API has NOT
+# established that CI is fine, and must not spell that the same way as either
+# "green" or "failing":
+#
+#   green        -> empty output, condition false, no message
+#   failing      -> "FAILING: <workflow names>"
+#   unreachable  -> "COULD NOT CHECK (gh exited N): <reason>"
+#
+# The previous version had `condition: output != ''` over the bare `gh` output,
+# so on 2026-08-26 a TLS handshake timeout was pasted into "currently failing on
+# main: ..." and alerted as if it were a list of failing workflows. Main was
+# green. See lessons-critical: "I could not tell" must never be spelled the same
+# way as "no".
 
 name: CI Health Check
 schedule: "*/30 * * * *"
 enabled: true
-command: gh run list --branch main --limit 10 --json workflowName,conclusion --jq 'group_by(.workflowName) | map(.[0]) | map(select(.conclusion == "failure")) | map(.workflowName) | join(", ")'
+command: >-
+  out=$(gh run list --branch main --limit 10 --json workflowName,conclusion
+  --jq 'group_by(.workflowName) | map(.[0]) | map(select(.conclusion == "failure")) | map(.workflowName) | join(", ")' 2>&1);
+  rc=$?;
+  if [ $rc -ne 0 ]; then
+  printf 'COULD NOT CHECK (gh exited %s): %s' "$rc" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)";
+  elif [ -n "$out" ]; then
+  printf 'FAILING: %s' "$out";
+  fi
 condition: "output != ''"
-message: "CI Alert: currently failing on main: ${output}. Run `gh run list --limit 5` to investigate."
+message: "CI on main — ${output}. Run `gh run list --limit 5` to investigate."
 target: architect
 timeout: 30

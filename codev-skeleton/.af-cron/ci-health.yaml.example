@@ -1,15 +1,36 @@
 # Example: CI Health Check
 #
-# Checks for recent CI failures every 30 minutes and notifies the architect.
+# Reports broken builds on the default branch every 30 minutes.
 # Copy this file without the .example extension to activate it.
+#
+# Three outcomes, three signals. A checker that cannot reach the API has NOT
+# established that CI is fine, and must not spell that the same way as either
+# "green" or "failing":
+#
+#   green        -> empty output, condition false, no message
+#   failing      -> "FAILING: <workflow names>"
+#   unreachable  -> "COULD NOT CHECK (gh exited N): <reason>"
+#
+# The earlier version of this example was `condition: output != '0'` over the
+# bare `gh` output. Any `gh` failure — an expired token, no network, a TLS
+# timeout — produced output that is not '0', so it alerted as
+# "CI Alert: <error text> recent failures" while CI was green.
 #
 # See: https://github.com/cluesmith/codev/blob/main/codev/specs/399-af-cron.md
 
 name: CI Health Check
 schedule: "*/30 * * * *"
 enabled: true
-command: gh run list --limit 5 --json status,conclusion --jq '[.[] | select(.conclusion == "failure")] | length'
-condition: "output != '0'"
-message: "CI Alert: ${output} recent failures. Run `gh run list --limit 5` to investigate."
+command: >-
+  out=$(gh run list --branch main --limit 10 --json workflowName,conclusion
+  --jq 'group_by(.workflowName) | map(.[0]) | map(select(.conclusion == "failure")) | map(.workflowName) | join(", ")' 2>&1);
+  rc=$?;
+  if [ $rc -ne 0 ]; then
+  printf 'COULD NOT CHECK (gh exited %s): %s' "$rc" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)";
+  elif [ -n "$out" ]; then
+  printf 'FAILING: %s' "$out";
+  fi
+condition: "output != ''"
+message: "CI on main — ${output}. Run `gh run list --limit 5` to investigate."
 target: architect
 timeout: 30
