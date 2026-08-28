@@ -274,20 +274,28 @@ try {
     socket.close();
 
     const observed = seqs.length > 0;
-    const contiguous = observed ? classifyResume(seqs[0] - 1, seqs.map((s) => ({ sequence: s }))) : null;
-    const withHole = observed
-      ? classifyResume(seqs[0] - 1, seqs.filter((_, i) => i !== 1).map((s) => ({ sequence: s })))
-      : null;
+    const replayed = observed ? classifyResume(seqs[0] - 1, seqs.map((s) => ({ sequence: s }))) : null;
     const withSnapshot = observed
       ? classifyResume(seqs[0] - 1, seqs.map((s) => ({ sequence: s })), { threads: [] })
       : null;
+    // Redelivery, not a fault: t3code overlaps deliberately.
+    const alreadyApplied = observed
+      ? classifyResume(seqs[seqs.length - 1], seqs.map((s) => ({ sequence: s })))
+      : null;
 
+    // NOT tested here: a hole inside a replayed range. t3code's sequence is a
+    // single global counter filtered to one thread, so a sparse range is the
+    // NORMAL shape and carries no information about loss. An earlier version of
+    // this scenario removed an element and asserted `gap`, which only produced a
+    // gap because the run had one active thread. Phase 3 discharges C and D with
+    // a control connection and eventId comparison, which can actually tell.
     record('C+D: resume classification on real sequences', observed ? 'demonstrated' : 'not-demonstrated', {
       observedSequences: seqs.slice(0, 8),
-      contiguous: contiguous?.kind ?? null,
-      withHole: withHole?.kind ?? null,
+      sequencesAreSparse: observed && seqs.some((s, i) => i > 0 && s !== seqs[i - 1] + 1),
+      replayed: replayed?.kind ?? null,
       withSnapshot: withSnapshot?.kind ?? null,
-      gapDistinctFromEmpty: withHole?.kind === 'gap' && classifyResume(0, []).kind === 'empty',
+      alreadyApplied: alreadyApplied?.kind ?? null,
+      gapDistinctFromEmpty: withSnapshot?.kind === 'gap' && classifyResume(0, []).kind === 'empty',
       note: observed ? 'classified against server-issued sequence numbers' : 'no sequenced items observed',
     });
   }

@@ -12,14 +12,48 @@
  * requested range, porch treats it as a gap, reconciles from the snapshot, and logs
  * it — it never assumes continuity. So a resubscription has three outcomes, not two:
  *
- *   contiguous  the requested range arrived intact
- *   gap         the server answered with something else (a snapshot, or a range
- *               starting later than we asked) — we do NOT know what we missed
- *   empty       the server had nothing after our cursor, which is ordinary
+ *   replayed  the server honoured the cursor and replayed from it
+ *   gap       the server answered with something else (a snapshot, or a range we
+ *             cannot trust) — we do NOT know what we missed
+ *   empty     the server had nothing after our cursor, which is ordinary
  *
  * `gap` and `empty` must never be spelled the same way. An empty result means
- * "nothing happened"; a gap means "something happened and we cannot see what". This
- * project has spent a phase on defects where those two collapsed into one another.
+ * "nothing happened"; a gap means "something happened and we cannot see what".
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHAT THIS MODULE CANNOT DETECT, AND WHY THE FIRST OUTCOME IS NOT CALLED
+ * "CONTIGUOUS"
+ *
+ * t3code's sequence is a **single global counter**, not a per-thread one.
+ * `orchestration_events` has one `sequence` column and the resume query is
+ * `WHERE sequence > ? ORDER BY sequence ASC` across every aggregate
+ * (`apps/server/src/persistence/Layers/OrchestrationEventStore.ts:160-181`);
+ * `apps/server/src/ws.ts:1498-1508` then filters that global stream down to the
+ * one thread you subscribed to.
+ *
+ * So on any server with more than one active thread, a **correct** replay of
+ * thread events after 45 looks like `48, 51, 52`. The intervening numbers belong
+ * to other threads. There is no hole there, and nothing in the response
+ * distinguishes that from a response where our own 49 was genuinely dropped.
+ *
+ * An earlier version of this file asserted `first === afterSequence + 1` and
+ * walked the list demanding `previous + 1`. Both are arithmetic on a counter that
+ * was never per-thread. It passed its unit tests, which fed it consecutive
+ * integers, and it passed the live run, which had exactly one active thread. On a
+ * real multi-thread server it would have reported `gap` on every healthy resume,
+ * and porch would have reconciled from snapshots forever.
+ *
+ * The honest statement is therefore: **a lost event inside a replayed range is
+ * not detectable from the sequence numbers alone, and this module does not claim
+ * to detect it.** What is detectable is the protocol-level fact that the server
+ * declined the cursor and sent a snapshot instead — which is the case the spec
+ * actually names, and the case that loses events in bulk. Detecting a single
+ * dropped event needs a second source: the spike compared `eventId` lists against
+ * a control connection, which is what Phase 3's exit conditions do.
+ *
+ * `replayed` means "the server honoured the cursor". It does not mean "nothing
+ * was lost", and no call site may read it that way.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 
 /** A stream item carrying a sequence number, as t3code emits them. */
@@ -30,10 +64,22 @@ export interface SequencedItem {
 
 export type ResumeOutcome =
   | {
-      readonly kind: 'contiguous';
-      /** Items from `afterSequence + 1` upward, in order, with no holes. */
+      /**
+       * The server replayed from the cursor. See the header: this is NOT a claim
+       * that the range is hole-free — that is not knowable here.
+       */
+      readonly kind: 'replayed';
+      /** Items strictly after `afterSequence`, in ascending order. */
       readonly items: ReadonlyArray<SequencedItem>;
       readonly lastSequence: number;
+      /**
+       * Items at or below the cursor that were dropped as already-applied.
+       * t3code overlaps deliberately — "overlapping events are deduped by
+       * sequence on the client" (`ws.ts:1481`) — so this is ordinary, and it is
+       * reported rather than hidden because a caller with a persisted cursor
+       * wants to know its replay overlapped.
+       */
+      readonly duplicatesDropped: number;
     }
   | {
       readonly kind: 'empty';
@@ -60,6 +106,11 @@ export type ResumeOutcome =
  * `snapshotSeen` is passed separately rather than sniffed out of `items`, because
  * "the server sent a snapshot" is a fact about the *protocol exchange*, not about
  * the item shapes, and inferring it from the payload would be guessing.
+ *
+ * The server reaches the snapshot path in two ways, both worth forcing in a test
+ * (`ws.ts:1493-1526`): the replay gap exceeds `THREAD_RESUME_MAX_GAP` (1,000), or
+ * the cursor is **ahead** of the server's head — which is what porch sees when
+ * the server's database is restored from a backup while porch's cursor survives.
  */
 export function classifyResume(
   afterSequence: number,
@@ -79,46 +130,38 @@ export function classifyResume(
     };
   }
 
-  if (items.length === 0) {
-    // Ordinary. The cursor stays where it was.
-    return { kind: 'empty', lastSequence: afterSequence };
-  }
-
-  const sorted = [...items].sort((a, b) => a.sequence - b.sequence);
-  const first = sorted[0].sequence;
-
-  if (first !== afterSequence + 1) {
-    return {
-      kind: 'gap',
-      requestedAfter: afterSequence,
-      firstReceived: first,
-      snapshot: null,
-      items: sorted,
-      reason:
-        `requested events after ${afterSequence} but the first received was ${first}; ` +
-        `${first - afterSequence - 1} event(s) are missing`,
-    };
-  }
-
-  // Holes in the middle are as much a gap as a late start.
-  for (let i = 1; i < sorted.length; i += 1) {
-    const expected = sorted[i - 1].sequence + 1;
-    if (sorted[i].sequence !== expected) {
+  // Ascending order is a guarantee of the store's query, not a hope. A response
+  // that violates it is one we cannot reason about at all, so it is a gap rather
+  // than something to sort into looking correct.
+  for (let i = 1; i < items.length; i += 1) {
+    if (items[i].sequence < items[i - 1].sequence) {
       return {
         kind: 'gap',
         requestedAfter: afterSequence,
-        firstReceived: first,
+        firstReceived: items[0].sequence,
         snapshot: null,
-        items: sorted,
-        reason: `sequence jumped from ${sorted[i - 1].sequence} to ${sorted[i].sequence}`,
+        items,
+        reason:
+          `events arrived out of order (${items[i - 1].sequence} then ${items[i].sequence}); ` +
+          `the server replays ORDER BY sequence ASC, so this response cannot be trusted as a range`,
       };
     }
   }
 
+  // At-or-below the cursor is redelivery, which the at-least-once design expects
+  // and t3code performs on purpose. Drop, count, do not flag.
+  const fresh = items.filter((entry) => entry.sequence > afterSequence);
+  const duplicatesDropped = items.length - fresh.length;
+
+  if (fresh.length === 0) {
+    return { kind: 'empty', lastSequence: afterSequence };
+  }
+
   return {
-    kind: 'contiguous',
-    items: sorted,
-    lastSequence: sorted[sorted.length - 1].sequence,
+    kind: 'replayed',
+    items: fresh,
+    lastSequence: fresh[fresh.length - 1].sequence,
+    duplicatesDropped,
   };
 }
 

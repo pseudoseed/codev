@@ -8,7 +8,7 @@
  *
  * It does not replay anything. Reconnecting restores a transport; restoring a
  * *subscription* means resubscribing with `afterSequence` at the last **applied**
- * cursor, and deciding whether what came back was contiguous, empty, or a gap.
+ * cursor, and deciding whether what came back was replayed, empty, or a gap.
  * That lives in `resume.ts`, because a socket that silently reconnects and
  * resumes reading looks identical to one that never dropped — and the events
  * between are exactly what the spec says must never be assumed continuous.

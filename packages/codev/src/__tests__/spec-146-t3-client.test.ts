@@ -90,24 +90,15 @@ describe('spec 146 phase 2: the wire envelope', () => {
 describe('spec 146 phase 2: resume has three answers, not two', () => {
   const item = (sequence: number) => ({ sequence });
 
-  it('reports a contiguous range', () => {
+  it('reports a replayed range', () => {
     const outcome = classifyResume(45, [item(46), item(47), item(48)]);
-    expect(outcome.kind).toBe('contiguous');
-    if (outcome.kind === 'contiguous') expect(outcome.lastSequence).toBe(48);
+    expect(outcome.kind).toBe('replayed');
+    if (outcome.kind === 'replayed') expect(outcome.lastSequence).toBe(48);
   });
 
   it('reports empty when the server had nothing newer', () => {
     const outcome = classifyResume(45, []);
     expect(outcome.kind).toBe('empty');
-  });
-
-  it('reports a GAP when the range starts late — not empty, not contiguous', () => {
-    const outcome = classifyResume(45, [item(50)]);
-    expect(outcome.kind).toBe('gap');
-    if (outcome.kind === 'gap') {
-      expect(outcome.firstReceived).toBe(50);
-      expect(outcome.reason).toMatch(/4 event\(s\) are missing/);
-    }
   });
 
   it('reports a GAP when a snapshot arrives instead of a range', () => {
@@ -118,18 +109,78 @@ describe('spec 146 phase 2: resume has three answers, not two', () => {
     if (outcome.kind === 'gap') expect(outcome.snapshot).not.toBeNull();
   });
 
-  it('reports a GAP for a hole in the middle, not just a late start', () => {
-    const outcome = classifyResume(45, [item(46), item(49)]);
-    expect(outcome.kind).toBe('gap');
-    if (outcome.kind === 'gap') expect(outcome.reason).toMatch(/jumped from 46 to 49/);
-  });
-
   it('never spells a gap the same way as empty', () => {
     // The assertion that matters: a caller switching on `kind` cannot conflate
     // "nothing happened" with "something happened and we cannot see what".
-    const gap = classifyResume(45, [item(99)]);
+    const gap = classifyResume(45, [item(99)], { threads: [] });
     const empty = classifyResume(45, []);
     expect(gap.kind).not.toBe(empty.kind);
+  });
+
+  // ---------------------------------------------------------------- the fix
+  //
+  // t3code's `sequence` is a SINGLE GLOBAL COUNTER
+  // (`OrchestrationEventStore.ts:160-181` — one `orchestration_events` table,
+  // `WHERE sequence > ? ORDER BY sequence ASC`), and `ws.ts:1498-1508` filters
+  // that global stream down to one thread. So the numbers a thread sees are
+  // sparse by construction.
+  //
+  // The first version of these tests fed `classifyResume` consecutive integers
+  // and asserted that non-consecutive ones were a gap. Both the code and the
+  // tests were written from the same wrong premise, so they agreed, and the
+  // live run agreed too because it had exactly one active thread. Three
+  // instruments, one assumption.
+
+  it('does NOT call a sparse range a gap — other threads own the missing numbers', () => {
+    // A healthy replay on a server with other active threads.
+    const outcome = classifyResume(45, [item(48), item(51), item(52)]);
+    expect(outcome.kind).toBe('replayed');
+    if (outcome.kind === 'replayed') expect(outcome.lastSequence).toBe(52);
+  });
+
+  it('does NOT call a late start a gap', () => {
+    // 46-49 went to other threads. This is the single most common shape on a
+    // busy server, and the old code failed every one of them.
+    const outcome = classifyResume(45, [item(50)]);
+    expect(outcome.kind).toBe('replayed');
+  });
+
+  it('drops already-applied events rather than flagging them', () => {
+    // t3code overlaps on purpose: "overlapping events are deduped by sequence
+    // on the client" (`ws.ts:1481`). Redelivery is the at-least-once design
+    // working, not a fault.
+    const outcome = classifyResume(45, [item(44), item(45), item(46)]);
+    expect(outcome.kind).toBe('replayed');
+    if (outcome.kind === 'replayed') {
+      expect(outcome.duplicatesDropped).toBe(2);
+      expect(outcome.items.map((entry) => entry.sequence)).toEqual([46]);
+    }
+  });
+
+  it('reports empty when everything returned was already applied', () => {
+    const outcome = classifyResume(45, [item(44), item(45)]);
+    expect(outcome.kind).toBe('empty');
+  });
+
+  it('reports a GAP when events arrive out of ascending order', () => {
+    // The store guarantees ORDER BY sequence ASC. A violation means the response
+    // is not a range we can reason about, so it must not be sorted into looking
+    // correct.
+    const outcome = classifyResume(45, [item(48), item(46)]);
+    expect(outcome.kind).toBe('gap');
+    if (outcome.kind === 'gap') expect(outcome.reason).toMatch(/out of order/);
+  });
+
+  it('states plainly that a hole inside a replayed range is undetectable here', () => {
+    // This is the honest limit, asserted so a later change cannot quietly claim
+    // more. `[48, 51, 52]` with 49 genuinely lost and `[48, 51, 52]` with 49
+    // belonging to another thread are the SAME RESPONSE. No classifier reading
+    // only sequence numbers can separate them; Phase 3 separates them with a
+    // control connection and eventId comparison, as the spike did.
+    const healthy = classifyResume(45, [item(48), item(51), item(52)]);
+    const lostAnEvent = classifyResume(45, [item(48), item(51), item(52)]);
+    expect(healthy.kind).toBe(lostAnEvent.kind);
+    expect(healthy.kind).toBe('replayed');
   });
 });
 
