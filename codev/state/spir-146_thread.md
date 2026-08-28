@@ -471,6 +471,53 @@ becomes a description of the code. I did the opposite here — built the separat
 suite — and it took ten minutes, which is the honest measure of what the
 temptation was worth.
 
+### A second pattern: a fix that overreached
+
+Distinct from the ten, and the architect named it: **not "a check that lied" but
+"a fix that overreached".** Two instances, and the tell is identical in both —
+the code was written from the failure it had just seen rather than from the set
+of things it could touch.
+
+1. **`git add tools/t3-server/`.** Written to stage the harness. Staged the live
+   data directory too, including private keys, and put them on a public remote.
+2. **`stop` SIGTERMing every listener on the port.** Written to fix the
+   grandchild-survives-parent bug, which was real. On a machine where anything
+   else held 3799 it would have killed a service this project has no business
+   touching.
+
+Both worked. Both reached further than the problem did. The check is: having
+written the fix, ask what else it can reach — not what else it *will* reach on
+the failure in front of you.
+
+### The comfortable half of the truth
+
+`shapeCheck` was documented as a "lower bound" in three files. True in one
+direction and silent in the other: the emitted schema carries
+`additionalProperties: false` on 239 nodes while t3code decodes with
+`onExcessProperty: "ignore"`, so the check was *stricter* than the server there.
+
+It would have broken Phase 2 on its first additive upstream field — **the change
+class the churn classifier calls non-breaking.** The client would have rejected a
+payload the server legitimately sent, while the classifier said that change was
+safe.
+
+Nobody asked me to write only the flattering direction. I described the property
+I had reasoned about rather than the one I had measured, and "lower bound" is the
+version that makes the tool sound cautious. When a document states a one-sided
+invariant, the question is whether the other side was checked or merely not
+imagined.
+
+### The counter-example, which matters as much as the failures
+
+gemini's iteration-3 lane produced no output and reported
+`LANE_DID_NOT_REVIEW: true` with `CONFIDENCE: LOW` — it did not emit a verdict it
+had not earned. Under exactly the conditions that produced ten silent-success
+failures in this phase, that machinery did the right thing because it was built
+to distinguish "did not run" from "ran and found nothing".
+
+The pattern is not inevitable. It is what happens when that distinction is not
+designed in.
+
 ### CI drift check — tracked, not silently absent
 
 Filed as **#152**. CI runs Node 20 with no t3code checkout, so
