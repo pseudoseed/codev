@@ -169,3 +169,15 @@
   current 3.4 KiB status file versus ~6 µs for the scalar scan. The implementation keeps it simple
   for now: the sampler needs exact nested YAML semantics, atomic porch writes make parse failure
   exceptional, and the existing comment explicitly documents fallback to unavailable enrichment.
+
+## Scope change after Phase 3
+
+- Architect `uiv2` stopped client implementation after Spec 146 landed on `main`: Codev is replacing
+  v2 with a new client on a self-hosted t3code server. Phase 4 had not started, so no partial semantic
+  gate card was present to finish.
+- The PR therefore contains the completed and consulted Phases 1–3 only. Phase 5 is **cancelled by
+  Spec 146**, not deferred; Phase 4 is also intentionally unimplemented because its only consumer was
+  the retiring v2 client.
+- The structured porch record and resolver-delivered authoring guidance remain prerequisites for the
+  replacement client. The already-committed v2 wire projection is retained as harmless transition
+  work per the architect's explicit instruction.
