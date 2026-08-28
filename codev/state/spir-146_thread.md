@@ -1733,3 +1733,52 @@ The first full harness run stamped `clientTreeDirty: true` and a `clientCommit`
 that did not contain `packages/porch-driver` — the code was still untracked. That
 is exactly the failure the stamp exists to catch, so the code was committed first
 and the harness re-run against the clean tree.
+
+## Iteration 1: two lanes, seven findings, all accepted
+
+`REQUEST_CHANGES` from both. Nothing was rebutted as wrong.
+
+The one worth keeping is the check timeout. `checks.ts` signalled the shell's own
+PID and resolved on `close`, and its only test was `sleep 30` — the single shape
+where bash **execs**, so the shell's pid is the sleep's and killing it works.
+`sleep 20; true` forks, and a lane measured **20,019 ms against a 1,000 ms
+budget**. Every real check is the second shape.
+
+I measured the matrix before believing either half of the fix:
+
+| | `exit` | `close` |
+|---|---|---|
+| attached | 705 ms | **20,018 ms** |
+| detached | 705 ms | 706 ms |
+
+Which then falsified a mutation I had just written. With `detached`, reverting
+`exit`→`close` alone still bounds the compound case, so that mutation reported a
+green that meant nothing. It was **removed** rather than kept — a mutation that
+cannot fail is the same error as the test it was checking, one level up. The
+harness now says so in its docstring instead of implying coverage it does not
+have.
+
+Second finding worth recording: `thread.create` lists `modelSelection` as
+**required** in the vendored contract, and I omitted it whenever no `--model` was
+given, reasoning that the server would default. `thread.turn.start` does not
+require one, which is what made the omission look right. Neither the unit tests (a
+permissive fake dispatcher) nor the live evidence (always passes a model) could
+see it. The fix that matters is the test: the outbound payload is now shape-checked
+against the contract's own **input** schema, which is where this class is caught by
+construction rather than by someone noticing.
+
+Third: the journal recognised a torn last line and never removed it, so the next
+append glued a record onto the partial one and every later read threw. One crash
+after the crash the journal exists to survive.
+
+## A gap I made and am not hiding
+
+While the lanes were running I re-read `commands.ts` and changed it: a **refusal**
+is journalled `failed`, an **unanswered** command stays pending so recovery
+replays it under the same `commandId`. Both lanes flagged the old comment; the new
+behaviour goes further than either finding.
+
+But it landed *during* the round, so no lane has reviewed it — the same gap the
+architect flagged for Phase 2's force-advance, made by me, one phase later. It is
+disclosed at the top of the rebuttals rather than left for someone to notice from
+the diff.

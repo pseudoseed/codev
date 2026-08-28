@@ -756,6 +756,24 @@ describe('spec 146 phase 3: phase checks', () => {
     }
   });
 
+  it('keeps every byte a normal check printed, despite resolving promptly', async () => {
+    // `exit` can fire before the pipes drain, so resolving on it alone would cut
+    // the tail off a chatty check — a truncated log presented as a whole one.
+    const dir = tempDir('check-drain');
+    try {
+      const result = await runPhaseCheck({
+        command: 'for i in $(seq 1 2000); do echo "line-$i"; done',
+        cwd: dir,
+      });
+      expect(result.passed).toBe(true);
+      expect(result.stdoutTruncated).toBe(false);
+      expect(result.stdout.trim().split('\n')).toHaveLength(2000);
+      expect(result.stdout.trim().endsWith('line-2000')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('captures stderr separately from stdout', async () => {
     const dir = tempDir('check-streams');
     try {

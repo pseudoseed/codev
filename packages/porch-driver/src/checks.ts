@@ -39,8 +39,19 @@
  *    against `timeoutMs: 1000`.
  *  - `close` fires when the last holder of the stdout pipe goes away, so a
  *    backgrounded grandchild kept the promise pending long after the shell died.
- *    Resolving on `exit` bounds it; output an orphan writes after that is not
- *    captured, which is the correct trade and is stated rather than hidden.
+ *
+ *    Resolving on `exit` INSTEAD would bound it and lose output: `exit` can fire
+ *    before the pipes drain, so a check that prints a lot and exits promptly would
+ *    have its tail cut — and a truncated log presented as a whole one is the
+ *    failure this project is about. So `close` still wins the race when it comes,
+ *    and `exit` starts a short grace timer that resolves without it. The normal
+ *    check keeps every byte; the pathological one is bounded.
+ *
+ *    The grace is not mutation-checkable here: at the output sizes a test can
+ *    produce, the pipes are already empty when `exit` fires, so resolving at once
+ *    passes too. It stays because the guarantee is about the case that does not
+ *    reproduce on demand, and `146-phase3-mutation-check.py` records that rather
+ *    than carrying a mutation that reports a meaningless green.
  *
  * So the child is `detached`, the signal goes to the process GROUP, and the
  * result resolves on `exit`.
@@ -71,6 +82,14 @@ export interface PhaseCheckOptions {
   readonly killSignal?: NodeJS.Signals;
   /** Milliseconds between the timeout signal and SIGKILL. Default 5s. */
   readonly killGraceMs?: number;
+  /**
+   * How long to keep draining output after the process exits. Default 500ms.
+   *
+   * `exit` can arrive before the pipes are empty. Waiting for `close` alone is
+   * unbounded — an orphan can hold the pipe — so this is the compromise: the
+   * drain wins if it finishes, and the grace ends it if it does not.
+   */
+  readonly drainGraceMs?: number;
   /**
    * Bytes retained per output stream. Default 4 MiB.
    *
@@ -183,6 +202,9 @@ export async function runPhaseCheck(options: PhaseCheckOptions): Promise<PhaseCh
     let timedOut = false;
     let settled = false;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
+    let exitCode: number | null = null;
+    let exitSignal: NodeJS.Signals | null = null;
 
     child.stdout.on('data', (chunk: Buffer) => {
       const next = appendCapped(stdout, chunk.toString(), cap);
@@ -206,33 +228,46 @@ export async function runPhaseCheck(options: PhaseCheckOptions): Promise<PhaseCh
     child.once('error', (error) => {
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      if (drainTimer) clearTimeout(drainTimer);
       if (settled) return;
       settled = true;
       reject(error);
     });
 
-    // `exit`, not `close`. `close` waits for the last holder of the stdout pipe,
-    // which a backgrounded grandchild can be for as long as it likes — so the
-    // budget would bound the process and not the call.
-    child.once('exit', (code, signal) => {
+    const finish = () => {
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      if (drainTimer) clearTimeout(drainTimer);
       if (settled) return;
       settled = true;
       resolve({
         command: options.command,
         cwd: options.cwd,
         shell,
-        exitCode: code,
-        signal: signal as NodeJS.Signals | null,
+        exitCode: exitCode,
+        signal: exitSignal,
         stdout,
         stderr,
         timedOut,
         durationMs: Date.now() - startedAt,
         stdoutTruncated,
         stderrTruncated,
-        passed: code === 0 && !timedOut,
+        passed: exitCode === 0 && !timedOut,
       });
+    };
+
+    // `close` means the pipes drained; it is the right moment when it comes.
+    child.once('close', finish);
+
+    // `exit` means the process is gone. It starts a bounded drain rather than
+    // resolving at once, because the pipes may still hold this check's output —
+    // and rather than waiting forever, because something that is not this check
+    // may be holding them open.
+    child.once('exit', (code, signal) => {
+      exitCode = code;
+      exitSignal = signal as NodeJS.Signals | null;
+      if (drainTimer) clearTimeout(drainTimer);
+      drainTimer = setTimeout(finish, options.drainGraceMs ?? 500);
     });
   });
 }

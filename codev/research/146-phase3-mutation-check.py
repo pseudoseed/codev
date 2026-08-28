@@ -6,7 +6,12 @@ resolves on `exit` rather than `close` AND spawns `detached`, and on this platfo
 either one alone bounds a compound command (measured: close+attached 20,018ms,
 exit+attached 705ms, close+detached 706ms). No test can go red for reverting just
 one, so no mutation claims otherwise. The grandchild test does discriminate
-`detached`.
+`detached`. The same is true of the post-exit drain grace: on this platform the
+pipes are already empty when `exit` fires at the sizes a test can produce, so
+resolving immediately passes too. The grace stays because the guarantee is about
+the case that does not reproduce on demand, and the output-completeness test stays
+because it would catch a real truncation — but neither claims a red it cannot
+produce.
 
 Same discipline as `146-phase2-mutation-check.py`: revert one property at a time,
 run the single test that claims it, put the file back in a `finally`. A test that
@@ -166,8 +171,8 @@ MUTATIONS = [
     ),
     (
         f'{DRIVER}/checks.ts',
-        "        exitCode: code,",
-        "        exitCode: code ?? 0,",
+        "        exitCode: exitCode,",
+        "        exitCode: exitCode ?? 0,",
         'a timeout is spelled differently from a failure',
     ),
     (
