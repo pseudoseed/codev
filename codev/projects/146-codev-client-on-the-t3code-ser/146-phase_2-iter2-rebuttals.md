@@ -138,9 +138,30 @@ The packaging decision itself belongs to Phase 3 and is recorded for it:
 `porch-driver` either declares its own dependency and t3-client stops being
 private, or both stay internal.
 
+## Found while fixing, not reported by either lane
+
+`SequenceCursor.apply` in `resume.ts` set `#applied` unconditionally, so applying
+an item at or below the cursor walked the cursor **backwards** and persisted the
+lower value — after which the resubscription re-requests a span whose handlers
+have already completed, on every attempt.
+
+It was never reachable, because the one caller filtered duplicates before
+calling. `reconcileTo`, added in this iteration to fix the past-the-head gap,
+is the second caller, and it removed that protection. **An invariant defended by
+a caller is not an invariant, it is a convention.**
+
+The fix guards the advance, not the handler: a redelivered item still reaches the
+handler, because that is what at-least-once means; only the cursor refuses to
+move. Test asserts the handler sees `[10, 4, 10]` while the cursor stays at 10
+and persists once.
+
+This is a third shape of fix-defect, distinct from the two this phase already
+produced: a fix that **made an unreachable defect reachable**. The catching
+question is not what the fix touches but what it makes newly possible.
+
 ## Verification
 
-- 74 unit tests (was 59 at the start of this iteration).
+- 75 unit tests (was 59 at the start of this iteration).
 - Six live scenarios re-run against the pinned server after the fixes, stamped
   with the commit they ran against: A, B, D, E, F demonstrated; C groundwork
   abstains, as it has throughout, and is discharged in Phase 3's exit conditions.

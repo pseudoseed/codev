@@ -477,7 +477,9 @@ claim stops being a one-off observation and becomes a tested property.
       "refused as a duplicate" needs a different response from "the request failed". The first
       implementation threw a plain `Error` with the payload stringified into the message, which
       made that distinction reachable only by matching on text.
-- [x] Tests for this phase. 59 in `spec-146-t3-client.test.ts`, plus six live scenarios.
+- [x] Tests for this phase. 75 in `spec-146-t3-client.test.ts`, plus six live scenarios. (59 at
+      the end of iteration 1; the 16 added since are the review findings, each with a test that
+      fails without its fix.)
 
 #### Acceptance Criteria
 
