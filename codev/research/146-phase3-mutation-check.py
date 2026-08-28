@@ -141,8 +141,8 @@ MUTATIONS = [
     ),
     (
         f'{DRIVER}/checks.ts',
-        "  return { text: combined.slice(combined.length - cap), truncated: true };",
-        "  return { text: combined, truncated: false };",
+        "  const bytes = Buffer.from(combined, 'utf8');",
+        "  return { text: combined, truncated: false };\n  const bytes = Buffer.from(combined, 'utf8');",
         'caps captured output and says it did',
     ),
     (
@@ -198,6 +198,54 @@ MUTATIONS = [
         "        if (Array.isArray(existing.instructions) && Array.isArray(incoming.instructions)) {",
         "        if (false) {",
         'merges an existing opencode.json rather than overwriting it',
+    ),
+    (
+        f'{DRIVER}/commands.ts',
+        "      if (isServerRefusal(error)) journal.recordOutcome(intent.commandId, 'failed', (error as Error).message);",
+        "      journal.recordOutcome(intent.commandId, 'failed', (error as Error).message);",
+        'an UNANSWERED command during recovery stays pending for the next recovery',
+    ),
+    (
+        f'{DRIVER}/thread.ts',
+        "      text: role === null ? text : joinRoleAndText(role, text),",
+        "      text,",
+        'carries the role prompt in the FIRST turn, and only the first',
+    ),
+    (
+        f'{DRIVER}/thread.ts',
+        "    const started = await startTurn(this.deps.dispatcher, this.deps.journal, this.deps.tracker, {\n      threadId: this.threadId,\n      text: role === null ? text : joinRoleAndText(role, text),\n      ...(this.mapping.modelSelection === undefined ? {} : { modelSelection: this.mapping.modelSelection }),\n    });\n    this.#pendingRole = null;",
+        "    this.#pendingRole = null;\n    const started = await startTurn(this.deps.dispatcher, this.deps.journal, this.deps.tracker, {\n      threadId: this.threadId,\n      text: role === null ? text : joinRoleAndText(role, text),\n      ...(this.mapping.modelSelection === undefined ? {} : { modelSelection: this.mapping.modelSelection }),\n    });",
+        'keeps the role pending when the first turn fails to start',
+    ),
+    (
+        f'{DRIVER}/thread.ts',
+        "    if (this.#seenEventKeys.has(key)) return;",
+        "    if (false) return;",
+        'a redelivered event is applied once, not twice',
+    ),
+    (
+        f'{DRIVER}/thread.ts',
+        "    if (this.#seenEventKeys.has(key)) return;",
+        "    if (false) return;",
+        'a redelivered event does not consume a second slot of the retention cap',
+    ),
+    (
+        f'{DRIVER}/thread.ts',
+        "    applyWorktreeSetup(setup, options.worktreePath, (message) => {\n      setupWarnings.push(message);\n      options.onSetupWarning?.(message);\n    });",
+        "    applyWorktreeSetup(setup, options.worktreePath);",
+        'retains a worktree file that could not be merged as a warning',
+    ),
+    (
+        f'{DRIVER}/checks.ts',
+        "  if (Buffer.byteLength(combined, 'utf8') <= cap) return { text: combined, truncated: false };",
+        "  if (combined.length <= cap) return { text: combined, truncated: false };",
+        'caps output in BYTES, which is what the option is called',
+    ),
+    (
+        f'{DRIVER}/checks.ts',
+        "      const next = appendCapped(stdout, stdoutDecoder.write(chunk), cap);",
+        "      const next = appendCapped(stdout, chunk.toString(), cap);",
+        'decodes a multi-byte character split across two chunks',
     ),
 ]
 

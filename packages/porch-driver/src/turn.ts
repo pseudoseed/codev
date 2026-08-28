@@ -178,6 +178,11 @@ export interface StartedTurn {
  * The role prompt is delivered here, as the first turn's `text` — that is what
  * replaces `buildRoleInjection` / `buildScriptRoleInjection`. There is no file to
  * write and no CLI flag to build, because there is no CLI.
+ *
+ * This function does not know which turn is the first, and does not need to:
+ * `DriverThread` holds the role from `create` and composes it into the text of
+ * whichever turn starts first (`#startTurnWithRole`). A caller reaching this
+ * function directly is starting a turn that carries exactly what it passes.
  */
 export async function startTurn(
   dispatcher: CommandDispatcher,

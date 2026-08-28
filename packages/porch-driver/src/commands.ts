@@ -315,6 +315,12 @@ export async function dispatchCommand(
  * Same ids, so the server collapses anything that already landed. Returns the
  * ids replayed, in journal order, because "nothing was pending" and "recovery
  * ran" must be distinguishable to the caller.
+ *
+ * Throws on the first replay that does not succeed, and what it writes before
+ * throwing depends on WHICH kind of failure it was: a refusal is journalled
+ * `failed` and settled, an unanswered command is left pending for the next
+ * recovery. Re-running recovery after a transport failure therefore resumes from
+ * the same intent rather than from a shorter list.
  */
 export async function recoverPendingCommands(
   dispatcher: CommandDispatcher,
@@ -327,7 +333,15 @@ export async function recoverPendingCommands(
       await dispatcher.call(DISPATCH_METHOD, intent.command);
       journal.recordOutcome(intent.commandId, 'dispatched');
     } catch (error) {
-      journal.recordOutcome(intent.commandId, 'failed', (error as Error).message);
+      // The SAME split `dispatchCommand` makes, and for a sharper reason.
+      //
+      // Recovery runs immediately after a crash, which is precisely when the
+      // server may still be coming up: a dead socket here is the expected case,
+      // not the exotic one. Journalling it `failed` gives the intent an outcome,
+      // `pending()` stops returning it, and the command recovery exists to re-send
+      // is dropped from recovery permanently — by the one code path whose entire
+      // job is not to drop it.
+      if (isServerRefusal(error)) journal.recordOutcome(intent.commandId, 'failed', (error as Error).message);
       throw error;
     }
     replayed.push(intent.commandId);

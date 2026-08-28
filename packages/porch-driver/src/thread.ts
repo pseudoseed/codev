@@ -125,9 +125,25 @@ export interface CreateThreadOptions {
   readonly runtimeMode?: string;
   readonly interactionMode?: string;
   readonly threadId?: string;
-  /** Written into the worktree for a human to read; the turn carries the prompt. */
+  /**
+   * The role prompt.
+   *
+   * Delivered as the FIRST turn's content — that is what replaces
+   * `buildRoleInjection` / `buildScriptRoleInjection` — and also written into the
+   * worktree for a human to read. Both, not either: the file is documentation,
+   * the turn is what the agent actually receives.
+   */
   readonly roleContent?: string;
   readonly roleFilePath?: string;
+  /**
+   * Called for each worktree file that could not be merged.
+   *
+   * `applyWorktreeSetup` leaves an unparseable JSON file alone rather than
+   * destroying a user's config, and that decision is only defensible if someone
+   * is told. Whether or not this is supplied, the messages are retained on
+   * `setupWarnings`, so the skip is never silent in both places at once.
+   */
+  readonly onSetupWarning?: (message: string) => void;
   /** From `buildWorktreeGuardFiles(worktreePath)`. Absent means no guard, reported. */
   readonly guardFiles?: ReadonlyArray<WorktreeFile>;
   /** Cap on retained events. Default 5,000. */
@@ -175,9 +191,33 @@ export interface TurnOutcome {
  * because an unmappable harness or an unsupported model must fail before a thread
  * exists.
  */
+/**
+ * The identity of a delivered event.
+ *
+ * `eventId` when the server sent one, the sequence otherwise. Prefixed so a
+ * sequence key can never collide with an id that happens to be a number.
+ */
+function eventKey(event: ThreadEvent): string {
+  return event.eventId === undefined ? `seq:${event.sequence}` : `id:${event.eventId}`;
+}
+
+/**
+ * The first turn's text: the role prompt, then what the caller asked for.
+ *
+ * A blank caller text yields the role alone rather than a trailing separator —
+ * a turn that opens with the role and nothing else is the ordinary spawn.
+ */
+function joinRoleAndText(role: string, text: string): string {
+  return text.length === 0 ? role : `${role}\n\n${text}`;
+}
+
 export class DriverThread {
   #events: ThreadEvent[] = [];
   #droppedEvents = 0;
+  /** Keys of the retained events, so a redelivered event is recognised as one. */
+  #seenEventKeys = new Set<string>();
+  /** The role prompt, until the first turn carries it. Null once delivered. */
+  #pendingRole: string | null = null;
 
   private constructor(
     readonly threadId: string,
@@ -185,6 +225,8 @@ export class DriverThread {
     readonly branch: string,
     readonly mapping: HarnessMapping,
     readonly setup: WorktreeSetupPlan,
+    /** Worktree files that could not be merged, in the order they were skipped. */
+    readonly setupWarnings: ReadonlyArray<string>,
     private readonly deps: DriverThreadDeps,
     private readonly retainEvents: number,
   ) {}
@@ -215,7 +257,11 @@ export class DriverThread {
       roleContent: options.roleContent,
       roleFilePath: options.roleFilePath,
     });
-    applyWorktreeSetup(setup, options.worktreePath);
+    const setupWarnings: string[] = [];
+    applyWorktreeSetup(setup, options.worktreePath, (message) => {
+      setupWarnings.push(message);
+      options.onSetupWarning?.(message);
+    });
 
     await dispatchCommand(deps.dispatcher, deps.journal, {
       type: 'thread.create',
@@ -230,15 +276,18 @@ export class DriverThread {
       createdAt: new Date().toISOString(),
     });
 
-    return new DriverThread(
+    const thread = new DriverThread(
       threadId,
       options.worktreePath,
       options.branch,
       mapping,
       setup,
+      setupWarnings,
       deps,
       options.retainEvents ?? 5_000,
     );
+    thread.#pendingRole = options.roleContent ?? null;
+    return thread;
   }
 
   /** The driver kind this thread runs under. */
@@ -269,18 +318,38 @@ export class DriverThread {
   /**
    * Feed one subscription value.
    *
-   * Idempotent: a redelivered event updates the same derived state and appends a
-   * duplicate to the log, which `assistantText` tolerates because it filters by
-   * sequence range. At-least-once delivery makes redelivery ordinary.
+   * Idempotent, by DISCARDING a redelivered event rather than by tolerating it.
+   *
+   * The earlier version appended the duplicate and claimed `assistantText` would
+   * cope because it filters by sequence range — which it does not: a range filter
+   * admits both copies of the same sequence, so a replay during a turn returned
+   * the assistant's text twice and burned two slots of the retention cap for one
+   * event. Redelivery is not an edge case here; the cursor advances after the
+   * handler by design, so at-least-once delivery is the contract this class is
+   * built on, and every replay crosses this line.
+   *
+   * The key is `eventId` when the server sent one and the sequence otherwise.
+   * Both are unique per event; the sequence is the fallback because it is the
+   * field `asThreadEvent` already requires.
    */
   observe(value: unknown): void {
     this.deps.tracker.observe(value);
     const event = asThreadEvent(value);
     if (!event || event.aggregateId !== this.threadId) return;
+    const key = eventKey(event);
+    if (this.#seenEventKeys.has(key)) return;
+    this.#seenEventKeys.add(key);
     this.#events.push(event);
     if (this.#events.length > this.retainEvents) {
       const dropped = this.#events.length - this.retainEvents;
+      for (const evicted of this.#events.slice(0, dropped)) this.#seenEventKeys.delete(eventKey(evicted));
       this.#events.splice(0, dropped);
+      // Evicting the keys with the events keeps the set bounded by the same cap
+      // rather than by the session's lifetime. The cost is that a redelivery of an
+      // event already evicted would be appended again — harmless, because every
+      // read is bounded by a turn's sequence range and an evicted event is by
+      // definition older than the running turn's start.
+      //
       // Counted as EVENTS dropped, not as times the cap was hit. Today those
       // agree, because `observe` takes one value at a time and the overflow is
       // therefore always one — there is no test that can tell the two apart, and
@@ -297,11 +366,7 @@ export class DriverThread {
    * status, which reads `ready` for an interrupted turn as well as a finished one.
    */
   async runTurn(text: string, options: { readonly timeoutMs?: number } = {}): Promise<TurnOutcome> {
-    const started = await startTurn(this.deps.dispatcher, this.deps.journal, this.deps.tracker, {
-      threadId: this.threadId,
-      text,
-      ...(this.mapping.modelSelection === undefined ? {} : { modelSelection: this.mapping.modelSelection }),
-    });
+    const started = await this.#startTurnWithRole(text);
 
     // ONE budget for the turn, not one per wait. Two `#withTimeout` calls each
     // holding the full budget meant `timeoutMs: 60_000` could take 120 seconds —
@@ -324,11 +389,32 @@ export class DriverThread {
 
   /** Start a turn without waiting for it. The caller owns the returned promises. */
   async beginTurn(text: string) {
-    return await startTurn(this.deps.dispatcher, this.deps.journal, this.deps.tracker, {
+    return await this.#startTurnWithRole(text);
+  }
+
+  /** True until the role prompt has actually been carried by a turn. */
+  get roleDelivered(): boolean {
+    return this.#pendingRole === null;
+  }
+
+  /**
+   * Start a turn, carrying the role prompt if this is the first one.
+   *
+   * The role is consumed only AFTER the start command is accepted. A turn that
+   * failed to start may or may not have landed, and of the two ways to be wrong
+   * — an agent that receives its role twice, or an agent that never receives it
+   * — only the second leaves it working without instructions. So the role stays
+   * pending until something confirms it went.
+   */
+  async #startTurnWithRole(text: string) {
+    const role = this.#pendingRole;
+    const started = await startTurn(this.deps.dispatcher, this.deps.journal, this.deps.tracker, {
       threadId: this.threadId,
-      text,
+      text: role === null ? text : joinRoleAndText(role, text),
       ...(this.mapping.modelSelection === undefined ? {} : { modelSelection: this.mapping.modelSelection }),
     });
+    this.#pendingRole = null;
+    return started;
   }
 
   /** Interrupt the running turn. Journalled like any other command. */

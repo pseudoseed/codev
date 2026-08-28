@@ -1816,3 +1816,103 @@ The architect's framing, which is the part to carry forward: **if you fix during
 round, the fix is unreviewed by construction.** Twice now. It is a pattern, not an
 accident, and the handling is disclosure plus explicit scope in the next round —
 not a promise to stop fixing.
+
+---
+
+# Phase 3, iteration 2 — round open
+
+Context was refreshed at the iteration boundary (architect's standing instruction:
+refresh between rounds inside a phase, because a compaction is worse than a refresh).
+Re-entered on `porch next 146`, which returned iteration 2's implement task.
+
+The state at re-entry, verified rather than remembered:
+
+- Iteration 1's seven findings were all accepted and fixed before the refresh, in
+  `b27dfdda3`, `90b5b753c`, `05a37e442`, `eabbed41f`. Rebuttals recorded in
+  `146-phase_3-iter1-rebuttals.md`; none of the seven was disputed as wrong.
+- `status.yaml` carries `iteration: 2`, `build_complete: false`. Porch's re-iter
+  commit `b9327e375` sits on top of the fixes and touches no code.
+- The working tree holds no uncommitted source changes.
+
+So iteration 2's "fix issues from iteration 1" task was already discharged by the
+previous session; this round's work is the checks and the review round itself.
+
+Re-ran the phase checks through `porch done 146` rather than trusting the previous
+session's green, because porch validates them itself and `build_complete` was false.
+
+Checks passed on `porch done 146`: build 13.6 s, tests 183.4 s, "BUILD COMPLETE".
+`porch next 146` opened iteration 2's 2-way round and generated
+`146-phase_3-iter2-context.md` itself — porch writes that file from iteration 2
+onward, so the hand-written iteration-1 substitute is not needed again, and
+`--context` is already in the commands porch emits.
+
+The context file carries both iteration-1 verdicts and the full response document.
+That matters for the standing disclosure: the mid-round `commands.ts` change (the
+refusal-vs-unanswered split in `dispatchCommand`, `isServerRefusal`, and its two
+tests) is described in the response, so both lanes see it named this round rather
+than inheriting it unreviewed into Phase 4.
+
+Spot-verified before opening the round that each iteration-1 fix is actually in the
+tree, not merely written up: `ModelSelectionRequiredError` in `thread.ts`,
+`#truncateTornTail`/`repairTornTail` and `isServerRefusal` in `commands.ts`,
+`detached: true` with `process.kill(-pid, …)` and the truncation flags in
+`checks.ts`, and the retired-harness assertion now comparing
+`RETIRED_HARNESS_NAMES` against `Object.keys(RETIRED_HARNESSES)`.
+
+Both lanes launched in parallel in the background.
+
+## Iteration 2's round — both lanes REQUEST_CHANGES, 7 findings, all accepted
+
+Both lanes independently found the same blocking bug, and it is the instructive
+one: iteration 1 split refusal from unanswered in `dispatchCommand` and left
+`recoverPendingCommands` twenty lines below journalling `failed` for any error at
+all. `pending()` drops anything with an outcome, so a dead socket during recovery
+retired the command permanently — in the one loop whose entire job is not to lose
+it, at the one moment (just after a crash, server still coming up) when a dead
+socket is the expected case.
+
+`isServerRefusal` had exactly one call site. Grepping for the predicate after
+introducing it would have found the second place the reasoning applied. **Applying
+a fix where the bug was reported is not the same as applying it where the reason
+holds** — that is the rule to carry.
+
+The other two blocking findings were both comments asserting properties the code
+did not have:
+
+- `turn.ts` said the role prompt is delivered as the first turn's text. It was
+  written to `.builder-role.md` and sent nowhere. Fixed: the thread holds the role
+  from `create` and composes it into whichever turn starts first, consumed only
+  after the start is accepted — a role delivered twice is survivable, a builder
+  running with no role is not.
+- `observe`'s comment claimed idempotence "because `assistantText` filters by
+  sequence range". A range filter admits both copies of the same sequence, so a
+  replay doubled the assistant's text and burned two cap slots for one event.
+  Fixed by discarding the redelivery, keyed on `eventId` or sequence.
+
+**A comment that states a property the code does not have is worse than no
+comment**, because it tells the next reader the case was considered. Two rounds,
+two of them. Where a comment claims a property, there should be a test named for
+it.
+
+Four non-blocking findings also fixed: the stale plan record (57/21 → 78/37), a
+byte cap that counted UTF-16 code units, `chunk.toString()` splitting multi-byte
+sequences, and a silent JSON merge failure from `DriverThread.create`.
+
+### The test-size rule, third instance
+
+Two of my new tests passed against the bugs they were written for, and the
+mutation harness caught both:
+
+- the byte cap: 200 emoji truncates under either reading because the trim is
+  already byte-based. The escape window is where the code units fit and the bytes
+  do not — 40 emoji, 80 units against a cap of 100, 160 bytes against the same
+  100.
+- the UTF-8 split: 64 KiB of ASCII then an emoji splits nothing; the emoji arrives
+  whole in its own chunk. The split has to be forced with a pause between the two
+  halves of the sequence.
+
+Same rule as phases 1-3 already recorded, now with three more instances: **a
+test's input shape is part of the test.** The harness is what makes the rule
+enforceable rather than merely believed.
+
+37 mutations, all red, no SKIP and no STILL PASSES.

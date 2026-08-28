@@ -244,6 +244,63 @@ describe('spec 146 phase 3: the dispatch journal', () => {
     }
   });
 
+  it('a REFUSAL during recovery settles the intent', async () => {
+    // The server answered no. Replaying it would replay a decision already made,
+    // so this one is allowed to leave recovery.
+    const dir = tempDir('journal-recover-refused');
+    try {
+      const path = join(dir, 'commands.jsonl');
+      const journal = new DispatchJournal(path);
+      journal.recordIntent('cmd-1', 'thread.turn.start', { type: 'thread.turn.start', commandId: 'cmd-1' });
+
+      const refusal = Object.assign(new Error('rejected'), { name: 'RpcFailureError' });
+      const dispatcher = {
+        async call() {
+          throw refusal;
+        },
+      };
+
+      await expect(recoverPendingCommands(dispatcher, new DispatchJournal(path))).rejects.toBe(refusal);
+      expect(new DispatchJournal(path).pending()).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('an UNANSWERED command during recovery stays pending for the next recovery', async () => {
+    // The failure recovery is most likely to meet, because recovery runs right
+    // after a crash, when the server may still be coming up. Recording it as
+    // `failed` would spell "I could not tell" like "no" and drop the command
+    // from the one code path whose job is to re-send it.
+    const dir = tempDir('journal-recover-unanswered');
+    try {
+      const path = join(dir, 'commands.jsonl');
+      const journal = new DispatchJournal(path);
+      journal.recordIntent('cmd-1', 'thread.turn.start', { type: 'thread.turn.start', commandId: 'cmd-1' });
+
+      const dead = Object.assign(new Error('socket closed'), { name: 'NotConnectedError' });
+      await expect(
+        recoverPendingCommands(
+          {
+            async call() {
+              throw dead;
+            },
+          },
+          new DispatchJournal(path),
+        ),
+      ).rejects.toBe(dead);
+
+      // Still pending on disk, so a later recovery finds it.
+      expect(new DispatchJournal(path).pending().map((r) => r.commandId)).toEqual(['cmd-1']);
+
+      const dispatcher = recordingDispatcher();
+      expect(await recoverPendingCommands(dispatcher, new DispatchJournal(path))).toEqual(['cmd-1']);
+      expect(dispatcher.calls[0].payload.commandId).toBe('cmd-1');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('a completed dispatch is not pending', async () => {
     const dir = tempDir('journal-settled');
     try {
@@ -745,6 +802,59 @@ describe('spec 146 phase 3: phase checks', () => {
     }
   });
 
+  it('caps output in BYTES, which is what the option is called', async () => {
+    // `combined.length` counts UTF-16 code units, so a 4 MiB cap held about 8 MiB
+    // of astral output — wrong in the direction that matters, and only for the
+    // output most likely to be large.
+    //
+    // THE SIZE IS THE TEST. Each emoji is 4 bytes and 2 code units, so a
+    // code-unit cap only escapes in the window where the units still fit and the
+    // bytes do not: 40 emoji is 80 units against a cap of 100, and 160 bytes
+    // against the same 100. Pick 200 instead and both readings truncate — the
+    // trim itself is byte-based — and the test goes green against the bug it
+    // was written for. Which is what the first version of it did.
+    const dir = tempDir('check-output-cap-bytes');
+    try {
+      const result = await runPhaseCheck({
+        command: 'for i in $(seq 1 40); do printf "\\xF0\\x9F\\x9A\\x80"; done',
+        cwd: dir,
+        maxOutputBytes: 100,
+      });
+      expect(result.passed).toBe(true);
+      expect(Buffer.byteLength(result.stdout, 'utf8')).toBeLessThanOrEqual(100);
+      expect(result.stdoutTruncated).toBe(true);
+      // Cut on a character boundary: no replacement character at the head.
+      expect(result.stdout.startsWith('�')).toBe(false);
+      expect(result.stdout.endsWith('🚀')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('decodes a multi-byte character split across two chunks', async () => {
+    // A `data` chunk is a byte boundary, not a character boundary. Under a plain
+    // `chunk.toString()` a sequence straddling two chunks decodes to replacement
+    // characters, and a check's output is then wrong in a way no exit code shows.
+    //
+    // THE SPLIT HAS TO BE FORCED. Writing a lot of ASCII and then the emoji does
+    // not split anything — the emoji arrives whole in its own chunk, and the test
+    // passes with or without the decoder. So the command writes the first two
+    // bytes of the sequence, waits long enough for the reader to consume them,
+    // and then writes the last two.
+    const dir = tempDir('check-utf8-split');
+    try {
+      const result = await runPhaseCheck({
+        command: 'printf "start:"; printf "\\xF0\\x9F"; sleep 0.3; printf "\\x9A\\x80"; printf ":end"',
+        cwd: dir,
+      });
+      expect(result.passed).toBe(true);
+      expect(result.stdout).toBe('start:🚀:end');
+      expect(result.stdout).not.toContain('�');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('records the interpreter it used', async () => {
     // Phase 2 had a teardown race that failed under bash and passed under zsh.
     const dir = tempDir('check-shell');
@@ -967,6 +1077,155 @@ describe('spec 146 phase 3: the thread', () => {
       expect(outcome.startSequence).toBe(1);
       expect(outcome.endSequence).toBe(4);
       expect(tracker.activeThreads.size).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('carries the role prompt in the FIRST turn, and only the first', async () => {
+    // The deliverable is "role prompts are delivered as the first turn's
+    // content". Writing `.builder-role.md` satisfies the human-readable half and
+    // none of the agent-facing one: a role the agent never receives is a role
+    // that was not delivered, and the outbound payload is where that is visible.
+    const dir = tempDir('thread-role');
+    try {
+      const { thread, dispatcher } = await makeThread(dir, { roleContent: '# Role: Builder' });
+      expect(thread.roleDelivered).toBe(false);
+
+      const first = await thread.beginTurn('start phase 1');
+      thread.observe(sessionSet('t1', 2, 'turn-1'));
+      thread.observe(sessionSet('t1', 3, null));
+      await first.settled;
+
+      const turns = dispatcher.calls.filter((c) => c.payload.type === 'thread.turn.start');
+      expect(turns[0].payload.message.text).toBe('# Role: Builder\n\nstart phase 1');
+      expect(thread.roleDelivered).toBe(true);
+
+      const second = await thread.beginTurn('start phase 2');
+      thread.observe(sessionSet('t1', 4, 'turn-2'));
+      thread.observe(sessionSet('t1', 5, null));
+      await second.settled;
+
+      const later = dispatcher.calls.filter((c) => c.payload.type === 'thread.turn.start');
+      expect(later[1].payload.message.text).toBe('start phase 2');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the role pending when the first turn fails to start', async () => {
+    // Of the two ways to be wrong — a role delivered twice, or a role never
+    // delivered — only the second leaves the agent working with no instructions.
+    const dir = tempDir('thread-role-retry');
+    try {
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      const worktreePath = join(dir, 'worktree');
+      mkdirSync(worktreePath, { recursive: true });
+      let failNext = false;
+      const calls: Array<{ payload: any }> = [];
+      const dispatcher = {
+        async call(_method: string, payload: any) {
+          calls.push({ payload });
+          if (failNext) throw Object.assign(new Error('socket closed'), { name: 'NotConnectedError' });
+          return {};
+        },
+      };
+      const thread = await DriverThread.create(
+        { dispatcher, journal, tracker: new TurnTracker() },
+        {
+          projectId: 'p1',
+          title: 'a builder',
+          harnessName: 'codex',
+          model: 'gpt-5.6-luna',
+          worktreePath,
+          branch: 'builder/x',
+          threadId: 't1',
+          roleContent: '# Role: Builder',
+        },
+      );
+
+      failNext = true;
+      await expect(thread.beginTurn('go')).rejects.toThrow('socket closed');
+      expect(thread.roleDelivered).toBe(false);
+
+      failNext = false;
+      await thread.beginTurn('go');
+      const turns = calls.filter((c) => c.payload.type === 'thread.turn.start');
+      expect(turns[turns.length - 1].payload.message.text).toBe('# Role: Builder\n\ngo');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a redelivered event is applied once, not twice', async () => {
+    // At-least-once delivery is the contract — the cursor advances after the
+    // handler by design — so every replay crosses `observe`. Appending the
+    // duplicate returned the assistant's text twice: a range filter admits both
+    // copies of the same sequence, which is what the old comment assumed it
+    // would not.
+    const dir = tempDir('thread-redelivery');
+    try {
+      const { thread } = await makeThread(dir);
+      const promise = thread.runTurn('do the thing');
+      thread.observe(sessionSet('t1', 2, 'turn-1'));
+      thread.observe(assistantMessage('t1', 3, 'DONE'));
+      // The socket dropped and resubscribed from the applied cursor; the server
+      // replays what it already sent.
+      thread.observe(sessionSet('t1', 2, 'turn-1'));
+      thread.observe(assistantMessage('t1', 3, 'DONE'));
+      thread.observe(sessionSet('t1', 4, null));
+
+      const outcome = await promise;
+      expect(outcome.text).toBe('DONE');
+      expect(thread.events).toHaveLength(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a redelivered event does not consume a second slot of the retention cap', async () => {
+    // The other half of the same defect: a replay used to evict live events to
+    // make room for copies of events already held, so `textTruncated` could go
+    // true without a single event having been lost.
+    const dir = tempDir('thread-redelivery-cap');
+    try {
+      const { thread } = await makeThread(dir, { retainEvents: 2 });
+      thread.observe(assistantMessage('t1', 1, 'a'));
+      thread.observe(assistantMessage('t1', 2, 'b'));
+      thread.observe(assistantMessage('t1', 1, 'a'));
+      thread.observe(assistantMessage('t1', 2, 'b'));
+
+      expect(thread.droppedEvents).toBe(0);
+      expect(assistantText(thread.events, 't1', 0)).toBe('ab');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('retains a worktree file that could not be merged as a warning', async () => {
+    // `applyWorktreeSetup` leaves unparseable JSON alone rather than destroying a
+    // user's config. That is only defensible if the skip is reported, and
+    // `create` used to pass no `onWarning` at all — the same silence the module
+    // refuses for a missing guard.
+    const dir = tempDir('thread-setup-warning');
+    try {
+      const worktreePath = join(dir, 'worktree');
+      mkdirSync(worktreePath, { recursive: true });
+      writeFileSync(join(worktreePath, 'opencode.json'), '{ not json', 'utf-8');
+
+      const seen: string[] = [];
+      const { thread } = await makeThread(dir, {
+        harnessName: 'opencode',
+        worktreePath,
+        roleContent: '# role',
+        onSetupWarning: (message: string) => seen.push(message),
+      });
+
+      expect(thread.setupWarnings).toHaveLength(1);
+      expect(thread.setupWarnings[0]).toContain('opencode.json');
+      expect(seen).toEqual([...thread.setupWarnings]);
+      // And the user's file is still theirs.
+      expect(readFileSync(join(worktreePath, 'opencode.json'), 'utf-8')).toBe('{ not json');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -672,9 +672,13 @@ involved.
       guard writes into. That establishes the file is READ. It does not establish that a
       `PreToolUse` hook declared there fires for an SDK-driven tool call — no `claudeAgent` turn
       was run in this phase. Recorded under `limits.guard` in the evidence file.
-- [x] Tests for this phase. 57 in `packages/codev/src/__tests__/spec-146-porch-driver.test.ts`,
-      21 of them mutation-checked by `codev/research/146-phase3-mutation-check.py`: each reverts
-      one property and asserts the test that names it goes red. All 21 do.
+- [x] Tests for this phase. 78 in `packages/codev/src/__tests__/spec-146-porch-driver.test.ts`,
+      37 of them mutation-checked by `codev/research/146-phase3-mutation-check.py`: each reverts
+      one property and asserts the test that names it goes red. All 37 do.
+
+      The count moved twice, once per review round, and the record is written from the tree
+      rather than from the round it was first written in — a stale count here reads as a claim
+      about coverage that nobody made.
 
 #### Acceptance Criteria
 
@@ -707,7 +711,7 @@ involved.
       **The consequence porch inherits:** after an interrupt the thread is idle while the worktree
       may still be being written. "No turn is active" is not "the tree is quiet", and `runCheck`'s
       guard covers the first and cannot cover the second.
-- [x] Build and tests pass. `npm run build` clean; `npm test` 6,351 passed, 48 skipped, 0 failed
+- [x] Build and tests pass. `npm run build` clean; `npm test` 6,372 passed, 48 skipped, 0 failed
       (two pre-existing load flakes given wider budgets, no assertion changed — see the review's
       Flaky Tests section).
 

@@ -66,6 +66,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 
 export interface PhaseCheckOptions {
   /** The command line, run by `shell -lc`. */
@@ -159,11 +160,27 @@ function signalGroup(child: { pid?: number; kill(signal: NodeJS.Signals): boolea
   }
 }
 
-/** Append to a capped buffer, keeping the tail. */
+/**
+ * Append to a capped buffer, keeping the tail.
+ *
+ * The cap is in BYTES, which is what the option is called. Measuring
+ * `string.length` counted UTF-16 code units instead, so a 4 MiB cap held about
+ * 8 MiB of astral output — a memory bound that was wrong in the direction that
+ * matters, and only for the output most likely to be large.
+ *
+ * The tail is cut on a character boundary. A byte slice can land inside a
+ * multi-byte sequence, so any leading continuation bytes (`10xxxxxx`) are
+ * dropped rather than decoded into a replacement character at the head of every
+ * truncated log.
+ */
 function appendCapped(buffer: string, chunk: string, cap: number): { text: string; truncated: boolean } {
   const combined = buffer + chunk;
-  if (combined.length <= cap) return { text: combined, truncated: false };
-  return { text: combined.slice(combined.length - cap), truncated: true };
+  if (Buffer.byteLength(combined, 'utf8') <= cap) return { text: combined, truncated: false };
+
+  const bytes = Buffer.from(combined, 'utf8');
+  let start = bytes.length - cap;
+  while (start < bytes.length && (bytes[start] & 0b1100_0000) === 0b1000_0000) start += 1;
+  return { text: bytes.subarray(start).toString('utf8'), truncated: true };
 }
 
 /**
@@ -206,13 +223,21 @@ export async function runPhaseCheck(options: PhaseCheckOptions): Promise<PhaseCh
     let exitCode: number | null = null;
     let exitSignal: NodeJS.Signals | null = null;
 
+    // A `data` chunk is a byte boundary, not a character boundary: a multi-byte
+    // sequence straddling two chunks decodes to replacement characters under a
+    // plain `toString()`. `StringDecoder` holds the partial sequence until its
+    // remaining bytes arrive, so a check that prints anything non-ASCII is
+    // reported as it was written.
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
+
     child.stdout.on('data', (chunk: Buffer) => {
-      const next = appendCapped(stdout, chunk.toString(), cap);
+      const next = appendCapped(stdout, stdoutDecoder.write(chunk), cap);
       stdout = next.text;
       stdoutTruncated = stdoutTruncated || next.truncated;
     });
     child.stderr.on('data', (chunk: Buffer) => {
-      const next = appendCapped(stderr, chunk.toString(), cap);
+      const next = appendCapped(stderr, stderrDecoder.write(chunk), cap);
       stderr = next.text;
       stderrTruncated = stderrTruncated || next.truncated;
     });
