@@ -760,3 +760,19 @@ stores the **command**, not just its id. A restart that re-mints a command under
 recorded id gets a loud conflict, which is the good outcome; a restart that
 re-mints a *new* id under the same intent gets a silent double-apply, which is the
 criterion Phase 3 has to fail on.
+
+**The "interrupted turn reports ready" claim, verified in the source rather than
+inherited from the spec.** `OrchestrationSessionStatus`
+(`packages/contracts/src/orchestration.ts:300`) does contain `interrupted`, so the
+claim is not obviously true from the enum — an implementation could use it. It
+does not. `ClaudeAdapter.ts:3435-3441` maps the CLI's session state to exactly
+three values: `running`, `waiting` (for `requires_action`), and `ready` for
+everything else, interruption included. So the session status of an interrupted
+turn is `ready`, identical to a completed one, and `activeTurnId: null` is the
+only settle signal. The completed-versus-interrupted distinction lives on the
+**turn**, not the session (`ClaudeAdapter.ts:3668,3682,3759` call
+`completeTurn(context, "interrupted", …)`).
+
+Worth noting because the enum contains a value that reads like the answer and is
+never assigned on this path. Checking the enum instead of the assignment would
+have produced a settle detector that waits for a status that never arrives.
