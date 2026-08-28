@@ -3,47 +3,62 @@
   "scenarios": [
     {
       "scenario": "A: connect, dispatch, subscribe, stream",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
       "scopes": "orchestration:read orchestration:operate terminal:operate review:write relay:read",
       "dispatched": true,
       "worktreeCreated": true,
       "itemsReceived": 2,
       "outcome": "ok",
-      "note": "stream synchronized",
-      "state": "demonstrated",
-      "stateMeaning": "Ran against a live pinned server and passed."
+      "note": "stream synchronized"
     },
     {
       "scenario": "B: acks honoured (with ack-suppressed control)",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
       "ackedItems": 2,
       "suppressedItems": 1,
       "distinguishable": true,
-      "note": "suppressed client fell behind, so the ack is doing work",
-      "state": "demonstrated",
-      "stateMeaning": "Ran against a live pinned server and passed."
+      "note": "suppressed client fell behind, so the ack is doing work"
     },
     {
-      "scenario": "C+D: resume classification on real sequences",
-      "observedSequences": [],
-      "contiguous": null,
-      "withHole": null,
-      "withSnapshot": null,
-      "gapDistinctFromEmpty": false,
-      "note": "no sequenced items observed",
+      "scenario": "C groundwork: classification against server-issued sequences",
       "state": "not-demonstrated",
-      "stateMeaning": "The scenario did not run to a verdict: no server-issued sequences existed to classify. This is NOT a failure of the classifier."
+      "stateMeaning": "The scenario did not run to a verdict — preconditions absent, or nothing to observe. This says NOTHING about whether the code works, and is not a failure.",
+      "observedSequences": [],
+      "sequencesAreSparse": false,
+      "replayed": null,
+      "withSnapshot": null,
+      "alreadyApplied": null,
+      "gapDistinctFromEmpty": false,
+      "note": "no sequenced items observed"
+    },
+    {
+      "scenario": "D: cursor ahead of head forces a real snapshot, classified as a gap",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "requestedAfter": 5000000,
+      "serverSentSnapshot": true,
+      "outcomeKind": "gap",
+      "emptyKind": "empty",
+      "gapDistinctFromEmpty": true,
+      "note": "server answered a past-the-head cursor with a snapshot, and it is reported as a gap"
     }
   ],
   "limits": {
-    "scenarioCplusD": "NOT demonstrated live. An idle thread emits ~2 stream items, none carrying a sequence number this probe could find, so there were no server-issued sequences to classify. The classifier is unit-tested (6 tests: contiguous, empty, late-start gap, mid-range hole, snapshot gap, gap-distinct-from-empty) but those use synthetic sequences. Demonstrating it live needs an active agent turn generating a real event stream, which is Phase 3 work.",
-    "doNotRead": "allScenariosPassed:false means C+D was not demonstrated, NOT that the classifier failed. A and B passed against the live server."
+    "scenarioC": "Criterion C is NOT checked by the C groundwork scenario, and that scenario is not evidence for it. t3code numbers events on a SINGLE GLOBAL counter (one `sequence` column on orchestration_events, read `WHERE sequence > ? ORDER BY sequence ASC` and then filtered to the subscribed thread), so a sparse range is the normal shape and carries no information about loss. Proving the client replays exactly the missing range needs a second, never-dropped control connection and an eventId comparison, against a thread that is actually generating events. That is Phase 3 work, recorded in Phase 3's exit conditions as Phase 2's criterion.",
+    "scenarioD": "Criterion D IS discharged here, by scenario D. The server chooses the snapshot path itself because the cursor is past its head (ws.ts:1493-1526); nothing about the response is manufactured by this script.",
+    "harness": "The pinned checkout is verified; the `t3` CLI binary running against it is NOT pinned. A divergence between the two is invisible to `verify`.",
+    "doNotRead": "A `not-demonstrated` scenario is not a failing one. Read the per-scenario `stateMeaning`, which is emitted by the run rather than added afterwards."
   },
   "summary": {
     "demonstrated": [
       "A: connect, dispatch, subscribe, stream",
-      "B: acks honoured (with ack-suppressed control)"
+      "B: acks honoured (with ack-suppressed control)",
+      "D: cursor ahead of head forces a real snapshot, classified as a gap"
     ],
     "notDemonstrated": [
-      "C+D: resume classification on real sequences"
+      "C groundwork: classification against server-issued sequences"
     ],
     "failed": [],
     "note": "Three states, not a boolean. 'demonstrated', 'not-demonstrated' and 'failed' are different facts, and an earlier version of this file collapsed the last two into allScenariosPassed:false with a prose note explaining the difference. A boolean plus documentation is a boolean plus a thing nobody reads."
