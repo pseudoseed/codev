@@ -366,13 +366,18 @@ export class DriverThread {
    * status, which reads `ready` for an interrupted turn as well as a finished one.
    */
   async runTurn(text: string, options: { readonly timeoutMs?: number } = {}): Promise<TurnOutcome> {
-    const started = await this.#startTurnWithRole(text);
-
-    // ONE budget for the turn, not one per wait. Two `#withTimeout` calls each
-    // holding the full budget meant `timeoutMs: 60_000` could take 120 seconds —
-    // a timeout that does not bound what the caller asked it to bound.
+    // ONE budget for the whole call, and it starts HERE — before the dispatch.
+    //
+    // Two corrections, one round apart, both of the same kind. First: two
+    // `#withTimeout` calls each holding the full budget meant `timeoutMs: 60_000`
+    // could take 120 seconds. Then: the deadline was taken after the dispatch
+    // returned, so a hung `thread.turn.start` sat outside the budget entirely and
+    // `runTurn` could never return at all. A timeout the caller passes has to
+    // bound the call the caller made, not the part of it after the network.
     const deadline = options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs;
     const remaining = () => (deadline === undefined ? undefined : Math.max(deadline - Date.now(), 0));
+
+    const started = await this.#withTimeout(this.#startTurnWithRole(text), remaining(), 'the turn to be dispatched');
     const turnId = await this.#withTimeout(started.running, remaining(), 'the turn to start');
     await this.#withTimeout(started.settled, remaining(), 'the turn to settle');
 

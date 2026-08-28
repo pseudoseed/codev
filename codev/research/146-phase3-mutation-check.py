@@ -17,6 +17,18 @@ Same discipline as `146-phase2-mutation-check.py`: revert one property at a time
 run the single test that claims it, put the file back in a `finally`. A test that
 passes with the property removed is not evidence of the property.
 
+DO NOT RUN THIS WHILE ANYTHING ELSE IS READING THE TREE, AND DO NOT INTERRUPT IT.
+
+It rewrites source files in place and restores them in a `finally`. Two
+consequences, both observed rather than theorised:
+
+  - A review lane reading the tree concurrently can read a MUTATED file and report
+    a defect this repository does not have.
+  - Killing the process inside the try block leaves a mutation APPLIED. That
+    happened once during Phase 3: `cursor.ts` was left persisting the cursor before
+    the handler — the exact defect the phase exists to prevent — and it typechecks,
+    so nothing but `git status` showed it.
+
 Run from the repo root:  python3 codev/research/146-phase3-mutation-check.py
 """
 import subprocess
@@ -141,8 +153,8 @@ MUTATIONS = [
     ),
     (
         f'{DRIVER}/checks.ts',
-        "  const bytes = Buffer.from(combined, 'utf8');",
-        "  return { text: combined, truncated: false };\n  const bytes = Buffer.from(combined, 'utf8');",
+        "  const bytes = Buffer.from(buffer + chunk, 'utf8');",
+        "  return { text: buffer + chunk, bytes: combinedBytes, truncated: false };\n  const bytes = Buffer.from(buffer + chunk, 'utf8');",
         'caps captured output and says it did',
     ),
     (
@@ -200,6 +212,18 @@ MUTATIONS = [
         'merges an existing opencode.json rather than overwriting it',
     ),
     (
+        f'{DRIVER}/turn.ts',
+        "    this.#waiters.get(threadId)?.abandon(new TurnDisplacedError(threadId));\n",
+        "",
+        'rejects a displaced waiter rather than leaving it unresolved forever',
+    ),
+    (
+        f'{DRIVER}/worktree-setup.ts',
+        "    const instructions = options.roleContent === undefined ? [] : [roleFilePath];",
+        "    const instructions = [roleFilePath];",
+        'lists no opencode instructions when there is no role file to point at',
+    ),
+    (
         f'{DRIVER}/commands.ts',
         "      if (isServerRefusal(error)) journal.recordOutcome(intent.commandId, 'failed', (error as Error).message);",
         "      journal.recordOutcome(intent.commandId, 'failed', (error as Error).message);",
@@ -237,14 +261,26 @@ MUTATIONS = [
     ),
     (
         f'{DRIVER}/checks.ts',
-        "  if (Buffer.byteLength(combined, 'utf8') <= cap) return { text: combined, truncated: false };",
-        "  if (combined.length <= cap) return { text: combined, truncated: false };",
+        "  const combinedBytes = bufferBytes + Buffer.byteLength(chunk, 'utf8');",
+        "  const combinedBytes = (buffer + chunk).length;",
         'caps output in BYTES, which is what the option is called',
     ),
     (
         f'{DRIVER}/checks.ts',
-        "      const next = appendCapped(stdout, stdoutDecoder.write(chunk), cap);",
-        "      const next = appendCapped(stdout, chunk.toString(), cap);",
+        "      if (killTimer) {\n        clearTimeout(killTimer);\n        if (timedOut) signalGroup(child, 'SIGKILL');\n      }",
+        "      if (killTimer) clearTimeout(killTimer);",
+        'kills a SIGTERM-ignoring descendant even though the shell exited first',
+    ),
+    (
+        f'{DRIVER}/thread.ts',
+        "    const started = await this.#withTimeout(this.#startTurnWithRole(text), remaining(), 'the turn to be dispatched');",
+        "    const started = await this.#startTurnWithRole(text);",
+        'bounds the DISPATCH too, not only the waits after it',
+    ),
+    (
+        f'{DRIVER}/checks.ts',
+        "      const next = appendCapped(stdout, stdoutBytes, stdoutDecoder.write(chunk), cap);",
+        "      const next = appendCapped(stdout, stdoutBytes, chunk.toString(), cap);",
         'decodes a multi-byte character split across two chunks',
     ),
 ]

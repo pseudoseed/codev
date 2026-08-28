@@ -45,6 +45,7 @@ import {
 } from '../../../porch-driver/src/commands.js';
 import { CursorUnreadableError, PersistentCursor } from '../../../porch-driver/src/cursor.js';
 import {
+  TurnDisplacedError,
   TurnTracker,
   activeTurnIdOf,
   asThreadEvent,
@@ -855,6 +856,29 @@ describe('spec 146 phase 3: phase checks', () => {
     }
   });
 
+  it('kills a SIGTERM-ignoring descendant even though the shell exited first', async () => {
+    // The escape the group kill alone does not close. SIGTERM goes to the group,
+    // the shell dies, `exit` fires, and `finish` used to CLEAR the pending SIGKILL
+    // — so a descendant that ignored SIGTERM outlived the check that spawned it
+    // and kept writing to the worktree the next check is about to measure.
+    const dir = tempDir('check-sigterm-survivor');
+    try {
+      const result = await runPhaseCheck({
+        command: `( trap "" TERM; sleep 2; printf x > survivor.txt ) & sleep 30`,
+        cwd: dir,
+        timeoutMs: 400,
+        killGraceMs: 5_000,
+      });
+      expect(result.timedOut).toBe(true);
+
+      // Past when the survivor would have written, had it survived.
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      expect(existsSync(join(dir, 'survivor.txt'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it('records the interpreter it used', async () => {
     // Phase 2 had a teardown race that failed under bash and passed under zsh.
     const dir = tempDir('check-shell');
@@ -1017,8 +1041,11 @@ describe('spec 146 phase 3: the thread', () => {
 
       // And the payload passes the vendored contract's own input schema, which is
       // where the omission would have been caught before it reached a server.
+      // `toBe('ok')`, not `not.toBe('failed')`: the checker also answers
+      // `unchecked`, and "I could not check this" passing as "this is valid" is
+      // the exact spelling collapse the rest of this phase refuses.
       const outcome = checkPayload('orchestration.dispatchCommand', 'input', created.payload);
-      expect(outcome.status).not.toBe('failed');
+      expect(outcome.status).toBe('ok');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1317,6 +1344,70 @@ describe('spec 146 phase 3: the thread', () => {
       setTimeout(() => thread.observe(sessionSet('t1', 2, 'turn-1')), 350);
       await expect(promise).rejects.toThrow(/still be running/);
       expect(Date.now() - started).toBeLessThan(600);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a displaced waiter rather than leaving it unresolved forever', async () => {
+    // Only one turn is tracked per thread, so a second `expectTurn` replaced the
+    // first waiter and the promises it had handed out could never settle either
+    // way. "Nobody will ever tell you" spelled exactly like "still running".
+    const tracker = new TurnTracker();
+    const first = tracker.expectTurn('t1');
+    tracker.expectTurn('t1');
+
+    await expect(first.running).rejects.toThrow(TurnDisplacedError);
+    await expect(first.settled).rejects.toThrow(TurnDisplacedError);
+  });
+
+  it('lists no opencode instructions when there is no role file to point at', () => {
+    const withRole = planWorktreeSetup('opencode', { worktreePath: '/tmp/w', roleContent: '# role' });
+    const without = planWorktreeSetup('opencode', { worktreePath: '/tmp/w' });
+
+    const read = (plan: typeof withRole) =>
+      JSON.parse(plan.files.find((f) => f.relativePath === 'opencode.json')!.content).instructions;
+
+    expect(read(withRole)).toEqual(['.builder-role.md']);
+    // Not a harmless extra entry: it would describe instructions nobody supplied.
+    expect(read(without)).toEqual([]);
+    expect(without.files.some((f) => f.relativePath === '.builder-role.md')).toBe(false);
+  });
+
+  it('bounds the DISPATCH too, not only the waits after it', async () => {
+    // The budget used to start after `thread.turn.start` returned, so a dispatch
+    // that hung sat outside it entirely and `runTurn` never returned at all — the
+    // same defect as the doubled budget, one call earlier, and invisible to a test
+    // whose dispatcher answers instantly.
+    const dir = tempDir('thread-dispatch-budget');
+    try {
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      const worktreePath = join(dir, 'worktree');
+      mkdirSync(worktreePath, { recursive: true });
+      let hang = false;
+      const dispatcher = {
+        async call() {
+          if (hang) await new Promise(() => {});
+          return {};
+        },
+      };
+      const thread = await DriverThread.create(
+        { dispatcher, journal, tracker: new TurnTracker() },
+        {
+          projectId: 'p1',
+          title: 'a builder',
+          harnessName: 'codex',
+          model: 'gpt-5.6-luna',
+          worktreePath,
+          branch: 'builder/x',
+          threadId: 't1',
+        },
+      );
+
+      hang = true;
+      const started = Date.now();
+      await expect(thread.runTurn('x', { timeoutMs: 400 })).rejects.toThrow(/dispatched/);
+      expect(Date.now() - started).toBeLessThan(1_500);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

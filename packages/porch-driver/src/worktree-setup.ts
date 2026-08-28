@@ -109,9 +109,14 @@ export function planWorktreeSetup(driverKind: T3DriverKind, options: WorktreeSet
   }
 
   if (driverKind === 'opencode') {
+    // `instructions` names the role file, so it is listed only when that file is
+    // actually written. Pointing opencode at a path that does not exist is not a
+    // harmless extra entry: it is a config that describes instructions nobody
+    // supplied, and it would read as "the role is installed" to anyone looking.
+    const instructions = options.roleContent === undefined ? [] : [roleFilePath];
     files.push({
       relativePath: 'opencode.json',
-      content: JSON.stringify({ instructions: [roleFilePath] }, null, 2) + '\n',
+      content: JSON.stringify({ instructions }, null, 2) + '\n',
     });
   }
 

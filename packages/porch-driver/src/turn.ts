@@ -73,6 +73,7 @@ interface Waiter {
   seenRunning: boolean;
   resolveRunning(turnId: string): void;
   resolveSettled(): void;
+  abandon(reason: Error): void;
   readonly running: Promise<string>;
   readonly settled: Promise<void>;
 }
@@ -80,13 +81,46 @@ interface Waiter {
 function makeWaiter(): Waiter {
   let resolveRunning!: (turnId: string) => void;
   let resolveSettled!: () => void;
-  const running = new Promise<string>((resolve) => {
+  let rejectRunning!: (reason: Error) => void;
+  let rejectSettled!: (reason: Error) => void;
+  const running = new Promise<string>((resolve, reject) => {
     resolveRunning = resolve;
+    rejectRunning = reject;
   });
-  const settled = new Promise<void>((resolve) => {
+  const settled = new Promise<void>((resolve, reject) => {
     resolveSettled = resolve;
+    rejectSettled = reject;
   });
-  return { seenRunning: false, resolveRunning, resolveSettled, running, settled };
+  // Both are attached so a waiter that is displaced before anyone awaits it does
+  // not surface as an unhandled rejection. The awaiting caller still sees it.
+  running.catch(() => {});
+  settled.catch(() => {});
+  return {
+    seenRunning: false,
+    resolveRunning,
+    resolveSettled,
+    abandon: (reason: Error) => {
+      rejectRunning(reason);
+      rejectSettled(reason);
+    },
+    running,
+    settled,
+  };
+}
+
+/** A waiter was displaced by a second turn started on the same thread. */
+export class TurnDisplacedError extends Error {
+  constructor(readonly threadId: string) {
+    super(
+      `The turn being awaited on thread ${threadId} was displaced by a second ` +
+        `turn started on the same thread.\n` +
+        `  Only one turn is tracked per thread, so the first waiter can never be ` +
+        `resolved once the second replaces it. This is "nobody will ever tell you", ` +
+        `not "it is still running" — a caller left awaiting the old promises would ` +
+        `hang forever with nothing to observe.`,
+    );
+    this.name = 'TurnDisplacedError';
+  }
 }
 
 /**
@@ -148,6 +182,10 @@ export class TurnTracker {
    * so a caller can scope "what this turn produced" without guessing.
    */
   expectTurn(threadId: string): { readonly startSequence: number; readonly running: Promise<string>; readonly settled: Promise<void> } {
+    // A second turn on the same thread displaces the first waiter, and the
+    // promises it handed out would then never settle either way. Rejecting them
+    // is the difference between a caller that learns and a caller that hangs.
+    this.#waiters.get(threadId)?.abandon(new TurnDisplacedError(threadId));
     const waiter = makeWaiter();
     this.#waiters.set(threadId, waiter);
     return { startSequence: this.lastSequence(threadId), running: waiter.running, settled: waiter.settled };

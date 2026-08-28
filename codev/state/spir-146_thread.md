@@ -1937,3 +1937,44 @@ have told it.
 
 Scenario B unchanged: still `not-demonstrated` with its finding. An interrupt
 stops the turn, not the process the provider spawned.
+
+## Iteration 3 — split verdict, and a near-miss worth recording
+
+**codex REQUEST_CHANGES** (2 blocking), **claude APPROVE** (3 non-blocking). All
+seven items accepted and fixed; nothing rebutted.
+
+Both blocking findings were timeouts that did not bound what they named:
+
+- `finish()` cancelled the pending SIGKILL escalation. The group kill from
+  iteration 1 closed the escape for descendants that die on SIGTERM and left open
+  the one for descendants that do not — the check reported `timedOut` while
+  something it spawned kept writing to the worktree the next check measures. The
+  escalation is now SPENT rather than cancelled.
+- `runTurn`'s deadline started after the dispatch returned, so a hung
+  `thread.turn.start` was outside the budget entirely. Same defect as iteration
+  1's doubled budget, one call earlier: that one made 60 s take 120 s, this one
+  made it take forever.
+
+**The pattern, now three rounds old.** Every blocking finding in this phase after
+iteration 1 has been a timeout tested against the input where its subject is
+trivially bounded anyway — an `exec`ing shell, an instant dispatcher, a child that
+dies on SIGTERM. **A timeout test whose subject would finish on its own is not a
+timeout test.** That is a special case of the input-shape rule and belongs beside
+it in `lessons-learned.md` at MAINTAIN.
+
+### The near-miss: the mutation harness left a live mutation in the tree
+
+I started the harness while the claude lane was still reading the tree, realised a
+reviewer could read a file mid-mutation, and stopped it. **The kill landed inside
+the try block, so its `finally` never ran and one mutation stayed applied** —
+`cursor.ts` persisting the cursor BEFORE the handler, which is the exact defect
+this phase exists to prevent. It typechecks. The phase's own tests would have
+caught it, but nothing in the commit path looks at a file I did not edit.
+
+Caught by `git status` listing a file I never touched. Restored by rewriting the
+hunk, not with `git checkout --`, which is on the standing do-not-run list.
+
+Two rules out of it, and the harness docstring now carries both: **it is not safe
+to run while anything else reads the tree, and it is not safe to interrupt.**
+Between those, "not safe to interrupt" is the one that nearly cost something,
+because the damage it leaves is silent and syntactically valid.

@@ -172,15 +172,26 @@ function signalGroup(child: { pid?: number; kill(signal: NodeJS.Signals): boolea
  * multi-byte sequence, so any leading continuation bytes (`10xxxxxx`) are
  * dropped rather than decoded into a replacement character at the head of every
  * truncated log.
+ *
+ * `bytes` is carried in and out rather than recomputed. Re-encoding the whole
+ * buffer per `data` event turned a 4 MiB cap into a 4 MiB scan on every chunk of
+ * a chatty check — quadratic in the output of exactly the check most likely to
+ * produce a lot of it.
  */
-function appendCapped(buffer: string, chunk: string, cap: number): { text: string; truncated: boolean } {
-  const combined = buffer + chunk;
-  if (Buffer.byteLength(combined, 'utf8') <= cap) return { text: combined, truncated: false };
+function appendCapped(
+  buffer: string,
+  bufferBytes: number,
+  chunk: string,
+  cap: number,
+): { text: string; bytes: number; truncated: boolean } {
+  const combinedBytes = bufferBytes + Buffer.byteLength(chunk, 'utf8');
+  if (combinedBytes <= cap) return { text: buffer + chunk, bytes: combinedBytes, truncated: false };
 
-  const bytes = Buffer.from(combined, 'utf8');
+  const bytes = Buffer.from(buffer + chunk, 'utf8');
   let start = bytes.length - cap;
   while (start < bytes.length && (bytes[start] & 0b1100_0000) === 0b1000_0000) start += 1;
-  return { text: bytes.subarray(start).toString('utf8'), truncated: true };
+  const kept = bytes.subarray(start);
+  return { text: kept.toString('utf8'), bytes: kept.length, truncated: true };
 }
 
 /**
@@ -214,6 +225,8 @@ export async function runPhaseCheck(options: PhaseCheckOptions): Promise<PhaseCh
 
     let stdout = '';
     let stderr = '';
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let timedOut = false;
@@ -232,13 +245,15 @@ export async function runPhaseCheck(options: PhaseCheckOptions): Promise<PhaseCh
     const stderrDecoder = new StringDecoder('utf8');
 
     child.stdout.on('data', (chunk: Buffer) => {
-      const next = appendCapped(stdout, stdoutDecoder.write(chunk), cap);
+      const next = appendCapped(stdout, stdoutBytes, stdoutDecoder.write(chunk), cap);
       stdout = next.text;
+      stdoutBytes = next.bytes;
       stdoutTruncated = stdoutTruncated || next.truncated;
     });
     child.stderr.on('data', (chunk: Buffer) => {
-      const next = appendCapped(stderr, stderrDecoder.write(chunk), cap);
+      const next = appendCapped(stderr, stderrBytes, stderrDecoder.write(chunk), cap);
       stderr = next.text;
+      stderrBytes = next.bytes;
       stderrTruncated = stderrTruncated || next.truncated;
     });
 
@@ -261,7 +276,19 @@ export async function runPhaseCheck(options: PhaseCheckOptions): Promise<PhaseCh
 
     const finish = () => {
       clearTimeout(timer);
-      if (killTimer) clearTimeout(killTimer);
+      // A pending SIGKILL escalation must be SPENT, not cancelled.
+      //
+      // The shell dies on the timeout's SIGTERM and `exit` fires, so `finish` runs
+      // while the escalation is still queued — and clearing it there hands the
+      // check's own descendants an exemption. Anything still in the group at this
+      // point ignored SIGTERM or was backgrounded away from it, which is exactly
+      // what the escalation exists for. The alternative is a check that reports
+      // `timedOut` while something it started keeps writing to the worktree the
+      // next phase check is about to measure.
+      if (killTimer) {
+        clearTimeout(killTimer);
+        if (timedOut) signalGroup(child, 'SIGKILL');
+      }
       if (drainTimer) clearTimeout(drainTimer);
       if (settled) return;
       settled = true;
