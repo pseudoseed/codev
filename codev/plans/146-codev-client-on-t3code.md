@@ -676,14 +676,94 @@ code actually makes true. Any claim that is aspirational is deleted rather than 
 
 ---
 
-### Phase 7: Thread identity schema and dual-write spawn
+### Phase 7: Transport and service security posture
 
 **Dependencies**: Phase 6
 
 #### Objective
 
-Make the cutover representable in `global.db`, and route new spawns down the thread path while
+Give the spec's Security constraints an owner. The draft of this plan left them to a CSP bullet
+inside a UI phase, which review correctly called incomplete: pairing, per-machine credentials,
+binding, transport encryption, origin rules and route authentication are all server-side
+properties, and none of them belong to the client.
+
+The premise is the spec's own: the t3code server executes arbitrary agent shell in worktrees, so
+reaching it is equivalent to shell access. A tailnet is transport, not an authentication model.
+
+#### Files to Create / Modify
+
+- `packages/codev/src/agent-farm/lib/machine-credentials.ts` — per-machine storage and revocation.
+- `packages/codev/src/agent-farm/lib/pairing.ts` — pairing token issuance and redemption.
+- `packages/codev/src/agent-farm/servers/agent-auth.ts` — authentication for every `codev-agent`
+  route and stream.
+- `packages/codev/src/agent-farm/servers/tower-server.ts` — binding policy.
+- `codev/resources/146-remote-access-runbook.md` — pairing, exposure, and teardown.
+- `packages/codev/src/agent-farm/__tests__/agent-auth.test.ts`
+
+#### Deliverables
+
+- [ ] **Every `codev-agent` HTTP route and every stream is authenticated.** No unauthenticated
+      read of protocol state, because gate content and worktree paths are not public. A route added
+      without auth fails a test that enumerates the router rather than checking a list by hand.
+- [ ] Pairing tokens are **single-use with a bounded TTL**, and are never written to a repository,
+      a log, or a shell history file. A test asserts the token does not appear in the log stream.
+- [ ] **Per-machine credentials, stored separately and individually revocable.** Revoking one
+      machine does not disturb another. This is the property success criterion 15's scenario tests
+      from the client side; here it is tested at the store.
+- [ ] **Loopback-only binding is the default**; exposing an interface is an explicit action. The
+      existing `BRIDGE_MODE` gate (`tower-server.ts:109-116`) is the model and is kept.
+- [ ] All remote transport is HTTPS/WSS. A plaintext non-loopback bind is refused, not warned
+      about — the current code warns and continues, and that is a deliberate change recorded here.
+- [ ] Explicit origin rules on both the HTTP surface and the WebSocket upgrade. A WebSocket that
+      ignores `Origin` is reachable from any page the browser visits, which is the specific hole
+      that makes CSRF relevant to a localhost service.
+- [ ] The runbook covers `npx t3 pair --tailscale` and its teardown,
+      `tailscale serve --https=443 off`, because the spec records that the mapping persists until
+      it is torn down.
+- [ ] Tests for this phase.
+
+#### Acceptance Criteria
+
+- [ ] An unauthenticated request to every `codev-agent` route is refused, enumerated from the
+      router so a new route cannot be forgotten.
+- [ ] A pairing token redeems once and is refused the second time; an expired one is refused.
+- [ ] Revoking machine A's credential leaves machine B working, asserted at the credential store.
+- [ ] A non-loopback bind without TLS is refused at startup.
+- [ ] A WebSocket upgrade from a disallowed origin is refused.
+- [ ] Build and tests pass.
+
+#### Test Plan
+
+Unit: token single-use and TTL; per-machine revocation isolation; origin matching; the binding
+refusal.
+
+Integration: the full pairing flow against a live server, then teardown, following the runbook as
+written so the runbook is tested rather than merely authored.
+
+---
+
+### Phase 8: Thread identity in status.yaml and global.db
+
+**Dependencies**: Phase 5
+
+#### Objective
+
+Make the cutover representable in **both** stores, and route new spawns down the thread path while
 existing PTY builders keep running untouched.
+
+Two corrections from review shape this phase.
+
+**`status.yaml` is the join key and the original plan forgot it.** The spec says the client joins
+porch and t3code "on a `threadId` that porch records in `status.yaml` at spawn". `ProjectState`
+(`commands/porch/types.ts:217`) has no such field, and writing the id only into `global.db` would
+leave the authoritative join unimplemented. Both stores are covered here.
+
+**The migration framework named in the draft does not exist.** Verified: there is no
+`db/migrations/` directory. Migrations are inline `v2`…`vN` blocks in `db/index.ts`, each guarded
+by a `SELECT version FROM _migrations` probe, with fresh databases short-circuited by marking every
+version done against `GLOBAL_SCHEMA` in `schema.ts`. **There are no down-migrations.** So the
+draft's "migration is reversible" acceptance criterion was not achievable, and it is replaced
+below with one that is.
 
 The `architect` table is the hard part, and the spec is right about why. Verified against
 `db/schema.ts:177-187`: `pid INTEGER NOT NULL`, `port INTEGER NOT NULL` and `cmd TEXT NOT NULL`
@@ -692,8 +772,11 @@ not have this problem — its `pid` and `port` already carry `DEFAULT 0`.
 
 #### Files to Create / Modify
 
-- `packages/codev/src/agent-farm/db/schema.ts`
-- `packages/codev/src/agent-farm/db/migrations/` — the new migration.
+- `packages/codev/src/agent-farm/db/index.ts` — the new inline migration, following the existing
+  `_migrations` version pattern.
+- `packages/codev/src/agent-farm/db/schema.ts` — `GLOBAL_SCHEMA` convergence for fresh databases.
+- `packages/codev/src/commands/porch/types.ts` — `thread_id` on `ProjectState`.
+- `packages/codev/src/commands/porch/state.ts` — serialization of the new field.
 - `packages/codev/src/agent-farm/commands/spawn.ts`
 - `packages/codev/src/agent-farm/commands/spawn-worktree.ts`
 - `packages/codev/src/agent-farm/commands/status.ts` — report the drain count.
@@ -701,17 +784,25 @@ not have this problem — its `pid` and `port` already carry `DEFAULT 0`.
 
 #### Deliverables
 
+- [ ] **`status.yaml` records the `threadId` at spawn.** `ProjectState` gains the field, it
+      round-trips through the existing read and write path, and a `status.yaml` written before this
+      change still loads — the field is optional, matching how `awaiting_input` and `pr_history`
+      were added.
 - [ ] `builders` gains a nullable `thread_id`. Old rows stay valid with no backfill, following the
       pattern `harness` and `model` established.
 - [ ] `architect` gains a nullable `thread_id`, and the migration makes a thread-backed row
-      representable. Two options exist and the phase picks one and records why: a table rebuild
-      relaxing the three `NOT NULL` columns with a `CHECK` that exactly one shape is present, or
-      an `ADD COLUMN` plus sentinel values (`0`, `0`, `''`) with the exclusivity enforced in code
-      and by a partial unique index. The rebuild is stricter; the sentinel is cheaper and
-      reversible. **A row must be able to represent either shape and never both**, whichever is
-      chosen.
-- [ ] `afx spawn` writes `thread_id` and no `terminal_id`. A builder's path is a property of its
-      row, never a global mode.
+      representable. Two options exist; the phase picks one and records why. A **table rebuild**
+      relaxing the three `NOT NULL` columns with a `CHECK` that exactly one shape is present is
+      stricter but, given no down-migration framework exists, is effectively one-way. An **`ADD
+      COLUMN` plus sentinel values** (`0`, `0`, `''`) with exclusivity enforced in code is weaker
+      at the schema level but leaves the table shape untouched, which matters when the only way
+      back is a restore. **A row must represent either shape and never both**, whichever is chosen.
+- [ ] The migration follows the existing mechanism exactly: a new version constant, a guarded
+      inline block in `db/index.ts`, and matching `GLOBAL_SCHEMA` text so a fresh database and a
+      migrated one converge. A test asserts they converge, since that is the property the
+      short-circuit depends on.
+- [ ] `afx spawn` writes `thread_id` to both stores and no `terminal_id`. A builder's path is a
+      property of its row, never a global mode.
 - [ ] `afx status` reports the drain count: rows where
       `terminal_id IS NOT NULL AND thread_id IS NULL AND status != 'complete'`.
 - [ ] No in-flight builder is migrated across paths, and there is no code that could.
@@ -720,15 +811,21 @@ not have this problem — its `pid` and `port` already carry `DEFAULT 0`.
 #### Acceptance Criteria
 
 - [ ] Migration applies to a copy of a real `global.db` and every existing row survives.
-- [ ] Migration is reversible while zero thread-backed rows exist.
+- [ ] A fresh database built from `GLOBAL_SCHEMA` and a migrated one have identical schemas.
+- [ ] **Rollback is tested as the spec defines it, not as a schema revert**: stop new thread-backed
+      spawns, confirm `afx spawn` returns to the PTY path immediately, and assert no thread-backed
+      row is orphaned. The spec is explicit that dropping `thread_id` while thread-backed builders
+      exist orphans real work, so the revertible step is the spawn path, not the column.
 - [ ] A row carrying both a `terminal_id` and a `thread_id` is rejected.
+- [ ] A `status.yaml` written before this change loads unchanged; a new one carries `thread_id`.
 - [ ] A new spawn takes the thread path; an existing PTY builder is unaffected and still reachable.
 - [ ] `afx status` reports a drain count that goes to zero as PTY builders complete.
 - [ ] Build and tests pass.
 
 #### Test Plan
 
-Unit: migration up and down; the exclusivity constraint; the drain query.
+Unit: the migration against a copied real database; fresh-versus-migrated schema convergence; the
+exclusivity constraint; the drain query; `ProjectState` round-trip with and without the field.
 
 Integration: spawn a thread-backed builder alongside a running PTY builder and drive both.
 
