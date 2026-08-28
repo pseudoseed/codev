@@ -883,3 +883,35 @@ That is a genuine loss of capability compared with what the old code claimed —
 the old code did not have the capability, it had a false positive on every busy
 server. Phase 3's exit conditions discharge the real check the way the spike did:
 a control connection and an `eventId` comparison.
+
+### The harness reported a start it never confirmed
+
+Re-running the live evidence after the classifier fix, the server died on launch
+and `start` said `started pid 13734` anyway. Cause: the t3 server needs
+`node:sqlite`, which is Node 22+; the active shell was Node 20, `npx` inherited
+it, and the server wrote `Error: No such built-in module: node:sqlite` into its
+log and exited.
+
+The interesting part is what happened next. `ready` has a real 180-second
+readiness poll, so nothing passed falsely — it waited the full timeout and then
+reported that the server "did not answer on 127.0.0.1:3799". Every word true, and
+all of it pointing at the network. The actual cause was one line in a log the
+harness never read.
+
+Two guards added to `start`:
+
+- `assertNodeVersion()` refuses **before** spawning and names `node:sqlite` and
+  the fix. A precondition that the spec already states (Node 22) but nothing
+  enforced.
+- `assertChildSurvived()` checks the process is still alive after `spawn` and, if
+  not, surfaces the log's error lines — redacting the pairing token first.
+  `spawn` succeeding means a process was **created**, not that it **stayed**.
+
+Same family as the rest of this list, and this one is mine: `say('started pid N')`
+was a success message printed without checking the thing it described. The
+harness's own README says a pin nothing enforces is a comment; a start nothing
+confirms is the same.
+
+**For Phase 3:** the live harness must be run under Node 22 (`nvm use 22`). Under
+Node 20 it now fails in one second with the reason instead of three minutes with
+the wrong one.
