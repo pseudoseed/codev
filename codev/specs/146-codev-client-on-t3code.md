@@ -393,11 +393,32 @@ The mailbox is replaced only if these hold, otherwise it stays:
   modules it uses live under `effect/unstable/`. So the dependency is a pre-1.0 beta of a library,
   on a path that library itself marks unstable, moving at 27 commits a month.
 
-  This is the weakest point of the whole plan and it should not be softened. It does not reverse
-  the decision, because the alternative is a PTY layer that produced six bugs in one week, but it
-  does mean the drift test and the pinned commit are the load-bearing parts of this spec rather
-  than precautions. Classifying those 184 commits as breaking or non-breaking is criterion 12 and
-  gates deletion.
+  **Criterion 12 is now discharged, and the answer is worse than the raw count suggested.** Of 54
+  classifiable commits, **21 change a shape Codev consumes: 39%**. They concentrate in
+  `dispatchCommand` (15) and `subscribeThread` (13), which are precisely the two methods
+  `porch-driver` is built on. At roughly 20 closure commits a month that is about **8 consumed
+  changes a month**.
+
+  Three limits on that number, all recorded in
+  `codev/research/146-contract-churn-classification.md`:
+
+  - The 184-commit window cannot be classified end to end, because the closure did not exist at
+    its start. `auth.ts` arrived 2026-04-09, `providerInstance.ts` 2026-04-29, `vcs.ts` and
+    `sourceControl.ts` 2026-05-02. Before those dates "changed against the vendored types" has no
+    referent. 184 is a correct churn count and a wrong classification base.
+  - Commits before roughly 2026-06-01 cannot be emitted with the pinned Effect at all; they fail
+    inside `SchemaAST` because they predate `4.0.0-beta.103`. Those are reported as a third
+    verdict, `unclassifiable`, and never folded into either bucket.
+  - `source-only` does not mean safe. A relaxed branded id lands there with a zero-byte schema
+    diff, because all 20 lossy schemas emit unconstrained. 32 `source-only` means 32 whose effect
+    the emitter cannot see.
+
+  **An earlier revision said a pinned commit goes stale in weeks. It goes stale in days.** The
+  refresh procedure is operational tooling that will be exercised constantly, not a safety net
+  held in reserve. This is the weakest point of the whole plan and it should not be softened. It
+  does not reverse the decision, because the alternative is a PTY layer that produced six bugs in
+  one week, but it does mean the drift test, the source hash and the pin are the load-bearing
+  parts of this spec rather than precautions.
 
 ## Success Criteria
 
@@ -436,9 +457,9 @@ The mailbox is replaced only if these hold, otherwise it stays:
 - [ ] 10c. One architect and six builders run concurrently in one workspace without either
   starving the other.
 - [ ] 11. A 24-hour gate resumes with context. **Gates the deletion phase.**
-- [ ] 12. The 184 commits across the 9-file vendored closure are classified as breaking or
-  non-breaking against the vendored types, with the breaking count recorded. Counting commits is
-  not the criterion. **Gates the deletion phase.**
+- [x] 12. **Discharged.** 21 of 54 classifiable closure commits change a consumed shape (39%),
+  concentrated in `dispatchCommand` and `subscribeThread`. Recorded in
+  `codev/research/146-contract-churn-classification.md` with its three stated limits.
 - [ ] 12b. The five delivery semantics under "Message delivery semantics" are demonstrated:
   ordering, queue-while-active, durable acknowledgement, idempotency keys, loud failure when the
   server is unreachable. **Criterion 13 depends on this one.** If it fails, the mailbox stays and
