@@ -32,6 +32,7 @@ import {
   type ExitFrame,
   type ServerFrame,
 } from './envelope.js';
+import { checkPayload, type CheckOutcome, type PayloadShapeError } from './checked.js';
 
 /**
  * The minimum a socket must do. Deliberately the shape of the standard
@@ -89,12 +90,30 @@ export interface T3ClientOptions {
    * project is about.
    */
   readonly onMalformed?: (error: Error) => void;
+  /**
+   * Shape-check inbound payloads against the vendored contract. Default `true`.
+   *
+   * A failing payload rejects the call (or the stream), carrying the method tag
+   * and the failing path. It is never coerced and never dropped. Passing is NOT
+   * proof of contract validity — see `checked.ts`.
+   */
+  readonly checkPayloads?: boolean;
+  /**
+   * Called once per method the generated contract cannot check.
+   *
+   * A method with no generated schema is `unchecked`, which is not a pass. If
+   * this is omitted the method is still recorded on `uncheckedMethods`, so the
+   * fact survives somewhere a caller can read it rather than nowhere.
+   */
+  readonly onUnchecked?: (method: string, role: 'input' | 'output', reason: string) => void;
 }
 
 export class T3Client {
   #pending = new Map<string | number, Pending>();
   #nextId = 1;
   #closed = false;
+  /** Methods whose payloads the vendored contract could not check, with the reason. */
+  readonly uncheckedMethods = new Map<string, string>();
 
   constructor(
     private readonly socket: SocketLike,
@@ -125,9 +144,23 @@ export class T3Client {
         const chunk = frame as ChunkFrame;
         // ACK FIRST, then deliver. Acking after the handler would let a slow
         // consumer throttle the connection into a stall that looks like the
-        // server having nothing to say.
+        // server having nothing to say. The ack goes out even for a payload we
+        // are about to reject: the frame WAS received, and withholding the ack
+        // would stall the connection on top of the error rather than instead of
+        // it.
         this.#sendRaw(ack(chunk.requestId));
-        this.#pending.get(chunk.requestId)?.onChunk?.(chunk.values);
+        const pending = this.#pending.get(chunk.requestId);
+        if (!pending) return;
+        for (const value of chunk.values) {
+          const failure = this.#checkInbound(pending.method, value);
+          if (failure) {
+            this.#pending.delete(chunk.requestId);
+            if (pending.timer) clearTimeout(pending.timer);
+            pending.reject(failure);
+            return;
+          }
+        }
+        pending.onChunk?.(chunk.values);
         return;
       }
       case 'Exit': {
@@ -137,7 +170,16 @@ export class T3Client {
         this.#pending.delete(exit.requestId);
         if (pending.timer) clearTimeout(pending.timer);
         try {
-          pending.resolve(exitValue(exit));
+          const value = exitValue(exit);
+          // A streaming call's Exit carries no domain payload — the values came
+          // through Chunk frames and were checked there. Checking `undefined`
+          // against the output schema would fail every stream.
+          const failure = pending.onChunk ? null : this.#checkInbound(pending.method, value);
+          if (failure) {
+            pending.reject(failure);
+            return;
+          }
+          pending.resolve(value);
         } catch (error) {
           pending.reject(error as Error);
         }
@@ -146,6 +188,32 @@ export class T3Client {
       default:
         this.options.onOutOfBand?.(frame);
     }
+  }
+
+  /**
+   * Returns the error for a payload that failed its shape check, or null.
+   *
+   * `unchecked` is recorded rather than returned: it is not a failure, and it
+   * must not be spelled like a pass either — it lands on `uncheckedMethods` and
+   * on `onUnchecked` so it exists somewhere readable.
+   */
+  #checkInbound(method: string, value: unknown): PayloadShapeError | null {
+    if (this.options.checkPayloads === false) return null;
+    let outcome: CheckOutcome;
+    try {
+      outcome = checkPayload(method, 'output', value);
+    } catch (error) {
+      // UnresolvedRefError / UnsupportedKeywordError are defects in the generated
+      // artifacts, not facts about this payload. Do not convert them into a
+      // payload rejection, which would blame the server for our own codegen.
+      throw error;
+    }
+    if (outcome.status === 'failed') return outcome.error;
+    if (outcome.status === 'unchecked' && !this.uncheckedMethods.has(method)) {
+      this.uncheckedMethods.set(method, outcome.reason);
+      this.options.onUnchecked?.(method, 'output', outcome.reason);
+    }
+    return null;
   }
 
   #onClose(): void {

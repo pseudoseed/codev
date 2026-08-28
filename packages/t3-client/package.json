@@ -5,13 +5,35 @@
   "description": "Spec 146: a client for t3code's RPC WebSocket. Speaks the layerJson envelope directly; no Effect, no runtime dependencies.",
   "type": "module",
   "exports": {
-    "./envelope": { "types": "./src/envelope.ts", "default": "./dist/envelope.js" },
-    "./client": { "types": "./src/client.ts", "default": "./dist/client.js" },
-    "./auth": { "types": "./src/auth.ts", "default": "./dist/auth.js" },
-    "./resume": { "types": "./src/resume.ts", "default": "./dist/resume.js" },
-    "./socket": { "types": "./src/socket.ts", "default": "./dist/socket.js" }
+    "./envelope": {
+      "types": "./src/envelope.ts",
+      "default": "./dist/envelope.js"
+    },
+    "./client": {
+      "types": "./src/client.ts",
+      "default": "./dist/client.js"
+    },
+    "./auth": {
+      "types": "./src/auth.ts",
+      "default": "./dist/auth.js"
+    },
+    "./resume": {
+      "types": "./src/resume.ts",
+      "default": "./dist/resume.js"
+    },
+    "./socket": {
+      "types": "./src/socket.ts",
+      "default": "./dist/socket.js"
+    },
+    "./checked": {
+      "types": "./src/checked.ts",
+      "default": "./dist/checked.js"
+    }
   },
-  "files": ["src", "dist"],
+  "files": [
+    "src",
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "check-types": "tsc --noEmit"
@@ -19,5 +41,8 @@
   "devDependencies": {
     "typescript": "catalog:"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@cluesmith/codev-types": "workspace:*"
+  }
 }

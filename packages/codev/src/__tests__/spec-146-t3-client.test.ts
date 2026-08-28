@@ -27,6 +27,7 @@ import { classifyResume, SequenceCursor } from '../../../t3-client/src/resume.js
 import { assertTransportSafe, missingScopes, webSocketUrl } from '../../../t3-client/src/auth.js';
 import { exponentialBackoff } from '../../../t3-client/src/socket.js';
 import { T3Client, NotConnectedError, type SocketLike } from '../../../t3-client/src/client.js';
+import { checkPayload, checkableMethods, PayloadShapeError } from '../../../t3-client/src/checked.js';
 
 // ---------------------------------------------------------------- envelope
 
@@ -300,7 +301,9 @@ function fakeSocket(): SocketLike & {
 describe('spec 146 phase 2: the client', () => {
   it('resolves a call with the exit value', async () => {
     const socket = fakeSocket();
-    const client = new T3Client(socket);
+    // checkPayloads:false: `{ clean: true }` is a placeholder, not a vcs.status
+    // result. This test is about Exit resolving to the success value.
+    const client = new T3Client(socket, { checkPayloads: false });
     const promise = client.call('vcs.status', { cwd: '/repo' });
     socket.emit({ _tag: 'Exit', requestId: 1, exit: { _tag: 'Success', value: { clean: true } } });
     await expect(promise).resolves.toEqual({ clean: true });
@@ -310,7 +313,11 @@ describe('spec 146 phase 2: the client', () => {
     // The protocol obligation the spike never exercised. The server enables
     // ack backpressure; without this the stream stops and looks like silence.
     const socket = fakeSocket();
-    const client = new T3Client(socket);
+    // checkPayloads:false because this test is about the ACK protocol, not about
+    // payload shapes: its values are placeholders under a real method name. The
+    // checker rejecting them is the checker working — see the payload-shape
+    // describe block below, which asserts exactly that.
+    const client = new T3Client(socket, { checkPayloads: false });
     const values: unknown[] = [];
     const promise = client.stream('orchestration.subscribeThread', {}, (v) => values.push(v));
 
@@ -326,7 +333,11 @@ describe('spec 146 phase 2: the client', () => {
 
   it('acks BEFORE delivering, so a slow consumer cannot deadlock the connection', async () => {
     const socket = fakeSocket();
-    const client = new T3Client(socket);
+    // checkPayloads:false because this test is about the ACK protocol, not about
+    // payload shapes: its values are placeholders under a real method name. The
+    // checker rejecting them is the checker working — see the payload-shape
+    // describe block below, which asserts exactly that.
+    const client = new T3Client(socket, { checkPayloads: false });
     let ackedWhenHandlerRan = false;
     const promise = client.stream('orchestration.subscribeThread', {}, () => {
       ackedWhenHandlerRan = socket.sent.some((s) => JSON.parse(s)._tag === 'Ack');
@@ -361,5 +372,117 @@ describe('spec 146 phase 2: the client', () => {
     for (const l of [] as never[]) void l;
     (socket as unknown as { emit(f: unknown): void }).emit({ _tag: 'Nonsense' });
     expect(onMalformed).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------- payload shape checks
+
+describe('spec 146 phase 2: inbound payloads are shape-checked, and a pass is not a proof', () => {
+  it('accepts a payload matching the generated shape', () => {
+    const outcome = checkPayload('vcs.createWorktree', 'output', {
+      worktree: { path: '/tmp/wt', refName: 'main', isMain: false, isCurrent: false, isLocked: false },
+    });
+    // Either it matched, or the generator could not cover it. What it must NOT
+    // be is 'failed' on a well-formed payload.
+    expect(outcome.status).not.toBe('failed');
+  });
+
+  it('reports a mismatch as FAILED, naming the method and the failing path', () => {
+    const outcome = checkPayload('vcs.createWorktree', 'output', { worktree: 'not-an-object' });
+    expect(outcome.status).toBe('failed');
+    if (outcome.status === 'failed') {
+      expect(outcome.error).toBeInstanceOf(PayloadShapeError);
+      expect(outcome.error.method).toBe('vcs.createWorktree');
+      expect(outcome.error.role).toBe('output');
+      expect(outcome.error.paths.length).toBeGreaterThan(0);
+      // The message must carry the lower-bound caveat, so a reader cannot take a
+      // pass from this checker as contract validity.
+      expect(outcome.error.message).toMatch(/LOWER BOUND/);
+    }
+  });
+
+  it('reports UNCHECKED for a method the contract does not cover — never ok', () => {
+    // The rule this project keeps relearning: "I looked and it was fine" and
+    // "I had nothing to look with" must not be spelled the same way.
+    const outcome = checkPayload('nonexistent.method', 'output', { anything: true });
+    expect(outcome.status).toBe('unchecked');
+    expect(outcome.status).not.toBe('ok');
+    if (outcome.status === 'unchecked') expect(outcome.reason).toMatch(/nonexistent\.method/);
+  });
+
+  it('reports UNCHECKED when the contract names no schema for the role', () => {
+    // vcs.removeWorktree has `output: null` in the generated contract. That is a
+    // real hole, and it must surface as one.
+    const covered = checkableMethods();
+    expect(covered).toContain('vcs.removeWorktree');
+    const outcome = checkPayload('vcs.removeWorktree', 'output', { whatever: 1 });
+    expect(outcome.status).toBe('unchecked');
+  });
+
+  it('rejects the call when an Exit payload fails its shape check', async () => {
+    const sent: string[] = [];
+    let onMessage: ((event: { data: unknown }) => void) | undefined;
+    const socket: SocketLike = {
+      send: (data) => void sent.push(data),
+      close: () => {},
+      addEventListener: (type: string, listener: never) => {
+        if (type === 'message') onMessage = listener as unknown as typeof onMessage;
+      },
+      readyState: 1,
+    } as unknown as SocketLike;
+
+    const client = new T3Client(socket);
+    const promise = client.call('vcs.createWorktree', {});
+    const id = JSON.parse(sent[0]).id;
+    onMessage?.({ data: JSON.stringify([{ _tag: 'Exit', requestId: id, exit: { _tag: 'Success', value: { worktree: 'nope' } } }]) });
+
+    await expect(promise).rejects.toThrow(PayloadShapeError);
+  });
+
+  it('records an unchecked method rather than letting the fact vanish', async () => {
+    const sent: string[] = [];
+    let onMessage: ((event: { data: unknown }) => void) | undefined;
+    const socket: SocketLike = {
+      send: (data) => void sent.push(data),
+      close: () => {},
+      addEventListener: (type: string, listener: never) => {
+        if (type === 'message') onMessage = listener as unknown as typeof onMessage;
+      },
+      readyState: 1,
+    } as unknown as SocketLike;
+
+    const seen: string[] = [];
+    const client = new T3Client(socket, { onUnchecked: (method) => void seen.push(method) });
+    const promise = client.call('some.unknown.method', {});
+    const id = JSON.parse(sent[0]).id;
+    onMessage?.({ data: JSON.stringify([{ _tag: 'Exit', requestId: id, exit: { _tag: 'Success', value: { any: 'thing' } } }]) });
+
+    await expect(promise).resolves.toEqual({ any: 'thing' });
+    expect(seen).toContain('some.unknown.method');
+    expect(client.uncheckedMethods.get('some.unknown.method')).toMatch(/no generated contract entry/);
+  });
+
+  it('can be turned off, and then checks nothing at all', async () => {
+    const sent: string[] = [];
+    let onMessage: ((event: { data: unknown }) => void) | undefined;
+    const socket: SocketLike = {
+      send: (data) => void sent.push(data),
+      close: () => {},
+      addEventListener: (type: string, listener: never) => {
+        if (type === 'message') onMessage = listener as unknown as typeof onMessage;
+      },
+      readyState: 1,
+    } as unknown as SocketLike;
+
+    const client = new T3Client(socket, { checkPayloads: false });
+    const promise = client.call('vcs.createWorktree', {});
+    const id = JSON.parse(sent[0]).id;
+    onMessage?.({ data: JSON.stringify([{ _tag: 'Exit', requestId: id, exit: { _tag: 'Success', value: { worktree: 'nope' } } }]) });
+
+    // The same payload that rejects above resolves here. That is the point of the
+    // switch, and asserting it means the switch is doing something rather than
+    // being a flag nobody wired up.
+    await expect(promise).resolves.toEqual({ worktree: 'nope' });
+    expect(client.uncheckedMethods.size).toBe(0);
   });
 });
