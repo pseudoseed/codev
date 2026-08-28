@@ -8,8 +8,8 @@ The spec selects Approach 3: adopt t3code for process control, and write a new C
 against it. This plan sequences that work so that every claim capable of killing the project is
 tested before anything expensive is built on top of it.
 
-Three findings from reading the t3code source changed the shape of the plan before it was
-written, and they are recorded here because later phases depend on them.
+Four findings from reading and running the t3code source changed the shape of the plan before it
+was written, and they are recorded here because later phases depend on them.
 
 **The contract question the spec deferred is settled, and the answer is codegen.** t3code serves
 its RPC over `RpcSerialization.layerJson` (`apps/server/src/ws.ts:2492`). Under that layer the
@@ -34,8 +34,9 @@ design.** The probe is committed at `codev/experiments/146-schema-emitter-probe/
 against `effect@4.0.0-beta.103` **installed from npm** — the version t3code pins — on Node 22.
 It is not run against the vendored `.repos/effect-smol` checkout in the t3code clone, which is
 `4.0.0-beta.102`; that copy is cited in this plan only for the RPC wire-format source, never for
-emitter behaviour. `toJsonSchemaDocument` handled every shape in the closure — structs, unions, literals, brands, refinements and both transform forms — so nothing
-in it is unrepresentable. But `Schema.String.check(isNonEmpty())` emits `minLength: 1`, while the
+emitter behaviour. `toJsonSchemaDocument` handled every shape in the closure — structs, unions,
+literals, brands, refinements and both transform forms — so nothing in it is unrepresentable.
+But `Schema.String.check(isNonEmpty())` emits `minLength: 1`, while the
 *same check applied on the decoded side of a `decodeTo` transform* emits a bare `{"type": "string"}`
 with the constraint gone. `SchemaRepresentation.toRepresentation` is blind to it as well: the
 constrained and unconstrained forms serialise to the byte-identical document
