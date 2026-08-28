@@ -159,7 +159,10 @@ checked against the code before being acted on, and the ones that were right cha
 - **`afx interrupt`, `cleanup` and `dev` were unassigned** despite the spec promising their
   contracts survive. Phase 9 owns them.
 - **`apps/web` was missing entirely.** It is the legacy dashboard the spec deletes — React and
-  xterm on `codev-sdk` — and the sdk's terminal surface goes with it.
+  xterm on `codev-sdk`. The sdk's terminal surface does **not** go with it: `apps/vscode` still
+  imports `TowerClient`, `backoffDelayMs` and `TerminalType` from `@cluesmith/codev-sdk/tower-client`
+  (`connection-manager.ts:2-3`, `terminal-manager.ts:7`), so `tower-client` is retained as a
+  compile-only surface. Phase 14 carries the ruling and the reasoning.
 
 One finding is recorded but not adopted: a reviewer asked for `rpc.ts` to be vendored for
 method-to-payload mapping. Phase 1 keeps it excluded and instead pins the mapping explicitly, since
@@ -206,11 +209,30 @@ property. Only the generator needs `effect`, so only the generator lives outside
   Schema, covering only the subset the emitter actually produces. No imports.
 - `packages/types/src/t3/pin.json` — the pinned t3code commit SHA, the `effect` version observed at
   that commit, and the closure file list.
+- `packages/types/package.json` — an export map entry for the new subpath. Today `exports` carries
+  only `"."`, so nothing under `src/t3/` is reachable by a consumer without one; review caught this
+  and it would have surfaced as an unresolvable import in Phase 2.
+- `packages/types/tsconfig.json` — `resolveJsonModule`, and `schema.json` copied into `dist` by the
+  build. `shape-check.ts` imports the JSON, and the package maps `types` to `src/` but `default` to
+  `dist/`, so a JSON file that never reaches `dist` fails at consumer runtime and not in CI. A test
+  asserts `schema.json` is present in the built output.
 - `packages/types/__tests__/t3-drift.test.ts`
 - `packages/types/__tests__/t3-shape-check.test.ts`
 - `packages/types/__tests__/no-runtime-deps.test.ts`
+- `packages/types/src/t3/generated/ATTRIBUTION.md` — the MIT notice for the t3code source these
+  artifacts derive from, plus the pinned SHA. **This is a licence obligation, not tidiness.**
+  `@cluesmith/codev-types` is published, is Apache-2.0, and ships `files: ["src", "dist"]`, so the
+  generated artifacts leave this machine inside a distributed package. MIT requires the notice
+  travel with the distribution. Review caught this; the first revision would have shipped derived
+  MIT work with no notice.
+- `pnpm-workspace.yaml` — **`tools/*` added to the workspace globs.** Today they are `packages/*`
+  and `apps/*` only, so a `tools/t3-codegen` package would never have its `effect` devDependency
+  installed and the codegen would not run. The alternative — a standalone install step documented
+  in `REFRESH.md` — is rejected because a refresh procedure whose first step is "remember to
+  install" is a procedure that gets skipped.
 - `tools/t3-codegen/package.json` — the generator, **outside** `packages/types`. `effect` and
-  `typescript` as devDependencies. Not part of the published workspace build.
+  `typescript` as devDependencies. In the workspace so it installs, excluded from the publish and
+  the release build.
 - `tools/t3-codegen/generate.ts` — imports the pinned checkout's contracts, walks the closure,
   emits every artifact above.
 - `tools/t3-codegen/classify-churn.ts` — replays commits against the detector.
@@ -562,8 +584,20 @@ possible.
   builder-id to `threadId`.
 - `packages/codev/src/agent-farm/servers/status-reader.ts` — `status.yaml` reads, scoped per
   worktree.
+- `packages/codev/src/agent-farm/db/index.ts` — the `thread_id` columns, see below.
+- `packages/codev/src/agent-farm/db/schema.ts` — `GLOBAL_SCHEMA` convergence.
 - `codev/resources/146-codev-agent-failure-matrix.md`
 - `packages/codev/src/agent-farm/servers/__tests__/`
+
+**The `thread_id` columns land here, not in Phase 8.** Review found a circular dependency in the
+first revision: this phase's registry reads `architect.thread_id` and `builders.thread_id`, Phase 8
+added those columns, and Phase 8 declared a dependency on this phase. As ordered, neither could be
+built. The split that resolves it is between *schema* and *use*: this phase adds the two nullable
+columns and the migration that carries them, because it is the first phase that needs them to
+exist. Phase 8 keeps everything that writes and reads them at spawn time — the `status.yaml` field,
+the dual-write, the drain count, and the backup-and-restore path. The migration mechanics, the
+additive-only ruling and the automatic backup are all specified in Phase 8 and apply to the
+migration written here.
 
 #### Deliverables
 
@@ -844,10 +878,10 @@ not have this problem — its `pid` and `port` already carry `DEFAULT 0`.
       round-trips through the existing read and write path, and a `status.yaml` written before this
       change still loads — the field is optional, matching how `awaiting_input` and `pr_history`
       were added.
-- [ ] `builders` gains a nullable `thread_id`. Old rows stay valid with no backfill, following the
-      pattern `harness` and `model` established.
-- [ ] `architect` gains a nullable `thread_id`. **The `ADD COLUMN` plus sentinel-values option is
-      chosen** (`pid` 0, `port` 0, `cmd` `''`), with exclusivity enforced in code rather than by a
+- [ ] The `thread_id` columns themselves were added in Phase 5, which is the first phase that
+      needs them to exist. This phase does not re-add them; it is the first that **writes** them.
+      Old rows stay valid with no backfill, following the pattern `harness` and `model` established.
+- [ ] For `architect`, **the `ADD COLUMN` plus sentinel-values option is chosen** (`pid` 0, `port` 0, `cmd` `''`), with exclusivity enforced in code rather than by a
       `CHECK`. The rejected alternative — a table rebuild relaxing the three `NOT NULL` columns
       with a `CHECK` constraint — is stricter at the schema level, but it changes the table shape,
       and with no down-migration the only way back is a restore from backup. Additive stays
@@ -1032,7 +1066,7 @@ real; a fake clock does not test what the reaper does.
 
 ### Phase 11: codev-client tree and live status
 
-**Dependencies**: Phase 5, Phase 9
+**Dependencies**: Phase 6, Phase 7, Phase 9
 
 #### Objective
 
@@ -1064,7 +1098,7 @@ The stack matches `apps/v2`: React 19, Vite 6, Vitest 4, Playwright.
 - [ ] One client connects to more than one machine's server at once, each independently live.
 - [ ] With one server stopped, its subtree is marked disconnected **with a last-updated
       timestamp**, other machines stay live, and nothing renders blank or silently stale.
-- [ ] A human approves a real gate from the client through Phase 5's capability path.
+- [ ] A human approves a real gate from the client through Phase 6's capability path.
 - [ ] No `dangerouslySetInnerHTML` on agent output; a restrictive CSP; explicit origin rules. The
       client holds credentials for N servers, which makes XSS a credential-theft path rather than a
       defacement one.
@@ -1094,7 +1128,7 @@ a gate approved.
 
 ### Phase 12: codev-client tiling and mobile
 
-**Dependencies**: Phase 11
+**Dependencies**: Phase 7, Phase 11
 
 #### Objective
 
@@ -1147,7 +1181,7 @@ written.
 
 ### Phase 13: Extension retirement
 
-**Dependencies**: Phase 12
+**Dependencies**: None; must land before Phase 14
 
 #### Objective
 
@@ -1229,9 +1263,20 @@ earlier phase, not a judgement:
   `apps/` holds `streamdeck`, `v2`, `vscode` and `web`, and `@cluesmith/codev-web` is the
   xterm-based one (`@xterm/addon-canvas`, `addon-fit`, `addon-web-links` on `codev-sdk`). A phase
   that says "the legacy dashboard" and lists no path leaves a builder three candidates.
-- `packages/sdk/` — the terminal surface it exposes to `apps/web` goes dead with that app and is
-  removed with it. The #1189 boundary tests must still pass afterwards, so this is an edit to the
-  sdk, not a deletion of it.
+- `packages/sdk/` — **its terminal surface does not go dead with `apps/web`, and an earlier
+  revision of this plan was wrong to say so.** Review falsified it and the check confirms:
+  `apps/vscode/src/connection-manager.ts:2-3` imports `TowerClient` and `backoffDelayMs`, and
+  `terminal-manager.ts:7` imports `TerminalType`, all from `@cluesmith/codev-sdk/tower-client`.
+
+  This collides with Phase 13 by design, not by accident. Phase 13 keeps `apps/vscode` in the tree
+  precisely so upstream's 173 commits keep merging cleanly, and dropping it from the build hides a
+  local break while leaving every future upstream merge landing vscode code against an sdk that no
+  longer exports what it imports. So the ruling has to be explicit, and it is: **the sdk's
+  `tower-client` module is retained as a compile-only surface for `apps/vscode`.** It stops being
+  wired to anything live when `apps/web` goes, but its exported types and the `TowerClient` shape
+  stay so the unbuilt app still typechecks if someone builds it. The alternative — deleting the
+  exports and accepting a permanently broken `apps/vscode` — throws away the exact benefit Phase 13
+  was designed to buy.
 - `codev-skeleton/` — mirrored throughout.
 - `codev/reviews/146-codev-client-on-t3code.md`
 
@@ -1247,10 +1292,56 @@ Phase 15, behind a release checkpoint.
 - [ ] **The schema is left alone.** `terminal_sessions` and `terminal_id` survive this phase
       unused, which is precisely the state the spec requires a release to ship in before they are
       dropped.
-- [ ] All 33 non-test mailbox references and the five files reaching the PTY manager are resolved,
-      not left dangling. **Four of the 33 are features or commands the spec keeps**, not call sites
-      to unwire. Each is named, because a builder who treats them as unwiring removes behaviour
-      silently:
+- [ ] **Twelve non-test files reach the PTY layer, not five.** The "five" figure was inherited
+      from the spec without re-measuring; review caught it and the measurement confirms twelve:
+      `spawn-worktree.ts`, `attach.ts`, `shellper-husk-sweep.ts`, `tower-tunnel.ts`,
+      `tower-websocket.ts`, `mailbox-wiring.ts`, `tower-utils.ts`, `tower-server.ts`,
+      `tower-instances.ts`, `tower-routes.ts`, `tower-types.ts`, `tower-terminals.ts`. Reproduce
+      with:
+
+      ```bash
+      grep -rln "pty-manager\|ptyManager\|from '\.\./\.\./terminal\|from '\.\./terminal" \
+        packages/codev/src --include="*.ts" | grep -v __tests__ \
+        | grep -v "^packages/codev/src/terminal"
+      ```
+
+      Every one of the twelve is resolved here, and each is marked **delete** or **edit**, because
+      the distinction is the whole difficulty of this phase. Four of them are components the spec
+      **keeps** in `codev-agent` and are therefore surgery, not deletion — verified by counting
+      their terminal references: `tower-routes.ts` (7), `tower-server.ts` (2), `tower-tunnel.ts`
+      (1), and `session-log-sweep.ts` (1, reached via the census). A builder who reads the earlier
+      revision's flat list as a delete list removes the HTTP server the spec preserves.
+
+      | File | Fate |
+      |---|---|
+      | `tower-terminals.ts` | delete |
+      | `shellper-husk-sweep.ts` | delete |
+      | `commands/attach.ts` | delete — see the `afx attach` ruling below |
+      | `mailbox-wiring.ts` | delete with the mailbox |
+      | `tower-routes.ts` | **edit** — 7 terminal references removed, routes preserved |
+      | `tower-server.ts` | **edit** — 2 references removed, the HTTP/WS server survives |
+      | `tower-tunnel.ts` | **edit** — the tunnel survives |
+      | `session-log-sweep.ts` | **edit** — the spec keeps the sweep |
+      | `process-census.ts` | **edit** — 1 reference |
+      | `tower-websocket.ts` | **edit** — terminal channels go, protocol state stays |
+      | `tower-utils.ts`, `tower-types.ts`, `tower-instances.ts` | **edit** — shared helpers and types |
+      | `spawn-worktree.ts` | **edit** — the PTY spawn path goes, worktree setup stays |
+
+      The test files that import `../../terminal/` are deleted or rewritten alongside their
+      subjects; a phase that leaves them is not green.
+- [ ] **`afx attach` is ruled on.** It is registered at `cli.ts:253` and `commands/attach.ts` is
+      PTY-coupled, but the spec's open question 4 lists six preserved commands and `attach` is not
+      among them, so no phase claimed it either way. It **retires with the PTY layer**: attaching to
+      a terminal has no meaning once a builder is a thread, and the thread's own view replaces it.
+      Its removal is announced in the release notes rather than discovered, because it is a
+      registered command a human may have in muscle memory.
+
+      A reviewer also flagged `afx shell` as PTY-coupled. It is not: `commands/shell.ts` has no
+      import from `terminal/`, and the grep above does not return it. Recorded so the next reader
+      does not re-open a question that was checked.
+- [ ] All 33 non-test mailbox references are resolved, not left dangling. **Four of the 33 are
+      features or commands the spec keeps**, not call sites to unwire. Each is named, because a
+      builder who treats them as unwiring removes behaviour silently:
       - `servers/cron-delivery.ts:27-29` and `servers/delayed-send.ts` import `db/mailbox.js`
         directly. Both move onto Phase 4's scheduled-delivery path here.
       - `commands/cleanup.ts:17` imports `dismissHeldForAgent` from `db/mailbox.js`. `afx cleanup`
@@ -1274,10 +1365,21 @@ Phase 15, behind a release checkpoint.
 
 - [ ] Criterion 13: all named components deleted (subject to the 12b condition) and the suite is
       green.
-- [ ] Criterion 14: net line count is lower than baseline, recorded with both figures. The
-      pre-migration baseline is measurable now and is recorded before deletion starts:
-      `packages/codev/src/terminal` is 5,250 lines, `apps/v2` 5,174, `apps/streamdeck` 4,225, plus
-      `render-gate.ts` at 646 and `tower-terminals.ts` at 1,185.
+- [ ] Criterion 14: net line count is lower than baseline, recorded with both figures under **one
+      stated counting rule**. Review caught the earlier revision mixing rules — `terminal/` was a
+      non-test figure while `apps/v2` and `apps/streamdeck` were with-tests figures, which makes
+      the total meaningless.
+
+      **The rule: non-test `.ts` and `.tsx` only**, excluding any path matching `__tests__`,
+      `.test.` or `.spec.`. Measured under that rule today, before deletion starts:
+      `packages/codev/src/terminal` **5,250**, `apps/v2` **1,713**, `apps/streamdeck` **2,017**,
+      `render-gate.ts` **646**, `tower-terminals.ts` **1,185**. The same command produces the
+      after figure, and both appear in the review:
+
+      ```bash
+      find <dir> -type f \( -name "*.ts" -o -name "*.tsx" \) \
+        | grep -vE "__tests__|\.test\.|\.spec\." | xargs wc -l | tail -1
+      ```
 - [ ] `codev/` and `codev-skeleton/` agree; a repo-wide grep for the deleted names across both
       trees returns only intentional references.
 - [ ] `terminal_sessions` and `terminal_id` still exist and are unreferenced by live code.
@@ -1383,25 +1485,27 @@ is a fact to look up, not to assume.
 
 ## Documentation Updates
 
-- `tools/t3-codegen/REFRESH.md` — the contract refresh procedure (Phase 1).
-- `tools/t3-server/README.md` — bringing up a pinned server, and CI behaviour (Phase 1).
-- `codev/resources/146-remote-access-runbook.md` — pairing, exposure and teardown (Phase 7).
-- `codev/resources/146-architect-cutover-runbook.md` — the per-workspace cutover (Phase 9).
-- `codev/research/146-contract-churn-classification.md` — criterion 12 (Phase 1).
-- `scripts/t3-server/README.md` — bringing up a pinned server by hand, and what CI does without
-  one (Phase 1).
-- `codev/research/146-delivery-semantics-evidence.md` — criterion 12b (Phase 4).
-- `codev/resources/146-architect-cutover-runbook.md` — the spec's step 4, per workspace, and what
-  `/arch-save` did not capture on the first real cutover (Phase 8).
-- `codev/resources/146-approval-threat-model.md` — the deferred threat model (Phase 5).
-- `codev/resources/146-codev-agent-failure-matrix.md` — the deferred failure matrix (Phase 6).
-- `codev/research/146-driver-parity.md` and `146-long-gate-evidence.md` — criteria 10 and 11
-  (Phase 9).
-- Tailnet pairing and teardown runbook, including `tailscale serve --https=443 off` (Phase 11).
-- `codev/resources/arch-critical.md` and `arch.md` — the terminal layer's removal and
-  `codev-agent`'s role, routed by tier with displacement if the hot file is at its cap
-  (Phases 12-13).
-- `codev/resources/lessons-critical.md` and `lessons-learned.md` — same, routed by tier.
-- `CLAUDE.md` and `AGENTS.md` — kept byte-identical (Phase 13).
-- `codev-skeleton/` — mirrored throughout, and the t3code server documented as an install
-  requirement (Phase 13).
+Rebuilt from the phase breakdown after review found six entries assigned to the wrong phase and the
+pinned-server README listed under two conflicting paths. Each document appears once, against the
+phase that owns it.
+
+| Document | Phase |
+|---|---|
+| `tools/t3-codegen/REFRESH.md` — the contract refresh procedure | 1 |
+| `tools/t3-server/README.md` — bringing up a pinned server, and CI behaviour without one | 1 |
+| `codev/research/146-contract-churn-classification.md` — criterion 12 | 1 |
+| `packages/types/src/t3/generated/UNREPRESENTED.md` and `LOSSY.md` — generated, not hand-written | 1 |
+| `codev/research/146-delivery-semantics-evidence.md` — criterion 12b | 4 |
+| `codev/resources/146-codev-agent-failure-matrix.md` — the deferred failure matrix | 5 |
+| `codev/resources/146-approval-threat-model.md` — the deferred threat model | 6 |
+| `codev/resources/146-remote-access-runbook.md` — pairing, exposure, and `tailscale serve --https=443 off` | 7 |
+| `codev/resources/146-architect-cutover-runbook.md` — the spec's step 4, per workspace, and what `/arch-save` did not capture on the first real cutover | 9 |
+| `codev/research/146-driver-parity.md` and `146-long-gate-evidence.md` — criteria 10 and 11 | 10 |
+| `apps/vscode/README.md` — marked unsupported | 13 |
+| `packages/types/src/t3/generated/ATTRIBUTION.md` — MIT notice for the derived t3code source | 1 |
+| `codev/resources/arch-critical.md` and `arch.md` — the terminal layer's removal and `codev-agent`'s role, routed by tier with displacement if the hot file is at its cap | 14 |
+| `codev/resources/lessons-critical.md` and `lessons-learned.md` — same, routed by tier | 14 |
+| `CLAUDE.md` and `AGENTS.md` — kept byte-identical | 14 |
+| `codev-skeleton/` — mirrored throughout, and the t3code server documented as an install requirement | 14 |
+| Release notes — `afx attach` retired | 14 |
+| `codev/reviews/146-codev-client-on-t3code.md` — including the line-count figures under the stated rule, and the release version that shipped the unused columns | 14, 15 |
