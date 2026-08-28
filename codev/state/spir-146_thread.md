@@ -1159,20 +1159,43 @@ turns" — needs `terminal.open`, `terminal.write`, `terminal.close` and probabl
 `terminal.attach` (`packages/contracts/src/rpc.ts:252-258`). Every one of those
 calls would come back `unchecked` today.
 
-That is the `unchecked` machinery earning its keep rather than a crisis: Phase 3
-will be *told*, on the first terminal call, that nothing validated the payload,
-instead of running unvalidated and looking identical to running validated. But it
-does mean a decision at the start of Phase 3, not a discovery in the middle of it:
+I put two options to the architect — extend the contract with `terminal.ts`
+entries, or accept unchecked terminal payloads and record it. **Both were wrong,
+and the ruling is worth keeping in full because I nearly reached it myself and
+stopped one step short.**
 
-- **Extend the contract.** Add four entries to `packages/types/src/t3/pin.json`
-  with `source: "terminal.ts"` and their schema names, and add `terminal.ts` to
-  the codegen closure. The `vcs.*` entries are the template — they already resolve
-  schemas from a vendored file by name and fail loudly when the name is absent
-  (`generate.mjs:347-350`). Adding a file to the closure also puts it under the
-  source-hash drift detector, which is correct once we depend on it.
-- **Or accept unchecked terminal payloads** and record that in the phase commit,
-  the way the spec permits deliberate acceptance but not silent loss.
+### DECISION: Phase 3 does not use t3code terminals for phase checks at all
 
-The first is a morning's work and is almost certainly right, because a phase check
-returning a wrong exit status is the failure mode with the worst blast radius in
-this whole design.
+Architect's ruling, and the reasoning:
+
+> A t3code terminal is a PTY, and its `exited` event carries the SHELL's exit
+> code, not the check's. Running phase checks through it would reintroduce the
+> exact ambiguity this entire migration exists to remove. Codev is leaving
+> PTY-driving because you cannot reliably learn a command's result by watching a
+> terminal. Routing porch's checks back through one would be the migration undoing
+> itself in the phase that defines it.
+
+The plan already said it and I read past it: "phase checks run as shell in the
+thread's own `worktreePath`, **outside the thread**, between turns." *Outside the
+thread* means porch spawns the process itself, with `child_process`, in that
+directory. No `terminal.open`, no `terminal.write`, no RPC in the path at all.
+
+Two things make this concrete rather than a preference:
+
+- **The spike already proved the shape.** Turn 1 settled, an external shell wrote
+  a file in the thread's `worktreePath`, turn 2 read the new value back
+  (`proof.mjs:314-334`). That external shell is `spawnSync('/bin/zsh', ['-lc',
+  command], { cwd })` — `proof.mjs:71-77`. Plain `child_process`, and nothing
+  about it touched the terminal contract.
+- **Porch's own `runCheck` already takes a `cwd`** and reads a real exit status
+  (`packages/codev/src/commands/porch/checks.ts:43-49`). Phase 3's work there is
+  to pass the thread's `worktreePath`. The capability exists; the question was
+  never how to get it.
+
+So: **do not extend `pin.json` with `terminal.ts` for this.** If a later phase
+needs terminals — a human attaching to watch a builder — that is a client concern
+and it can extend the closure then, with its own justification.
+
+I noted the PTY exit-code ambiguity myself, in this thread, two sections up, and
+then offered a plan that would have walked into it. Having the fact is not the
+same as applying it.
