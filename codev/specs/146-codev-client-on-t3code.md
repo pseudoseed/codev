@@ -249,10 +249,12 @@ The mailbox is replaced only if these hold, otherwise it stays:
 - Multi-day gate retention behaves like the proven 36-minute case. One reap plus one server
   restart was actually elapsed.
 - Real Codev worktrees cost more disk than the 8-12 MiB measured against a seed repository.
-- Contract churn is low enough that pinning plus deliberate upgrades beats maintaining a PTY
-  layer. **This is currently unmeasured.** Measuring it is a pre-deletion gate, not an assumption
-  to carry: count breaking changes to `packages/contracts/src` across releases before any
-  deletion lands.
+- Contract churn is survivable. **Now measured, and it is high.** `orchestration.ts` has 89
+  commits since 2026-02-07, against 2,812 commits repo-wide, so roughly 14 commits a month land
+  on the single file this integration depends on most. That count is commits, not breaking
+  changes; classifying them is still a pre-deletion gate. But it is enough to say the vendoring
+  constraint and the drift test are load-bearing rather than precautionary, and that a pinned
+  commit will go stale in weeks, not years.
 
 ## Success Criteria
 
