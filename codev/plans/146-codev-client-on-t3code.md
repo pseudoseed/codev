@@ -30,8 +30,11 @@ boundary tests from #1189 stay green, and the spec's vendoring constraint is sat
 generated artifacts rather than by copied Effect source.
 
 **The emitter was run before this plan was written, and it is lossy in a way that changes the
-design.** Against `effect@4.0.0-beta.103` on Node 22, `toJsonSchemaDocument` handled every shape in
-the closure — structs, unions, literals, brands, refinements and both transform forms — so nothing
+design.** The probe is committed at `codev/experiments/146-schema-emitter-probe/` and was run
+against `effect@4.0.0-beta.103` **installed from npm** — the version t3code pins — on Node 22.
+It is not run against the vendored `.repos/effect-smol` checkout in the t3code clone, which is
+`4.0.0-beta.102`; that copy is cited in this plan only for the RPC wire-format source, never for
+emitter behaviour. `toJsonSchemaDocument` handled every shape in the closure — structs, unions, literals, brands, refinements and both transform forms — so nothing
 in it is unrepresentable. But `Schema.String.check(isNonEmpty())` emits `minLength: 1`, while the
 *same check applied on the decoded side of a `decodeTo` transform* emits a bare `{"type": "string"}`
 with the constraint gone. `SchemaRepresentation.toRepresentation` is blind to it as well: the
@@ -105,18 +108,67 @@ written to catch.
     {"id": "phase_2", "title": "t3code RPC transport client"},
     {"id": "phase_3", "title": "porch-driver session lifecycle and crash recovery"},
     {"id": "phase_4", "title": "Message delivery semantics"},
-    {"id": "phase_5", "title": "Approval capability and threat model"},
-    {"id": "phase_6", "title": "codev-agent protocol state service"},
-    {"id": "phase_7", "title": "Thread identity schema and dual-write spawn"},
-    {"id": "phase_8", "title": "Architect threads and afx addressing"},
-    {"id": "phase_9", "title": "Full protocol on a second driver"},
-    {"id": "phase_10", "title": "codev-client tree and live status"},
-    {"id": "phase_11", "title": "codev-client tiling and mobile"},
-    {"id": "phase_12", "title": "Extension retirement"},
-    {"id": "phase_13", "title": "Terminal layer deletion"}
+    {"id": "phase_5", "title": "codev-agent protocol state service"},
+    {"id": "phase_6", "title": "Approval capability and threat model"},
+    {"id": "phase_7", "title": "Transport and service security posture"},
+    {"id": "phase_8", "title": "Thread identity in status.yaml and global.db"},
+    {"id": "phase_9", "title": "Architect threads and afx command parity"},
+    {"id": "phase_10", "title": "Full protocol on a second driver"},
+    {"id": "phase_11", "title": "codev-client tree and live status"},
+    {"id": "phase_12", "title": "codev-client tiling and mobile"},
+    {"id": "phase_13", "title": "Extension retirement"},
+    {"id": "phase_14", "title": "Terminal layer deletion"},
+    {"id": "phase_15", "title": "Terminal schema drop"}
   ]
 }
 ```
+
+### Revisions after the first review round
+
+The first 4-way review produced one APPROVE and three REQUEST_CHANGES. Every finding below was
+checked against the code before being acted on, and the ones that were right changed the plan:
+
+- **Generated artifacts move into `packages/types`,** which is what the spec's constraint actually
+  says. Only the codegen *tool* lives outside it, because that tool needs `effect` as a
+  devDependency and `packages/types` must keep none. The original draft put both outside and was
+  simply not following the constraint.
+- **A pinned server has to be obtainable.** Phases 1-4 all say "against a live server on the pinned
+  commit" and nothing provisioned one. Phase 1 now owns acquisition, startup and version
+  verification.
+- **`threadId` must land in `status.yaml`,** not only in `global.db`. The spec makes `status.yaml`
+  the join key and `ProjectState` (`commands/porch/types.ts:217`) has no field for it. Phase 8 now
+  covers both stores; the original covered one.
+- **Phases 5 and 6 were swapped.** Approval issuance needs `codev-agent`'s routes to exist, and the
+  original ordering had the dependency backwards.
+- **`approve()` mutates before it checks.** Verified: the verify auto-complete and the gate
+  auto-create both call `writeStateAndCommit` before the flag test at `index.ts:898`. Phase 6 moves
+  authorization ahead of every write.
+- **Security got a phase.** Pairing, per-machine credentials, binding, HTTPS/WSS, origin rules and
+  route authentication are spec constraints that the draft left to a CSP bullet in a UI phase.
+- **Migration mechanics were invented.** There is no `db/migrations/` directory and no
+  down-migration framework; migrations are inline `v2..vN` blocks in `db/index.ts` gated on
+  `_migrations` rows. Phase 8 names the real mechanism and drops the "reversible" claim it cannot
+  honour.
+- **Deletion split in two.** The spec requires the `terminal_sessions` drop to happen after a
+  release has shipped with the columns unused, so it is Phase 15, behind a release checkpoint.
+- **The 12b contingency now matches the spec.** The spec says criterion 13 is *not attempted* if
+  12b fails. The draft said Phase 14 proceeds without deleting the mailbox, which contradicted it.
+- **`afx interrupt`, `cleanup` and `dev` were unassigned** despite the spec promising their
+  contracts survive. Phase 9 owns them.
+- **`apps/web` was missing entirely.** It is the legacy dashboard the spec deletes — React and
+  xterm on `codev-sdk` — and the sdk's terminal surface goes with it.
+
+One finding is recorded but not adopted: a reviewer asked for `rpc.ts` to be vendored for
+method-to-payload mapping. Phase 1 keeps it excluded and instead pins the mapping explicitly, since
+vendoring a 1,123-line RPC group to recover eight method names would pull in every unrelated
+subsystem's schemas.
+
+**A note on provenance.** Part of the Phase 4 scheduled-delivery and `afx inbox` content was
+written into this file by a process other than the builder while the review round was running. Its
+citations were checked against the source and are accurate — `cron-delivery.ts` does import
+`db/mailbox.js`, `delayed-send.ts` does persist `--delay` bodies as mailbox rows, and `inbox.ts`
+does list held rows — so the content is kept on its merits. The provenance is recorded because an
+artifact editing itself mid-review is worth knowing about.
 
 ## Phase Breakdown
 
@@ -149,6 +201,8 @@ fallback is recorded before any client code exists.
   Schema, covering only the subset the emitter actually produces.
 - `packages/t3-contract/tools/classify-churn.ts` — replays commits against the detector.
 - `packages/t3-contract/REFRESH.md` — the refresh procedure the spec's constraint requires.
+- `scripts/t3-server/` — the pinned-server test harness: checkout, install, start, pair, stop.
+- `scripts/t3-server/README.md` — how to bring one up by hand, and how CI is expected to behave.
 - `packages/t3-contract/__tests__/drift.test.ts`
 - `packages/t3-contract/__tests__/shape-check.test.ts`
 - `packages/t3-contract/__tests__/no-runtime-deps.test.ts`
@@ -190,6 +244,18 @@ fallback is recorded before any client code exists.
       each is recorded as breaking or non-breaking **against the schemas Codev consumes**, with the
       breaking count written to `codev/research/146-contract-churn-classification.md`. This
       discharges success criterion 12; counting commits is explicitly not the criterion.
+- [ ] **The pinned-server test harness is built here, because Phases 2, 3, 4 and 9 all declare
+      acceptance criteria against "a live server on the pinned commit" and nothing else in this plan
+      produces one.** The read-only clone at `/Users/chris/dev/t3code` has **no `node_modules`** —
+      it has never been installed — so bringing a server up is real work, not a precondition
+      somebody already met. The harness covers: checkout at `pin.json`'s SHA, install, start on a
+      known port, obtain a test session token without a relay, tear down, and clean up worktrees the
+      run created. A builder improvising this in Phase 2 leaves Phase 9 to improvise it again
+      differently.
+- [ ] **How CI behaves without a server is decided here and stated once.** The live-server tests are
+      a separate suite from the unit suite, and their absence is reported as *skipped for no server*,
+      never as a pass. Success and "could not tell" must not be spelled the same way, which is the
+      same rule Phase 2's gap signal and Phase 6's failure matrix are built on.
 - [ ] Tests for this phase.
 
 #### Acceptance Criteria
@@ -216,6 +282,13 @@ fallback is recorded before any client code exists.
       classification distinguishes "source changed, consumed shapes unaffected" from "consumed
       shapes changed" — otherwise the breaking count is inflated to the commit count and the
       criterion is not met.
+- [ ] **The harness brings up a live server on the pinned commit from a cold clone, twice, on a
+      machine where it has never run** — that is the state `/Users/chris/dev/t3code` is in today.
+      A dispatched no-op command returns successfully, then teardown leaves no stray process, port
+      binding or worktree. Phase 2 does not start until this passes, since every one of its
+      acceptance criteria assumes it.
+- [ ] With no server running, the live suite reports skipped-for-no-server and the unit suite still
+      passes. Neither reports green for tests that did not execute.
 - [ ] Build and tests pass.
 
 #### Test Plan
@@ -377,7 +450,9 @@ every phase in between.
 
 - `packages/porch-driver/src/deliver.ts`
 - `packages/porch-driver/src/queue.ts`
+- `packages/porch-driver/src/scheduled.ts` — durable scheduled delivery on the thread path.
 - `packages/porch-driver/__tests__/delivery.test.ts`
+- `packages/porch-driver/__tests__/scheduled.test.ts`
 - `codev/research/146-delivery-semantics-evidence.md`
 
 #### Deliverables
@@ -394,6 +469,20 @@ every phase in between.
       not reproduced, and the difference is documented.
 - [ ] Evidence written to `codev/research/146-delivery-semantics-evidence.md`, since success
       criterion 12b gates a later phase and needs a record a reviewer can check.
+- [ ] **Durable scheduled delivery is rebuilt here, because two surviving features depend on the
+      mailbox Phase 13 deletes.** The spec keeps cron and delayed-send in `codev-agent`, and both
+      reach the mailbox directly: `servers/cron-delivery.ts:27-29` imports `db/mailbox.js` and
+      `mailbox-delivery.js`, and `servers/delayed-send.ts` persists every `--delay` body as a
+      mailbox row. Deleting the mailbox without this is a silent loss of `afx send --delay` and of
+      every cron notification, so it is designed here rather than discovered in Phase 13. The
+      requirement is narrow: a pre-due message survives a restart, fires once at its due time, and
+      is deduplicated by the same idempotency key the four properties above already establish.
+- [ ] **`afx inbox` is ruled on, not left dangling.** `commands/inbox.ts` exists only to list, show
+      and dismiss *held* mailbox rows, and "held" is a render-gate concept that does not exist on
+      the thread path — a queued turn is delivered on settle, never held pending a readable prompt.
+      Either the command retires with the mailbox, or it is repointed at pre-due scheduled messages.
+      Whichever is chosen is recorded here, because CLAUDE.md documents `afx inbox` and a command
+      that silently stops working is worse than one that is removed.
 - [ ] Tests for this phase.
 
 #### Acceptance Criteria
@@ -402,6 +491,9 @@ every phase in between.
       none interleaved.
 - [ ] The same idempotency key sent twice results in exactly one delivery.
 - [ ] A send against a stopped server raises at the call site within a bounded timeout.
+- [ ] A scheduled message written before a restart fires once after it, at its due time, and a
+      duplicate schedule under the same idempotency key does not double-fire. This is the property
+      `--delay` and cron both need, tested once.
 - [ ] All five properties are demonstrated and recorded. **If any fails, the phase completes with
       the failure recorded and the architect is notified** — the mailbox then survives Phase 13,
       which is the spec's stated behaviour, not a defect in this plan.
@@ -633,6 +725,7 @@ working through it — including #47's spoofing rule.
 - `packages/codev/src/agent-farm/commands/workspace-add-architect.ts`
 - `packages/codev/src/agent-farm/utils/architect-name.ts`
 - `packages/codev/src/agent-farm/__tests__/issue-47-builder-message-route.test.ts` — extended.
+- `codev/resources/146-architect-cutover-runbook.md` — the per-workspace cutover procedure.
 
 #### Deliverables
 
@@ -646,6 +739,14 @@ working through it — including #47's spoofing rule.
       `CODEV_WORKTREE_ROOT`. A builder that `cd`s out of its worktree keeps its identity — the
       #47 failure mode is structurally gone rather than patched.
 - [ ] An architect thread survives a server restart and resumes with context.
+- [ ] **The architect cutover runbook is written here and exercised on one workspace.** Phase 13
+      gates on "every architect has been cut over per the spec's step 4", but a gate checkbox is not
+      a procedure and no other phase owns one. The spec is explicit that this step is not a drain:
+      an architect conversation cannot be migrated, so cutover means `/arch-save`, stop the PTY
+      architect, start the thread-backed one, re-init from the saved state, and live with it before
+      doing the next workspace. The runbook records what `/arch-save` did **not** capture on the
+      first real cutover, because that is the spec's named rollback trigger and it is only
+      discoverable by doing it.
 - [ ] Tests for this phase.
 
 #### Acceptance Criteria
@@ -843,7 +944,9 @@ is not simultaneously removing the terminal layer and discovering what depended 
 #### Files to Create / Modify
 
 - `apps/streamdeck/` — deleted.
-- `pnpm-workspace.yaml` — `apps/vscode` removed from the workspace build.
+- `pnpm-workspace.yaml` — `apps/vscode` excluded from the workspace build. The file globs
+  `apps/*`, so this is a negation entry (`!apps/vscode`) beside the glob, not the removal of a
+  list entry. Deleting the glob would drop every app including the new client.
 - `package.json` — packaging excludes both.
 - `apps/vscode/README.md` — marked unsupported.
 - `codev/resources/arch.md`, `codev/resources/lessons-learned.md` — routed by tier.
@@ -906,7 +1009,13 @@ earlier phase, not a judgement:
 - `packages/codev/src/agent-farm/db/mailbox.ts` — deleted, same condition.
 - `packages/codev/src/agent-farm/utils/harness.ts` — deleted.
 - `apps/v2/` — deleted.
-- The legacy dashboard — deleted.
+- `apps/web/` — deleted. This is the legacy dashboard, named by path rather than by description:
+  `apps/` holds `streamdeck`, `v2`, `vscode` and `web`, and `@cluesmith/codev-web` is the
+  xterm-based one (`@xterm/addon-canvas`, `addon-fit`, `addon-web-links` on `codev-sdk`). A phase
+  that says "the legacy dashboard" and lists no path leaves a builder three candidates.
+- `packages/sdk/` — the terminal surface it exposes to `apps/web` goes dead with that app and is
+  removed with it. The #1189 boundary tests must still pass afterwards, so this is an edit to the
+  sdk, not a deletion of it.
 - `packages/codev/src/agent-farm/db/migrations/` — `terminal_sessions` and `terminal_id`, in their
   own migration.
 - `codev-skeleton/` — mirrored throughout.
@@ -922,7 +1031,10 @@ earlier phase, not a judgement:
       migration**, after a release has shipped with them unused. They are not dropped in the same
       commit as the code.
 - [ ] All 33 non-test mailbox references and the five files reaching the PTY manager are resolved,
-      not left dangling.
+      not left dangling. Two of the 33 are **features the spec keeps**, not call sites to unwire:
+      `servers/cron-delivery.ts` and `servers/delayed-send.ts` both import `db/mailbox.js`
+      directly, and they move onto Phase 4's scheduled-delivery path here. `commands/inbox.ts`
+      follows whichever ruling Phase 4 recorded.
 - [ ] Every framework change is mirrored in `codev-skeleton/`, and the whole repo is grepped across
       both trees before this is called done.
 - [ ] `codev-skeleton/` documents running a t3code server as an install requirement, which it
@@ -964,12 +1076,18 @@ to deleted symbols across both trees. Migration applied and reverted against a c
 | The 24-hour gate is discovered late and stalls the schedule | Medium | Medium | Started in Phase 9, four phases before it is needed |
 | Architect cutover loses conversation state | Medium | High | One workspace at a time, `/arch-save` first, and the spec's rollback order: stop new spawns, drain, only then revert schema |
 | Tiling ships as a wireframe that passes tests | Medium | High | Phase 11 asserts measured geometry and computed font size from the rendered page under Playwright, not from stylesheets |
+| Deleting the mailbox silently removes `afx send --delay` and cron notifications | **Confirmed** | High | Both hard-import `db/mailbox.js` (`cron-delivery.ts:27-29`, `delayed-send.ts`) while the spec keeps both features. Phase 4 builds durable scheduled delivery on the thread path; Phase 13 moves them onto it rather than treating them as call sites to unwire |
+| The live-server harness is improvised per phase, or never built | Medium | High | The pinned clone has no `node_modules` and has never been installed. Phase 1 owns the harness and Phase 2 does not start until it comes up twice from cold; absence reports as skipped, never as pass |
 
 ## Documentation Updates
 
 - `packages/t3-contract/REFRESH.md` — the contract refresh procedure (Phase 1).
 - `codev/research/146-contract-churn-classification.md` — criterion 12 (Phase 1).
+- `scripts/t3-server/README.md` — bringing up a pinned server by hand, and what CI does without
+  one (Phase 1).
 - `codev/research/146-delivery-semantics-evidence.md` — criterion 12b (Phase 4).
+- `codev/resources/146-architect-cutover-runbook.md` — the spec's step 4, per workspace, and what
+  `/arch-save` did not capture on the first real cutover (Phase 8).
 - `codev/resources/146-approval-threat-model.md` — the deferred threat model (Phase 5).
 - `codev/resources/146-codev-agent-failure-matrix.md` — the deferred failure matrix (Phase 6).
 - `codev/research/146-driver-parity.md` and `146-long-gate-evidence.md` — criteria 10 and 11
