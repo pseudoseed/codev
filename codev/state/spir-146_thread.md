@@ -444,6 +444,42 @@ gated the secret-scrub on two `--diff-filter=A` greps, I added a third that
 walks each commit's *tree* instead of its diff. They kept it, on the reasoning
 that the first two shared a failure mode.
 
+### The rule that changes how the remaining phases get verified
+
+**A plan with ticked boxes is itself a check, and it lies the same way.**
+
+Instances one through nine were checks that measured nothing. Instance ten is a
+*checkbox* that measured nothing — the same defect one layer up, in the record of
+whether the check exists.
+
+The deliverable read "the live-server tests are a **separate suite** from the unit
+suite". I implemented a per-test `ctx.skip()`, which gave the right *behaviour*
+and not the stated *structure*, and I ticked the box. Nothing downstream could
+have caught it: the tests passed, the skip worked, and the plan said done.
+
+This matters for the fourteen phases still to come, because every one of them
+ends with me marking its own criteria met. The check on that is:
+
+> Re-read the deliverable's words, not your memory of them, and ask what would be
+> *different* if it were false. If nothing would look different, the box is not
+> evidence.
+
+**And the tempting move, named so it can be refused:** when the deliverable and
+the implementation disagree, rewording the deliverable to match what was built
+closes the gap and destroys the plan. That is how a specification silently
+becomes a description of the code. I did the opposite here — built the separate
+suite — and it took ten minutes, which is the honest measure of what the
+temptation was worth.
+
+### CI drift check — tracked, not silently absent
+
+Filed as **#152**. CI runs Node 20 with no t3code checkout, so
+`generate --check` cannot run; a conditional job would always skip and report
+green forever while verifying nothing. Declining to add it was right, but the
+absence needed an owner outside this project's notes. What CI *does* cover is
+artifact self-consistency; what it does not cover is drift, and the issue says so
+in those words.
+
 ### Correction: PID 61593 was not in my worktree
 
 I told the architect another agent was running test suites in my worktree and

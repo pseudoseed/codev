@@ -275,6 +275,11 @@ property. Only the generator needs `effect`, so only the generator lives outside
 - [x] CI behaviour is decided and documented, not left to discovery: either CI provisions the
       server, or the live-server tests are tagged and skipped there with the skip **visible in the
       run output**. A silently skipped integration suite reports green for tests that never ran.
+
+      **Decided: no drift-check job.** CI runs Node 20 with no t3code checkout, so
+      `generate --check` would fail its guard and a conditional job would skip forever while
+      reporting green. CI covers artifact self-consistency through the normal suite; it does not
+      cover drift, and that absence is tracked as **#152** rather than left in this note.
 - [x] Codegen emits declarations and JSON Schema from the pinned checkout. Every schema in the
       closure that the emitter **cannot** represent is listed by name in a generated
       `UNREPRESENTED.md`, with the reason. An empty list is not assumed; the list is the evidence.
