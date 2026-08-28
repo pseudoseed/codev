@@ -478,8 +478,19 @@ claim stops being a one-off observation and becomes a tested property.
       implementation threw a plain `Error` with the payload stringified into the message, which
       made that distinction reachable only by matching on text.
 - [x] Tests for this phase. 75 in `spec-146-t3-client.test.ts`, plus six live scenarios. (59 at
-      the end of iteration 1; the 16 added since are the review findings, each with a test that
-      fails without its fix.)
+      the end of iteration 1; the 16 added since cover the review findings.)
+
+      **Eight of those are measured, not asserted.** `codev/research/146-phase2-mutation-check.py`
+      reverts one fix at a time and reports whether its test goes red: the cursor monotonicity
+      guard, the handler-failure backoff, both frame-shape validations, the `ClientProtocolError`
+      fail-all, the idle-timer rearm, the terminal-error deny-list, and the stop-after-handler-
+      failure chain guard. All eight fail without their fix. The remaining eight are asserted, and
+      this sentence says so rather than letting the count imply otherwise.
+
+      One of the eight first reported STILL PASSES, and the test was fine: the mutation had been
+      pointed at the duplicate filter rather than at the chain guard that actually stops the
+      stream. **A mutation can be correct, run, and still be pointed away from the fix** — the same
+      defect as a test pointed away from the bug, one level up.
 
 #### Acceptance Criteria
 

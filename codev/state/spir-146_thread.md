@@ -1545,3 +1545,20 @@ now used to catch a fresh run that produced no file at all.
 
 The wrapper now keeps the streams apart, validates the output parses as JSON
 before overwriting, and refuses to overwrite on a scenario failure.
+
+## Eight fixes checked by reverting them
+
+The plan claimed the tests added since iteration 1 "each fail without their
+fix". That was written, not checked. `codev/research/146-phase2-mutation-check.py`
+now checks it: revert one fix, run its test, restore the file in a `finally`.
+Eight fixes, eight red tests, tree clean after every run. The other eight remain
+asserted and the plan now says so.
+
+One first reported STILL PASSES — the stop-after-handler-failure test. The test
+was fine. My mutation had removed the duplicate filter (`sequence <=
+queuedThrough`) rather than the chain guard (`if (handlerFailure) return`), so
+the protection under test was never disabled. **A mutation can be correct, run,
+and still be pointed away from the fix.** Same defect as a test pointed away from
+the bug, one level up, and it produces the more dangerous reading: a green
+mutation result reads as "this test is worthless" and would have had me rewrite
+a test that was already right.
