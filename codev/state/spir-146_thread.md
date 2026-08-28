@@ -1509,3 +1509,16 @@ line ranges, a measured 88 reconnects in 100ms, five files visible in
 `git status` as modified-not-staged — and every one reproduced when I checked it
 myself. The honest caveat is that a round where nothing is checkable is exactly
 the round where compliance is invisible, so the count alone proves nothing.
+
+## Architect ruling recorded in the plan: phase checks never go through a terminal
+
+Phase 3 runs its checks with `child_process` in the thread's `worktreePath` — no
+`terminal.open`, no `terminal.write`, no RPC anywhere in the path that runs a
+check. A check is a process porch owns end to end; routing it through the
+server's terminal layer would turn its exit code into a parsing problem and its
+lifetime into the server's business. Corollary, also ruled: **do not extend
+`pin.json` with `terminal.ts` for this.** Phases 14 and 15 delete the terminal
+layer, so a check that depended on it would have to be rewritten then.
+
+Written into the plan's Phase 3 deliverable rather than left here, because a
+ruling that lives only in a thread is a ruling the phase prompt never shows.

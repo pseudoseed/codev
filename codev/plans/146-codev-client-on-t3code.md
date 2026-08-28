@@ -581,6 +581,15 @@ involved.
       idempotent, because this yields at-least-once delivery by construction.
 - [ ] Phase checks run as shell in the thread's own `worktreePath`, outside the thread, between
       turns.
+
+      **Ruled by the architect: not through a t3code terminal.** porch spawns the check process
+      itself with `child_process` in that directory — no `terminal.open`, no `terminal.write`, no
+      RPC in the path that runs a check. A check is a process porch owns end to end, and routing it
+      through the server's terminal layer would make its exit code a parsing problem and its
+      lifetime the server's business. Corollary, also ruled: **do not extend `pin.json` with
+      `terminal.ts` for this** — the contract stays as narrow as the work needs. Phases 14 and 15
+      delete the terminal layer, and a check that depended on it would have to be rewritten
+      then.
 - [ ] `--harness` maps to a t3code `driverKind` and `--model` to `modelSelection.model`. An
       unsupported pair fails at spawn, matching today's `assertHarnessAcceptsModel` behaviour.
 - [ ] Role prompts are delivered as the first turn's content, replacing `buildScriptRoleInjection`
