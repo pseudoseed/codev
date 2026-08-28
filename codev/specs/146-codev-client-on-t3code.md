@@ -114,6 +114,29 @@ component the client cannot render protocol state at all, let alone approve a ga
 architect-name to `threadId` map and the builder-id to `threadId` join. The client talks to
 `codev-agent` for protocol state and to t3code for session state, and never confuses the two.
 
+**What happens to Tower.** Tower is not deleted; it is hollowed out and renamed in role.
+`codev-agent` **is** the surviving Tower process, minus everything that drove a terminal. It
+keeps the HTTP/WS server, `global.db`, the workspace registry, cron and delayed-send,
+`session-log-sweep`, the tunnel, `afx dev` and `afx open`'s annotation viewer. It loses the PTY
+manager, terminal sessions, the render gate and the mailbox. A builder reading this should not
+expect a new process next to a surviving Tower: there is one service, and it is the old one with
+its terminal half removed.
+
+**What replaces the harness registry.** `utils/harness.ts` carries more than three names, and
+deleting it without a replacement would be a silent capability regression. Explicitly:
+
+- Role prompts reach a thread as the first turn's content, replacing `buildScriptRoleInjection`
+  and `buildRoleInjection`.
+- `--harness` maps to a t3code `driverKind`. The five built-in drivers cover `claude`, `codex`
+  and `opencode`; `cursor` and `grok` become newly available.
+- `--model` maps to `modelSelection.model` on `thread.create`, replacing `modelScriptFragment`
+  and `assertHarnessAcceptsModel`. An unsupported pair fails at spawn, as it does today.
+- `installHarnessWorktreeFiles` (the Claude write-guard from #1018, and `opencode.json`) has no
+  equivalent and must be reimplemented as worktree setup in `porch-driver`, or its absence
+  accepted deliberately.
+- **Custom adopter-defined harnesses (`buildCustomHarnessProvider`) do not survive.** t3code's
+  driver registry is compile-time. This is a capability regression and is listed in Non-Goals.
+
 **4. Deletions**, only after parity: PTY manager, terminal session management, render gate,
 mailbox, harness registry, v2 client, legacy dashboard.
 
@@ -150,23 +173,31 @@ including `orchestration:operate`, which covers every dispatchable command. Ther
 that means "a human is holding this," and device type is presentation metadata, not proof. A
 paired t3code session cannot distinguish a person clicking from an agent holding the same token.
 
-So the boundary is not t3code's session. It is Codev's own, and it is enforceable for one
-concrete reason: **Codev controls issuance, and an approval credential is never written into an
-agent's environment.**
+So the boundary is not t3code's session. It is Codev's own, and it has to cover **both** entry
+points or it covers neither.
 
-- `codev-agent` (below) issues a distinct approval capability, separate from any t3code
-  credential and separate from the read-only capability the client uses for status.
-- A builder's environment never receives it. `spawn-worktree.ts` already writes a controlled set
-  of variables into the start script; the approval capability is excluded there by construction,
-  and a test asserts its absence from any spawned environment.
-- `--a-human-explicitly-approved-this` stays for terminal use. It was never a security boundary
-  either. It is a string any agent with shell can type; it works because agents are told not to.
-  The spec stops describing it as a control.
+A previous revision said excluding the capability from a builder's environment stops an agent
+approving its own gate. **That is false, and CMAP falsified it against the code.**
+`porch approve` enforces only the flag (`packages/codev/src/commands/porch/index.ts:899`) and
+writes `status.yaml` directly. A builder has shell in its worktree, so it can run that command
+today and nothing in the client-side capability changes it.
+
+The requirement, stated so it is actually true:
+
+- **Both paths carry the same check.** `porch approve` gates on the approval capability, not on
+  the flag string. The flag stays as a human-typed confirmation of intent; it stops being
+  described as a control, because it never was one.
+- **The host stores a verifier, never a replayable credential.** Builders have shell on the same
+  machine as `codev-agent`, so a token sitting on disk is a token they can read. The host keeps
+  a hash; the secret lives with the human's client session.
+- `codev-agent` refuses issuance to any caller it can identify as a builder or architect process,
+  and issuance is not reachable without a human-paired session.
 - Every approval records the capability id, machine, and timestamp in `status.yaml`.
 
-**What this does and does not buy.** It stops an agent inside a builder worktree from approving
-its own gate, which is the actual threat. It does not stop a human who has the capability from
-handing it to an agent, and no design can.
+**What this buys and what it does not.** It removes the shell-in-a-worktree self-approval path,
+which is the actual threat and which the flag never addressed. It does not stop a human who
+holds the capability from handing it to an agent, and no design can. The full threat model,
+issuance root of trust, expiry, revocation and replay protection belong in the plan, not here.
 
 ### Extensions and adopters
 
@@ -203,7 +234,11 @@ documented install requirement.
 
 1. A human sees every machine, workspace, architect and builder, with live status, in one tree.
 2. Four to six builders are watchable simultaneously on a large screen.
-3. The same view works from an iPad over a tailnet, self-hosted, with no third-party account.
+3. The same view works from an iPad, self-hosted, with **no account with t3code or its relay**.
+   The transport is a private mesh network. Tailscale is the tested path and does involve a
+   Tailscale account; Headscale is the fully self-hosted alternative and is untested here. Plain
+   LAN binding also works. The claim is that no third party sees Codev's data or gates access to
+   it, not that no network service is involved.
 4. One client manages more than one machine.
 5. Message delivery and interrupts become typed commands with acknowledgements, not keystrokes.
 6. Net lines of Codev-owned code fall, counting `codev-client` as added.
@@ -216,6 +251,9 @@ documented install requirement.
 - Enabling T3 Connect or any cloud relay.
 - Replacing `afx` as a CLI.
 - Migrating in-flight builders. Cutover is for newly spawned work.
+- **Custom adopter-defined harnesses.** t3code's driver registry is compile-time, so
+  `buildCustomHarnessProvider` has no equivalent. Adopters get the five built-in drivers. This is
+  a deliberate capability regression, recorded here rather than discovered later.
 
 ## Solution Approaches
 
@@ -333,8 +371,14 @@ The mailbox is replaced only if these hold, otherwise it stays:
   event.
 - [ ] 3. The tree renders correct live status for every row, including a builder blocked on a gate
   showing #128's structured question and choices, not only a gate name.
-- [ ] 4. Six builders tile at 1440x900 with every pane at least 400x300 CSS px, body text at 13px
-  or larger, and each pane showing builder id, status, and the last three lines of output.
+- [ ] 4. Six builders tile at 1440x900 in a 3x2 grid, every pane at least 340x240 CSS px, body
+  text at 13px or larger, each pane showing builder id, status, and the last three agent
+  messages. The earlier 400x300 floor was arithmetically impossible: 1440 less a 280px sidebar
+  and padding leaves about 1128px, so three columns are ~368px wide, and 900 less chrome leaves
+  about 812px, so two rows are ~400px tall. Three columns at 400 does not fit.
+- [ ] 4b. The architect does **not** occupy a seventh tile at 1440x900. It gets a persistent
+  strip below the grid showing status and its last message, and expands to a full pane on demand,
+  replacing the grid. A seventh equal tile is only offered at 1920 or wider.
 - [ ] 5. The same six page one-per-screen at 390px wide with no horizontal scroll.
 - [ ] 6. An iPad on the tailnet reaches the client and drives a builder to completion.
 - [ ] 7. One client shows two machines' workspaces in one tree, each independently live.
@@ -359,6 +403,10 @@ The mailbox is replaced only if these hold, otherwise it stays:
 - [ ] 12. The 89 commits to `orchestration.ts` are classified as breaking or non-breaking against
   the vendored types, with the breaking count recorded. Counting commits is not the criterion.
   **Gates the deletion phase.**
+- [ ] 12b. The five delivery semantics under "Message delivery semantics" are demonstrated:
+  ordering, queue-while-active, durable acknowledgement, idempotency keys, loud failure when the
+  server is unreachable. **Criterion 13 depends on this one.** If it fails, the mailbox stays and
+  13 is not attempted.
 - [ ] 13. PTY manager, render gate, mailbox, terminal session management, harness registry, v2
   client and legacy dashboard are deleted, and the suite is green without them.
 - [ ] 14. Net Codev-owned line count is lower than the pre-migration baseline, recorded in the
@@ -444,14 +492,14 @@ That shape rules out a flag-day switch and rules in dual-write.
 
 **Five steps, each independently revertible:**
 
-1. **Add `thread_id` to `builders` and to `architect`, both nullable.** Nothing reads them yet.
-   Matches how `harness` and `model` were introduced on `builders`. Old rows stay valid with no
-   backfill.
+1. **Both tables gain a thread identity, and neither loses its old one.** Nothing reads the new
+   field yet. `harness` and `model` were introduced on `builders` the same way, so this is the
+   established pattern here rather than a new one. Old rows stay valid with no backfill.
 
-   The `architect` table needs more than a column. It requires `pid`, `port` and `cmd`, all
-   PTY-shaped, and a thread-backed architect has none of them. Those three become nullable in
-   the same migration, with a check that a row carries either the PTY triple or a `thread_id`
-   and never both. Without this the architect cutover in step 4 cannot be represented at all.
+   The `architect` table needs more than a column: it requires `pid`, `port` and `cmd`, all
+   PTY-shaped, and a thread-backed architect has none of them. A row must be able to represent
+   either shape and never both. The migration's exact form belongs in the plan; the requirement
+   is that without it the architect cutover in step 4 cannot be represented at all.
 2. **New spawns take the thread path.** `afx spawn` writes `thread_id` and no `terminal_id`.
    Existing builders keep running on PTY untouched. Both paths live simultaneously; a builder's
    path is a property of its row, never a global mode.
