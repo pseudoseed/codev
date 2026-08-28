@@ -465,9 +465,17 @@ claim stops being a one-off observation and becomes a tested property.
 
 - [x] **MET, live.** Against a live server on the pinned commit: connect, dispatch a command,
       subscribe to a thread, receive a typed stream to completion. Scenario A.
-- [x] **MET, live.** A stream of more chunks than the server's buffer completes, proving acks are
-      honoured. A deliberately ack-suppressed client stalls, proving the test can tell the
-      difference. Scenario B: the suppressed client fell behind, so the control did its job.
+- [x] **MET, live — and this criterion's own wording was wrong.** Scenario B: the ack-suppressed
+      client fell behind, so the control did its job.
+
+      **There is no buffer to exceed.** The criterion said "a stream of more chunks than the
+      server's buffer", which describes a mechanism t3code does not have. `RpcServer.ts:401-404`
+      creates a `Latch` per request, and `419-421` / `438-440` close it after **every** write and
+      await the ack before the next one; `192-193` is the ack opening it. The window is exactly one
+      chunk, not a buffer of some depth. So an unacked client stalls after its **first** chunk, and
+      2 acked against 1 suppressed is not thin evidence — it is the largest difference the
+      mechanism can produce. Raised as thin by a review lane; checking the server showed the
+      premise of the criterion was what was thin.
 - [~] **PARTIALLY MET — discharged in Phase 3, and still Phase 2's criteria.** Socket killed
       mid-stream at a known sequence; resubscription replays exactly the missing range and the
       completion event is present.
