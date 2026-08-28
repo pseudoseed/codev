@@ -22,6 +22,7 @@ import {
   MalformedFrameError,
   request,
   type ExitFrame,
+  RpcFailureError,
 } from '../../../t3-client/src/envelope.js';
 import { classifyResume, SequenceCursor } from '../../../t3-client/src/resume.js';
 import { assertTransportSafe, missingScopes, webSocketUrl } from '../../../t3-client/src/auth.js';
@@ -822,5 +823,79 @@ describe('spec 146 phase 2: a cursor earned before synchronizing is not thrown a
 
     expect(calls[0]).not.toHaveProperty('afterSequence');
     expect(calls[1].afterSequence).toBe(11);
+  });
+});
+
+describe('spec 146 phase 2: a failed RPC is a named error carrying its tag', () => {
+  it('surfaces the server error tag, not a stringified message', () => {
+    // Phase 3 branches on this. Replaying a commandId against a different
+    // aggregate raises OrchestrationCommandIdConflictError; "the server refused
+    // this as a duplicate" needs a different response from "the request failed",
+    // and matching on message text is not a way to tell.
+    const frame = {
+      _tag: 'Exit' as const,
+      requestId: 7,
+      exit: {
+        _tag: 'Failure' as const,
+        cause: {
+          _tag: 'Fail',
+          error: { _tag: 'OrchestrationCommandIdConflictError', commandId: 'cmd-1' },
+        },
+      },
+    };
+    let thrown: unknown;
+    try {
+      exitValue(frame as never);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(RpcFailureError);
+    const failure = thrown as InstanceType<typeof RpcFailureError>;
+    expect(failure.requestId).toBe(7);
+    expect(failure.kind).toBe('Fail');
+    expect(failure.tag).toBe('OrchestrationCommandIdConflictError');
+  });
+
+  it('reports a null tag rather than guessing when the payload carries none', () => {
+    const frame = {
+      _tag: 'Exit' as const,
+      requestId: 8,
+      exit: { _tag: 'Failure' as const, cause: { _tag: 'Die', defect: 'boom' } },
+    };
+    try {
+      exitValue(frame as never);
+      expect.unreachable('exitValue must throw on a failure exit');
+    } catch (error) {
+      expect((error as InstanceType<typeof RpcFailureError>).tag).toBeNull();
+      expect((error as InstanceType<typeof RpcFailureError>).kind).toBe('Die');
+    }
+  });
+
+  it('rejects the call with the named failure, so the tag survives the client', async () => {
+    const sent: string[] = [];
+    let onMessage: ((event: { data: unknown }) => void) | undefined;
+    const socket = {
+      send: (data: string) => void sent.push(data),
+      close: () => {},
+      addEventListener: (type: string, listener: unknown) => {
+        if (type === 'message') onMessage = listener as typeof onMessage;
+      },
+      readyState: 1,
+    } as unknown as SocketLike;
+
+    const client = new T3Client(socket);
+    const promise = client.call('orchestration.dispatchCommand', {});
+    const id = JSON.parse(sent[0]).id;
+    onMessage?.({
+      data: JSON.stringify([
+        {
+          _tag: 'Exit',
+          requestId: id,
+          exit: { _tag: 'Failure', cause: { _tag: 'Fail', error: { _tag: 'SomeDomainError' } } },
+        },
+      ]),
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(RpcFailureError);
   });
 });

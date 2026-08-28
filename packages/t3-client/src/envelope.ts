@@ -201,12 +201,48 @@ export function isSuccess(exit: ExitFrame): boolean {
   return exit.exit._tag === 'Success';
 }
 
+/**
+ * A request the server answered with a failure exit.
+ *
+ * Named, and carrying the decoded error rather than only a rendered string,
+ * because callers have to branch on WHICH failure. Phase 3's crash recovery is
+ * the concrete case: replaying a `commandId` against a different aggregate
+ * raises `OrchestrationCommandIdConflictError`
+ * (`apps/server/src/orchestration/Errors.ts:56`), and "the server refused this
+ * as a duplicate" needs a different response from "the request failed". An
+ * earlier version threw a plain `Error` with the payload stringified into the
+ * message, which made that distinction reachable only by matching on text.
+ */
+export class RpcFailureError extends Error {
+  constructor(
+    readonly requestId: string | number,
+    /** `Fail` for an expected domain error, `Die` for a defect. */
+    readonly kind: string,
+    /** The server's error payload, undecoded. */
+    readonly cause: unknown,
+  ) {
+    super(
+      `t3code RPC request ${String(requestId)} failed (${kind}): ` +
+        JSON.stringify(cause).slice(0, 300),
+    );
+    this.name = 'RpcFailureError';
+  }
+
+  /**
+   * The server error's `_tag`, when it has one.
+   *
+   * t3code's errors are `Schema.TaggedErrorClass`es, so the tag is the thing to
+   * branch on. Returns null rather than a guess when the payload carries none.
+   */
+  get tag(): string | null {
+    const error = this.cause as { _tag?: unknown } | null;
+    return error && typeof error._tag === 'string' ? error._tag : null;
+  }
+}
+
 /** The value of a successful exit, or throw with the failure's cause. */
 export function exitValue(exit: ExitFrame): unknown {
   if (exit.exit._tag === 'Success') return exit.exit.value;
   const cause = exit.exit.cause;
-  throw new Error(
-    `t3code RPC request ${String(exit.requestId)} failed (${cause._tag}): ` +
-      JSON.stringify(cause.error ?? cause.defect ?? cause).slice(0, 300),
-  );
+  throw new RpcFailureError(exit.requestId, cause._tag, cause.error ?? cause.defect ?? cause);
 }
