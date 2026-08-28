@@ -306,6 +306,13 @@ the remote, mobile or multi-machine benefit. Rejected.
 ## Constraints
 
 - **Self-hosted only.** No Clerk, no relay, no account.
+- **Attribute t3code's MIT licence.** `packages/types` is published, Apache-2.0, with
+  `files: [src, dist]`. Generated artifacts derived from MIT-licensed t3code source ship inside
+  that distribution, so the notice travels with them. This is a licence obligation, not a
+  courtesy.
+- **The codegen tool lives under `packages/` or `apps/`.** The pnpm workspace globs are
+  `packages/*` and `apps/*` only, so a `tools/` directory would never have its `effect`
+  devDependency installed.
 - **Vendor the contract, at build time, keeping `packages/types` runtime-free.** `@t3tools/contracts`
   is unpublished. The vendored surface is the transitive closure of `orchestration.ts`, `git.ts`
   and `auth.ts`: 9 files, 3,663 lines, not the whole 19,662-line package. `rpc.ts` is **not**
@@ -439,7 +446,9 @@ The mailbox is replaced only if these hold, otherwise it stays:
 - [ ] 13. PTY manager, render gate, mailbox, terminal session management, harness registry, v2
   client and legacy dashboard are deleted, and the suite is green without them.
 - [ ] 14. Net Codev-owned line count is lower than the pre-migration baseline, recorded in the
-  review.
+  review. **One counting rule, stated with its command:** non-test `.ts`/`.tsx` only. Under that
+  rule the baseline is `terminal/` 5,250, `apps/v2` 1,713, `apps/streamdeck` 2,017. Mixing
+  with-test and without-test counts, as an earlier draft did, makes the criterion meaningless.
 
 ## Test Scenarios
 
@@ -511,9 +520,16 @@ The mailbox is replaced only if these hold, otherwise it stays:
 
 This is ruled from the dependency shape, not chosen as a date.
 
-**What the code says.** 33 non-test files reference the mailbox. The PTY manager reaches
-`tower-routes.ts`, `tower-websocket.ts`, `tower-terminals.ts`, `tower-tunnel.ts` and
-`session-log-sweep.ts`. `global.db` has a `terminal_sessions` table, and `builders` carries a
+**What the code says.** 33 non-test files reference the mailbox. **The PTY surface is wider than
+an earlier revision claimed: twelve files, not five**, and four of them are components this spec
+*keeps* rather than deletes. `tower-routes.ts` (155 terminal references), `tower-server.ts`,
+`tower-tunnel.ts` and `session-log-sweep.ts` all survive and need editing, not removal. A flat
+delete list would have taken out the HTTP server this spec preserves.
+
+`@cluesmith/codev-sdk`'s terminal surface also survives `apps/web`. `apps/vscode` imports
+`TowerClient` and `backoffDelayMs` from it, so removing those exports would break the extension
+that Phase 13 deliberately keeps in the tree to preserve upstream merges. `tower-client` is
+retained as a compile-only surface. `global.db` has a `terminal_sessions` table, and `builders` carries a
 nullable `terminal_id` alongside `harness` and `model`, both added the same way by an earlier
 migration. So a second nullable column is the established pattern here, not a new one.
 
