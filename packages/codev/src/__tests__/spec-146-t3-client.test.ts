@@ -30,6 +30,12 @@ import { exponentialBackoff, ManagedSocket } from '../../../t3-client/src/socket
 import { T3Client, NotConnectedError, ProtocolError, RequestTimeoutError, type SocketLike } from '../../../t3-client/src/client.js';
 import { checkPayload, checkableMethods, PayloadShapeError } from '../../../t3-client/src/checked.js';
 import { ResumingSubscription, SubscriptionTerminatedError } from '../../../t3-client/src/subscription.js';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** packages/codev/src/__tests__ -> repo root. */
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
 
 // ---------------------------------------------------------------- envelope
 
@@ -1474,5 +1480,56 @@ describe('spec 146 phase 2: a past-the-head gap can be reconciled in band', () =
     expect(sub.applied).toBe(100);
     sub.stop();
     await running;
+  });
+});
+
+describe('spec 146 phase 2: the package is loadable the way a consumer loads it', () => {
+  // Every other test in this file imports `../../../t3-client/src/*.ts` by
+  // relative path, so neither the `exports` map nor `dist` is touched by the
+  // suite. A review lane pointed out that Phase 3's `porch-driver` will import
+  // `@cluesmith/t3-client/client` and hit whatever is wrong there first.
+  //
+  // This is deliberately NOT fixed by adding the dependency to `packages/codev`:
+  // codev does not use t3-client, and codev is published while t3-client is
+  // `private: true`, so that would make a published package depend on an
+  // unpublishable one.
+
+  const pkgDir = join(repoRoot, 'packages', 't3-client');
+  const manifest = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as {
+    exports: Record<string, { types: string; default: string }>;
+  };
+
+  it('declares an export for every source module', () => {
+    const sources = readdirSync(join(pkgDir, 'src'))
+      .filter((file) => file.endsWith('.ts'))
+      .map((file) => file.replace(/\.ts$/, ''));
+    const exported = Object.keys(manifest.exports).map((key) => key.replace(/^\.\//, ''));
+    expect([...exported].sort()).toEqual([...sources].sort());
+  });
+
+  it('points every export at a file that the build actually produces', () => {
+    // The half that was already broken once: the root `build` did not include
+    // t3-client at all, so `dist` existed only as a gitignored artifact of a
+    // manual `tsc` in one worktree.
+    const rootBuild = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    expect(
+      rootBuild.scripts.build,
+      'the root build must build t3-client, or its dist exists only by accident',
+    ).toContain('@cluesmith/t3-client build');
+
+    for (const [subpath, target] of Object.entries(manifest.exports)) {
+      const typesPath = join(pkgDir, target.types);
+      expect(existsSync(typesPath), `${subpath} types target ${target.types} is missing`).toBe(true);
+      // `default` points into dist, which is a build output — assert the SOURCE
+      // it is compiled from exists rather than requiring a build to have run,
+      // so this test is meaningful in a clean checkout too.
+      const source = target.default.replace(/^\.\/dist\//, './src/').replace(/\.js$/, '.ts');
+      expect(
+        existsSync(join(pkgDir, source)),
+        `${subpath} default ${target.default} has no source at ${source}`,
+      ).toBe(true);
+    }
   });
 });

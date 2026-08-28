@@ -1427,3 +1427,48 @@ Generalising the evidence stamp: `146-phase2-live-evidence.json` was byte-identi
 whether freshly produced or left over, so "I re-ran it" was unverifiable from the
 file. It now carries `ranAt`, `clientCommit`, `clientTreeDirty` and `nodeVersion`,
 emitted by the run rather than added afterwards.
+
+
+### The export map nothing loaded
+
+The last open iteration-2 finding. Every test in the suite imports
+`../../../t3-client/src/*.ts` by relative path, so neither the `exports` map nor
+`dist` was ever exercised — Phase 3's `porch-driver` importing
+`@cluesmith/t3-client/client` would have been the first thing to touch it.
+
+**Not fixed by adding the dependency to `packages/codev`.** codev does not use
+t3-client, and codev is published while t3-client is `private: true`; declaring it
+would make a published package depend on an unpublishable one. Two tests instead:
+every source module has an export entry, and every export target has a real source
+plus the root `build` genuinely builds the package. The second is the half that was
+already broken once — `dist` existed only as a gitignored artifact of a manual
+`tsc` in one worktree.
+
+**For Phase 3:** `porch-driver` either declares its own dependency and t3-client
+stops being `private`, or both stay internal. That is a packaging decision to make
+at the start of the phase, not on the first failing import.
+
+## Phase 3 notes gathered from the spike while waiting on checks
+
+Read-only, from `codev/experiments/146-t3code-porch-proof/proof.mjs`.
+
+**The settle detector needs a `seenRunning` latch** (`proof.mjs:219-236`). A turn
+is settled only when `activeTurnId` goes null *after* it has been seen non-null.
+Without the latch, the `thread.session-set` emitted at thread **creation** already
+carries `activeTurnId: null`, so a naive detector reports the turn settled before
+it ever started — and every check then runs against a worktree the agent has not
+touched. Same shape as "I could not tell spelled as no": absence of an active turn
+means both *not started* and *finished*, and only the latch separates them.
+
+**Register the waiter before dispatching** (`proof.mjs:294-311`). `makeTurnWaiter`
+runs before `dispatch`, and `startSequence` is captured before it too. Registering
+after races: the turn can begin producing events before the waiter exists, the
+`running` signal is missed, and the detector then waits forever on a turn that has
+already started.
+
+**The server sustains a long-lived subscription** (`proof.mjs:336-352`). The spike
+held one open across a 36-minute pause, crossing the 30-minute reaper plus the
+5-minute sweep, and the thread resumed with full context. So the 300-second
+teardown was purely my client's total-duration timeout — the server side of the
+24-hour gate already has evidence, and what Phase 3 adds is that
+`packages/t3-client` no longer tears itself down.
