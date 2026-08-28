@@ -1094,3 +1094,55 @@ trigger turned up. C needs a control connection and an `eventId` comparison
 against a thread genuinely producing events — `proof.mjs:380-440` has the
 connect-and-kill mechanics, and `ResumingSubscription` is now the thing under
 test rather than an ad-hoc script.
+
+## Three rules, named — from the architect's review of the Phase 2 close
+
+These are stated as rules rather than as tally marks, because each one names a
+distinct failure and the review doc needs them separable.
+
+### An abstention is not a pass
+
+**A test that produces no observation has not confirmed the hypothesis.** When the
+observation set is empty the correct reading is *unknown*, never *consistent
+with*.
+
+This is not one of the nine. Those were checks that measured nothing and **said
+yes**. This is a check that measured nothing and **said nothing**, and the silence
+was read as agreement.
+
+The instance: `classifyResume` asserted `first === afterSequence + 1`, which would
+have called every healthy resume on a busy server a gap. Its unit tests shared its
+premise, so they agreed. The live run recorded `not-demonstrated` with
+`observedSequences: []` — it abstained, correctly and loudly, with a `stateMeaning`
+field spelling out that it said nothing about the code. I counted it toward the
+weight of evidence anyway.
+
+The abstention machinery worked perfectly. The reader is what failed. Which is why
+the rule has to be about reading, not about instrumentation: three states in the
+output do not help if two of them get summed.
+
+### A green suite is fully consistent with the work not existing
+
+The complement of the checkbox rule already in this thread. **A deliverable with no
+implementation has no failing test — it has no test at all.** Nothing goes red.
+Coverage does not dip in a place anyone looks. The suite is silent, and silence
+reads as fine.
+
+That is precisely why reading the plan as a checklist found shape-checking and
+resubscription missing, and why running the tests could not have. The plan is the
+only artifact that records what *should* exist; the test suite records only what
+does.
+
+### Documentation is untested code
+
+The same defect in prose. Above the array that collected handler promises sat a
+comment: *"the values must reach the handler in arrival order."* True as an
+intention, false as a description, and **written where nobody executes it**.
+
+A guarantee stated in a comment has no runtime, no assertion, and no failure mode.
+It reads as evidence for the code beneath it — to a reviewer skimming, and to me,
+twice: I wrote it, then re-read the file and did not notice.
+
+So a comment claiming a property is a claim that needs a test, or it is decoration.
+The test that eventually caught it drives three handlers with descending durations
+(30ms, 15ms, 1ms), because equal durations pass against the broken code.
