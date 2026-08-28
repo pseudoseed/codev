@@ -257,6 +257,10 @@ export async function runPhaseCheck(options: PhaseCheckOptions): Promise<PhaseCh
     };
 
     // `close` means the pipes drained; it is the right moment when it comes.
+    //
+    // Safe to resolve from here without checking that `exit` ran first: Node
+    // guarantees `close` is emitted only after `exit` (or after `error`, which
+    // rejects above), so `exitCode` is already set by the time this fires.
     child.once('close', finish);
 
     // `exit` means the process is gone. It starts a bounded drain rather than

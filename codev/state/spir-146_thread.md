@@ -1782,3 +1782,37 @@ But it landed *during* the round, so no lane has reviewed it — the same gap th
 architect flagged for Phase 2's force-advance, made by me, one phase later. It is
 disclosed at the top of the rebuttals rather than left for someone to notice from
 the diff.
+
+## One rule, three instances: the input shape is part of the test
+
+The architect put these together and the grouping is right — this project has now
+produced three tests aimed at the position the defect cannot occupy:
+
+1. **Phase 2:** the handler failed on the *last* event before a drop — the one
+   arrangement where a cursor that advances past a failed handler cannot be
+   observed.
+2. **Phase 2:** the sequence classifier checked against an *empty* observation
+   set, which passes whatever the classifier does.
+3. **Phase 3:** the check timeout tested `sleep 30`, the single shape where bash
+   **execs** the child, so the pid signalled IS the process. Every real check —
+   `npm test`, anything compound — gets a bash parent whose children survive.
+
+The rule: **a test's input shape is part of the test.** Picking the convenient
+shape is how a real defect gets a passing grade for the wrong reason. Before
+writing the assertion, ask which inputs make the bug unreachable, and use one that
+does not.
+
+This belongs in `lessons-learned.md` at MAINTAIN, not just here.
+
+## Standing obligation for Phase 4
+
+**Name the mid-round `commands.ts` diff in Phase 4's first context file**, so a
+lane covers what none saw in Phase 3: the refusal-vs-unanswered split in
+`dispatchCommand` plus `isServerRefusal`, and its two tests. Commit
+`90b5b753c`'s parent range — specifically the change in
+`[Spec 146][Phase: phase_3] fix: seven findings from the iteration-1 review`.
+
+The architect's framing, which is the part to carry forward: **if you fix during a
+round, the fix is unreviewed by construction.** Twice now. It is a pattern, not an
+accident, and the handling is disclosure plus explicit scope in the next round —
+not a promise to stop fixing.
