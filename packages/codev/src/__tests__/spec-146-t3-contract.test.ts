@@ -29,6 +29,18 @@ const readJson = (p: string) => JSON.parse(readFileSync(p, 'utf8'));
  */
 const readSchemas = () => readJson(join(generated, 'schema.json')).schemas as Record<string, any>;
 
+/**
+ * Is a pinned t3code checkout available?
+ *
+ * The plan requires the live-server-dependent tests to be a SUITE separate from
+ * the unit tests, whose absence reports as "skipped for no server" and never as
+ * a pass. This constant is that separation: the suite below is gated at the
+ * `describe` level, so with no checkout vitest prints one skipped *suite* rather
+ * than a green run that silently verified nothing.
+ */
+const T3_ROOT = process.env.T3CODE_ROOT ?? '/Users/chris/dev/t3code';
+const HAS_CHECKOUT = existsSync(join(T3_ROOT, 'packages', 'contracts', 'src'));
+
 describe('spec 146: packages/types stays dependency-free', () => {
   it('declares no runtime dependencies', () => {
     const pkg = readJson(join(typesRoot, 'package.json'));
@@ -121,29 +133,24 @@ describe('spec 146: the emitter is lossy, and says so', () => {
   });
 });
 
-describe('spec 146: source-hash is the drift detector the schema cannot be', () => {
-  it('hashes match the pinned checkout when it is available', (ctx) => {
+/**
+ * LIVE SUITE — requires a pinned t3code checkout. Skipped as a whole when there
+ * is none, so its absence is legible in the run output instead of disappearing
+ * into a green unit run.
+ */
+describe.skipIf(!HAS_CHECKOUT)(`spec 146 [live: needs t3code checkout at ${T3_ROOT}]`, () => {
+  it('hashes match the pinned checkout', () => {
     const pin = readJson(join(t3Root, 'pin.json'));
-    const t3 = process.env.T3CODE_ROOT ?? '/Users/chris/dev/t3code';
-    const contracts = join(t3, pin.contractsRoot);
-
-    if (!existsSync(contracts)) {
-      // `ctx.skip()`, not `return`. An earlier version returned early with a
-      // console.warn, and vitest reported the test GREEN — a check that did not
-      // run, spelled exactly like a check that passed. Review caught it. This is
-      // the whole lesson of this phase applied to the phase's own tests.
-      ctx.skip(
-        `no t3code checkout at ${t3}: could not verify hashes. This is "could not check", not "fine".`,
-      );
-      return;
-    }
-
+    const contracts = join(T3_ROOT, pin.contractsRoot);
     const hashes = readJson(join(generated, 'source-hash.json'));
     for (const [file, expected] of Object.entries<string>(hashes.files)) {
       const actual = createHash('sha256').update(readFileSync(join(contracts, file))).digest('hex');
       expect(actual, `${file} drifted from the pinned hash`).toBe(expected);
     }
   });
+});
+
+describe('spec 146: source-hash is the drift detector the schema cannot be', () => {
 
   /**
    * The plan's acceptance criterion for the two-layer design: mutate
