@@ -29,7 +29,7 @@ import { assertTransportSafe, missingScopes, webSocketUrl } from '../../../t3-cl
 import { exponentialBackoff } from '../../../t3-client/src/socket.js';
 import { T3Client, NotConnectedError, type SocketLike } from '../../../t3-client/src/client.js';
 import { checkPayload, checkableMethods, PayloadShapeError } from '../../../t3-client/src/checked.js';
-import { ResumingSubscription } from '../../../t3-client/src/subscription.js';
+import { ResumingSubscription, SubscriptionTerminatedError } from '../../../t3-client/src/subscription.js';
 
 // ---------------------------------------------------------------- envelope
 
@@ -81,10 +81,31 @@ describe('spec 146 phase 2: the wire envelope', () => {
     const failure = {
       _tag: 'Exit',
       requestId: 1,
-      exit: { _tag: 'Failure', cause: { _tag: 'Fail', error: { reason: 'nope' } } },
+      exit: { _tag: 'Failure', cause: [{ _tag: 'Fail', error: { reason: 'nope' } }] },
     } as ExitFrame;
     expect(isSuccess(failure)).toBe(false);
     expect(() => exitValue(failure)).toThrow(/nope/);
+  });
+
+  it('accepts ClientProtocolError, which is in FromServerEncoded', () => {
+    // Previously rejected as an unknown tag, which turned the server saying
+    // "your protocol is wrong" into "this connection is unreadable". Both are
+    // bad news; only one names the cause.
+    const frames = decodeFrames(
+      JSON.stringify({ _tag: 'ClientProtocolError', error: { _tag: 'RpcClientError' } }),
+    );
+    expect(frames).toHaveLength(1);
+    expect(frames[0]._tag).toBe('ClientProtocolError');
+  });
+
+  it('rejects ClientEnd, which is NOT in FromServerEncoded', () => {
+    // It exists in FromServer — the DECODED union — and never reaches a socket.
+    // Accepting it was harmless in that it never arrived, and harmful in that
+    // this file claimed to have been validated against RpcMessage.ts while
+    // listing a shape that union does not contain.
+    expect(() => decodeFrames(JSON.stringify({ _tag: 'ClientEnd' }))).toThrow(
+      /unknown server frame tag/,
+    );
   });
 });
 
@@ -827,7 +848,13 @@ describe('spec 146 phase 2: a cursor earned before synchronizing is not thrown a
 });
 
 describe('spec 146 phase 2: a failed RPC is a named error carrying its tag', () => {
-  it('surfaces the server error tag, not a stringified message', () => {
+  // `cause` is an ARRAY. RpcMessage.ts:257-275 declares
+  // `cause: ReadonlyArray<{Fail} | {Die} | {Interrupt}>` — an Effect cause is a
+  // tree, so parallel failures and interrupts travel together. The first version
+  // of these tests fed a single object, matching the code's wrong assumption, so
+  // both agreed and neither matched the server.
+
+  it('surfaces the server error tag from the first Fail entry', () => {
     // Phase 3 branches on this. Replaying a commandId against a different
     // aggregate raises OrchestrationCommandIdConflictError; "the server refused
     // this as a duplicate" needs a different response from "the request failed",
@@ -837,10 +864,9 @@ describe('spec 146 phase 2: a failed RPC is a named error carrying its tag', () 
       requestId: 7,
       exit: {
         _tag: 'Failure' as const,
-        cause: {
-          _tag: 'Fail',
-          error: { _tag: 'OrchestrationCommandIdConflictError', commandId: 'cmd-1' },
-        },
+        cause: [
+          { _tag: 'Fail', error: { _tag: 'OrchestrationCommandIdConflictError', commandId: 'cmd-1' } },
+        ],
       },
     };
     let thrown: unknown;
@@ -852,22 +878,49 @@ describe('spec 146 phase 2: a failed RPC is a named error carrying its tag', () 
     expect(thrown).toBeInstanceOf(RpcFailureError);
     const failure = thrown as InstanceType<typeof RpcFailureError>;
     expect(failure.requestId).toBe(7);
-    expect(failure.kind).toBe('Fail');
     expect(failure.tag).toBe('OrchestrationCommandIdConflictError');
+    expect(failure.interrupted).toBe(false);
+    expect(failure.died).toBe(false);
   });
 
-  it('reports a null tag rather than guessing when the payload carries none', () => {
+  it('finds the Fail entry even when an Interrupt travels with it', () => {
+    // The reason cause is an array at all. A single-object model would have to
+    // pick one of these and silently discard the other.
     const frame = {
       _tag: 'Exit' as const,
-      requestId: 8,
-      exit: { _tag: 'Failure' as const, cause: { _tag: 'Die', defect: 'boom' } },
+      requestId: 9,
+      exit: {
+        _tag: 'Failure' as const,
+        cause: [
+          { _tag: 'Interrupt', fiberId: 3 },
+          { _tag: 'Fail', error: { _tag: 'SomeDomainError' } },
+        ],
+      },
     };
     try {
       exitValue(frame as never);
       expect.unreachable('exitValue must throw on a failure exit');
     } catch (error) {
-      expect((error as InstanceType<typeof RpcFailureError>).tag).toBeNull();
-      expect((error as InstanceType<typeof RpcFailureError>).kind).toBe('Die');
+      const failure = error as InstanceType<typeof RpcFailureError>;
+      expect(failure.tag).toBe('SomeDomainError');
+      expect(failure.interrupted).toBe(true);
+    }
+  });
+
+  it('reports a null tag rather than guessing when the cause carries no Fail', () => {
+    const frame = {
+      _tag: 'Exit' as const,
+      requestId: 8,
+      exit: { _tag: 'Failure' as const, cause: [{ _tag: 'Die', defect: 'boom' }] },
+    };
+    try {
+      exitValue(frame as never);
+      expect.unreachable('exitValue must throw on a failure exit');
+    } catch (error) {
+      const failure = error as InstanceType<typeof RpcFailureError>;
+      expect(failure.tag).toBeNull();
+      expect(failure.error).toBeNull();
+      expect(failure.died).toBe(true);
     }
   });
 
@@ -891,11 +944,181 @@ describe('spec 146 phase 2: a failed RPC is a named error carrying its tag', () 
         {
           _tag: 'Exit',
           requestId: id,
-          exit: { _tag: 'Failure', cause: { _tag: 'Fail', error: { _tag: 'SomeDomainError' } } },
+          exit: { _tag: 'Failure', cause: [{ _tag: 'Fail', error: { _tag: 'SomeDomainError' } }] },
         },
       ]),
     });
 
     await expect(promise).rejects.toBeInstanceOf(RpcFailureError);
+  });
+});
+
+describe('spec 146 phase 2: a failing handler must not let the cursor walk past it', () => {
+  const event = (sequence: number) => ({ kind: 'event', event: { sequence } });
+  const sync = { kind: 'synchronized' };
+
+  function scripted(script: Array<{ values: unknown[]; drop?: boolean }>) {
+    const calls: Array<Record<string, unknown>> = [];
+    let turn = 0;
+    let closed = false;
+    const client = {
+      async stream(_m: string, payload: Record<string, unknown>, onValue: (v: unknown) => void) {
+        calls.push(payload);
+        const step = script[turn] ?? { values: [], drop: false };
+        turn += 1;
+        closed = false;
+        for (const value of step.values) {
+          if (closed) break;
+          onValue(value);
+        }
+        if (step.drop) throw new Error('dropped');
+        return undefined;
+      },
+    };
+    return {
+      calls,
+      connect: async () => ({
+        client: client as never,
+        close: () => {
+          closed = true;
+        },
+      }),
+    };
+  }
+
+  const wiring = (
+    onValue: (v: unknown, s: number | null) => void | Promise<void>,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    method: 'orchestration.subscribeThread',
+    payload: { threadId: 't' },
+    sequenceOf: (v: unknown) => (v as { event?: { sequence?: number } })?.event?.sequence ?? null,
+    isSnapshot: () => false,
+    isSynchronized: (v: unknown) => (v as { kind?: string })?.kind === 'synchronized',
+    onValue,
+    onResume: () => {},
+    delayBetweenAttemptsMs: 2,
+    ...extra,
+  });
+
+  it('redelivers the failed event when a LATER event in the same stream would succeed', async () => {
+    // Both review lanes found this independently and one reproduced it: the old
+    // enqueue swallowed the rejection and queuedThrough had already advanced, so
+    // 10 failing while 11 succeeded left the cursor at 11 and event 10 gone, with
+    // no signal anywhere.
+    //
+    // The previous test only failed the LAST event before a drop, which is the
+    // one arrangement where the bug cannot show. That is why a green suite said
+    // nothing.
+    const applied: number[] = [];
+    const errors: Array<{ sequence: number | null }> = [];
+    let failuresLeft = 1;
+
+    const t = scripted([
+      { values: [event(10), event(11), sync] },
+      { values: [event(10), event(11), sync] },
+    ]);
+    const sub = new ResumingSubscription(
+      t.connect,
+      wiring(
+        (_v, sequence) => {
+          if (sequence === 10 && failuresLeft > 0) {
+            failuresLeft -= 1;
+            throw new Error('handler failed on 10');
+          }
+          if (sequence !== null) applied.push(sequence);
+        },
+        { onHandlerError: (_e: unknown, sequence: number | null) => void errors.push({ sequence }) },
+      ),
+    );
+
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 60));
+    sub.stop();
+    await running;
+
+    // The failure was reported, not swallowed.
+    expect(errors).toEqual([{ sequence: 10 }]);
+    // The cursor never advanced past the failed event, so the resume asked for it.
+    expect(t.calls[1].afterSequence).toBe(0);
+    // And 10 was actually redelivered and applied, before 11.
+    expect(applied).toEqual([10, 11]);
+  });
+
+  it('does not apply a later event after an earlier handler failed in the same stream', async () => {
+    // The narrower invariant: once a handler fails, nothing further in THAT
+    // stream is applied. Otherwise the cursor is ahead of a hole again.
+    const applied: number[] = [];
+    const t = scripted([{ values: [event(10), event(11), event(12), sync] }]);
+    const sub = new ResumingSubscription(
+      t.connect,
+      wiring(
+        (_v, sequence) => {
+          if (sequence === 10) throw new Error('always fails');
+          if (sequence !== null) applied.push(sequence);
+        },
+        { onHandlerError: () => {} },
+      ),
+    );
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 30));
+    sub.stop();
+    await running;
+
+    expect(applied).toEqual([]);
+    expect(sub.applied).toBe(0);
+  });
+});
+
+describe('spec 146 phase 2: a non-retryable stream error is surfaced, not retried forever', () => {
+  it('throws SubscriptionTerminatedError rather than reconnecting on a PayloadShapeError', async () => {
+    // The old catch-all turned every named error this phase produces into a
+    // reconnect attempt, so the error never reached anyone and the loop looked
+    // like a quiet connection.
+    let attempts = 0;
+    const client = {
+      async stream() {
+        attempts += 1;
+        const error = new Error('payload did not match');
+        error.name = 'PayloadShapeError';
+        throw error;
+      },
+    };
+    const sub = new ResumingSubscription(async () => ({ client: client as never, close: () => {} }), {
+      method: 'orchestration.subscribeThread',
+      payload: {},
+      sequenceOf: () => null,
+      isSnapshot: () => false,
+      isSynchronized: () => false,
+      onValue: () => {},
+      onResume: () => {},
+    });
+
+    await expect(sub.run()).rejects.toThrow(SubscriptionTerminatedError);
+    expect(attempts, 'a terminal error must not be retried').toBe(1);
+  });
+
+  it('still retries an ordinary transport error', async () => {
+    let attempts = 0;
+    const client = {
+      async stream() {
+        attempts += 1;
+        throw new Error('socket dropped');
+      },
+    };
+    const sub = new ResumingSubscription(async () => ({ client: client as never, close: () => {} }), {
+      method: 'orchestration.subscribeThread',
+      payload: {},
+      sequenceOf: () => null,
+      isSnapshot: () => false,
+      isSynchronized: () => false,
+      onValue: () => {},
+      onResume: () => {},
+    });
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 60));
+    sub.stop();
+    await running;
+    expect(attempts).toBeGreaterThan(1);
   });
 });

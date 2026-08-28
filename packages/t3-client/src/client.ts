@@ -148,7 +148,18 @@ export class T3Client {
         // are about to reject: the frame WAS received, and withholding the ack
         // would stall the connection on top of the error rather than instead of
         // it.
-        this.#sendRaw(ack(chunk.requestId));
+        // The ack is best-effort by necessity: `#sendRaw` throws
+        // `NotConnectedError` if the socket closed between the frame arriving and
+        // this line, and we are inside the socket's message listener, where a
+        // throw reaches no call site and takes the message loop with it. Same
+        // hazard as the codegen errors in `#checkInbound`. A dropped socket
+        // already fails every pending request via `#onClose`, so swallowing here
+        // loses nothing: there is no one left to ack to.
+        try {
+          this.#sendRaw(ack(chunk.requestId));
+        } catch {
+          /* socket closed under us; #onClose has already failed the pending requests */
+        }
         const pending = this.#pending.get(chunk.requestId);
         if (!pending) return;
         for (const value of chunk.values) {

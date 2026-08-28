@@ -70,6 +70,26 @@ export interface ResumingSubscriptionOptions {
   /** Persist the cursor after each applied event. */
   persist?(sequence: number): void | Promise<void>;
   /**
+   * A handler threw. **Not optional in practice**: without it a failing handler
+   * is invisible, and the subscription retries it forever in silence.
+   *
+   * The stream is ended after this fires and the resubscription redelivers from
+   * the last successfully applied sequence, so the failed event comes back.
+   */
+  onHandlerError?(error: unknown, sequence: number | null): void;
+  /**
+   * Should this stream error be retried by resubscribing?
+   *
+   * The default treats a **known** protocol or validation failure as terminal —
+   * `PayloadShapeError`, `RpcFailureError`, and the codegen errors — and retries
+   * everything else. That is a deny-list, and the weaker of the two directions on
+   * purpose: an unrecognised error on a socket is far more often a transport
+   * hiccup than a contract violation, and retrying a terminal error wastes time
+   * while terminating a transient one strands the subscription. A caller that
+   * wants the stricter allow-list passes its own.
+   */
+  isRetryable?(error: unknown): boolean;
+  /**
    * Pause between resubscription attempts. Default 0, which is still a *timer*
    * rather than a microtask, and that distinction is load-bearing.
    *
@@ -85,11 +105,44 @@ export interface ResumingSubscriptionOptions {
   readonly delayBetweenAttemptsMs?: number;
 }
 
+/**
+ * Errors that resubscribing cannot fix.
+ *
+ * Matched by `name` rather than by `instanceof`, so this module does not have to
+ * import the error classes and create a dependency cycle, and so an error that
+ * crossed a realm boundary still classifies.
+ */
+const TERMINAL_ERROR_NAMES = new Set([
+  'PayloadShapeError',
+  'RpcFailureError',
+  'UnresolvedRefError',
+  'UnsupportedKeywordError',
+]);
+
+const defaultIsRetryable = (error: unknown): boolean => {
+  const name = (error as { name?: unknown } | null)?.name;
+  return typeof name !== 'string' || !TERMINAL_ERROR_NAMES.has(name);
+};
+
+/** Thrown from `run()` when a stream failed with something resubscribing cannot fix. */
+export class SubscriptionTerminatedError extends Error {
+  constructor(readonly reason: unknown) {
+    super(
+      `t3code subscription ended on a non-retryable error: ` +
+        `${(reason as Error)?.name ?? 'unknown'}: ${(reason as Error)?.message ?? String(reason)}\n` +
+        `  Resubscribing would produce the same failure, so it is surfaced here rather than ` +
+        `turned into a reconnect loop that looks like a quiet connection.`,
+    );
+    this.name = 'SubscriptionTerminatedError';
+  }
+}
+
 export class ResumingSubscription {
   #cursor: SequenceCursor;
   #stopped = false;
   #attempt = 0;
   #everSubscribed = false;
+  #emptyStreak = 0;
   #transport: SubscriptionTransport | null = null;
 
   constructor(
@@ -149,6 +202,7 @@ export class ResumingSubscription {
       };
 
       const catchUp: SequencedItem[] = [];
+      let streamFailure: unknown | null = null;
       let snapshot: unknown | null = null;
       let synchronized = false;
       const requestedAfter = this.#cursor.applied;
@@ -162,11 +216,33 @@ export class ResumingSubscription {
       // collected the promises in an array and claimed arrival order in a
       // comment. Collecting is not sequencing.
       let chain: Promise<void> = Promise.resolve();
-      const enqueue = (work: () => void | Promise<void>) => {
-        chain = chain.then(work, () => work() as void | Promise<void>).then(
-          () => undefined,
-          () => undefined,
-        );
+
+      // Set the moment a handler fails. Everything after it is refused: no
+      // further handlers run, the cursor does not move, and the stream is ended
+      // so the resubscription redelivers from the last SUCCESSFULLY applied
+      // sequence.
+      //
+      // The version this replaces swallowed every rejection and let the queue
+      // carry on. Event 10's handler throwing while 11 succeeded advanced the
+      // cursor to 11, so 10 was gone permanently and nothing anywhere said so —
+      // which broke exactly the at-least-once property three separate comments in
+      // this repo claim, and that Phase 3's crash recovery is built on. Both
+      // review lanes found it independently; one reproduced it.
+      let handlerFailure: { error: unknown; sequence: number | null } | null = null;
+
+      const enqueue = (work: () => void | Promise<void>, sequence: number | null) => {
+        chain = chain.then(async () => {
+          if (handlerFailure) return;
+          try {
+            await work();
+          } catch (error) {
+            handlerFailure = { error, sequence };
+            this.options.onHandlerError?.(error, sequence);
+            // End the stream. The loop will resubscribe from `cursor.applied`,
+            // which has NOT moved past the failed event.
+            transport.close();
+          }
+        });
       };
 
       // Advances at ENQUEUE time, ahead of the cursor, which advances only when a
@@ -192,15 +268,17 @@ export class ResumingSubscription {
             return;
           }
 
+          if (handlerFailure) return;
+
           if (this.options.isSnapshot(value)) {
             snapshot = value;
-            enqueue(() => this.options.onValue(value, null));
+            enqueue(() => this.options.onValue(value, null), null);
             return;
           }
 
           const sequence = this.options.sequenceOf(value);
           if (sequence === null) {
-            enqueue(() => this.options.onValue(value, null));
+            enqueue(() => this.options.onValue(value, null), null);
             return;
           }
 
@@ -212,11 +290,21 @@ export class ResumingSubscription {
           if (sequence <= queuedThrough) return;
           queuedThrough = sequence;
 
-          enqueue(() => this.#cursor.apply({ sequence }, () => this.options.onValue(value, sequence)));
+          enqueue(
+            () => this.#cursor.apply({ sequence }, () => this.options.onValue(value, sequence)),
+            sequence,
+          );
         });
-      } catch {
-        // The socket dropped or the server ended the stream. Either way the
-        // subscription is over and the loop opens a new one — unless stopped.
+      } catch (error) {
+        // The socket dropped, the server ended the stream, or the request failed.
+        // Only the first is something resubscribing can fix.
+        //
+        // The version this replaces caught everything and looped. A
+        // PayloadShapeError or an RpcFailureError became an endless reconnect
+        // that looked like a quiet connection, and the named error this phase
+        // went to the trouble of producing never reached anyone.
+        const retryable = (this.options.isRetryable ?? defaultIsRetryable)(error);
+        if (!retryable) streamFailure = error;
       } finally {
         // Drain the chain, so the cursor reflects every handler that ran before
         // the next resubscription reads it.
@@ -246,9 +334,19 @@ export class ResumingSubscription {
         this.#transport = null;
       }
 
+      if (streamFailure !== null) throw new SubscriptionTerminatedError(streamFailure);
+
+      // A stream that delivered nothing and never synchronized is the shape that
+      // spins: resubscribe, get nothing, resubscribe. Back off on the streak so a
+      // server ending streams instantly does not become a hot loop. Reset as soon
+      // as one produces anything, so an ordinary reconnect pays no penalty.
+      this.#emptyStreak = synchronized || catchUp.length > 0 ? 0 : this.#emptyStreak + 1;
+      const backoff =
+        this.#emptyStreak > 0 ? Math.min(50 * 2 ** (this.#emptyStreak - 1), 5_000) : 0;
+
       // A timer, not a microtask. See `delayBetweenAttemptsMs`.
       await new Promise<void>((resolve) =>
-        setTimeout(resolve, this.options.delayBetweenAttemptsMs ?? 0),
+        setTimeout(resolve, Math.max(this.options.delayBetweenAttemptsMs ?? 0, backoff)),
       );
     }
   }

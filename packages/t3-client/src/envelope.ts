@@ -80,16 +80,30 @@ export interface ExitFrame {
   readonly exit: ExitValue;
 }
 
+/**
+ * One entry in a failure cause.
+ *
+ * `Fail` is an expected domain error, `Die` a defect, `Interrupt` a cancellation.
+ */
+export type CauseEntry =
+  | { readonly _tag: 'Fail'; readonly error: unknown }
+  | { readonly _tag: 'Die'; readonly defect: unknown }
+  | { readonly _tag: 'Interrupt'; readonly fiberId: number | undefined };
+
+/**
+ * `cause` is an **array**, and this was wrong here until review caught it.
+ *
+ * `ExitEncoded` in `RpcMessage.ts:257-275` declares
+ * `cause: ReadonlyArray<{Fail} | {Die} | {Interrupt}>`. An Effect cause is a
+ * tree — parallel failures and interrupts travel together — so a single object
+ * cannot represent it. The first version of this file typed it as one object and
+ * read `cause._tag`, which on an array is `undefined`: every failure would have
+ * come back with no kind and no tag, and the whole point of naming the error was
+ * to let Phase 3 branch on which failure it was.
+ */
 export type ExitValue =
   | { readonly _tag: 'Success'; readonly value?: unknown }
-  | {
-      readonly _tag: 'Failure';
-      readonly cause: {
-        readonly _tag: 'Fail' | 'Die' | 'Interrupt';
-        readonly error?: unknown;
-        readonly defect?: unknown;
-      };
-    };
+  | { readonly _tag: 'Failure'; readonly cause: ReadonlyArray<CauseEntry> };
 
 /** A server-side defect not attributable to one request. */
 export interface DefectFrame {
@@ -101,11 +115,34 @@ export interface PongFrame {
   readonly _tag: 'Pong';
 }
 
-export interface ClientEndFrame {
-  readonly _tag: 'ClientEnd';
+/**
+ * The server reporting a protocol error against every in-flight request.
+ *
+ * In `FromServerEncoded` (`RpcMessage.ts:192-197`) and previously missing here,
+ * so the decoder rejected it as an unknown tag — turning a message that says
+ * "your protocol is wrong" into "this connection is unreadable". Both are bad
+ * news, but they are different bad news and only one of them names the cause.
+ */
+export interface ClientProtocolErrorFrame {
+  readonly _tag: 'ClientProtocolError';
+  readonly error: unknown;
 }
 
-export type ServerFrame = ChunkFrame | ExitFrame | DefectFrame | PongFrame | ClientEndFrame;
+/**
+ * `ClientEnd` is deliberately absent.
+ *
+ * It exists in `FromServer` (`RpcMessage.ts:180-184`), the *decoded* union, but
+ * not in `FromServerEncoded` — it never arrives on the wire. Accepting it was
+ * harmless in the sense that it never appeared, and harmful in the sense that
+ * the file claimed to have been validated against `RpcMessage.ts` while listing
+ * a shape that union does not contain.
+ */
+export type ServerFrame =
+  | ChunkFrame
+  | ExitFrame
+  | DefectFrame
+  | PongFrame
+  | ClientProtocolErrorFrame;
 
 // ---------------------------------------------------------------- errors
 
@@ -130,7 +167,10 @@ export class MalformedFrameError extends Error {
 
 // ---------------------------------------------------------------- encode / decode
 
-const SERVER_TAGS = new Set(['Chunk', 'Exit', 'Defect', 'Pong', 'ClientEnd']);
+// Exactly `FromServerEncoded` (`RpcMessage.ts:192-197`). Not `FromServer`, which
+// is the decoded union and contains `ClientEnd` — a shape that never reaches a
+// socket.
+const SERVER_TAGS = new Set(['Chunk', 'Exit', 'Defect', 'Pong', 'ClientProtocolError']);
 
 /** Serialise one client frame for the wire. One JSON object per frame. */
 export function encodeFrame(frame: ClientFrame): string {
@@ -216,33 +256,53 @@ export function isSuccess(exit: ExitFrame): boolean {
 export class RpcFailureError extends Error {
   constructor(
     readonly requestId: string | number,
-    /** `Fail` for an expected domain error, `Die` for a defect. */
-    readonly kind: string,
-    /** The server's error payload, undecoded. */
-    readonly cause: unknown,
+    /** Every entry in the cause, in the order the server sent them. */
+    readonly cause: ReadonlyArray<CauseEntry>,
   ) {
     super(
-      `t3code RPC request ${String(requestId)} failed (${kind}): ` +
+      `t3code RPC request ${String(requestId)} failed ` +
+        `(${cause.map((entry) => entry._tag).join(', ') || 'empty cause'}): ` +
         JSON.stringify(cause).slice(0, 300),
     );
     this.name = 'RpcFailureError';
   }
 
   /**
-   * The server error's `_tag`, when it has one.
+   * The first `Fail` entry's error, which is the domain error a caller branches
+   * on. Null when the cause carries none — a pure `Die` or `Interrupt`.
+   *
+   * "First `Fail`" rather than "the cause", because a cause is a tree and may
+   * hold several. A caller needing all of them reads `cause`.
+   */
+  get error(): unknown {
+    const failure = this.cause.find((entry) => entry._tag === 'Fail');
+    return failure ? (failure as { error: unknown }).error : null;
+  }
+
+  /**
+   * The domain error's `_tag`, when it has one.
    *
    * t3code's errors are `Schema.TaggedErrorClass`es, so the tag is the thing to
-   * branch on. Returns null rather than a guess when the payload carries none.
+   * branch on. Returns null rather than a guess when there is none.
    */
   get tag(): string | null {
-    const error = this.cause as { _tag?: unknown } | null;
-    return error && typeof error._tag === 'string' ? error._tag : null;
+    const error = this.error as { _tag?: unknown } | null;
+    return error && typeof error === 'object' && typeof error._tag === 'string' ? error._tag : null;
+  }
+
+  /** True when the request was cancelled rather than failed. */
+  get interrupted(): boolean {
+    return this.cause.some((entry) => entry._tag === 'Interrupt');
+  }
+
+  /** True when the cause carries a defect — a bug, not an expected error. */
+  get died(): boolean {
+    return this.cause.some((entry) => entry._tag === 'Die');
   }
 }
 
 /** The value of a successful exit, or throw with the failure's cause. */
 export function exitValue(exit: ExitFrame): unknown {
   if (exit.exit._tag === 'Success') return exit.exit.value;
-  const cause = exit.exit.cause;
-  throw new RpcFailureError(exit.requestId, cause._tag, cause.error ?? cause.defect ?? cause);
+  throw new RpcFailureError(exit.requestId, exit.exit.cause);
 }
