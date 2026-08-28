@@ -404,8 +404,16 @@ claim stops being a one-off observation and becomes a tested property.
 - `packages/t3-client/src/socket.ts` — WebSocket lifecycle, reconnect with backoff.
 - `packages/t3-client/src/client.ts` — request/response and streaming call surface.
 - `packages/t3-client/src/auth.ts` — OAuth token exchange and WS ticket issuance.
-- `packages/t3-client/src/resume.ts` — `afterSequence` resubscription and gap detection.
-- `packages/t3-client/__tests__/`
+- `packages/t3-client/src/resume.ts` — classification of what a resubscription returned.
+- `packages/t3-client/src/checked.ts` — **added during the phase.** Maps a method to its generated
+  schema and shape-checks inbound payloads, with `unchecked` as a first-class outcome.
+- `packages/t3-client/src/subscription.ts` — **added during the phase.** The resubscription itself:
+  `resume.ts` classifies a resubscription, and nothing was performing one.
+- `packages/codev/src/__tests__/spec-146-t3-client.test.ts` — the tests live here rather than in
+  `packages/t3-client/__tests__/`, because the root `test` script runs
+  `pnpm --filter @cluesmith/codev test`; a suite inside `t3-client` would never run.
+- `packages/t3-client/live/integration.mjs` — the live scenarios, which are not unit tests and
+  must not be run as if they were.
 
 #### Deliverables
 
