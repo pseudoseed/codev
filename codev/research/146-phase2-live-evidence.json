@@ -1,8 +1,8 @@
 {
   "criterion": "Spec 146 Phase 2 live integration",
-  "ranAt": "2026-08-28T20:29:40.502Z",
+  "ranAt": "2026-08-28T20:43:09.685Z",
   "nodeVersion": "v22.22.2",
-  "clientCommit": "62e70a1a278ae4adadb20e59bd930c7a013f1034",
+  "clientCommit": "2e781ccfa2e70f4f126a496d62a6cf782dce9d7b",
   "clientTreeDirty": false,
   "scenarios": [
     {
