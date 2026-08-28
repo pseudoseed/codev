@@ -190,24 +190,35 @@ fallback is recorded before any client code exists.
 
 #### Files to Create / Modify
 
-- `packages/t3-contract/package.json` — new package. `effect` and `typescript` as
-  **devDependencies only**; zero runtime dependencies.
-- `packages/t3-contract/pin.json` — the pinned t3code commit SHA, the `effect` version observed at
+**Generated artifacts live in `packages/types`.** The spec's constraint says Codev "vendors the
+schema types from a pinned t3code commit into `packages/types`", and the first draft of this plan
+put them in a new package instead. Review was right that this was not following the constraint.
+The split is between *artifacts* and *tooling*: the artifacts are declarations, JSON and a shape
+check with no imports, so they sit in `packages/types` without disturbing its zero-runtime-deps
+property. Only the generator needs `effect`, so only the generator lives outside.
+
+- `packages/types/src/t3/generated/types.d.ts` — emitted TypeScript declarations.
+- `packages/types/src/t3/generated/schema.json` — emitted JSON Schema document.
+- `packages/types/src/t3/generated/source-hash.json` — per-file hashes of the 9 closure files.
+- `packages/types/src/t3/generated/UNREPRESENTED.md`, `LOSSY.md` — emitted reports.
+- `packages/types/src/t3/shape-check.ts` — a zero-dependency shape check over the emitted JSON
+  Schema, covering only the subset the emitter actually produces. No imports.
+- `packages/types/src/t3/pin.json` — the pinned t3code commit SHA, the `effect` version observed at
   that commit, and the closure file list.
-- `packages/t3-contract/tools/generate.ts` — the codegen. Imports the pinned checkout's contracts,
-  walks the closure, emits declarations and JSON Schema.
-- `packages/t3-contract/src/generated/types.d.ts` — emitted TypeScript declarations.
-- `packages/t3-contract/src/generated/schema.json` — emitted JSON Schema document.
-- `packages/t3-contract/src/generated/source-hash.json` — per-file hashes of the 9 closure files.
-- `packages/t3-contract/src/shape-check.ts` — a zero-dependency shape check over the emitted JSON
-  Schema, covering only the subset the emitter actually produces.
-- `packages/t3-contract/tools/classify-churn.ts` — replays commits against the detector.
-- `packages/t3-contract/REFRESH.md` — the refresh procedure the spec's constraint requires.
-- `scripts/t3-server/` — the pinned-server test harness: checkout, install, start, pair, stop.
-- `scripts/t3-server/README.md` — how to bring one up by hand, and how CI is expected to behave.
-- `packages/t3-contract/__tests__/drift.test.ts`
-- `packages/t3-contract/__tests__/shape-check.test.ts`
-- `packages/t3-contract/__tests__/no-runtime-deps.test.ts`
+- `packages/types/__tests__/t3-drift.test.ts`
+- `packages/types/__tests__/t3-shape-check.test.ts`
+- `packages/types/__tests__/no-runtime-deps.test.ts`
+- `tools/t3-codegen/package.json` — the generator, **outside** `packages/types`. `effect` and
+  `typescript` as devDependencies. Not part of the published workspace build.
+- `tools/t3-codegen/generate.ts` — imports the pinned checkout's contracts, walks the closure,
+  emits every artifact above.
+- `tools/t3-codegen/classify-churn.ts` — replays commits against the detector.
+- `tools/t3-codegen/REFRESH.md` — the refresh procedure the spec's constraint requires.
+- `tools/t3-server/` — the pinned-server harness: acquire, install, start, verify version, pair,
+  stop. Phases 1-4, 5 and 8-10 all claim to run against a live pinned server and nothing provided
+  one; this is that.
+- `tools/t3-server/README.md` — how to bring one up by hand, and how CI is expected to behave when
+  it cannot.
 
 #### Deliverables
 
@@ -216,8 +227,22 @@ fallback is recorded before any client code exists.
       `sourceControl.ts`, `vcs.ts` — and the generator fails loudly if the pinned checkout's import
       graph reaches a file not on that list. Silent closure growth is the failure mode this
       catches.
-- [ ] `rpc.ts` is **not** vendored. Method names are taken from `ORCHESTRATION_WS_METHODS` and the
-      equivalent constants, which are plain string literals.
+- [ ] `rpc.ts` is **not** vendored, and the phase records why rather than leaving it implicit.
+      Review asked for it, on the grounds that Phase 2 needs a method-to-payload mapping. It does,
+      but `rpc.ts` is 1,123 lines whose transitive closure is 27 files and 11,120 lines — three
+      times the whole rest of the vendoring surface — because it names every unrelated subsystem's
+      RPCs. Instead, the mapping for the eight methods Codev actually calls is written out
+      explicitly in `pin.json` as `method → payload schema → success schema`, generated from the
+      closure and checked by the drift test. Method names come from `ORCHESTRATION_WS_METHODS` and
+      its equivalents, which are plain string literals.
+- [ ] **A pinned server can be brought up by anyone.** `tools/t3-server/` acquires the pinned
+      commit, installs it, starts it, **verifies the running server's commit matches `pin.json`**,
+      and stops it. The verification is the point: `pin.json` on its own records an intention, and
+      every phase that claims to test against the pinned server is worthless if the server it
+      reached was some other build.
+- [ ] CI behaviour is decided and documented, not left to discovery: either CI provisions the
+      server, or the live-server tests are tagged and skipped there with the skip **visible in the
+      run output**. A silently skipped integration suite reports green for tests that never ran.
 - [ ] Codegen emits declarations and JSON Schema from the pinned checkout. Every schema in the
       closure that the emitter **cannot** represent is listed by name in a generated
       `UNREPRESENTED.md`, with the reason. An empty list is not assumed; the list is the evidence.
@@ -262,7 +287,8 @@ fallback is recorded before any client code exists.
 
 #### Acceptance Criteria
 
-- [ ] `packages/t3-contract` has zero runtime dependencies, asserted by test.
+- [ ] `packages/types` still has zero runtime dependencies after the generated artifacts land,
+      asserted by test, and no file under `packages/types/src/t3/` imports `effect`.
 - [ ] The existing #1189 boundary tests on `codev-core` and `codev-sdk` still pass unchanged.
 - [ ] Regenerating from the pinned commit is a no-op; mutating any closure file in a scratch
       checkout makes the drift test fail and names the schema.
@@ -920,12 +946,12 @@ architect while six builders are active.
 
 ### Phase 10: Full protocol on a second driver
 
-**Dependencies**: Phase 8
+**Dependencies**: Phase 9
 
 #### Objective
 
 Run a complete protocol end to end with no PTY involved, on two provider drivers, and start the
-24-hour gate clock that Phase 13 depends on.
+24-hour gate clock that Phase 14 depends on.
 
 Only Codex was exercised in the spike. Success criterion 10 requires a second driver before
 deletion, and this phase is where a driver-specific failure surfaces while it is still cheap.
@@ -968,7 +994,7 @@ real; a fake clock does not test what the reaper does.
 
 ### Phase 11: codev-client tree and live status
 
-**Dependencies**: Phase 6, Phase 8
+**Dependencies**: Phase 5, Phase 9
 
 #### Objective
 
@@ -1030,7 +1056,7 @@ a gate approved.
 
 ### Phase 12: codev-client tiling and mobile
 
-**Dependencies**: Phase 10
+**Dependencies**: Phase 11
 
 #### Objective
 
@@ -1083,11 +1109,11 @@ written.
 
 ### Phase 13: Extension retirement
 
-**Dependencies**: Phase 11
+**Dependencies**: Phase 12
 
 #### Objective
 
-Retire both extensions, differently, as the spec rules. This lands before deletion so that Phase 13
+Retire both extensions, differently, as the spec rules. This lands before deletion so that Phase 14
 is not simultaneously removing the terminal layer and discovering what depended on it.
 
 #### Files to Create / Modify
@@ -1126,7 +1152,7 @@ Manual: confirm the vscode README states unsupported.
 
 ### Phase 14: Terminal layer deletion
 
-**Dependencies**: Phase 9, Phase 12
+**Dependencies**: Phase 10, Phase 13
 
 #### Objective
 
@@ -1138,16 +1164,19 @@ accounting the spec's final criterion asks for.
 This phase does not start until all of the following are true. Each is a fact recorded by an
 earlier phase, not a judgement:
 
-- [ ] Success criterion 11: the 24-hour gate started in Phase 9 has completed and resumed with
+- [ ] Success criterion 11: the 24-hour gate started in Phase 10 has completed and resumed with
       context.
 - [ ] Success criterion 12: Phase 1's churn classification records a breaking count.
-- [ ] Success criterion 12b: Phase 4's five delivery semantics all held. **If any failed, the
-      mailbox is not deleted and this phase proceeds without it.**
-- [ ] Success criterion 10: two drivers passed Phase 9.
+- [ ] **Success criterion 12b: Phase 4's five delivery semantics all held.** The spec is explicit —
+      "If it fails, the mailbox stays and 13 is not attempted." So a 12b failure does **not** mean
+      this phase runs without the mailbox; it means this phase does not run. The draft of this plan
+      said otherwise and contradicted the spec. On a 12b failure, stop here, report to the
+      architect, and let them rule on scope.
+- [ ] Success criterion 10: two drivers passed Phase 10.
 - [ ] The drain is complete: zero rows where
       `terminal_id IS NOT NULL AND thread_id IS NULL AND status != 'complete'`, for every
       workspace.
-- [ ] Every architect has been cut over per the spec's step 4, one workspace at a time.
+- [ ] Every architect has been cut over per the runbook Phase 9 wrote, one workspace at a time.
 
 #### Files to Create / Modify
 
@@ -1165,20 +1194,21 @@ earlier phase, not a judgement:
 - `packages/sdk/` — the terminal surface it exposes to `apps/web` goes dead with that app and is
   removed with it. The #1189 boundary tests must still pass afterwards, so this is an edit to the
   sdk, not a deletion of it.
-- `packages/codev/src/agent-farm/db/migrations/` — `terminal_sessions` and `terminal_id`, in their
-  own migration.
 - `codev-skeleton/` — mirrored throughout.
 - `codev/reviews/146-codev-client-on-t3code.md`
+
+The `terminal_sessions` table and the `terminal_id` column are **not touched here**. They go in
+Phase 15, behind a release checkpoint.
 
 #### Deliverables
 
 - [ ] PTY manager, render gate, terminal session management, harness registry, v2 client and legacy
       dashboard deleted, and the suite green without them.
-- [ ] The mailbox deleted **only if** criterion 12b held; otherwise retained with the reason
-      recorded.
-- [ ] The `terminal_sessions` table and the `terminal_id` column go **last, in their own
-      migration**, after a release has shipped with them unused. They are not dropped in the same
-      commit as the code.
+- [ ] The mailbox deleted. If criterion 12b failed, this phase does not run at all — see the gate
+      above.
+- [ ] **The schema is left alone.** `terminal_sessions` and `terminal_id` survive this phase
+      unused, which is precisely the state the spec requires a release to ship in before they are
+      dropped.
 - [ ] All 33 non-test mailbox references and the five files reaching the PTY manager are resolved,
       not left dangling. Two of the 33 are **features the spec keeps**, not call sites to unwire:
       `servers/cron-delivery.ts` and `servers/delayed-send.ts` both import `db/mailbox.js`
@@ -1196,17 +1226,70 @@ earlier phase, not a judgement:
 
 - [ ] Criterion 13: all named components deleted (subject to the 12b condition) and the suite is
       green.
-- [ ] Criterion 14: net line count is lower than baseline, recorded with both figures.
+- [ ] Criterion 14: net line count is lower than baseline, recorded with both figures. The
+      pre-migration baseline is measurable now and is recorded before deletion starts:
+      `packages/codev/src/terminal` is 5,250 lines, `apps/v2` 5,174, `apps/streamdeck` 4,225, plus
+      `render-gate.ts` at 646 and `tower-terminals.ts` at 1,185.
 - [ ] `codev/` and `codev-skeleton/` agree; a repo-wide grep for the deleted names across both
       trees returns only intentional references.
-- [ ] The schema migration is separate from the code deletion commit.
+- [ ] `terminal_sessions` and `terminal_id` still exist and are unreferenced by live code.
 - [ ] Build and tests pass.
 
 #### Test Plan
 
 The full suite, green without the deleted modules. A grep-based test asserting no live references
-to deleted symbols across both trees. Migration applied and reverted against a copy of a real
-`global.db`.
+to deleted symbols across both trees, and one asserting the schema is untouched.
+
+---
+
+### Phase 15: Terminal schema drop
+
+**Dependencies**: Phase 14, and a shipped release
+
+#### Objective
+
+Drop `terminal_sessions` and `terminal_id`, last, after a release has shipped with them unused.
+
+This is a separate phase because the spec makes it one: the columns "go last, in their own
+migration, after a release has shipped with them unused". Bundling the drop into Phase 14 would
+mean shipping the deletion and the irreversible schema change together, and there is no
+down-migration framework to undo it — a point Phase 8 establishes and this phase inherits.
+
+#### Gating — check before starting
+
+- [ ] A release has shipped containing Phase 14, with `terminal_sessions` and `terminal_id`
+      present and unused.
+- [ ] No live code references either, re-checked at the tip rather than trusted from Phase 14.
+
+#### Files to Create / Modify
+
+- `packages/codev/src/agent-farm/db/index.ts` — the drop migration, following the inline
+  `_migrations` version pattern established in Phase 8.
+- `packages/codev/src/agent-farm/db/schema.ts` — `GLOBAL_SCHEMA` updated to match.
+- `packages/codev/src/agent-farm/db/__tests__/`
+
+#### Deliverables
+
+- [ ] `terminal_sessions` dropped and `terminal_id` removed from `builders` and `architect`, in one
+      migration of their own containing nothing else.
+- [ ] `GLOBAL_SCHEMA` updated so a fresh database and a migrated one still converge.
+- [ ] The release checkpoint recorded in the review: which version shipped with the columns unused.
+- [ ] Tests for this phase.
+
+#### Acceptance Criteria
+
+- [ ] The migration applies to a copy of a real post-release `global.db` and every surviving row is
+      intact.
+- [ ] Fresh and migrated schemas are identical.
+- [ ] The commit contains the migration and nothing else.
+- [ ] Build and tests pass.
+
+#### Test Plan
+
+Unit: the migration against a copied real database; fresh-versus-migrated convergence.
+
+Manual: confirm against the release history that a shipped version carried the unused columns. This
+is a fact to look up, not to assume.
 
 ---
 
@@ -1230,7 +1313,10 @@ to deleted symbols across both trees. Migration applied and reverted against a c
 
 ## Documentation Updates
 
-- `packages/t3-contract/REFRESH.md` — the contract refresh procedure (Phase 1).
+- `tools/t3-codegen/REFRESH.md` — the contract refresh procedure (Phase 1).
+- `tools/t3-server/README.md` — bringing up a pinned server, and CI behaviour (Phase 1).
+- `codev/resources/146-remote-access-runbook.md` — pairing, exposure and teardown (Phase 7).
+- `codev/resources/146-architect-cutover-runbook.md` — the per-workspace cutover (Phase 9).
 - `codev/research/146-contract-churn-classification.md` — criterion 12 (Phase 1).
 - `scripts/t3-server/README.md` — bringing up a pinned server by hand, and what CI does without
   one (Phase 1).
