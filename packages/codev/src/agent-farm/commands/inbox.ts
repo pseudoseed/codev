@@ -16,6 +16,7 @@
 import { getTowerClient, DEFAULT_TOWER_PORT } from '../lib/tower-client.js';
 import { logger, fatal } from '../utils/logger.js';
 import { getConfig } from '../utils/config.js';
+import { heldRecoveryAction } from '../servers/mailbox-hold-policy.js';
 
 /** One held row as returned by GET /api/inbox — metadata only, never the body. */
 interface InboxRow {
@@ -175,6 +176,16 @@ export async function inboxList(options: InboxListOptions = {}): Promise<void> {
     );
     logger.info('  afx send <id> --interrupt "<message>"   (Ctrl+C first, which clears the line)');
     logger.info('  afx interrupt sends ESC, which ends a turn but does not clear typed text.');
+  }
+
+  const unreadable = rows.filter(r => heldRecoveryAction(r.holdDetail) === 'escape-screen');
+  if (unreadable.length > 0) {
+    logger.blank();
+    logger.info(
+      'Rows marked no-region-end, no-composer-marker, or geometry-mismatch are STUCK, not transient:',
+    );
+    logger.info('  Tower sends one automatic ESC after the starvation window; delivery still requires a clean gate.');
+    logger.info('  If one remains held, inspect its pane and run: afx interrupt <id> --no-enter');
   }
 }
 
