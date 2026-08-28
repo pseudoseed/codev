@@ -545,3 +545,67 @@ agent that *had* genuinely been editing my plan file earlier, and concluded it
 was the same actor. It was not. I checked my own pid chain before acting and
 asked rather than killing, which is the only reason this is a note and not an
 incident.
+
+## Phase 1 CLOSED — state at Phase 2 entry
+
+Porch advanced to `phase_2` after three iterations. Everything below is committed
+and pushed to `origin/builder/spir-146`.
+
+### What exists now
+
+- `packages/types/src/t3/` — `pin.json`, `shape-check.ts`, `index.ts`, and
+  `generated/` (schema.json, schema.ts, types.d.ts, source-hash.json,
+  methods.json, LOSSY.md, UNREPRESENTED.md, ATTRIBUTION.md). Zero runtime deps.
+- `tools/t3-codegen/` — the only `effect` in the repo, a devDependency.
+  `generate.mjs`, `classify-churn.mjs`, `transform-blindness-probe.mjs`,
+  `REFRESH.md`.
+- `tools/t3-server/` — `t3-server.mjs` (acquire/verify/start/ready/stop/status),
+  `smoke.mjs`, README, and a `.gitignore` for `.runtime/` that must never go.
+- `packages/codev/src/__tests__/spec-146-t3-contract.test.ts` and
+  `spec-146-shape-check.test.ts` — **49 tests**.
+- Research: churn classification (+ its JSON), transform-blindness evidence,
+  harness cold-start evidence.
+
+### What Phase 2 must not assume
+
+1. **The harness pins the checkout, not the `t3` CLI binary that serves it.** A
+   divergence between them is invisible to `verify`. Ruled partially-met by the
+   architect and carried into Phase 2's entry conditions. Two closures: build the
+   server from the pinned tree, or pin the CLI version in `pin.json`.
+2. **`shapeCheck` diverges from the server in BOTH directions.** Weaker on
+   everything in `LOSSY.md`; and it must not enforce `additionalProperties: false`
+   on inbound payloads, because t3code decodes with `onExcessProperty: "ignore"`.
+   Default is `excess: 'ignore'`; only use `'error'` on payloads Codev builds.
+3. **CI does not run the drift check** — issue **#152**. CI covers artifact
+   self-consistency only.
+4. **Read the spike before writing anything that talks to the server.**
+   `codev/experiments/146-t3code-porch-proof/` and
+   `/Users/chris/dev/t3code-spike/spike.mjs`. Auth is `POST /oauth/token`,
+   form-encoded, `urn:t3:params:oauth:token-type:environment-bootstrap`, then
+   `/api/auth/websocket-ticket`. I invented these once and got a 404.
+
+### What Phase 2 already has, proven
+
+`tools/t3-server/smoke.mjs` speaks the `RpcSerialization.layerJson` envelope as
+**plain JSON with no Effect at all**, and a live server accepted it — `Exit:
+Success` on a real `orchestration.dispatchCommand`, twice, port free after
+teardown. Phase 2's central premise is demonstrated, not inferred. Start from
+that file; it is the working reference for the envelope, the auth flow and the
+ack-free request path.
+
+Phase 2 still has to add: `Ack` per `Chunk` (the server enables ack backpressure
+at `RpcServer.ts:115`, so a non-acking client stalls its own stream),
+`afterSequence` resubscription, and gap detection distinct from both success and
+empty.
+
+### Running the harness
+
+```bash
+PATH=$HOME/.nvm/versions/node/v22.22.2/bin:$PATH
+node tools/t3-server/t3-server.mjs acquire && node tools/t3-server/t3-server.mjs start
+node tools/t3-server/t3-server.mjs ready     # prints the pairing token, redacts the log
+node tools/t3-server/t3-server.mjs stop
+```
+
+Node 22 is required for anything importing the contracts. The suite runs on
+Node 20 and the live-dependent tests are a `describe.skipIf` suite.
