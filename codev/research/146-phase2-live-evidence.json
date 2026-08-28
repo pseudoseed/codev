@@ -1,0 +1,38 @@
+{
+  "criterion": "Spec 146 Phase 2 live integration",
+  "scenarios": [
+    {
+      "scenario": "A: connect, dispatch, subscribe, stream",
+      "ok": true,
+      "scopes": "orchestration:read orchestration:operate terminal:operate review:write relay:read",
+      "dispatched": true,
+      "worktreeCreated": true,
+      "itemsReceived": 2,
+      "outcome": "ok",
+      "note": "stream synchronized"
+    },
+    {
+      "scenario": "B: acks honoured (with ack-suppressed control)",
+      "ok": true,
+      "ackedItems": 2,
+      "suppressedItems": 1,
+      "distinguishable": true,
+      "note": "suppressed client fell behind, so the ack is doing work"
+    },
+    {
+      "scenario": "C+D: resume classification on real sequences",
+      "ok": false,
+      "observedSequences": [],
+      "contiguous": null,
+      "withHole": null,
+      "withSnapshot": null,
+      "gapDistinctFromEmpty": false,
+      "note": "no sequenced items observed"
+    }
+  ],
+  "allScenariosPassed": false,
+  "limits": {
+    "scenarioCplusD": "NOT demonstrated live. An idle thread emits ~2 stream items, none carrying a sequence number this probe could find, so there were no server-issued sequences to classify. The classifier is unit-tested (6 tests: contiguous, empty, late-start gap, mid-range hole, snapshot gap, gap-distinct-from-empty) but those use synthetic sequences. Demonstrating it live needs an active agent turn generating a real event stream, which is Phase 3 work.",
+    "doNotRead": "allScenariosPassed:false means C+D was not demonstrated, NOT that the classifier failed. A and B passed against the live server."
+  }
+}
