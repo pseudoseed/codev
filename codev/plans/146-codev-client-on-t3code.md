@@ -29,6 +29,30 @@ checkout, and leave `packages/types` with zero runtime dependencies. The server/
 boundary tests from #1189 stay green, and the spec's vendoring constraint is satisfied by
 generated artifacts rather than by copied Effect source.
 
+**The emitter was run before this plan was written, and it is lossy in a way that changes the
+design.** Against `effect@4.0.0-beta.103` on Node 22, `toJsonSchemaDocument` handled every shape in
+the closure — structs, unions, literals, brands, refinements and both transform forms — so nothing
+in it is unrepresentable. But `Schema.String.check(isNonEmpty())` emits `minLength: 1`, while the
+*same check applied on the decoded side of a `decodeTo` transform* emits a bare `{"type": "string"}`
+with the constraint gone. `SchemaRepresentation.toRepresentation` is blind to it as well: the
+constrained and unconstrained forms serialise to the byte-identical document
+`{"representation":{"_tag":"String","checks":[]},"references":{}}`.
+
+That matters more than it looks, because `TrimmedNonEmptyString` is exactly that shape and it is
+the base of every branded entity id in t3code — `ThreadId`, `ProjectId`, `CommandId`, `TurnId`,
+`MessageId` and the rest. Two consequences, both designed into Phase 1:
+
+- The generated JSON Schema is a **lower bound** on t3code's validation, never an equivalent. A
+  validator built on it accepts input the server rejects. It is a shape check, and Phase 1 requires
+  it to say so in its own type name rather than being called a validator of the contract.
+- **A generated-artifact drift test alone cannot detect drift behind a transform.** If t3code
+  relaxed a branded id tomorrow, the emitted document would not change by one byte. So Phase 1
+  carries two drift layers, not one: a **source hash** over the 9 closure files that fires on any
+  change and forces a human to look, and the **generated diff** that names what changed in a shape
+  Codev consumes. The source hash is the load-bearing one; the generated diff is the one that
+  explains. At 9 files this is a bounded read, which is the reason the closure is pinned to a list
+  rather than followed dynamically.
+
 **The vendoring surface is a tenth of what it looks like.** `packages/contracts` is 19,662 lines,
 but the transitive import closure of `orchestration.ts`, `git.ts` and `auth.ts` — everything this
 integration actually consumes — is 9 files and 3,663 lines. `rpc.ts` is deliberately excluded:
@@ -120,12 +144,13 @@ fallback is recorded before any client code exists.
   walks the closure, emits declarations and JSON Schema.
 - `packages/t3-contract/src/generated/types.d.ts` — emitted TypeScript declarations.
 - `packages/t3-contract/src/generated/schema.json` — emitted JSON Schema document.
-- `packages/t3-contract/src/validate.ts` — a zero-dependency validator over the emitted JSON
+- `packages/t3-contract/src/generated/source-hash.json` — per-file hashes of the 9 closure files.
+- `packages/t3-contract/src/shape-check.ts` — a zero-dependency shape check over the emitted JSON
   Schema, covering only the subset the emitter actually produces.
 - `packages/t3-contract/tools/classify-churn.ts` — replays commits against the detector.
 - `packages/t3-contract/REFRESH.md` — the refresh procedure the spec's constraint requires.
 - `packages/t3-contract/__tests__/drift.test.ts`
-- `packages/t3-contract/__tests__/validate.test.ts`
+- `packages/t3-contract/__tests__/shape-check.test.ts`
 - `packages/t3-contract/__tests__/no-runtime-deps.test.ts`
 
 #### Deliverables
@@ -140,12 +165,25 @@ fallback is recorded before any client code exists.
 - [ ] Codegen emits declarations and JSON Schema from the pinned checkout. Every schema in the
       closure that the emitter **cannot** represent is listed by name in a generated
       `UNREPRESENTED.md`, with the reason. An empty list is not assumed; the list is the evidence.
-- [ ] `validate.ts` implements only the JSON Schema keywords the emitter actually produces,
-      enumerated from `schema.json`, and throws on encountering a keyword it does not implement
-      rather than passing it silently. A validator that quietly ignores a constraint reports
-      "valid" for input it never checked.
-- [ ] The drift test regenerates from the pinned checkout and fails on any difference from the
-      committed artifacts, naming the changed schema.
+      The pre-plan run against the hard cases produced no unrepresentable shapes, so an empty list
+      here is the expected result — but it is generated, not asserted from that run.
+- [ ] **`LOSSY.md`, generated alongside it, lists every emitted schema whose JSON Schema is weaker
+      than the Effect schema it came from** — detected by emitting each closure schema both as
+      written and with its transforms stripped, and recording every case where the two differ.
+      This is the list the pre-plan run showed is not empty, and it is more important than
+      `UNREPRESENTED.md`.
+- [ ] `shape-check.ts` is **named for what it does**. It implements only the JSON Schema keywords
+      the emitter actually produces, enumerated from `schema.json`, and throws on encountering a
+      keyword it does not implement rather than passing it silently. Its result type is not called
+      `valid`; passing means "matches the emitted shape", and the distinction is in the name
+      because a check that reports success for a constraint it never saw is the failure mode here.
+- [ ] **Two drift layers.** `source-hash.json` holds a hash per closure file, and the drift test
+      fails on any change to any of the 9 files — this is the layer that catches a relaxed branded
+      id, which the generated artifacts provably cannot see. The generated-artifact diff runs
+      alongside it and names the changed schema when the change is one the emitter can express.
+      A source-hash failure with no generated diff is a valid and expected outcome, and the test
+      reports it as "changed, effect on consumed shapes unknown" rather than as either a pass or a
+      silent failure.
 - [ ] `no-runtime-deps.test.ts` asserts the package's `dependencies` field is empty and that no
       file under `src/` imports `effect`.
 - [ ] The 184 commits touching the closure since 2026-02-07 are replayed through the detector and
@@ -160,25 +198,38 @@ fallback is recorded before any client code exists.
 - [ ] The existing #1189 boundary tests on `codev-core` and `codev-sdk` still pass unchanged.
 - [ ] Regenerating from the pinned commit is a no-op; mutating any closure file in a scratch
       checkout makes the drift test fail and names the schema.
-- [ ] `UNREPRESENTED.md` exists and is accurate — spot-checked by hand against at least the three
-      hardest cases in the closure: `TrimmedString` (a `decodeTo` transform),
+- [ ] **The transform-blindness regression test.** Take `TrimmedNonEmptyString` in a scratch
+      checkout, remove its `isNonEmpty` check, regenerate, and assert that the **source-hash layer
+      fails**. This case is chosen because the generated artifacts demonstrably do *not* change:
+      both forms emit `{"type":"string"}` and both serialise to the identical Representation
+      document. A drift test that passes here is not detecting drift, and this is the assertion
+      that proves the second layer is doing work.
+- [ ] `UNREPRESENTED.md` and `LOSSY.md` exist and are accurate — spot-checked by hand against the
+      three hardest cases in the closure: `TrimmedString` (a `decodeTo` transform),
       `ForwardCompatibleArray` (a filtering transform), and `ModelSelectionSource` (a pre-decode
-      legacy promotion). These are named because they are the shapes most likely to defeat a JSON
-      Schema emitter, and a plan that did not name them would let the phase pass by testing only
-      plain structs.
-- [ ] The churn classification records a breaking count, not a commit count.
+      legacy promotion). The pre-plan run showed the first two are representable but lossy —
+      `TrimmedNonEmptyString` loses `minLength`, and `ForwardCompatibleArray` emits `{"type":
+      "array"}` with no `items` — so both belong in `LOSSY.md`, and a `LOSSY.md` that omits them is
+      wrong.
+- [ ] The churn classification records a breaking count, not a commit count, and states which layer
+      caught each breaking change. Since the source-hash layer fires on cosmetic changes too, the
+      classification distinguishes "source changed, consumed shapes unaffected" from "consumed
+      shapes changed" — otherwise the breaking count is inflated to the commit count and the
+      criterion is not met.
 - [ ] Build and tests pass.
 
 #### Test Plan
 
-Unit: the validator against valid, invalid and unrepresentable payloads; the closure guard against
-an import graph that reaches outside the list; the no-runtime-deps assertion.
+Unit: the shape check against matching, non-matching and unrepresentable payloads; the closure
+guard against an import graph that reaches outside the list; the no-runtime-deps assertion.
 
 Integration: generate against the pinned checkout twice and assert byte equality; generate against
-a checkout with one schema field removed and assert the drift test fails naming that schema.
+a checkout with one schema field removed and assert the generated-diff layer fails naming that
+schema; generate against a checkout with `isNonEmpty` removed from `TrimmedNonEmptyString` and
+assert the source-hash layer fails while the generated diff stays empty.
 
-Manual: read `UNREPRESENTED.md` and confirm each entry against the source. If any entry is a schema
-a later phase must validate at runtime, that is a blocker to be raised with the architect before
+Manual: read `UNREPRESENTED.md` and `LOSSY.md` against the source. If any entry is a constraint a
+later phase intended to rely on at runtime, that is a blocker to raise with the architect before
 Phase 2 starts, not a note to carry forward.
 
 ---
@@ -212,9 +263,11 @@ claim stops being a one-off observation and becomes a tested property.
       (`RpcServer.ts:115`, `supportsAck`), so a client that does not acknowledge stalls its own
       stream after the server's buffer fills. This is a protocol obligation, not an optimisation,
       and it is why the phase exists separately from Phase 3.
-- [ ] Payloads are validated on the way in using Phase 1's validator. A payload that fails
-      validation is surfaced as a named decode error carrying the method tag and the failing path.
-      It is never coerced and never dropped silently.
+- [ ] Payloads are shape-checked on the way in using Phase 1's `shape-check.ts`. A payload that
+      fails is surfaced as a named decode error carrying the method tag and the failing path. It is
+      never coerced and never dropped silently. Per Phase 1, this is a lower bound on t3code's own
+      validation and the code says so — no call site may treat a passing shape check as proof the
+      payload is contract-valid.
 - [ ] Reconnect resubscribes with `afterSequence` at the last applied sequence.
 - [ ] If the server answers a resubscription with a snapshot instead of the requested range, the
       client reports a **gap** as its own distinct signal. It does not return an empty range, and
@@ -900,9 +953,10 @@ to deleted symbols across both trees. Migration applied and reverted against a c
 
 | Risk | Probability | Impact | Mitigation |
 |---|---|---|---|
-| JSON Schema codegen cannot represent the transform-heavy schemas (`TrimmedString`, `ForwardCompatibleArray`, `ModelSelectionSource`) | Medium | High | Phase 1 names these three explicitly and emits `UNREPRESENTED.md`. If any is needed at runtime, it blocks before Phase 2 rather than surfacing in Phase 10 |
+| Generated schemas are weaker than t3code's, so drift behind a transform is invisible | **Confirmed** | High | Measured before this plan was written: `TrimmedNonEmptyString` and `TrimmedString` emit identical JSON Schema *and* identical Representation documents. Phase 1 adds a source-hash layer over the 9 closure files as the load-bearing detector, with a regression test asserting the generated layer alone would miss it |
+| The shape check is mistaken for contract validation at a call site | Medium | High | Named `shape-check`, not `validate`; `LOSSY.md` enumerates every weakened schema; Phase 2 forbids treating a pass as contract validity |
 | `effect@4.0.0-beta.103` on `effect/unstable/rpc/*` changes shape | High | High | Only a devDependency of the codegen; Phase 2's transport owns the envelope directly, so an Effect API change costs a regenerate, not a rewrite |
-| 27 contract commits a month outruns the refresh procedure | High | High | Phase 1's drift test names the changed schema; the closure is 9 files, not 27, so a refresh is a bounded read |
+| 27 contract commits a month, and the source-hash layer fires on cosmetic changes too | High | Medium | The closure is 9 files, so each fire is a bounded read; the generated diff runs alongside and answers "did anything we consume change" in most cases without a manual read |
 | Ack backpressure missed, streams stall under load | Medium | High | Phase 2 tests it directly, with an ack-suppressed control that must stall |
 | Delivery semantics fail, mailbox cannot be deleted | Medium | Medium | Phase 4 runs early and its failure is an expected outcome the spec already rules on, not a blocker |
 | The approval boundary is claimed stronger than it is | Medium | High | Phase 5 states the loopback-attribution limit in the threat model and tests the refusal that actually matters |
