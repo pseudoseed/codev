@@ -1,0 +1,42 @@
+{
+  "orchestration.dispatchCommand": {
+    "input": "dispatchCommandInput",
+    "output": "dispatchCommandOutput",
+    "stream": false
+  },
+  "orchestration.subscribeThread": {
+    "input": "subscribeThreadInput",
+    "output": "subscribeThreadOutput",
+    "stream": true
+  },
+  "orchestration.getTurnDiff": {
+    "input": "getTurnDiffInput",
+    "output": "getTurnDiffOutput",
+    "stream": false
+  },
+  "orchestration.searchThreads": {
+    "input": "searchThreadsInput",
+    "output": "searchThreadsOutput",
+    "stream": false
+  },
+  "vcs.createWorktree": {
+    "input": "VcsCreateWorktreeInput",
+    "output": "VcsCreateWorktreeResult",
+    "stream": false
+  },
+  "vcs.removeWorktree": {
+    "input": "VcsRemoveWorktreeInput",
+    "output": null,
+    "stream": false
+  },
+  "vcs.createRef": {
+    "input": "VcsCreateRefInput",
+    "output": "VcsCreateRefResult",
+    "stream": false
+  },
+  "vcs.status": {
+    "input": "VcsStatusInput",
+    "output": "VcsStatusResult",
+    "stream": false
+  }
+}
