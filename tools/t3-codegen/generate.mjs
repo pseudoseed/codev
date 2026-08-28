@@ -193,6 +193,10 @@ function record(name, schema) {
  * primitives, which is where a reader needs to look.
  */
 async function scanForLoss() {
+  // A concrete element schema to probe combinators with. baseSchemas is the
+  // right source: it is the closure's own root and has no further imports.
+  const orchestrationBase = await import(pathToFileURL(join(stagingDir, 'baseSchemas.ts')).href);
+
   for (const file of pin.closure) {
     let mod;
     try {
@@ -202,21 +206,53 @@ async function scanForLoss() {
     }
     for (const name of exportedConstNames(file)) {
       const candidate = mod[name];
+      if (candidate == null) continue;
+
       // Effect 4 schemas are callable, so `typeof` is 'function', not 'object'.
       // Guarding on 'object' silently skips every schema and reports zero loss.
       const isSchema =
-        candidate != null &&
-        (typeof candidate === 'object' || typeof candidate === 'function') &&
-        candidate.ast !== undefined;
-      if (!isSchema) continue;
-      if (!sourceConstrains(file, name)) continue;
-      let emitted;
-      try {
-        emitted = emit(candidate);
-      } catch {
-        continue; // recorded as unrepresented if we actually consume it
+        (typeof candidate === 'object' || typeof candidate === 'function') && candidate.ast !== undefined;
+
+      if (isSchema) {
+        if (!sourceConstrains(file, name)) continue;
+        let emitted;
+        try {
+          emitted = emit(candidate);
+        } catch {
+          continue; // recorded as unrepresented if we actually consume it
+        }
+        if (isBare(emitted)) lossy.push({ file, name, emitted: JSON.stringify(emitted) });
+        continue;
       }
-      if (isBare(emitted)) lossy.push({ file, name, emitted: JSON.stringify(emitted) });
+
+      // Schema COMBINATORS — a plain function returning a schema, e.g.
+      // `ForwardCompatibleArray`. These have no `.ast` of their own, so the
+      // branch above skips them, and they are exactly where the second known
+      // loss lives: a filtering `decodeTo` transform whose element type does not
+      // survive emission. Probe by applying the combinator to a known element and
+      // checking whether that element's shape shows up in the output.
+      if (typeof candidate === 'function' && candidate.length >= 1) {
+        try {
+          const probeElement = orchestrationBase.ClientSurface ?? null;
+          if (!probeElement) continue;
+          const applied = candidate(probeElement);
+          if (!applied || applied.ast === undefined) continue;
+          const emitted = emit(applied);
+          // An array whose `items` vanished has lost its element constraint
+          // entirely: `{"type":"array"}` accepts an array of anything.
+          if (emitted && emitted.type === 'array' && emitted.items === undefined) {
+            lossy.push({
+              file,
+              name,
+              emitted: JSON.stringify(emitted),
+              note: 'combinator: element type does not survive emission',
+            });
+          }
+        } catch {
+          // Not a schema combinator, or needs arguments we cannot synthesise.
+          continue;
+        }
+      }
     }
   }
 }

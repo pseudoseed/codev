@@ -18,6 +18,7 @@ whose emitted JSON Schema carries no constraint at all. Every field typed with o
 degrades wherever it appears in `schema.json`.
 
 - `TrimmedNonEmptyString` (`baseSchemas.ts`) → `{"type":"string"}`
+- `ForwardCompatibleArray` (`baseSchemas.ts`) → `{"type":"array"}`
 - `ThreadId` (`baseSchemas.ts`) → `{"type":"string"}`
 - `ProjectId` (`baseSchemas.ts`) → `{"type":"string"}`
 - `EnvironmentId` (`baseSchemas.ts`) → `{"type":"string"}`
