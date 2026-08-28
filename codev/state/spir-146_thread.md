@@ -854,14 +854,21 @@ and once for each "hole". Every healthy resume on a busy server would have been 
 gap, and porch would have reconciled from snapshots forever while reporting that
 it was detecting loss.
 
-**Why nothing caught it.** The unit tests fed it consecutive integers. The live run
-classified real sequences and passed — because that run had exactly one active
-thread, so the global counter and the thread's counter were the same numbers. Code,
-tests and live evidence all agreed. This is the pattern already in this thread
-stated in its general form: *agreement between tools built from the same assumption
-is not corroboration, it is the assumption repeated.* Three instruments, one
-premise, and the premise was never checked against the server. What broke the tie
-was not another instrument — it was reading `readFromSequence`'s SQL.
+**Why nothing caught it.** The unit tests fed it consecutive integers, so they
+agreed with the code because they shared its premise — the pattern already recorded
+here: *agreement between tools built from the same assumption is not corroboration,
+it is the assumption repeated.*
+
+The live run did **not** agree. Checking rather than assuming: its C+D scenario is
+recorded `not-demonstrated`, `observedSequences: []` — it never saw a
+server-issued sequence, so it never ran the classifier at all. It abstained, and
+said so. Two instruments shared the premise; the third declined to answer and was
+read as though the question had been settled elsewhere. That is the same defect as
+the rest of this list, pointed at my own evidence file: an abstention treated as
+support.
+
+What broke the tie was not another instrument. It was reading
+`readFromSequence`'s SQL.
 
 **The fix, and what it gives up.** `contiguous` is renamed `replayed`, because
 "the server honoured the cursor" is what is actually established and "the range has
