@@ -173,10 +173,27 @@ handing it to an agent, and no design can.
 `apps/vscode` and `apps/streamdeck` both reach terminal APIs directly and break when terminal
 session management is deleted.
 
-**Ruled: both are retired, not migrated.** The owner does not use the VS Code extension and has
-never used the Stream Deck plugin. Migrating them would cost more than the client itself and
-serve nobody. Retirement is explicit and lands *before* the deletion phase, so neither is
-discovered broken after the fact. Recent Stream Deck work (specs 1463, 1465) is written off.
+**Ruled: both are retired, not migrated, and they are retired differently.**
+
+The owner does not use the VS Code extension and has never used the Stream Deck plugin.
+Migrating them would cost more than the client itself and serve nobody.
+
+**`apps/streamdeck` is deleted.** Nothing upstream touches it, so removal is clean and permanent.
+Recent Stream Deck work (specs 1463, 1465) is written off.
+
+**`apps/vscode` stays in the tree, unbuilt and unshipped.** This is decided by measurement, not
+preference. Upstream `cluesmith/codev` is 173 commits ahead of this fork, and **every one of its
+`apps/` changes is in `apps/vscode`** (180 file-touches across the contextual panel, comments and
+review queue). By contrast, upstream has **zero** commits touching `packages/codev/src/terminal`,
+`packages/codev/src/agent-farm/servers`, or `apps/v2` — the things this migration actually
+deletes.
+
+So deleting Tower, the PTY layer and v2 costs nothing in future merges, while deleting
+`apps/vscode` would conflict on every upstream merge forever. The conflict is cheap to resolve
+("deleted by us", `git rm` again) but it recurs indefinitely and buys nothing. Dropping it from
+the build and the release is enough. It is removed from the workspace build, excluded from
+packaging, and marked unsupported in its README. If upstream ever stops developing it, delete it
+then.
 
 `codev-skeleton/` gains an optional t3code dependency. An adopter without a t3code server keeps
 the existing behavior until the deletion phase, at which point running a server becomes a
@@ -324,8 +341,9 @@ The mailbox is replaced only if these hold, otherwise it stays:
 - [ ] 8. With one server stopped, its subtree is marked disconnected with a last-updated
   timestamp. Other machines stay live. Nothing renders blank and nothing renders stale without
   saying so.
-- [ ] 9. `apps/vscode` and `apps/streamdeck` are retired, with their removal landed before the
-  deletion phase.
+- [ ] 9. `apps/streamdeck` is deleted, and `apps/vscode` is dropped from the workspace build and
+  from packaging while remaining in the tree, both landed before the deletion phase. A fresh
+  `npm pack` contains neither.
 - [ ] 9b. A human approves a real gate from the client, and porch records the approving session
   id, machine and timestamp in `status.yaml`.
 - [ ] 9c. A spawned builder's environment contains no approval capability, asserted by a test
