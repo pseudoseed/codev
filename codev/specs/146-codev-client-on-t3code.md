@@ -366,9 +366,15 @@ The mailbox is replaced only if these hold, otherwise it stays:
 2. **`apps/vscode` and `apps/streamdeck`: retired.** See Extensions and adopters.
 3. **The architect is a thread.** See Desired State.
 
+4. **`afx` stays, as a thin CLI over `porch-driver`.** Same commands, same flags, new engine.
+   It is the one interface consistent across every repo the owner works in, and the afx skill
+   documents it for both agents and humans. Replacing it would mean retraining every workflow to
+   buy nothing. `afx spawn`, `send`, `status`, `interrupt`, `cleanup` and `dev` keep their
+   contracts; what changes underneath is that `send` becomes a queued command with an
+   acknowledgement instead of a keystroke into a screenshot.
+
 **Important, still open:**
 
-4. Does `afx` become a thin CLI over `porch-driver`, or keep its own path?
 5. What is the coexistence window, and what drains before the mailbox and PTY manager are removed?
 6. If the architect is a thread, what happens to `afx send architect` and sibling-architect
    addressing? Likely a turn on the target architect's thread, but the multi-architect naming in
