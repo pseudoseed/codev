@@ -130,6 +130,12 @@ async function main() {
       newRefName: `spec146-phase3-${Date.now()}`,
     });
 
+    // A token the model can only produce if the ROLE actually reached it. The
+    // role used to be written to `.builder-role.md` and sent nowhere, and the
+    // first turn carried only its own text — which is precisely what a live
+    // record with no role-derived answer in it could not distinguish.
+    const roleToken = `ROLE_${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+
     const thread = await DriverThread.create(
       { dispatcher: primary.dispatcher, journal, tracker },
       {
@@ -139,7 +145,7 @@ async function main() {
         model,
         worktreePath: worktree.path,
         branch: worktree.refName,
-        roleContent: '# live harness thread\n',
+        roleContent: roleContent(roleToken),
       },
     );
     log('thread', thread.threadId, 'driver', thread.driverKind, 'worktree', thread.worktreePath);
@@ -161,7 +167,7 @@ async function main() {
     controlStream.catch((error) => log('control stream ended:', String(error?.message ?? error)));
     await withTimeout(synced.promise, 'control subscription synchronized', 60_000);
 
-    if (requested.has('a')) await scenarioA(thread, worktree);
+    if (requested.has('a')) await scenarioA(thread, worktree, roleToken);
     if (requested.has('b')) await scenarioB(thread);
     if (requested.has('c')) await scenarioC({ thread, auth });
     if (requested.has('d')) await scenarioD({ thread, auth });
@@ -210,16 +216,37 @@ function limits() {
   };
 }
 
+/**
+ * The role prompt the thread is created with.
+ *
+ * It carries a token because the deliverable is that the role reaches the AGENT,
+ * not that the harness passed a string: a role written only to `.builder-role.md`
+ * looks identical from the outside until something asks the model for something
+ * only the role could have told it.
+ */
+function roleContent(roleToken) {
+  return (
+    '# live harness thread\n\n' +
+    `Your role token is ${roleToken}. ` +
+    'When a turn asks for your role token, reply with it exactly.\n'
+  );
+}
+
 // ---------------------------------------------------------------- scenario A
 
-async function scenarioA(thread, worktree) {
+async function scenarioA(thread, worktree, roleToken) {
   const token = `EXT_${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
   const name = 'A: a thread on a worktree, a turn to settle, an external write read back';
   try {
+    const roleWasPending = !thread.roleDelivered;
     const first = await thread.runTurn(
-      `Reply with exactly TURN1_READY. Do not run any tool and do not modify files.`,
+      `Reply with exactly TURN1_READY_<your role token> and nothing else. ` +
+        `Do not run any tool and do not modify files.`,
       { timeoutMs: 10 * 60_000 },
     );
+    // The model can only answer this if the role reached it, so the assertion is
+    // about delivery rather than about the harness having passed a string.
+    const roleReachedTheModel = first.text.includes(`TURN1_READY_${roleToken}`);
 
     // The external write goes through the phase-check path: a process porch owns,
     // in the thread's own worktreePath, between turns. No terminal RPC.
@@ -235,15 +262,26 @@ async function scenarioA(thread, worktree) {
     const sawFile = second.text.includes(`EXTERNAL_SEEN_${token}`);
     const settledBoth = first.endSequence > first.startSequence && second.startSequence >= first.endSequence;
     record(
-      sawFile && settledBoth && write.passed && readBack.stdout.trim() === token
+      sawFile && settledBoth && roleWasPending && roleReachedTheModel && write.passed && readBack.stdout.trim() === token
         ? demonstrated(name, {
             turn1: first.text.slice(0, 120),
             turn2: second.text.slice(0, 160),
+            roleDeliveredInFirstTurn: roleReachedTheModel,
+            roleNotRepeatedAfterwards: thread.roleDelivered,
             checkRanInWorktree: write.cwd === thread.worktreePath,
             checkShell: write.shell,
-            note: 'two turns settled, and the second read a file written between them by a process porch spawned',
+            note:
+              'two turns settled, the FIRST carried the role prompt (the model answered with ' +
+              'a token only the role contained), and the second read a file written between them ' +
+              'by a process porch spawned',
           })
-        : failed(name, { turn1: first.text.slice(0, 200), turn2: second.text.slice(0, 200), sawFile, settledBoth }),
+        : failed(name, {
+            turn1: first.text.slice(0, 200),
+            turn2: second.text.slice(0, 200),
+            sawFile,
+            settledBoth,
+            roleReachedTheModel,
+          }),
     );
   } catch (error) {
     record(failed(name, { note: String(error?.message ?? error) }));
