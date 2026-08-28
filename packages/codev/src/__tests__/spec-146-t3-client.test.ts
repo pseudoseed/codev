@@ -782,3 +782,45 @@ describe('spec 146 phase 2: a codegen defect surfaces at the call site, not in t
     await expect(promise).resolves.toEqual({ a: 1 });
   });
 });
+
+describe('spec 146 phase 2: a cursor earned before synchronizing is not thrown away', () => {
+  it('resumes at the applied cursor even when the first attempt never synchronized', async () => {
+    // The case: attempt 1 applies 10 and 11, then the socket drops BEFORE the
+    // server signals catch-up is complete. Gating "should I resume?" on having
+    // synchronized would discard a real cursor and pull a whole snapshot to
+    // redeliver events already applied.
+    const calls: Array<Record<string, unknown>> = [];
+    let turn = 0;
+    const client = {
+      async stream(_m: string, payload: Record<string, unknown>, onValue: (v: unknown) => void) {
+        calls.push(payload);
+        if (turn++ === 0) {
+          onValue({ kind: 'event', event: { sequence: 10 } });
+          onValue({ kind: 'event', event: { sequence: 11 } });
+          throw new Error('dropped before synchronized');
+        }
+        onValue({ kind: 'synchronized' });
+        return undefined;
+      },
+    };
+
+    const sub = new ResumingSubscription(async () => ({ client: client as never, close: () => {} }), {
+      method: 'orchestration.subscribeThread',
+      payload: { threadId: 't' },
+      sequenceOf: (v: unknown) => (v as { event?: { sequence?: number } })?.event?.sequence ?? null,
+      isSnapshot: () => false,
+      isSynchronized: (v: unknown) => (v as { kind?: string })?.kind === 'synchronized',
+      onValue: () => {},
+      onResume: () => {},
+      delayBetweenAttemptsMs: 2,
+    });
+
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 40));
+    sub.stop();
+    await running;
+
+    expect(calls[0]).not.toHaveProperty('afterSequence');
+    expect(calls[1].afterSequence).toBe(11);
+  });
+});

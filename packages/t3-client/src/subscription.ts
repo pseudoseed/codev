@@ -134,7 +134,14 @@ export class ResumingSubscription {
 
       // A first subscription sends no cursor and gets a snapshot, which is
       // correct rather than a gap. Only a resume can produce one.
-      const resuming = this.#everSubscribed || (this.options.startAfter ?? 0) > 0;
+      //
+      // `#cursor.applied > 0` is part of the test, not just `#everSubscribed`: a
+      // first attempt that applied events and then dropped BEFORE synchronizing
+      // has a real cursor, and re-subscribing without it would pull a whole
+      // snapshot to redeliver events we already applied. Gating only on
+      // synchronization would throw that cursor away.
+      const resuming =
+        this.#everSubscribed || this.#cursor.applied > 0 || (this.options.startAfter ?? 0) > 0;
       const payload: Record<string, unknown> = {
         ...this.options.payload,
         requestCompletionMarker: true,
