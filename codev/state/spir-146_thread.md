@@ -1221,11 +1221,22 @@ Three documented claims in this repo were false while that stood:
 - The plan's Phase 3 cursor deliverable, which the crash-recovery criteria are
   built on.
 
+### RULE: a test can be correct, run, pass, and still be pointed away from the bug
+
 **Why my test missed it.** It failed the handler on the *last* event before a drop
 — the single arrangement where the bug cannot appear, because there is no later
-event to carry the cursor past the hole. The suite was green and said nothing.
-Same shape as the ack-suppression control: a test that cannot fail proves nothing,
-and this one could only fail in an arrangement I did not write.
+event to carry the cursor past the hole.
+
+This is its own instance, distinct from the missing-test cases above, and the
+distinction is the point: **the test was not absent and it was not wrong.** It was
+aimed at the one position that could not fail. It exercised the right function,
+asserted a true property, and ran green on broken code.
+
+So "is there a test for this?" is the wrong question. The question is "what
+arrangement would this test have to be in to fail, and is that the arrangement the
+bug lives in?" For the handler case the answer was no, and the fix was a second
+test in the arrangement I had not written — 10 fails while 11 succeeds — not a
+better version of the first.
 
 Fixed: a handler failure sets a marker, refuses everything after it in that
 stream, reports through a new `onHandlerError`, and closes the transport so the
@@ -1253,9 +1264,19 @@ My own tests for `RpcFailureError` fed a single-object cause, so they agreed wit
 the code because they shared its mistake. The reference was on disk the whole
 time. I cited it without reading it.
 
-**The rule this earns:** *citing a source is not consulting it.* A comment naming
-the file it was derived from reads as strong evidence and costs nothing to write.
-The claim was checkable in one grep and stood for a whole phase.
+### RULE: citing a source is not consulting it
+
+**Goes directly beside the checkbox rule. They are the same defect from two
+directions: one ticks a box for work not done, the other ticks it for
+verification not performed.**
+
+A comment naming the file it was derived from reads as strong evidence and costs
+nothing to write. The deliverable said "validated against `RpcMessage.ts` as the
+reference", the file was on disk, one grep would have caught all three errors,
+and the box was ticked for a whole phase.
+
+This one is more dangerous than the nine, because it produces a deliverable that
+**reads as verified**. A missing check looks missing. A cited check looks done.
 
 ### The rest, all real
 
@@ -1282,6 +1303,18 @@ The claim was checkable in one grep and stood for a whole phase.
 
 claude's review states "All ten wire shapes are modelled against `RpcMessage.ts`"
 in its "what's solid" section — the exact thing codex proved false. Two lanes, and
-one of them corroborated the error rather than catching it. Worth recording
-against the standing order: a 2-way agreeing is weaker than it looks, and here
-they did not even agree.
+one of them corroborated the error rather than catching it.
+
+Two conclusions, both the architect's and both worth keeping:
+
+- **This is the argument for two lanes rather than one.** The disagreement is what
+  surfaced the envelope. Had only claude run, the `cause` shape would have
+  shipped, and the first Phase 3 test branching on
+  `OrchestrationCommandIdConflictError` would have found `tag` returning null with
+  no obvious cause.
+- **STANDING ORDER: weight findings over affirmations, from both lanes.** A
+  "what's solid" section is a lane restating my own claims back to me, and it
+  carries no evidence unless the lane says *how* it checked. claude's section
+  restated the deliverable's own wording. Reading it as independent confirmation
+  is the abstention error again, wearing better clothes: not silence read as
+  agreement this time, but an echo read as corroboration.
