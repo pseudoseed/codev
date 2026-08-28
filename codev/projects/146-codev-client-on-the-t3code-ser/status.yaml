@@ -8,10 +8,10 @@ plan_phases:
     status: complete
   - id: phase_2
     title: t3code RPC transport client
-    status: in_progress
+    status: complete
   - id: phase_3
     title: porch-driver session lifecycle and crash recovery
-    status: pending
+    status: in_progress
   - id: phase_4
     title: Message delivery semantics
     status: pending
@@ -48,7 +48,7 @@ plan_phases:
   - id: phase_15
     title: Terminal schema drop
     status: pending
-current_plan_phase: phase_2
+current_plan_phase: phase_3
 gates:
   spec-approval:
     status: approved
@@ -62,8 +62,8 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 3
-build_complete: true
+iteration: 1
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -165,7 +165,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/spir-146/codev/projects/146-codev-client-on-the-t3code-ser/146-phase_2-iter3-claude.txt
         stated: true
 started_at: '2026-08-28T15:56:27.086Z'
-updated_at: '2026-08-28T21:09:16.164Z'
+updated_at: '2026-08-28T21:09:17.823Z'
 context_refreshes:
   - boundary: enter:plan
     at: '2026-08-28T15:58:58.492Z'
@@ -173,6 +173,8 @@ context_refreshes:
   - boundary: plan-phase:phase_2
     at: '2026-08-28T18:28:33.939Z'
     acknowledged_at: '2026-08-28T18:30:00.008Z'
+  - boundary: plan-phase:phase_3
+    at: '2026-08-28T21:09:17.823Z'
 force_advanced:
   phase: phase_2
   iteration: 3
