@@ -250,8 +250,13 @@ describe('spec 146: the harness criterion that gates Phase 2', () => {
       const sourceAge = statSync(join(repoRoot, 'tools', 't3-server', source)).mtimeMs;
       expect(
         evidenceAge,
-        `${source} changed after the cold-start evidence was recorded — re-run ` +
-          `\`node tools/t3-server/smoke.mjs --runs 2\` rather than trusting a stale result`,
+        `${source} changed after the cold-start evidence was recorded — regenerate it with\n` +
+          `  nvm use 22 && node tools/t3-server/smoke.mjs --runs 2 > ` +
+          `codev/research/146-harness-coldstart-evidence.json\n` +
+          `rather than trusting a stale result. The redirection is part of the command: smoke.mjs ` +
+          `prints to stdout and writes nothing, so running it without one re-runs the whole cold ` +
+          `start and leaves the evidence exactly as stale as it was. (Node 22 because the t3 ` +
+          `server needs node:sqlite.)`,
       ).toBeGreaterThanOrEqual(sourceAge - 1000);
     }
   });
