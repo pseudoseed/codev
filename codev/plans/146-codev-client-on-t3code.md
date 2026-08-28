@@ -792,6 +792,35 @@ version done against `GLOBAL_SCHEMA` in `schema.ts`. **There are no down-migrati
 draft's "migration is reversible" acceptance criterion was not achievable, and it is replaced
 below with one that is.
 
+#### What rollback actually means here
+
+The spec's rollback section reads as though the schema can be reverted. Given the framework above,
+it cannot, and this plan says so plainly rather than implying otherwise.
+
+**There is no mechanism to un-apply a migration.** `_migrations` records versions applied and
+nothing reads it backwards. So "revert the schema" is not an operation this system offers.
+
+What *is* revertible is the spec's steps 1 and 2, and the spec is already right that those are the
+rollback:
+
+1. **Stop new thread-backed spawns.** `afx spawn` returns to the PTY path. This is a code change,
+   fully revertible, and it takes effect immediately.
+2. **Let existing thread-backed builders finish,** or capture each one's branch and worktree path
+   and close its thread deliberately. Never drop a thread with unmerged work.
+
+Step 3 — the spec calls it cleanup, not rollback — is **restore from a backup of `global.db`**,
+and nothing else. There is no down-migration to run instead. Two consequences follow and both are
+deliverables below:
+
+- The migration is written to be **additive only** on the way in. `ADD COLUMN` leaves the existing
+  table shape untouched, so a database that has taken the migration is still readable by the
+  previous release even though the column is unknown to it. A table rebuild would not have that
+  property, which is the deciding argument between the two options below and is why the choice is
+  made here rather than by the implementer.
+- **A copy of `global.db` is taken before the migration runs**, once, automatically, and its path
+  is logged. This is the only thing that makes step 3 possible at all, and a migration that assumes
+  a backup exists without creating one is assuming something no code guarantees.
+
 The `architect` table is the hard part, and the spec is right about why. Verified against
 `db/schema.ts:177-187`: `pid INTEGER NOT NULL`, `port INTEGER NOT NULL` and `cmd TEXT NOT NULL`
 all lack defaults, and a thread-backed architect has none of the three. The `builders` table does
@@ -817,13 +846,16 @@ not have this problem — its `pid` and `port` already carry `DEFAULT 0`.
       were added.
 - [ ] `builders` gains a nullable `thread_id`. Old rows stay valid with no backfill, following the
       pattern `harness` and `model` established.
-- [ ] `architect` gains a nullable `thread_id`, and the migration makes a thread-backed row
-      representable. Two options exist; the phase picks one and records why. A **table rebuild**
-      relaxing the three `NOT NULL` columns with a `CHECK` that exactly one shape is present is
-      stricter but, given no down-migration framework exists, is effectively one-way. An **`ADD
-      COLUMN` plus sentinel values** (`0`, `0`, `''`) with exclusivity enforced in code is weaker
-      at the schema level but leaves the table shape untouched, which matters when the only way
-      back is a restore. **A row must represent either shape and never both**, whichever is chosen.
+- [ ] `architect` gains a nullable `thread_id`. **The `ADD COLUMN` plus sentinel-values option is
+      chosen** (`pid` 0, `port` 0, `cmd` `''`), with exclusivity enforced in code rather than by a
+      `CHECK`. The rejected alternative — a table rebuild relaxing the three `NOT NULL` columns
+      with a `CHECK` constraint — is stricter at the schema level, but it changes the table shape,
+      and with no down-migration the only way back is a restore from backup. Additive stays
+      readable by the previous release; a rebuild does not. **A row must represent either shape and
+      never both.**
+- [ ] **A backup of `global.db` is taken before the migration runs**, and its path is logged at
+      `info`. Step 3 of the spec's rollback is a restore, so the backup is not a precaution, it is
+      the mechanism.
 - [ ] The migration follows the existing mechanism exactly: a new version constant, a guarded
       inline block in `db/index.ts`, and matching `GLOBAL_SCHEMA` text so a fresh database and a
       migrated one converge. A test asserts they converge, since that is the property the
@@ -843,6 +875,11 @@ not have this problem — its `pid` and `port` already carry `DEFAULT 0`.
       spawns, confirm `afx spawn` returns to the PTY path immediately, and assert no thread-backed
       row is orphaned. The spec is explicit that dropping `thread_id` while thread-backed builders
       exist orphans real work, so the revertible step is the spawn path, not the column.
+- [ ] **The restore path is exercised once, for real**: take the automatic backup, apply the
+      migration, restore the backup, and confirm the previous release opens the restored database.
+      This is the only rollback the framework supports, so it is tested rather than assumed.
+- [ ] A migrated database opens without error under the **previous** release, proving the migration
+      is additive. This is the property that makes a restore optional rather than mandatory.
 - [ ] A row carrying both a `terminal_id` and a `thread_id` is rejected.
 - [ ] A `status.yaml` written before this change loads unchanged; a new one carries `thread_id`.
 - [ ] A new spawn takes the thread path; an existing PTY builder is unaffected and still reachable.
@@ -1284,6 +1321,23 @@ down-migration framework to undo it — a point Phase 8 establishes and this pha
 - [ ] `terminal_sessions` dropped and `terminal_id` removed from `builders` and `architect`, in one
       migration of their own containing nothing else.
 - [ ] `GLOBAL_SCHEMA` updated so a fresh database and a migrated one still converge.
+- [ ] **The fresh-versus-existing sentinel is changed in this same migration, because dropping
+      `terminal_sessions` breaks it.** `db/index.ts:152-156` decides `isFresh` by asking whether the
+      `terminal_sessions` table exists, and the comment there says the check deliberately is *not*
+      `_migrations`, since that table "could exist but be empty in a partially-initialized legacy
+      DB". Drop `terminal_sessions` and every existing `global.db` is misread as fresh on the next
+      open: the code runs `GLOBAL_SCHEMA`, marks versions 1…`GLOBAL_CURRENT_VERSION` applied, and
+      **returns early — so no future migration ever runs on that database again.** The data
+      survives, because `GLOBAL_SCHEMA` is `CREATE TABLE IF NOT EXISTS` throughout; what is lost is
+      the ability to migrate that database ever again, silently and with no error, surfacing at
+      v21 on someone else's issue months later.
+
+      **The sentinel becomes `builders`,** ruled by the architect and recorded here rather than
+      left to the implementer. It is the one table the system cannot function without, so unlike
+      `terminal_sessions` it can never be dropped by a later migration — which is the property the
+      sentinel actually needs and the reason `terminal_sessions` was a poor choice in hindsight
+      rather than a careless one. The original comment's reasoning stands: the check must not be
+      `_migrations`, because that can exist but be empty on a partially-initialized legacy DB.
 - [ ] The release checkpoint recorded in the review: which version shipped with the columns unused.
 - [ ] Tests for this phase.
 
@@ -1292,6 +1346,11 @@ down-migration framework to undo it — a point Phase 8 establishes and this pha
 - [ ] The migration applies to a copy of a real post-release `global.db` and every surviving row is
       intact.
 - [ ] Fresh and migrated schemas are identical.
+- [ ] **A migrated database is opened a second time and is still detected as existing.** Apply the
+      drop, close, reopen, and assert the bootstrap took the migration path and not the fresh path
+      — then add a version 21 no-op and assert it applies. Without this the regression is invisible:
+      the first open after the drop looks completely normal, and the damage only shows up whenever
+      the next migration is written, which could be months later and by someone else.
 - [ ] The commit contains the migration and nothing else.
 - [ ] Build and tests pass.
 
