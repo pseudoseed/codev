@@ -1916,3 +1916,24 @@ test's input shape is part of the test.** The harness is what makes the rule
 enforceable rather than merely believed.
 
 37 mutations, all red, no SKIP and no STILL PASSES.
+
+### Live evidence regenerated twice, deliberately
+
+First at `63dd09bfb` (the fix commit), which was honest but weak: it proved the
+harness passed a role string, not that the agent received one. Those look
+identical from outside, and that is exactly why the old live record showed a
+first turn carrying only `TURN1_READY` while the code claimed role delivery.
+
+So the harness now creates the thread with a role carrying a token and asks for it
+in the first turn. Regenerated at `5f6beaa9e`: the model answered
+`TURN1_READY_ROLE_C5X082JZ`, a token that existed nowhere but the role prompt.
+`roleDeliveredInFirstTurn: true`, `roleNotRepeatedAfterwards: true`.
+
+**The rule this is an instance of:** evidence that a value was SENT is not evidence
+that it ARRIVED. The unit test asserts the outbound payload, which is the right
+thing for a unit test to assert; the live record has to close the other half, and
+it can only do that by asking the far side for something only that value could
+have told it.
+
+Scenario B unchanged: still `not-demonstrated` with its finding. An interrupt
+stops the turn, not the process the provider spawned.
