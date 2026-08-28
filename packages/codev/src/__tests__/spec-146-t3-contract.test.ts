@@ -137,6 +137,30 @@ describe('spec 146: source-hash is the drift detector the schema cannot be', () 
     }
   });
 
+  /**
+   * The plan's acceptance criterion for the two-layer design: mutate
+   * `TrimmedNonEmptyString` to drop its `isNonEmpty` check, and assert the
+   * source-hash layer fires while the generated diff stays empty.
+   *
+   * The probe runs under Node 22 with `effect` (it must emit schemas), which the
+   * suite does not, so the measurement is recorded and asserted here. Reproduce:
+   *
+   *   PATH=$HOME/.nvm/versions/node/v22.22.2/bin:$PATH \
+   *     node tools/t3-codegen/transform-blindness-probe.mjs
+   */
+  it('has recorded evidence that the generated layer alone would miss it', () => {
+    const evidencePath = join(repoRoot, 'codev', 'research', '146-transform-blindness-evidence.json');
+    const evidence = readJson(evidencePath);
+
+    expect(evidence.ok, 'probe could not run; the recorded evidence is stale').toBe(true);
+    expect(evidence.mutation).toContain('isNonEmpty');
+
+    // The whole justification for the second layer, in two assertions.
+    expect(evidence.schemaChanged, 'if this is true the emitter improved — revisit the design').toBe(false);
+    expect(evidence.hashChanged, 'if this is false BOTH drift layers are broken').toBe(true);
+    expect(evidence.verdict).toContain('CONFIRMED');
+  });
+
   it('would not notice a relaxed branded id in the generated schema alone', () => {
     // The regression guard for the whole two-layer design. `TrimmedNonEmptyString`
     // and an unconstrained trimmed string emit the identical document, so a change
