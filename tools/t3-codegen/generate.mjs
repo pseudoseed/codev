@@ -358,6 +358,48 @@ for (const name of ['OrchestrationEvent', 'ClientOrchestrationCommand']) {
   if (orchestration[name]) record(name, orchestration[name]);
 }
 
+/**
+ * Scan the EMITTED OUTPUT for loss, not just the source symbols.
+ *
+ * The source scan has a structural blind spot review found: it walks
+ * `export const` declarations, so a schema declared `const` with no export is
+ * invisible to it. `ModelSelectionSource` is exactly that, and its fields emit as
+ * bare `{}` — a schema with no constraints at all, which accepts literally any
+ * value. That is a stronger loss than `{"type":"string"}` and it was missing from
+ * LOSSY.md entirely.
+ *
+ * Scanning the output catches loss wherever it originates, including from symbols
+ * the source scan cannot name.
+ */
+function scanEmittedForLoss() {
+  const found = [];
+  const walk = (node, path, root) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      node.forEach((n, i) => walk(n, `${path}/${i}`, root));
+      return;
+    }
+    const keys = Object.keys(node);
+    if (keys.length === 0) {
+      found.push({ root, path: path || '/', emitted: '{}', why: 'no constraints at all: accepts any value' });
+      return;
+    }
+    if (keys.length === 1 && keys[0] === '$ref') return;
+    for (const [k, v] of Object.entries(node)) {
+      if (k === 'properties' && v && typeof v === 'object') {
+        for (const [prop, sub] of Object.entries(v)) walk(sub, `${path}/${prop}`, root);
+      } else if (['items', 'anyOf', 'oneOf', 'allOf'].includes(k)) {
+        walk(v, `${path}/${k}`, root);
+      }
+    }
+  };
+  for (const [name, schema] of Object.entries(schemas)) walk(schema, '', name);
+  for (const [name, def] of Object.entries(allDefs)) walk(def, '', `$defs/${name}`);
+  return found;
+}
+
+const emittedLoss = scanEmittedForLoss();
+
 // ---------------------------------------------------------------- JSON Schema -> .d.ts
 //
 // Types are derived from the emitted JSON Schema rather than from the Effect
@@ -475,11 +517,26 @@ Each entry is a schema the source constrains (via \`.check\`, \`Schema.brand\` o
 whose emitted JSON Schema carries no constraint at all. Every field typed with one of these
 degrades wherever it appears in \`schema.json\`.
 
+### Source schemas whose constraints did not survive
+
 ${
   lossy.length === 0
     ? '_None detected. If this section is empty, be suspicious: the probe in ' +
       'codev/experiments/146-schema-emitter-probe/ demonstrates the loss exists._'
-    : lossy.map((l) => `- \`${l.name}\` (\`${l.file}\`) → \`${l.emitted}\``).join('\n')
+    : lossy.map((l) => `- \`${l.name}\` (\`${l.file}\`) \u2192 \`${l.emitted}\`${l.note ? ` \u2014 ${l.note}` : ''}`).join('\n')
+}
+
+### Positions in the emitted output with NO constraints at all
+
+Found by scanning the generated schemas rather than the source symbols. The source scan walks
+\`export const\` declarations and is therefore blind to a schema declared \`const\` \u2014
+\`ModelSelectionSource\` is one, and its fields land here. A \`{}\` accepts any value whatsoever,
+which is a stronger loss than a bare typed schema.
+
+${
+  emittedLoss.length === 0
+    ? '_None._'
+    : emittedLoss.map((l) => `- \`${l.root}${l.path}\` \u2192 \`${l.emitted}\` \u2014 ${l.why}`).join('\n')
 }
 `;
 
@@ -592,6 +649,6 @@ if (checkOnly) {
   console.log(
     `[t3-codegen] wrote ${Object.keys(artifacts).length} artifacts: ` +
       `${Object.keys(schemas).length} schemas, ${Object.keys(methods).length} methods, ` +
-      `${lossy.length} lossy, ${unrepresented.length} unrepresented`,
+      `${lossy.length} lossy, ${emittedLoss.length} unconstrained, ${unrepresented.length} unrepresented`,
   );
 }

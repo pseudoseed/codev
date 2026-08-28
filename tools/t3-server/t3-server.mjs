@@ -137,6 +137,42 @@ function verify() {
 
 // ------------------------------------------------------------------ start / stop
 
+
+/**
+ * Is this PID one of ours?
+ *
+ * `stop` used to SIGTERM every process listening on the configured port, on the
+ * reasoning that the real server is a grandchild of the pid we recorded. That is
+ * true and it was still wrong: on a machine where something unrelated happens to
+ * hold 3799, it would have killed a service this project does not own. Review
+ * caught it.
+ *
+ * Ownership is proven from the command line: it must be a t3 serve for OUR data
+ * directory. Anything we cannot prove is ours is reported and left alone.
+ */
+function ownsProcess(pid) {
+  try {
+    const cmd = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' });
+    return cmd.includes(runtimeDir) || cmd.includes(join(runtimeDir, 'data'));
+  } catch {
+    return false; // cannot read it, cannot claim it
+  }
+}
+
+/** PIDs listening on our port that we can prove belong to this harness. */
+function ownedPortHolders() {
+  let holders = [];
+  try {
+    holders = execFileSync('lsof', ['-t', `-iTCP:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' })
+      .split('\n').map((l) => Number(l.trim())).filter((n) => Number.isInteger(n) && n > 0);
+  } catch {
+    return { ours: [], foreign: [] };
+  }
+  const ours = holders.filter(ownsProcess);
+  const foreign = holders.filter((p) => !ours.includes(p));
+  return { ours, foreign };
+}
+
 function readPid() {
   if (!existsSync(pidFile)) return null;
   const pid = Number(readFileSync(pidFile, 'utf8').trim());
@@ -163,7 +199,9 @@ function start() {
   say(`starting on 127.0.0.1:${port} with data dir ${dataDir}`);
 
   const log = join(runtimeDir, 'server.log');
-  writeFileSync(log, '');
+  // 0600: the server prints a pairing token on stdout and this file receives it
+  // until `ready` redacts it. Narrow the window AND the audience.
+  writeFileSync(log, '', { mode: 0o600 });
 
   // The child's stdio goes STRAIGHT to a file descriptor, never through a pipe
   // this process holds. An earlier version attached `child.stdout.on('data')`
@@ -212,11 +250,35 @@ async function waitReady(timeoutMs = 180_000) {
   return false;
 }
 
-/** Read the pairing token the server prints on startup. */
+/**
+ * Read the pairing token, then REDACT it from the log.
+ *
+ * The spec's Security constraint is explicit: pairing tokens are "never written
+ * to a repository, a log, or a shell history file". t3 prints the token on
+ * stdout and this harness sends stdout to a file, so it lands in a log — a
+ * direct violation, and review caught it.
+ *
+ * We cannot stop t3 printing it. What we can do is make the log stop holding it:
+ * read once, overwrite that line in place, and return the value in memory only.
+ * The file is also mode 0600 and gitignored.
+ *
+ * The residual window is stated rather than hidden: the token is on disk from
+ * the moment the server prints it until `ready` runs, typically a few seconds.
+ * Closing that completely would mean not persisting the server's stdout at all,
+ * which costs the diagnostics that made three separate harness bugs findable.
+ */
 function pairingToken() {
   const log = join(runtimeDir, 'server.log');
   if (!existsSync(log)) return null;
-  return /Token:\s*([A-Z0-9]+)/.exec(readFileSync(log, 'utf8'))?.[1] ?? null;
+  const contents = readFileSync(log, 'utf8');
+  const token = /Token:\s*([A-Z0-9]+)/.exec(contents)?.[1] ?? null;
+  if (token) {
+    const redacted = contents
+      .split(token).join('<redacted-pairing-token>')
+      .replace(/(Pairing URL: \S*?#token=)\S+/g, '$1<redacted>');
+    writeFileSync(log, redacted, { mode: 0o600 });
+  }
+  return token;
 }
 
 async function ready() {
@@ -234,16 +296,18 @@ function stop() {
     // Still sweep the port: a previous run may have left a listener with no
     // matching pid file, and reporting "nothing running" while a server holds
     // the port is the same lie as a check that passes without looking.
-    try {
-      const holders = execFileSync('lsof', ['-t', `-iTCP:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' })
-        .split('\n').map((l) => Number(l.trim())).filter((n) => Number.isInteger(n) && n > 0);
-      for (const holder of holders) {
-        try { process.kill(holder, 'SIGTERM'); } catch { /* gone */ }
-      }
-      say(holders.length > 0 ? `no pid file, but released port ${port} (pids ${holders.join(', ')})` : 'nothing running');
-    } catch {
-      say('nothing running');
+    const { ours, foreign } = ownedPortHolders();
+    for (const holder of ours) {
+      try { process.kill(holder, 'SIGTERM'); } catch { /* gone */ }
     }
+    if (foreign.length > 0) {
+      say(
+        `REFUSING to kill pid(s) ${foreign.join(', ')} on port ${port}: not ours.\n` +
+          `  Something outside this harness is listening there. Stop it yourself, or set\n` +
+          `  T3_HARNESS_PORT to a free port. This harness does not kill what it cannot prove it owns.`,
+      );
+    }
+    say(ours.length > 0 ? `no pid file, but released port ${port} (pids ${ours.join(', ')})` : 'nothing running');
     return;
   }
   try {
@@ -259,14 +323,12 @@ function stop() {
   // outlive a group signal. Without this the port stays bound, and a later
   // "cold" start would silently reuse the previous server — making a
   // start-twice proof a proof of nothing.
-  try {
-    const holders = execFileSync('lsof', ['-t', `-iTCP:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' })
-      .split('\n').map((l) => Number(l.trim())).filter((n) => Number.isInteger(n) && n > 0);
-    for (const holder of holders) {
-      try { process.kill(holder, 'SIGTERM'); } catch { /* gone */ }
-    }
-    if (holders.length > 0) say(`released port ${port} (pids ${holders.join(', ')})`);
-  } catch { /* lsof exits non-zero when nothing is listening */ }
+  const { ours, foreign } = ownedPortHolders();
+  for (const holder of ours) {
+    try { process.kill(holder, 'SIGTERM'); } catch { /* gone */ }
+  }
+  if (ours.length > 0) say(`released port ${port} (pids ${ours.join(', ')})`);
+  if (foreign.length > 0) say(`left pid(s) ${foreign.join(', ')} on port ${port} alone: not ours`);
 
   say(`stopped pid ${pid}`);
 }

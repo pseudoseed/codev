@@ -152,10 +152,17 @@ function sourceOf(sha) {
  *   - an enum gains a member
  *   - descriptions, titles, ordering
  *
+ * DIRECTION MATTERS, and an earlier version ignored it — codex caught that too.
+ * For an INPUT (what Codev sends) a narrowed type or a newly-required property
+ * breaks us. For an OUTPUT (what the server sends back) the opposite is true: a
+ * *widened* type or a *removed* required property breaks us, because we read
+ * fields we were promised. Applying input rules to outputs produced a count that
+ * was wrong in both directions at once.
+ *
  * Anything this cannot decide is returned as `unknown` rather than guessed. The
  * whole point of the exercise is not to spell "I could not tell" like "fine".
  */
-function classifyChange(before, after) {
+function classifyChange(before, after, direction) {
   const reasons = [];
   let unknown = false;
 
@@ -166,18 +173,35 @@ function classifyChange(before, after) {
       return;
     }
 
+    // A type change breaks whoever depends on the old type being honoured. On an
+    // input that is us (we send the old type); on an output that is also us (we
+    // read the old type). So a change breaks either way — but the DIRECTION
+    // decides for the asymmetric rules below.
     if (a.type !== b.type && (a.type || b.type)) {
       reasons.push(`${path}: type ${a.type ?? '?'} -> ${b.type ?? '?'}`);
     }
 
     if (Array.isArray(a.enum) && Array.isArray(b.enum)) {
-      const removed = a.enum.filter((v) => !b.enum.includes(v));
-      if (removed.length) reasons.push(`${path}: enum lost ${JSON.stringify(removed)}`);
+      if (direction === 'input') {
+        // A value we might send is no longer accepted.
+        const removed = a.enum.filter((v) => !b.enum.includes(v));
+        if (removed.length) reasons.push(`${path}: enum lost ${JSON.stringify(removed)}`);
+      } else {
+        // A value we must now handle that we did not have to before.
+        const added = b.enum.filter((v) => !a.enum.includes(v));
+        if (added.length) reasons.push(`${path}: enum gained ${JSON.stringify(added)} we must handle`);
+      }
     }
 
     const aReq = new Set(a.required ?? []);
     const bReq = new Set(b.required ?? []);
-    for (const key of bReq) if (!aReq.has(key)) reasons.push(`${path}/${key}: became required`);
+    if (direction === 'input') {
+      // We must now send something we did not send before.
+      for (const key of bReq) if (!aReq.has(key)) reasons.push(`${path}/${key}: became required`);
+    } else {
+      // We were promised a field and no longer are; code that reads it breaks.
+      for (const key of aReq) if (!bReq.has(key)) reasons.push(`${path}/${key}: no longer guaranteed`);
+    }
 
     const aProps = a.properties ?? {};
     const bProps = b.properties ?? {};
@@ -186,7 +210,8 @@ function classifyChange(before, after) {
       else walk(aProps[key], bProps[key], `${path}/${key}`);
     }
 
-    if (a.additionalProperties !== false && b.additionalProperties === false) {
+    // Only meaningful for inputs: the server now rejects extra fields we send.
+    if (direction === 'input' && a.additionalProperties !== false && b.additionalProperties === false) {
       reasons.push(`${path}: additionalProperties tightened to false`);
     }
 
@@ -238,8 +263,8 @@ for (const [index, commit] of commits.entries()) {
         const [beforeIn, beforeOut] = String(previous[m]).split('|');
         const [afterIn, afterOut] = String(emitted.schemas[m]).split('|');
         const parse = (t) => { try { return JSON.parse(t); } catch { return undefined; } };
-        const a = classifyChange(parse(beforeIn), parse(afterIn));
-        const b = classifyChange(parse(beforeOut), parse(afterOut));
+        const a = classifyChange(parse(beforeIn), parse(afterIn), 'input');
+        const b = classifyChange(parse(beforeOut), parse(afterOut), 'output');
         const worst = [a, b].find((v) => v.verdict === 'breaking')
           ?? [a, b].find((v) => v.verdict === 'unknown') ?? a;
         return { method: m, ...worst };

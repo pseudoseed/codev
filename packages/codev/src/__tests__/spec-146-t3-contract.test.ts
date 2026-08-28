@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -232,6 +232,28 @@ describe('spec 146: the harness criterion that gates Phase 2', () => {
 
   it('passed every run', () => {
     expect(evidence.allRunsPassed).toBe(true);
+  });
+
+  /**
+   * Recorded evidence can outlive the code it describes. Review pushed twice on
+   * tests that assert committed JSON, and it is a fair objection: nothing stops
+   * the harness changing while the evidence stays green.
+   *
+   * Executing the harness here would need Node 22 and a live server inside a
+   * Node 20 unit suite, which is the wrong place for it. What this CAN do is
+   * refuse to accept evidence older than the code it is evidence for.
+   */
+  it('is not older than the harness it describes', () => {
+    const evidencePath = join(repoRoot, 'codev', 'research', '146-harness-coldstart-evidence.json');
+    const evidenceAge = statSync(evidencePath).mtimeMs;
+    for (const source of ['t3-server.mjs', 'smoke.mjs']) {
+      const sourceAge = statSync(join(repoRoot, 'tools', 't3-server', source)).mtimeMs;
+      expect(
+        evidenceAge,
+        `${source} changed after the cold-start evidence was recorded — re-run ` +
+          `\`node tools/t3-server/smoke.mjs --runs 2\` rather than trusting a stale result`,
+      ).toBeGreaterThanOrEqual(sourceAge - 1000);
+    }
   });
 });
 

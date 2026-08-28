@@ -17,9 +17,11 @@ Each entry is a schema the source constrains (via `.check`, `Schema.brand` or `m
 whose emitted JSON Schema carries no constraint at all. Every field typed with one of these
 degrades wherever it appears in `schema.json`.
 
-- `TrimmedString` (`baseSchemas.ts`) → `{"type":"string"}`
+### Source schemas whose constraints did not survive
+
+- `TrimmedString` (`baseSchemas.ts`) → `{"type":"string"}` — transform not represented: decoding alters the value and the schema does not say so
 - `TrimmedNonEmptyString` (`baseSchemas.ts`) → `{"type":"string"}`
-- `ForwardCompatibleArray` (`baseSchemas.ts`) → `{"type":"array"}`
+- `ForwardCompatibleArray` (`baseSchemas.ts`) → `{"type":"array"}` — combinator: element type does not survive emission
 - `ThreadId` (`baseSchemas.ts`) → `{"type":"string"}`
 - `ProjectId` (`baseSchemas.ts`) → `{"type":"string"}`
 - `EnvironmentId` (`baseSchemas.ts`) → `{"type":"string"}`
@@ -39,3 +41,29 @@ degrades wherever it appears in `schema.json`.
 - `ProviderDriverKind` (`providerInstance.ts`) → `{"type":"string"}`
 - `ProviderInstanceId` (`providerInstance.ts`) → `{"type":"string"}`
 - `ProviderInstanceEnvironmentVariableName` (`providerInstance.ts`) → `{"type":"string"}`
+
+### Positions in the emitted output with NO constraints at all
+
+Found by scanning the generated schemas rather than the source symbols. The source scan walks
+`export const` declarations and is therefore blind to a schema declared `const` —
+`ModelSelectionSource` is one, and its fields land here. A `{}` accepts any value whatsoever,
+which is a stronger loss than a bare typed schema.
+
+- `OrchestrationEvent/anyOf/28/payload/activity/payload` → `{}` — no constraints at all: accepts any value
+- `$defs/dispatchCommandInput__Objects_/provider/anyOf/0` → `{}` — no constraints at all: accepts any value
+- `$defs/dispatchCommandInput__Objects_/instanceId/anyOf/0` → `{}` — no constraints at all: accepts any value
+- `$defs/dispatchCommandInput__Objects_/model` → `{}` — no constraints at all: accepts any value
+- `$defs/dispatchCommandInput__Objects_/options/anyOf/0` → `{}` — no constraints at all: accepts any value
+- `$defs/subscribeThreadOutput__Objects_/provider/anyOf/0` → `{}` — no constraints at all: accepts any value
+- `$defs/subscribeThreadOutput__Objects_/instanceId/anyOf/0` → `{}` — no constraints at all: accepts any value
+- `$defs/subscribeThreadOutput__Objects_/model` → `{}` — no constraints at all: accepts any value
+- `$defs/subscribeThreadOutput__Objects_/options/anyOf/0` → `{}` — no constraints at all: accepts any value
+- `$defs/subscribeThreadOutput__Objects_4/payload` → `{}` — no constraints at all: accepts any value
+- `$defs/OrchestrationEvent__Objects_2/provider/anyOf/0` → `{}` — no constraints at all: accepts any value
+- `$defs/OrchestrationEvent__Objects_2/instanceId/anyOf/0` → `{}` — no constraints at all: accepts any value
+- `$defs/OrchestrationEvent__Objects_2/model` → `{}` — no constraints at all: accepts any value
+- `$defs/OrchestrationEvent__Objects_2/options/anyOf/0` → `{}` — no constraints at all: accepts any value
+- `$defs/ClientOrchestrationCommand__Objects_/provider/anyOf/0` → `{}` — no constraints at all: accepts any value
+- `$defs/ClientOrchestrationCommand__Objects_/instanceId/anyOf/0` → `{}` — no constraints at all: accepts any value
+- `$defs/ClientOrchestrationCommand__Objects_/model` → `{}` — no constraints at all: accepts any value
+- `$defs/ClientOrchestrationCommand__Objects_/options/anyOf/0` → `{}` — no constraints at all: accepts any value

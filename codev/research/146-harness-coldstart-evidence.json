@@ -4,25 +4,25 @@
   "runs": [
     {
       "run": 1,
-      "startedAt": "2026-08-28T17:01:39.043Z",
+      "startedAt": "2026-08-28T18:23:19.554Z",
       "pairingTokenPresent": true,
       "scopes": "orchestration:read orchestration:operate terminal:operate review:write relay:read",
       "dispatchExit": "Success",
       "dispatchSucceeded": true,
       "portFreeAfterStop": true,
       "ok": true,
-      "durationMs": 5087
+      "durationMs": 4812
     },
     {
       "run": 2,
-      "startedAt": "2026-08-28T17:01:44.130Z",
+      "startedAt": "2026-08-28T18:23:24.366Z",
       "pairingTokenPresent": true,
       "scopes": "orchestration:read orchestration:operate terminal:operate review:write relay:read",
       "dispatchExit": "Success",
       "dispatchSucceeded": true,
       "portFreeAfterStop": true,
       "ok": true,
-      "durationMs": 4746
+      "durationMs": 4656
     }
   ],
   "allRunsPassed": true,
