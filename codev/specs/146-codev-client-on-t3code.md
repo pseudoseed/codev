@@ -106,7 +106,15 @@ of the same contract.
 - Reachable over a tailnet from an iPad.
 - Connected to more than one machine's server at once.
 
-**3. Deletions**, only after parity: PTY manager, terminal session management, render gate,
+**3. `codev-agent`.** A small HTTP service per machine, beside the t3code server, owning
+everything the browser cannot reach: reading `status.yaml`, streaming porch state changes,
+issuing capabilities, and invoking `porch approve`. CMAP found this gap correctly. A browser
+served beside t3code has no filesystem access to a remote machine's worktrees, so without this
+component the client cannot render protocol state at all, let alone approve a gate. It holds the
+architect-name to `threadId` map and the builder-id to `threadId` join. The client talks to
+`codev-agent` for protocol state and to t3code for session state, and never confuses the two.
+
+**4. Deletions**, only after parity: PTY manager, terminal session management, render gate,
 mailbox, harness registry, v2 client, legacy dashboard.
 
 ### The authoritative data model
@@ -132,25 +140,33 @@ structured content, not a bare gate name.
 
 ### Gate approval
 
-Approving from the UI is in scope, and the reasoning is worth stating because it reverses an
-earlier non-goal.
+Approving from the UI is in scope. An earlier revision justified it with "an authenticated
+session proves a human." **That was wrong, and CMAP caught it.**
 
-`--a-human-explicitly-approved-this` was never a strong control. It is a string, and any agent
-with shell access can type it. It works today because agents are told not to, not because they
-cannot. A button in a client behind a single-use pairing token and a per-machine revocable
-session is a *stronger* guarantee that a human acted, not a weaker one.
+t3code's authorization scopes are coarse. `packages/contracts/src/auth.ts` defines exactly eight:
+`access:read`, `access:write`, `orchestration:read`, `orchestration:operate`, `terminal:operate`,
+`review:write`, `relay:read`, `relay:write`. The spike's paired token carried five of them,
+including `orchestration:operate`, which covers every dispatchable command. There is no scope
+that means "a human is holding this," and device type is presentation metadata, not proof. A
+paired t3code session cannot distinguish a person clicking from an agent holding the same token.
 
-So the control moves from a flag to the session:
+So the boundary is not t3code's session. It is Codev's own, and it is enforceable for one
+concrete reason: **Codev controls issuance, and an approval credential is never written into an
+agent's environment.**
 
-- `porch approve` grows an authenticated path that records **who** approved, from which client
-  session, and when. The approval is written to `status.yaml` by porch as it is today.
-- The existing flag stays for terminal use. It is not the security boundary and the spec stops
-  describing it as one.
-- An agent-held credential cannot approve. Approval requires a session minted by human pairing,
-  and porch records the distinction.
-- Every approval is auditable after the fact: session id, machine, timestamp, gate.
+- `codev-agent` (below) issues a distinct approval capability, separate from any t3code
+  credential and separate from the read-only capability the client uses for status.
+- A builder's environment never receives it. `spawn-worktree.ts` already writes a controlled set
+  of variables into the start script; the approval capability is excluded there by construction,
+  and a test asserts its absence from any spawned environment.
+- `--a-human-explicitly-approved-this` stays for terminal use. It was never a security boundary
+  either. It is a string any agent with shell can type; it works because agents are told not to.
+  The spec stops describing it as a control.
+- Every approval records the capability id, machine, and timestamp in `status.yaml`.
 
-The UI shows the gate's structured question and choices from #128, and the human picks one.
+**What this does and does not buy.** It stops an agent inside a builder worktree from approving
+its own gate, which is the actual threat. It does not stop a human who has the capability from
+handing it to an agent, and no design can.
 
 ### Extensions and adopters
 
@@ -307,10 +323,14 @@ The mailbox is replaced only if these hold, otherwise it stays:
   deletion phase.
 - [ ] 9b. A human approves a real gate from the client, and porch records the approving session
   id, machine and timestamp in `status.yaml`.
-- [ ] 9c. An agent-held credential is refused when it attempts the same approval.
+- [ ] 9c. A spawned builder's environment contains no approval capability, asserted by a test
+  over the generated start script, and an approval attempted with a builder's credentials is
+  refused by `codev-agent`.
 - [ ] 10. At least two provider drivers pass criterion 1, not only Codex.
 - [ ] 11. A 24-hour gate resumes with context. **Gates the deletion phase.**
-- [ ] 12. Contract churn is measured and recorded. **Gates the deletion phase.**
+- [ ] 12. The 89 commits to `orchestration.ts` are classified as breaking or non-breaking against
+  the vendored types, with the breaking count recorded. Counting commits is not the criterion.
+  **Gates the deletion phase.**
 - [ ] 13. PTY manager, render gate, mailbox, terminal session management, harness registry, v2
   client and legacy dashboard are deleted, and the suite is green without them.
 - [ ] 14. Net Codev-owned line count is lower than the pre-migration baseline, recorded in the
@@ -374,9 +394,13 @@ The mailbox is replaced only if these hold, otherwise it stays:
    acknowledgement instead of a keystroke into a screenshot.
 
 5. **The coexistence window is defined below, in "Cutover and drain".**
-6. If the architect is a thread, what happens to `afx send architect` and sibling-architect
-   addressing? Likely a turn on the target architect's thread, but the multi-architect naming in
-   #47 needs a mapping.
+6. **Architect addressing is ruled.** `afx send architect` becomes a turn on the target
+   architect's thread. The name-to-thread map lives in `codev-agent`, backed by the existing
+   `architect` table in `global.db`, which already keys on `workspace_path` and name. #47's fix
+   established that identity comes from launch context rather than the current directory, and
+   that stays true: `CODEV_BUILDER_ID` and `CODEV_WORKTREE_ROOT` are replaced by a thread id
+   recorded at spawn. `architect:<name>` and `<workspace>:architect` keep their meanings, and the
+   spoofing rule survives unchanged because `codev-agent` owns the map, not the caller.
 
 ## Cutover and drain
 
