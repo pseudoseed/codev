@@ -1395,3 +1395,35 @@ re-run it was unverifiable from the artifact — which is the same standard I
 applied to `LOSSY.md` and the cold-start evidence in Phase 1, and did not apply
 here. It now carries `ranAt`, `clientCommit`, `clientTreeDirty` and `nodeVersion`,
 emitted by the run.
+
+### #153, and a fix that carves out its own failure case
+
+The architect filed **#153** for the framework half of the uncommitted-fixes
+error, and the framing is worth keeping because it is not only my mistake:
+
+> `porch done` answers "does the working tree build and pass", while a phase
+> transition is a claim about the **branch**, and those are the same thing only
+> when the tree is clean. Porch never checks that they are. The checks were honest
+> and measured something real; the thing they measured was not the thing being
+> asserted.
+
+Proposed fix: refuse to advance while tracked files are modified, over tracked
+paths only so logs and build output do not block it.
+
+**A fix that carves out its own failure case.** The architect's reading of the 88
+reconnects: my iteration-1 backoff reset the streak on `synchronized`, the sync
+check runs before the failure guard, and a handler-failure stream *does*
+synchronize — so the guard exempted the exact path the same iteration introduced.
+That is the overreach pattern already in this thread, **pointed inward**: earlier
+I asked what a fix can reach beyond its target; this is a fix that failed to reach
+the thing next to it, written in the same commit.
+
+The question that catches both: after writing a guard, ask which paths reach it —
+including the ones this change just added.
+
+### An artifact that cannot date itself cannot support a claim about when it ran
+
+Generalising the evidence stamp: `146-phase2-live-evidence.json` was byte-identical
+whether freshly produced or left over, so "I re-ran it" was unverifiable from the
+file. It now carries `ranAt`, `clientCommit`, `clientTreeDirty` and `nodeVersion`,
+emitted by the run rather than added afterwards.

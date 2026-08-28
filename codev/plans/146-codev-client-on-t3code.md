@@ -630,8 +630,23 @@ Checked at the end of this phase, not inherited from its start.
       restore or rollback of the server's database — so the test exercises a failure that happens
       rather than one manufactured to fire.
 
+- [ ] **The stream timeout is proven idle, not total, against a real long-lived subscription.**
+      Phase 2 shipped it as total-duration: a healthy subscription under continuous traffic was torn
+      down and resubscribed every 300 seconds, and abandoned without sending `Interrupt`, leaving
+      server-side work running with nothing reading it. Fixed in Phase 2 (`streamIdleTimeoutMs`,
+      rearmed per chunk) and unit-tested with fake timers, but **not yet demonstrated live**.
+
+      This gates more than Phase 3. Success criterion 11 is a gate held open at least 24 hours, and
+      Phase 10 starts it four phases before the deletion phase needs it. A 300-second teardown of a
+      healthy subscription would have made a day-long gate impossible **and would not have surfaced
+      until someone tried one** — the failure would have appeared as a mysterious reconnect storm in
+      Phase 10, months after the cause was written. So Phase 3 holds a subscription open past the
+      old 300-second budget under traffic, and records that it neither timed out nor resubscribed.
+
 These remain **Phase 2's** criteria. They are listed here because this is where they can be
-satisfied, not because they became Phase 3's work.
+satisfied, not because they became Phase 3's work. The timeout item above is different: it is
+Phase 3's own, added because Phase 2's fix is unverified live and the phase that would otherwise
+discover it is ten phases away.
 
 #### Test Plan
 
