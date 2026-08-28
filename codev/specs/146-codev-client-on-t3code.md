@@ -373,12 +373,55 @@ The mailbox is replaced only if these hold, otherwise it stays:
    contracts; what changes underneath is that `send` becomes a queued command with an
    acknowledgement instead of a keystroke into a screenshot.
 
-**Important, still open:**
-
-5. What is the coexistence window, and what drains before the mailbox and PTY manager are removed?
+5. **The coexistence window is defined below, in "Cutover and drain".**
 6. If the architect is a thread, what happens to `afx send architect` and sibling-architect
    addressing? Likely a turn on the target architect's thread, but the multi-architect naming in
    #47 needs a mapping.
+
+## Cutover and drain
+
+This is ruled from the dependency shape, not chosen as a date.
+
+**What the code says.** 33 non-test files reference the mailbox. The PTY manager reaches
+`tower-routes.ts`, `tower-websocket.ts`, `tower-terminals.ts`, `tower-tunnel.ts` and
+`session-log-sweep.ts`. `global.db` has a `terminal_sessions` table, and `builders` carries a
+nullable `terminal_id` alongside `harness` and `model`, both added the same way by an earlier
+migration. So a second nullable column is the established pattern here, not a new one.
+
+That shape rules out a flag-day switch and rules in dual-write.
+
+**Five steps, each independently revertible:**
+
+1. **Add `thread_id` to `builders`, nullable.** Nothing reads it yet. Matches how `harness` and
+   `model` were introduced. Old rows stay valid with no backfill.
+2. **New spawns take the thread path.** `afx spawn` writes `thread_id` and no `terminal_id`.
+   Existing builders keep running on PTY untouched. Both paths live simultaneously; a builder's
+   path is a property of its row, never a global mode.
+3. **Drain the builders.** The condition is checkable, not a guess: zero rows where
+   `terminal_id IS NOT NULL AND thread_id IS NULL AND status != 'complete'`. `afx status` reports
+   the count so the drain is visible. The longest protocol is SPIR, and spec 128 has taken more
+   than two days start to present, so the realistic drain is measured in days, not hours. No
+   in-flight builder is ever migrated across paths.
+4. **Cut over the architects, explicitly.** This is the step that costs something and it must not
+   be described as a drain. An architect session is long-lived; the `uiv2` architect that wrote
+   this spec has been alive for days. Moving it to a thread means ending that conversation and
+   starting a new one. There is no migration path for an in-flight conversation, so this is a
+   deliberate act per workspace: save architect state with `/arch-save`, stop the PTY architect,
+   start the thread-backed one, re-init from the saved state. Do one workspace first and live
+   with it before doing the rest.
+5. **Delete.** Only once steps 3 and 4 are complete for every workspace, and only behind success
+   criteria 11 and 12. The `terminal_sessions` table and `terminal_id` column go last, in their
+   own migration, after a release has shipped with them unused.
+
+**What forces a rollback.** Any of: a drain that will not reach zero because a builder is wedged
+on the thread path, an architect cutover that loses state the saved file did not capture, or a
+provider driver that fails criterion 10. Rollback at steps 1 through 3 is reverting one nullable
+column. After step 4 it is restoring an architect from `/arch-save` state, which is why step 4
+comes late and one workspace at a time.
+
+**The mailbox goes with step 5, not before.** Until then it stays live for PTY-backed builders,
+and the thread path uses queued commands. Two delivery systems coexisting is the intended state
+during the window, not a defect.
 
 ## References
 
