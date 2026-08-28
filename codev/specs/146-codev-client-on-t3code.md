@@ -328,7 +328,17 @@ the remote, mobile or multi-machine benefit. Rejected.
 
   A drift test fails when the generated output diverges from the pinned commit. "Breaks become
   compile errors" is only true once this exists.
-- **Pin the server by commit**, not by tag. Upgrades are deliberate.
+- **Pin to a stable tag, not a commit and not a nightly.** t3code cuts stable releases: v0.0.28
+  (2026-06-29) through v0.0.35 (2026-08-26), 8 in two months, spaced 1 day to 4 weeks apart.
+  Nightlies land several times a day and are not upgrade targets.
+
+  This is what makes the 39% consumed-change rate carryable. Tracking HEAD means absorbing ~8
+  consumed changes a month continuously; tracking releases batches the same work into one
+  classify-and-fix session per upgrade, on Codev's schedule rather than theirs. Codev releases in
+  weeks, so release-to-release is the matching cadence.
+
+  `0.1.0-alpha.0` and `0.1.0-alpha.1` are already on npm. A pre-1.0 minor bump is where the large
+  break usually lands, so budget for 0.1.0 being an upgrade rather than a refresh.
 - Gates and phase state live in `status.yaml`, written only by porch.
 - Framework changes land in `codev/` and `codev-skeleton/` both.
 - The client degrades honestly. An unreachable server never yields a blank or silently stale
