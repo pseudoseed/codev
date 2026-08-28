@@ -452,7 +452,14 @@ claim stops being a one-off observation and becomes a tested property.
       so, and the detectable gap is the protocol-level one: the server declined the cursor.
 - [x] With the server unreachable, every call fails loudly at the call site. There is no silent
       queue at this layer.
-- [x] Tests for this phase. 49 in `spec-146-t3-client.test.ts`, plus six live scenarios.
+- [x] **Added during the phase.** A failure exit surfaces as `RpcFailureError`, carrying the
+      request id, the `Fail`/`Die` kind and the server's undecoded error, with a `tag` getter.
+      Phase 3 branches on this: replaying a `commandId` against a different aggregate raises
+      `OrchestrationCommandIdConflictError` (`apps/server/src/orchestration/Errors.ts:56`), and
+      "refused as a duplicate" needs a different response from "the request failed". The first
+      implementation threw a plain `Error` with the payload stringified into the message, which
+      made that distinction reachable only by matching on text.
+- [x] Tests for this phase. 52 in `spec-146-t3-client.test.ts`, plus six live scenarios.
 
 #### Acceptance Criteria
 
