@@ -423,8 +423,18 @@ claim stops being a one-off observation and becomes a tested property.
 - [ ] Reconnect resubscribes with `afterSequence` at the last applied sequence.
 - [ ] If the server answers a resubscription with a snapshot instead of the requested range, the
       client reports a **gap** as its own distinct signal. It does not return an empty range, and
-      it does not return a range that looks contiguous. "I could not tell" and "there was nothing"
+      it does not return a range that looks complete. "I could not tell" and "there was nothing"
       must not be spelled the same way.
+
+      **Corrected during the phase.** The first implementation also reported a gap whenever the
+      returned sequences were not consecutive integers. t3code's `sequence` is a **single global
+      counter** — one column on `orchestration_events`, read `WHERE sequence > ? ORDER BY sequence
+      ASC` and *then* filtered to the subscribed thread (`OrchestrationEventStore.ts:160-181`,
+      `ws.ts:1498-1508`) — so a correct replay on a server with any second active thread is sparse
+      by construction, and that check fired on every healthy resume. It agreed with its unit tests,
+      which fed it consecutive integers, and with the live run, which had one active thread.
+      A hole inside a replayed range is **not detectable from sequence numbers**, the code now says
+      so, and the detectable gap is the protocol-level one: the server declined the cursor.
 - [ ] With the server unreachable, every call fails loudly at the call site. There is no silent
       queue at this layer.
 - [ ] Tests for this phase.
@@ -536,9 +546,23 @@ Checked at the end of this phase, not inherited from its start.
       events are real and the gap is a real gap. The spike's harness
       (`codev/experiments/146-t3code-porch-proof/`) already solved the connect-and-kill mechanics —
       read it first.
+
+      **The comparison must be against a control connection, not against arithmetic.** Because the
+      sequence is global and thread-filtered, "the replayed range is exactly the missing range" is
+      only checkable by holding a second, never-dropped subscription and comparing `eventId` lists
+      over the same window — which is what `proof.mjs:428-437` does. A test that asserts the
+      replayed sequences are consecutive is testing the counter, not the replay, and will fail on
+      a correct server the moment a second thread is active.
 - [ ] **Phase 2's criterion D, discharged here.** A resubscription answered with a snapshot
       produces a gap signal distinguishable from both success and empty, against server-issued
       sequences rather than synthetic ones.
+
+      **The trigger is deterministic and cheap.** `ws.ts:1493-1526` falls through to the snapshot
+      path when `replayGap > THREAD_RESUME_MAX_GAP` (1,000, `ws.ts:330`) **or when the cursor is
+      ahead of the server's head**. The second needs no warm-up: subscribe with
+      `afterSequence: head + 1`. It is also the real case — porch's persisted cursor surviving a
+      restore or rollback of the server's database — so the test exercises a failure that happens
+      rather than one manufactured to fire.
 
 These remain **Phase 2's** criteria. They are listed here because this is where they can be
 satisfied, not because they became Phase 3's work.
@@ -1548,6 +1572,7 @@ is a fact to look up, not to assume.
 | Tiling ships as a wireframe that passes tests | Medium | High | Phase 12 asserts measured geometry and computed font size from the rendered page under Playwright, not from stylesheets |
 | Deleting the mailbox silently removes `afx send --delay` and cron notifications | **Confirmed** | High | Both hard-import `db/mailbox.js` (`cron-delivery.ts:27-29`, `delayed-send.ts`) while the spec keeps both features. Phase 4 builds durable scheduled delivery on the thread path; Phase 14 moves them onto it rather than treating them as call sites to unwire |
 | **The harness pins the checkout, not the server binary** | **Confirmed** | High | `tools/t3-server/` starts the published `t3` CLI against the pinned tree. The source is pinned; the CLI is not, so a divergence between them is **invisible to `verify`**. Two closures exist — build the server from the pinned tree, or pin the CLI version in `pin.json` too — and neither is done in Phase 1. **No later phase may assume this away.** A phase that needs it closed says so at its boundary rather than inheriting it silently; Phases 2, 3, 4, 9 and 10 all test against this harness |
+| Sequence arithmetic is mistaken for loss detection | **Confirmed** | High | Found and fixed inside Phase 2: `sequence` is a single global counter filtered per thread, so "not consecutive" is the normal shape and the old contiguity check fired on every healthy multi-thread resume. The client now claims only what it can establish; the real check needs a control connection and runs in Phase 3's exit conditions |
 | The live-server harness is improvised per phase, or never built | Medium | High | The pinned clone has no `node_modules` and has never been installed. Phase 1 owns the harness and Phase 2 does not start until it comes up twice from cold; absence reports as skipped, never as pass |
 
 ## Documentation Updates
