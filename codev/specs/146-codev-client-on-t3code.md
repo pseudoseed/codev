@@ -1,7 +1,12 @@
+---
+approved: 2026-08-28
+validated: [gemini, codex, claude]
+---
+
 # Spec 146: a Codev client on a self-hosted t3code server
 
 **Issue:** #146
-**Status:** draft (revision 2, after CMAP)
+**Status:** approved (revision 6, after four CMAP rounds)
 **Author:** architect:uiv2
 
 ## Problem Statement
