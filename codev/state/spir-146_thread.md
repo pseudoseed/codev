@@ -632,3 +632,63 @@ node tools/t3-server/t3-server.mjs stop
 
 Node 22 is required for anything importing the contracts. The suite runs on
 Node 20 and the live-dependent tests are a `describe.skipIf` suite.
+
+## Phase 2 — partial close, and standing orders for Phase 3
+
+### A fix from one phase broke a caller in the next
+
+Phase 1's token redaction was **correct** — the pairing token was in a log, which
+the spec forbids. It also made `t3-server ready` **non-idempotent**: it strips the
+token as it reads it, so a second call reports "printed no pairing token" and
+dies. Phase 2's live script called `ready` per connection and broke.
+
+This is not an argument against the redaction. It is an argument for the failure
+being **loud**: the harness said exactly what was wrong, and the fix took minutes.
+Had `ready` returned `null` quietly, Phase 2 would have failed at the token
+exchange with a 401 and I would have gone looking in the wrong place.
+
+The real fix was not to un-redact but to stop calling `ready` twice: the bootstrap
+token is single-use anyway, so exchanging once and re-ticketing per connection is
+what a real client does.
+
+### Three states, not a boolean with a note
+
+The live evidence originally reported `allScenariosPassed: false` with a prose
+field explaining that a false sometimes meant "not demonstrated" and sometimes
+"failed". **A boolean plus documentation is a boolean plus a thing nobody reads.**
+It now emits `demonstrated` / `not-demonstrated` / `failed`, and the script exits
+0 / 2 / 1 respectively — "could not tell" has its own exit code.
+
+### Phase 2's C and D: moved, not renumbered
+
+Discharged in Phase 3, but they remain **Phase 2's criteria**, marked partially
+met with the same wording as the npx gap. Phase 3's **exit** conditions gate on
+them — exit, not entry, because entry conditions are read once and inherited
+while exit conditions get checked.
+
+Two arguments for moving them, the second the architect's and stronger than mine:
+driving a socket-kill needs a real event stream, and manufacturing one would test
+the classifier against **synthetic** sequences — a third instrument agreeing with
+the other two because they share a premise.
+
+**Do not mistake the spike for this.** The spike proved the *server* replays
+correctly (`afterSequence: 45` → 46-54, completion included). These criteria are
+about whether **`packages/t3-client`** requests and applies the range correctly.
+Read the spike's harness for the connect-and-kill mechanics; it solved that part.
+
+### STANDING ORDER: the review rotation is now 2-way
+
+**gemini is dropped** — it approved every round of the spec, the plan and both
+phases while codex and claude found every real defect. opencode remains out on
+#150.
+
+**Treat it as a 2-way, not a reduced 3-way.** Two lanes agreeing is weaker
+corroboration than three, and it is the exact case this project's own rule covers:
+*ask what they share before treating agreement as confirmation.*
+
+So: **when both lanes approve a phase touching contracts, security, or deletion,
+do one adversarial pass yourself against the thing they agreed on before
+accepting it.** Phases 5, 6, 7, 14 and 15 all qualify.
+
+If porch complains about a missing lane, **the config is the fix, never
+`status.yaml`.**

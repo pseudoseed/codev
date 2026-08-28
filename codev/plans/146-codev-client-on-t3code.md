@@ -435,10 +435,31 @@ claim stops being a one-off observation and becomes a tested property.
       thread, receive a typed stream to completion.
 - [ ] A stream of more chunks than the server's buffer completes, proving acks are honoured. A
       deliberately ack-suppressed client stalls, proving the test can tell the difference.
-- [ ] Socket killed mid-stream at a known sequence; resubscription replays exactly the missing
-      range and the completion event is present.
-- [ ] A forced snapshot response produces a gap signal distinguishable from both success and
-      empty.
+- [~] **PARTIALLY MET — discharged in Phase 3, and still Phase 2's criteria.** Socket killed
+      mid-stream at a known sequence; resubscription replays exactly the missing range and the
+      completion event is present.
+- [~] **PARTIALLY MET — same.** A forced snapshot response produces a gap signal distinguishable
+      from both success and empty.
+
+      **Why they moved, and what "moved" does not mean.** Both need a real event stream to kill a
+      socket in the middle of. An idle thread emits about two items and no server-issued sequence
+      numbers, so there is nothing to classify. Manufacturing traffic would test the classifier
+      against synthetic sequences — a third instrument agreeing with the other two because they
+      share a premise, which is the failure this project has already been bitten by twice.
+
+      They are **not renumbered into Phase 3's criteria list**, because a criterion moved into a
+      later phase becomes indistinguishable from that phase's own work and can evaporate. They
+      remain Phase 2's, discharged in Phase 3, and **Phase 3 cannot close without them** — recorded
+      in Phase 3's *exit* conditions, not its entry conditions, because entry conditions are read
+      once and inherited while exit conditions get checked.
+
+      What is already true and is **not** what these criteria ask: the original spike proved the
+      *server* replays correctly — `afterSequence: 45` returned 46-54 matching a control
+      connection, completion included
+      (`codev/research/146-t3code-porch-execution-proof.md`, on main). That is evidence about
+      t3code. These criteria are about whether **`packages/t3-client` requests and applies the
+      range correctly**, which is a different claim. The spike's harness already solved the
+      connect-and-kill mechanics; read it before writing this.
 - [ ] Build and tests pass.
 
 #### Test Plan
@@ -505,12 +526,29 @@ involved.
       side effect is absent.
 - [ ] Build and tests pass.
 
+#### Exit conditions — Phase 3 cannot close without these
+
+Checked at the end of this phase, not inherited from its start.
+
+- [ ] **Phase 2's criterion C, discharged here.** A socket killed mid-stream at a known
+      server-issued sequence; `packages/t3-client` resubscribes with `afterSequence` and replays
+      exactly the missing range, completion event included. This phase drives real turns, so the
+      events are real and the gap is a real gap. The spike's harness
+      (`codev/experiments/146-t3code-porch-proof/`) already solved the connect-and-kill mechanics —
+      read it first.
+- [ ] **Phase 2's criterion D, discharged here.** A resubscription answered with a snapshot
+      produces a gap signal distinguishable from both success and empty, against server-issued
+      sequences rather than synthetic ones.
+
+These remain **Phase 2's** criteria. They are listed here because this is where they can be
+satisfied, not because they became Phase 3's work.
+
 #### Test Plan
 
 Unit: cursor ordering; commandId journal; harness and model mapping including the rejection path.
 
 Integration against a live server: the four acceptance scenarios, with the two crash tests killing
-a real process at a real window rather than simulating it.
+a real process at a real window rather than simulating it, plus Phase 2's C and D above.
 
 ---
 

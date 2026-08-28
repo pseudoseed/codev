@@ -3,36 +3,49 @@
   "scenarios": [
     {
       "scenario": "A: connect, dispatch, subscribe, stream",
-      "ok": true,
       "scopes": "orchestration:read orchestration:operate terminal:operate review:write relay:read",
       "dispatched": true,
       "worktreeCreated": true,
       "itemsReceived": 2,
       "outcome": "ok",
-      "note": "stream synchronized"
+      "note": "stream synchronized",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed."
     },
     {
       "scenario": "B: acks honoured (with ack-suppressed control)",
-      "ok": true,
       "ackedItems": 2,
       "suppressedItems": 1,
       "distinguishable": true,
-      "note": "suppressed client fell behind, so the ack is doing work"
+      "note": "suppressed client fell behind, so the ack is doing work",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed."
     },
     {
       "scenario": "C+D: resume classification on real sequences",
-      "ok": false,
       "observedSequences": [],
       "contiguous": null,
       "withHole": null,
       "withSnapshot": null,
       "gapDistinctFromEmpty": false,
-      "note": "no sequenced items observed"
+      "note": "no sequenced items observed",
+      "state": "not-demonstrated",
+      "stateMeaning": "The scenario did not run to a verdict: no server-issued sequences existed to classify. This is NOT a failure of the classifier."
     }
   ],
-  "allScenariosPassed": false,
   "limits": {
     "scenarioCplusD": "NOT demonstrated live. An idle thread emits ~2 stream items, none carrying a sequence number this probe could find, so there were no server-issued sequences to classify. The classifier is unit-tested (6 tests: contiguous, empty, late-start gap, mid-range hole, snapshot gap, gap-distinct-from-empty) but those use synthetic sequences. Demonstrating it live needs an active agent turn generating a real event stream, which is Phase 3 work.",
     "doNotRead": "allScenariosPassed:false means C+D was not demonstrated, NOT that the classifier failed. A and B passed against the live server."
+  },
+  "summary": {
+    "demonstrated": [
+      "A: connect, dispatch, subscribe, stream",
+      "B: acks honoured (with ack-suppressed control)"
+    ],
+    "notDemonstrated": [
+      "C+D: resume classification on real sequences"
+    ],
+    "failed": [],
+    "note": "Three states, not a boolean. 'demonstrated', 'not-demonstrated' and 'failed' are different facts, and an earlier version of this file collapsed the last two into allScenariosPassed:false with a prose note explaining the difference. A boolean plus documentation is a boolean plus a thing nobody reads."
   }
 }

@@ -56,9 +56,23 @@ const id = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(
 const now = () => new Date().toISOString();
 
 const results = [];
-const record = (name, ok, detail) => {
-  results.push({ scenario: name, ok, ...detail });
-  console.error(`[live] ${ok ? 'PASS' : 'FAIL'} ${name}${detail?.note ? ` — ${detail.note}` : ''}`);
+
+/**
+ * Three states, not a boolean.
+ *
+ * `demonstrated` — ran against the live server and passed.
+ * `not-demonstrated` — could not run to a verdict (no traffic to observe, no
+ *   server, preconditions absent). Says nothing about whether the code works.
+ * `failed` — ran and the behaviour was wrong.
+ *
+ * An earlier version had `ok: true|false` with a prose note explaining that a
+ * false sometimes meant the second and sometimes the third. A boolean plus
+ * documentation is a boolean plus a thing nobody reads.
+ */
+const record = (name, state, detail) => {
+  results.push({ scenario: name, state, ...detail });
+  const label = { demonstrated: 'DEMONSTRATED', 'not-demonstrated': 'NOT-DEMONSTRATED', failed: 'FAILED' }[state];
+  console.error(`[live] ${label} ${name}${detail?.note ? ` — ${detail.note}` : ''}`);
 };
 
 /**
@@ -185,7 +199,7 @@ try {
     });
     const outcome = await done;
 
-    record('A: connect, dispatch, subscribe, stream', synchronized, {
+    record('A: connect, dispatch, subscribe, stream', synchronized ? 'demonstrated' : 'failed', {
       scopes,
       dispatched: dispatched !== undefined,
       worktreeCreated: Boolean(worktree?.worktree?.path),
@@ -227,7 +241,7 @@ try {
     // suppressed run keeps up, this volume never filled the buffer and the
     // scenario proved nothing — which is reported, not passed.
     const distinguishable = acked.count > suppressed.count;
-    record('B: acks honoured (with ack-suppressed control)', acked.count > 0, {
+    record('B: acks honoured (with ack-suppressed control)', acked.count === 0 ? 'not-demonstrated' : distinguishable ? 'demonstrated' : 'not-demonstrated', {
       ackedItems: acked.count,
       suppressedItems: suppressed.count,
       distinguishable,
@@ -268,7 +282,7 @@ try {
       ? classifyResume(seqs[0] - 1, seqs.map((s) => ({ sequence: s })), { threads: [] })
       : null;
 
-    record('C+D: resume classification on real sequences', observed, {
+    record('C+D: resume classification on real sequences', observed ? 'demonstrated' : 'not-demonstrated', {
       observedSequences: seqs.slice(0, 8),
       contiguous: contiguous?.kind ?? null,
       withHole: withHole?.kind ?? null,
@@ -283,12 +297,23 @@ try {
   } catch { /* best effort */ }
 }
 
-const allOk = results.every((r) => r.ok);
+const failed = results.filter((r) => r.state === 'failed');
+const notDemonstrated = results.filter((r) => r.state === 'not-demonstrated');
 console.log(
   JSON.stringify(
-    { criterion: 'Spec 146 Phase 2 live integration', scenarios: results, allScenariosPassed: allOk },
+    {
+      criterion: 'Spec 146 Phase 2 live integration',
+      scenarios: results,
+      summary: {
+        demonstrated: results.filter((r) => r.state === 'demonstrated').map((r) => r.scenario),
+        notDemonstrated: notDemonstrated.map((r) => r.scenario),
+        failed: failed.map((r) => r.scenario),
+      },
+    },
     null,
     2,
   ),
 );
-process.exit(allOk ? 0 : 1);
+// Exit 1 only for an actual failure. Exit 2 for "could not tell", which is
+// neither success nor a bug and must not be spelled like either.
+process.exit(failed.length > 0 ? 1 : notDemonstrated.length > 0 ? 2 : 0);
