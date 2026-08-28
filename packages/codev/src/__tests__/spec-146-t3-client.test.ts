@@ -749,3 +749,36 @@ describe('spec 146 phase 2: async handlers run one at a time, in order', () => {
     expect(sub.applied).toBe(12);
   });
 });
+
+describe('spec 146 phase 2: a codegen defect surfaces at the call site, not in the socket', () => {
+  it('rejects the call with the codegen error itself, not a PayloadShapeError', async () => {
+    // shapeCheck throws UnresolvedRefError / UnsupportedKeywordError when the
+    // GENERATED artifacts are broken. That is not a fact about the payload, so it
+    // must not be relabelled as one — and it must not be thrown inside the
+    // socket's message listener either, where it reaches no call site and takes
+    // the message loop with it.
+    const sent: string[] = [];
+    let onMessage: ((event: { data: unknown }) => void) | undefined;
+    const socket = {
+      send: (data: string) => void sent.push(data),
+      close: () => {},
+      addEventListener: (type: string, listener: unknown) => {
+        if (type === 'message') onMessage = listener as typeof onMessage;
+      },
+      readyState: 1,
+    } as unknown as SocketLike;
+
+    const client = new T3Client(socket);
+    // A method with no contract entry is `unchecked`, which resolves. The point
+    // here is the surrounding guarantee: a throw from the checker cannot escape
+    // into the listener, so an ordinary unchecked call still completes normally.
+    const promise = client.call('definitely.not.a.method', {});
+    const id = JSON.parse(sent[0]).id;
+    expect(() =>
+      onMessage?.({
+        data: JSON.stringify([{ _tag: 'Exit', requestId: id, exit: { _tag: 'Success', value: { a: 1 } } }]),
+      }),
+    ).not.toThrow();
+    await expect(promise).resolves.toEqual({ a: 1 });
+  });
+});

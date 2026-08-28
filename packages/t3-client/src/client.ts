@@ -32,7 +32,7 @@ import {
   type ExitFrame,
   type ServerFrame,
 } from './envelope.js';
-import { checkPayload, type CheckOutcome, type PayloadShapeError } from './checked.js';
+import { checkPayload, type CheckOutcome } from './checked.js';
 
 /**
  * The minimum a socket must do. Deliberately the shape of the standard
@@ -197,16 +197,20 @@ export class T3Client {
    * must not be spelled like a pass either — it lands on `uncheckedMethods` and
    * on `onUnchecked` so it exists somewhere readable.
    */
-  #checkInbound(method: string, value: unknown): PayloadShapeError | null {
+  #checkInbound(method: string, value: unknown): Error | null {
     if (this.options.checkPayloads === false) return null;
     let outcome: CheckOutcome;
     try {
       outcome = checkPayload(method, 'output', value);
     } catch (error) {
       // UnresolvedRefError / UnsupportedKeywordError are defects in the generated
-      // artifacts, not facts about this payload. Do not convert them into a
-      // payload rejection, which would blame the server for our own codegen.
-      throw error;
+      // artifacts, not facts about this payload, so they are returned AS
+      // THEMSELVES rather than wrapped in a PayloadShapeError — a caller must be
+      // able to tell "our codegen is broken" from "the server sent something
+      // wrong". They are returned rather than rethrown because this runs inside
+      // the socket's message listener, where a throw reaches no call site and
+      // takes the message loop with it instead of failing the request.
+      return error as Error;
     }
     if (outcome.status === 'failed') return outcome.error;
     if (outcome.status === 'unchecked' && !this.uncheckedMethods.has(method)) {
