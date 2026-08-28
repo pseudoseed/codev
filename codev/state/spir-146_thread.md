@@ -996,3 +996,33 @@ payloads, `reportedUnchecked: {}`.
 
 That is the first direct evidence that the vendored contract accepts real traffic
 from the pinned server, rather than merely accepting the fixtures I wrote for it.
+
+### The adversarial self-pass found three more, before any reviewer saw the code
+
+The standing order is to do one adversarial pass myself when the two remaining
+lanes agree on contract, security or deletion work. I did it early, on my own new
+code, before the lanes ran. It was worth more than the order requires.
+
+- **`onResume` fired only on `synchronized`.** A stream cut short before catch-up
+  finished produced *no outcome at all* — not success, not gap, nothing. The
+  caller heard silence, which is the one answer this module exists to make
+  impossible. Now reports a gap naming the truncation.
+- **`stop()` during `connect()` was ignored** until one more stream had opened, on
+  a socket the caller believed was shut. `connect` is slow by design — backoff, a
+  fresh ticket — so the window is real rather than theoretical.
+- **Handlers were collected, not sequenced.** The stream callback is synchronous
+  but `onValue` may be async. Firing each as it arrived let handler N+1 start
+  before N finished, so the cursor landed on whichever promise resolved last
+  rather than on the highest sequence. **The comment directly above the array said
+  "the values must reach the handler in arrival order."** I wrote the guarantee as
+  prose and the code as a `push`. Collecting is not sequencing.
+
+The third is the one worth keeping. It is the same failure as every other entry
+here, but at the smallest possible scale: **a claim stated next to code that does
+not implement it, where the claim reads as evidence for the code.** A reviewer
+skimming would see the comment and move on, and so did I, twice — I wrote it, then
+re-read the file and did not notice.
+
+The test that catches it drives three events whose handlers take 30ms, 15ms and
+1ms. An unsequenced implementation completes them 12, 11, 10. A test with equal
+durations would pass against the broken code, which is why the durations descend.
