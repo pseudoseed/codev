@@ -196,3 +196,74 @@ is the setting porch reads to build its required-lane list. The 4-way became a
 `plan-approval` requested with structured content. 15 phases, checks green,
 3-way review complete: gemini APPROVE, codex REQUEST_CHANGES addressed, claude
 REQUEST_CHANGES twice, both addressed.
+
+## 2026-08-28 — Phase 1: vendored contract, drift detection, churn
+
+Plan approved by the human. Phase 1 built and its checks run.
+
+### What shipped
+
+- `packages/types/src/t3/` — generated artifacts, `pin.json`, `shape-check.ts`,
+  `index.ts`. Zero runtime deps preserved; a test asserts it.
+- `tools/t3-codegen/` — the only place `effect` exists in this repo, as a
+  devDependency. `generate.mjs`, `classify-churn.mjs`, `REFRESH.md`.
+- `tools/t3-server/` — the pinned-server harness.
+- `tools/*` added to `pnpm-workspace.yaml`; without it nothing installs the
+  codegen's `effect`.
+- `packages/codev/src/__tests__/spec-146-t3-contract.test.ts` — 18 tests.
+
+Tests live in `packages/codev` because that is where the suite actually runs:
+root `test` is `pnpm --filter @cluesmith/codev test` and `packages/types` has no
+runner. A test in `packages/types` would look present and never execute.
+
+### Two bugs I wrote and caught
+
+**The loss detector reported zero loss.** I guarded on
+`typeof candidate === 'object'`, but Effect 4 schemas are *callable* — `typeof`
+is `'function'`. Every schema was skipped and LOSSY.md said "none detected" on a
+contract that degrades 20 schemas. Caught it only because the plan predicted the
+loss and the empty report contradicted the prediction. The test now asserts
+LOSSY.md is non-empty, so this cannot regress into a quiet clean bill.
+
+**The churn classifier reported every commit unbuildable.** It staged files in
+`/tmp`, where Node's upward walk for `effect` finds nothing. That failure read as
+"nothing to classify" rather than "the harness is broken". Fixed by staging
+inside the tool, same as the generator already did.
+
+Both are the same shape of bug: a broken check reporting success.
+
+### The measurement that matters
+
+**Criterion 12: 21 of 54 classifiable commits — 39% — change a shape Codev
+consumes.** `dispatchCommand` (15) and `subscribeThread` (13) absorb nearly all
+of it, which are exactly the two methods `porch-driver` is built on.
+
+Three limits, all recorded in the report rather than smoothed over:
+
+1. The spec's 184-commit window starts 2026-02-07, but the closure did not exist
+   until 2026-05-02 (`vcs.ts`, `sourceControl.ts`; `auth.ts` 2026-04-09,
+   `providerInstance.ts` 2026-04-29). Before that "changed against the vendored
+   types" has no referent.
+2. Commits before ~2026-06-01 cannot be emitted with the pinned Effect at all —
+   they fail inside `SchemaAST` because they predate `4.0.0-beta.103`. Reported
+   as `unclassifiable`, a third verdict, never folded into breaking or safe.
+3. `source-only` is not "safe". A relaxed branded id lands there with a zero-byte
+   schema diff. 32 source-only commits means 32 whose effect is *invisible to the
+   emitter*.
+
+### Harness
+
+`verify` is the load-bearing verb, not `start`, per the architect's instruction
+that a later phase must not quietly test against the wrong server. Three exit
+codes — 0 verified, 1 mismatch, 3 could-not-determine — because a missing
+checkout must not exit like a passing one. All three paths tested.
+
+Its real limit is in the README: it pins the *checkout*, not the `t3` CLI binary
+that serves it. If those diverge, `verify` cannot see it.
+
+### Plan corrections from implementation
+
+- `resolveJsonModule` deliverable superseded. Emitting `schema.ts` as a module
+  and passing the schema to `shapeCheck` removes the JSON-import machinery, and
+  with it the copy-into-dist step that would pass CI and fail at runtime.
+- Criterion 12 marked done with the real figure and its caveats.
