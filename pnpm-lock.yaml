@@ -379,6 +379,19 @@ importers:
         specifier: ^4.0.15
         version: 4.1.4(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@28.1.0)(vite@6.4.2(@types/node@22.19.17)(tsx@4.21.0)(yaml@2.9.0))
 
+  packages/porch-driver:
+    dependencies:
+      '@cluesmith/t3-client':
+        specifier: workspace:*
+        version: link:../t3-client
+    devDependencies:
+      '@types/node':
+        specifier: 22.x
+        version: 22.19.17
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+
   packages/sdk:
     dependencies:
       '@cluesmith/codev-types':

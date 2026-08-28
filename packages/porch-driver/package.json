@@ -1,0 +1,53 @@
+{
+  "name": "@cluesmith/porch-driver",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Spec 146, Phase 3: porch's session lifecycle against a t3code server. Spawn a thread on a worktree, run a turn to settle, run phase checks as processes porch owns, and survive a crash at either of the two windows that lose work. Library calls only \u2014 no PTY.",
+  "type": "module",
+  "exports": {
+    "./harness-map": {
+      "types": "./src/harness-map.ts",
+      "default": "./dist/harness-map.js"
+    },
+    "./commands": {
+      "types": "./src/commands.ts",
+      "default": "./dist/commands.js"
+    },
+    "./cursor": {
+      "types": "./src/cursor.ts",
+      "default": "./dist/cursor.js"
+    },
+    "./thread": {
+      "types": "./src/thread.ts",
+      "default": "./dist/thread.js"
+    },
+    "./turn": {
+      "types": "./src/turn.ts",
+      "default": "./dist/turn.js"
+    },
+    "./checks": {
+      "types": "./src/checks.ts",
+      "default": "./dist/checks.js"
+    },
+    "./worktree-setup": {
+      "types": "./src/worktree-setup.ts",
+      "default": "./dist/worktree-setup.js"
+    }
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "check-types": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "22.x",
+    "typescript": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@cluesmith/t3-client": "workspace:*"
+  }
+}
