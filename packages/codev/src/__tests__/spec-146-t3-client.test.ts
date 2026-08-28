@@ -698,3 +698,54 @@ describe('spec 146 phase 2: a subscription never answers with silence', () => {
     expect(opened).toBe(0);
   });
 });
+
+describe('spec 146 phase 2: async handlers run one at a time, in order', () => {
+  it('does not start the next handler before the previous one finishes', async () => {
+    // The bug this closes: the stream callback is synchronous but onValue may be
+    // async, so firing each as it arrived let handler N+1 start before N ended,
+    // and the cursor landed on whichever resolved last rather than the highest.
+    // The earlier version collected the promises in an array and asserted arrival
+    // order in a comment. Collecting is not sequencing.
+    const order: string[] = [];
+    let concurrent = 0;
+    let maxConcurrent = 0;
+
+    const client = {
+      async stream(_m: string, _p: Record<string, unknown>, onValue: (v: unknown) => void) {
+        // Descending durations: without sequencing, 12 finishes before 10.
+        onValue({ kind: 'event', event: { sequence: 10 } });
+        onValue({ kind: 'event', event: { sequence: 11 } });
+        onValue({ kind: 'event', event: { sequence: 12 } });
+        onValue({ kind: 'synchronized' });
+        return undefined;
+      },
+    };
+
+    const delays: Record<number, number> = { 10: 30, 11: 15, 12: 1 };
+    const sub = new ResumingSubscription(async () => ({ client: client as never, close: () => {} }), {
+      method: 'orchestration.subscribeThread',
+      payload: {},
+      sequenceOf: (v: unknown) => (v as { event?: { sequence?: number } })?.event?.sequence ?? null,
+      isSnapshot: () => false,
+      isSynchronized: (v: unknown) => (v as { kind?: string })?.kind === 'synchronized',
+      onValue: async (_v, sequence) => {
+        concurrent += 1;
+        maxConcurrent = Math.max(maxConcurrent, concurrent);
+        await new Promise((r) => setTimeout(r, delays[sequence as number] ?? 0));
+        order.push(String(sequence));
+        concurrent -= 1;
+      },
+      onResume: () => {},
+      delayBetweenAttemptsMs: 5,
+    });
+
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 150));
+    sub.stop();
+    await running;
+
+    expect(maxConcurrent, 'handlers must not overlap').toBe(1);
+    expect(order.slice(0, 3)).toEqual(['10', '11', '12']);
+    expect(sub.applied).toBe(12);
+  });
+});

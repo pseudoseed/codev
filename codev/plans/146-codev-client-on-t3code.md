@@ -442,7 +442,7 @@ claim stops being a one-off observation and becomes a tested property.
       so, and the detectable gap is the protocol-level one: the server declined the cursor.
 - [x] With the server unreachable, every call fails loudly at the call site. There is no silent
       queue at this layer.
-- [x] Tests for this phase. 44 in `spec-146-t3-client.test.ts`.
+- [x] Tests for this phase. 46 in `spec-146-t3-client.test.ts`.
 
 #### Acceptance Criteria
 

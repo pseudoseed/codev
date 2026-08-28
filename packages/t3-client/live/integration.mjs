@@ -53,6 +53,7 @@ const { T3Client } = await import(join(distDir, 'client.js'));
 const { classifyResume } = await import(join(distDir, 'resume.js'));
 const auth = await import(join(distDir, 'auth.js'));
 const { checkableMethods } = await import(join(distDir, 'checked.js'));
+const { ResumingSubscription } = await import(join(distDir, 'subscription.js'));
 
 /**
  * Every client this run opens, so the scenarios can report which methods were
@@ -424,6 +425,64 @@ try {
           checkedAndMatched.length === exercised.length
             ? 'every exercised method has a generated schema, and every live payload matched it'
             : 'at least one exercised method was NOT checked; scenarios A-D say nothing about its payloads',
+      },
+    );
+  }
+
+  // ------------------------------------------------------------ F: the subscription class, live
+  {
+    // `ResumingSubscription` is new and, until this scenario, only ever ran
+    // against a fake. A class that passes its unit tests and has never met the
+    // real server is the exact shape of thing this project keeps being bitten by,
+    // so it drives one real subscribe cycle here.
+    //
+    // This is NOT criterion C. It does not kill a socket mid-stream and it does
+    // not verify the replayed range. It establishes the smaller thing: the class
+    // subscribes to the live server, receives its frames, reports an outcome, and
+    // stops when told.
+    const { thread } = globalThis.__phase2;
+    const outcomes = [];
+    const seen = [];
+
+    const sub = new ResumingSubscription(
+      async () => {
+        const { client, socket } = await connect();
+        return { client, close: () => socket.close() };
+      },
+      {
+        method: 'orchestration.subscribeThread',
+        payload: { threadId: thread },
+        sequenceOf: (v) => (typeof v?.event?.sequence === 'number' ? v.event.sequence : null),
+        isSnapshot: (v) => v?.kind === 'snapshot',
+        isSynchronized: (v) => v?.kind === 'synchronized',
+        onValue: (v, sequence) => void seen.push({ kind: v?.kind ?? null, sequence }),
+        onResume: (outcome, info) => void outcomes.push({ kind: outcome.kind, ...info }),
+        delayBetweenAttemptsMs: 250,
+      },
+    );
+
+    const running = sub.run().catch((error) => ({ error: String(error) }));
+    await new Promise((resolve) => setTimeout(resolve, 8_000));
+    sub.stop();
+    const stopped = await Promise.race([
+      running.then(() => 'stopped'),
+      new Promise((resolve) => setTimeout(() => resolve('did-not-stop'), 5_000)),
+    ]);
+
+    record(
+      'F: ResumingSubscription drives a real subscription and stops on command',
+      outcomes.length > 0 && stopped === 'stopped' ? 'demonstrated' : 'not-demonstrated',
+      {
+        outcomes,
+        itemsSeen: seen.length,
+        firstOutcomeIsNotAGap: outcomes[0]?.kind !== 'gap',
+        stopped,
+        note:
+          outcomes.length === 0
+            ? 'the subscription reported no outcome at all, which is the one answer it must never give'
+            : stopped !== 'stopped'
+              ? 'the subscription did not stop within 5s of stop()'
+              : 'subscribed live, reported an outcome, and stopped when told',
       },
     );
   }

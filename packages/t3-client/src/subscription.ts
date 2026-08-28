@@ -146,9 +146,26 @@ export class ResumingSubscription {
       let synchronized = false;
       const requestedAfter = this.#cursor.applied;
 
-      // Applying inside the stream handler, not after it: the values must reach
-      // the handler in arrival order, and the cursor must move only behind them.
-      const pending: Array<Promise<void>> = [];
+      // Handlers run one at a time, in arrival order, on a single chain.
+      //
+      // The stream callback is synchronous but `onValue` may be async, so
+      // firing each one as it arrives lets event N+1's handler start before N's
+      // finishes — and then the cursor lands on whichever resolves last, which
+      // is not necessarily the highest. An earlier version of this file
+      // collected the promises in an array and claimed arrival order in a
+      // comment. Collecting is not sequencing.
+      let chain: Promise<void> = Promise.resolve();
+      const enqueue = (work: () => void | Promise<void>) => {
+        chain = chain.then(work, () => work() as void | Promise<void>).then(
+          () => undefined,
+          () => undefined,
+        );
+      };
+
+      // Advances at ENQUEUE time, ahead of the cursor, which advances only when a
+      // handler completes. Testing duplicates against the cursor would re-apply an
+      // event that is already queued but not yet run.
+      let queuedThrough = this.#cursor.applied;
 
       try {
         await transport.client.stream(this.options.method, payload, (value) => {
@@ -170,32 +187,33 @@ export class ResumingSubscription {
 
           if (this.options.isSnapshot(value)) {
             snapshot = value;
-            pending.push(Promise.resolve(this.options.onValue(value, null)));
+            enqueue(() => this.options.onValue(value, null));
             return;
           }
 
           const sequence = this.options.sequenceOf(value);
           if (sequence === null) {
-            pending.push(Promise.resolve(this.options.onValue(value, null)));
+            enqueue(() => this.options.onValue(value, null));
             return;
           }
 
           if (!synchronized) catchUp.push({ sequence });
 
-          // Already applied. t3code overlaps deliberately; re-running an
-          // idempotent handler is harmless but pointless, and skipping it keeps
-          // the cursor monotonic.
-          if (sequence <= this.#cursor.applied) return;
+          // Already applied or already queued. t3code overlaps deliberately;
+          // re-running an idempotent handler is harmless but pointless, and
+          // skipping it keeps the cursor monotonic.
+          if (sequence <= queuedThrough) return;
+          queuedThrough = sequence;
 
-          pending.push(
-            this.#cursor.apply({ sequence }, () => this.options.onValue(value, sequence)),
-          );
+          enqueue(() => this.#cursor.apply({ sequence }, () => this.options.onValue(value, sequence)));
         });
       } catch {
         // The socket dropped or the server ended the stream. Either way the
         // subscription is over and the loop opens a new one — unless stopped.
       } finally {
-        await Promise.allSettled(pending);
+        // Drain the chain, so the cursor reflects every handler that ran before
+        // the next resubscription reads it.
+        await chain;
 
         // A stream that ended before synchronizing produced no outcome at all,
         // so the caller heard nothing — neither success nor gap. Silence is the
