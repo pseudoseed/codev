@@ -1199,3 +1199,89 @@ and it can extend the closure then, with its own justification.
 I noted the PTY exit-code ambiguity myself, in this thread, two sections up, and
 then offered a plan that would have walked into it. Having the fact is not the
 same as applying it.
+
+## Phase 2 iteration 1 — the 2-way review, and what it caught
+
+Both lanes returned REQUEST_CHANGES. Both found the same blocking bug
+independently, and one of them reproduced it with a probe rather than reasoning
+about it. That is what the 2-way is supposed to buy.
+
+### The blocking one: a failing handler silently skipped its event
+
+`enqueue` swallowed every handler rejection, and `queuedThrough` had already
+advanced at enqueue time. So event 10's handler throwing while event 11 succeeded
+left the cursor at 11, event 10 gone permanently, and **nothing anywhere said so**.
+
+Three documented claims in this repo were false while that stood:
+
+- `resume.ts`: "If the handler throws, the cursor does NOT move, so the item is
+  redelivered."
+- `subscription.ts`: "a crash between the two redelivers rather than skips …
+  at-least-once, and it is load-bearing."
+- The plan's Phase 3 cursor deliverable, which the crash-recovery criteria are
+  built on.
+
+**Why my test missed it.** It failed the handler on the *last* event before a drop
+— the single arrangement where the bug cannot appear, because there is no later
+event to carry the cursor past the hole. The suite was green and said nothing.
+Same shape as the ack-suppression control: a test that cannot fail proves nothing,
+and this one could only fail in an arrangement I did not write.
+
+Fixed: a handler failure sets a marker, refuses everything after it in that
+stream, reports through a new `onHandlerError`, and closes the transport so the
+resubscription redelivers from the last **successfully applied** sequence. Two
+tests now, one of them exactly the arrangement that was missing.
+
+### The envelope was wrong against the reference it claimed to cite
+
+codex checked `RpcMessage.ts` at beta.103. Three errors, and I had ticked the box
+saying the shapes were "validated against `RpcMessage.ts` as the reference":
+
+- **`cause` is an array**, not one object — `ExitEncoded` declares
+  `ReadonlyArray<{Fail} | {Die} | {Interrupt}>` because an Effect cause is a tree.
+  Reading `cause._tag` on an array gives `undefined`, so `RpcFailureError` would
+  have carried no kind and no tag. The named error I built *for Phase 3 to branch
+  on* could not have been branched on.
+- **`ClientProtocolError` was rejected** as an unknown tag. It is in
+  `FromServerEncoded`, and it is the server reporting a protocol error against
+  every in-flight request. The decoder turned "your protocol is wrong" into "this
+  connection is unreadable".
+- **`ClientEnd` was accepted** and is not in `FromServerEncoded` at all — it lives
+  in `FromServer`, the decoded union, and never reaches a socket.
+
+My own tests for `RpcFailureError` fed a single-object cause, so they agreed with
+the code because they shared its mistake. The reference was on disk the whole
+time. I cited it without reading it.
+
+**The rule this earns:** *citing a source is not consulting it.* A comment naming
+the file it was derived from reads as strong evidence and costs nothing to write.
+The claim was checkable in one grep and stood for a whole phase.
+
+### The rest, all real
+
+- **Named errors became reconnect attempts.** The `catch {}` around the stream
+  caught everything, so a `PayloadShapeError` or an `RpcFailureError` turned into
+  an endless resubscribe that looked like a quiet connection. Now classified: a
+  known terminal error throws `SubscriptionTerminatedError`; anything unrecognised
+  still retries, and the deny-list direction is documented as deliberate.
+- **`packages/t3-client` was never built by the root `build`** while its `exports`
+  point at `./dist`. Nothing broke because the tests import `src` directly and my
+  worktree has a `dist` from a manual `tsc` — which is gitignored, so a fresh
+  clone or CI would not have it. Phase 3 importing `@cluesmith/t3-client/client`
+  would have failed to resolve. Same class as the export-map gap Phase 1 fixed.
+  Added to the root build.
+- **Hot resubscribe loop** on a server that ends streams instantly. Backoff now
+  grows on a streak of streams that delivered nothing, and resets the moment one
+  delivers.
+- **The ack could throw inside the message listener.** Same hazard as the codegen
+  errors, in the line directly above the fix for those. Now best-effort, with the
+  reason: a dropped socket has already failed every pending request, so there is
+  no one left to ack to.
+
+### One lane's claim I did not take
+
+claude's review states "All ten wire shapes are modelled against `RpcMessage.ts`"
+in its "what's solid" section — the exact thing codex proved false. Two lanes, and
+one of them corroborated the error rather than catching it. Worth recording
+against the standing order: a 2-way agreeing is weaker than it looks, and here
+they did not even agree.
