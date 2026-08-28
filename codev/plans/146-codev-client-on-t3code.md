@@ -212,10 +212,13 @@ property. Only the generator needs `effect`, so only the generator lives outside
 - `packages/types/package.json` — an export map entry for the new subpath. Today `exports` carries
   only `"."`, so nothing under `src/t3/` is reachable by a consumer without one; review caught this
   and it would have surfaced as an unresolvable import in Phase 2.
-- `packages/types/tsconfig.json` — `resolveJsonModule`, and `schema.json` copied into `dist` by the
-  build. `shape-check.ts` imports the JSON, and the package maps `types` to `src/` but `default` to
-  `dist/`, so a JSON file that never reaches `dist` fails at consumer runtime and not in CI. A test
-  asserts `schema.json` is present in the built output.
+- ~~`packages/types/tsconfig.json` — `resolveJsonModule` and a copy-into-`dist` step.~~
+  **Superseded during implementation, and the simpler answer is better.** The generator emits
+  `generated/schema.ts` as a TypeScript module alongside `schema.json`, and `shapeCheck` takes the
+  schema as a parameter rather than importing it. So there is no JSON import, no
+  `resolveJsonModule`, and no copy step that could pass CI and then fail at a consumer's runtime
+  because the file never reached `dist`. `schema.json` survives purely as the diffable artifact for
+  the drift test.
 - `packages/types/__tests__/t3-drift.test.ts`
 - `packages/types/__tests__/t3-shape-check.test.ts`
 - `packages/types/__tests__/no-runtime-deps.test.ts`
@@ -290,10 +293,24 @@ property. Only the generator needs `effect`, so only the generator lives outside
       silent failure.
 - [ ] `no-runtime-deps.test.ts` asserts the package's `dependencies` field is empty and that no
       file under `src/` imports `effect`.
-- [ ] The 184 commits touching the closure since 2026-02-07 are replayed through the detector and
-      each is recorded as breaking or non-breaking **against the schemas Codev consumes**, with the
-      breaking count written to `codev/research/146-contract-churn-classification.md`. This
-      discharges success criterion 12; counting commits is explicitly not the criterion.
+- [x] The commits touching the closure are replayed through the detector and each is recorded as
+      breaking or non-breaking **against the schemas Codev consumes**, with the breaking count
+      written to `codev/research/146-contract-churn-classification.md`. Criterion 12 discharged;
+      counting commits is explicitly not the criterion.
+
+      **Done, and the window is not the one the spec names.** The spec's 184 commits run from
+      2026-02-07, but the nine-file closure did not exist until 2026-05-02 — `auth.ts` arrived
+      2026-04-09, `providerInstance.ts` 2026-04-29, `vcs.ts` and `sourceControl.ts` 2026-05-02.
+      Before those dates "changed against the vendored types" has no referent. Commits before
+      roughly 2026-06-01 additionally cannot be emitted with the pinned Effect at all; they fail
+      inside `SchemaAST` because they predate `4.0.0-beta.103`. Those are reported as a **third
+      verdict**, `unclassifiable`, never folded into breaking or safe.
+
+      **Measured result: 21 of 54 classifiable commits (39%) change a shape Codev consumes**, and
+      `orchestration.dispatchCommand` (15) and `orchestration.subscribeThread` (13) absorb nearly
+      all of it — the two methods `porch-driver` is built on. The spec assumed a pin goes stale in
+      weeks; at ~20 closure commits a month this is closer to 8 consumed-changes a month. The
+      refresh procedure is operational tooling, not a safety net.
 - [ ] **The pinned-server test harness is built here, because Phases 2, 3, 4 and 9 all declare
       acceptance criteria against "a live server on the pinned commit" and nothing else in this plan
       produces one.** The read-only clone at `/Users/chris/dev/t3code` has **no `node_modules`** —
