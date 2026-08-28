@@ -831,22 +831,31 @@ Integration: spawn a thread-backed builder alongside a running PTY builder and d
 
 ---
 
-### Phase 8: Architect threads and afx addressing
+### Phase 9: Architect threads and afx command parity
 
-**Dependencies**: Phase 7
+**Dependencies**: Phase 8
 
 #### Objective
 
-Make an architect a thread rooted at the workspace, and keep every `afx send` addressing form
-working through it — including #47's spoofing rule.
+Make an architect a thread rooted at the workspace, keep every `afx send` addressing form working
+through it — including #47's spoofing rule — and give the rest of `afx` a thread-backed
+implementation.
+
+The spec's open question 4 rules that `afx` stays, with `spawn`, `send`, `status`, `interrupt`,
+`cleanup` and `dev` keeping their contracts and only the engine changing. Review found the draft
+covered the first three and left the last three unassigned; they are owned here.
 
 #### Files to Create / Modify
 
 - `packages/codev/src/agent-farm/commands/architect.ts`
 - `packages/codev/src/agent-farm/commands/send.ts`
+- `packages/codev/src/agent-farm/commands/interrupt.ts`
+- `packages/codev/src/agent-farm/commands/cleanup.ts`
+- `packages/codev/src/agent-farm/commands/dev.ts`
 - `packages/codev/src/agent-farm/commands/workspace-add-architect.ts`
 - `packages/codev/src/agent-farm/utils/architect-name.ts`
 - `packages/codev/src/agent-farm/__tests__/issue-47-builder-message-route.test.ts` — extended.
+- `packages/codev/src/agent-farm/__tests__/afx-parity.test.ts`
 - `codev/resources/146-architect-cutover-runbook.md` — the per-workspace cutover procedure.
 
 #### Deliverables
@@ -861,7 +870,20 @@ working through it — including #47's spoofing rule.
       `CODEV_WORKTREE_ROOT`. A builder that `cd`s out of its worktree keeps its identity — the
       #47 failure mode is structurally gone rather than patched.
 - [ ] An architect thread survives a server restart and resumes with context.
-- [ ] **The architect cutover runbook is written here and exercised on one workspace.** Phase 13
+- [ ] **`afx interrupt` becomes `thread.turn.interrupt`.** This is the command whose old
+      implementation the spec singles out as "sending ESC and hoping", and the spike proved the
+      typed form actually kills the process — `SHOULD_NOT_FINISH` never printed. Settling is
+      detected on `activeTurnId: null`, per Phase 3, not on session status.
+- [ ] **`afx cleanup` removes a thread-backed builder's worktree via t3code's worktree lifecycle**
+      rather than the PTY-era path, and refuses to remove one with unmerged work — the spec's
+      rollback section is explicit that a thread must never be dropped with unmerged work.
+- [ ] **`afx dev` keeps working against a thread-backed worktree.** It resolves the worktree path
+      from the thread rather than from `terminal_sessions`, which is where it reads it today.
+- [ ] A parity test drives each of `spawn`, `send`, `status`, `interrupt`, `cleanup` and `dev`
+      against a thread-backed builder and asserts the command's observable contract is unchanged.
+      The spec promises "same commands, same flags, new engine", and this is what makes that
+      checkable rather than aspirational.
+- [ ] **The architect cutover runbook is written here and exercised on one workspace.** Phase 14
       gates on "every architect has been cut over per the spec's step 4", but a gate checkbox is not
       a procedure and no other phase owns one. The spec is explicit that this step is not a drain:
       an architect conversation cannot be migrated, so cutover means `/arch-save`, stop the PTY
@@ -880,18 +902,23 @@ working through it — including #47's spoofing rule.
       context.
 - [ ] One architect and six builders run concurrently in one workspace without either starving the
       other — success criterion 10c, measured, not asserted.
+- [ ] `afx interrupt` on a running turn leaves `activeTurnId: null` and the interrupted command's
+      side effect absent.
+- [ ] `afx cleanup` refuses a thread-backed builder with unmerged work and succeeds without it.
+- [ ] `afx dev` binds against a thread-backed worktree.
 - [ ] Build and tests pass.
 
 #### Test Plan
 
-Unit: address parsing and the spoofing refusal.
+Unit: address parsing and the spoofing refusal; the cleanup refusal predicate.
 
-Integration: restart survival; the concurrency measurement with real turns running, recording
-memory and turn latency for the architect while six builders are active.
+Integration: restart survival; the six-command parity run against a thread-backed builder; the
+concurrency measurement with real turns running, recording memory and turn latency for the
+architect while six builders are active.
 
 ---
 
-### Phase 9: Full protocol on a second driver
+### Phase 10: Full protocol on a second driver
 
 **Dependencies**: Phase 8
 
@@ -939,7 +966,7 @@ real; a fake clock does not test what the reaper does.
 
 ---
 
-### Phase 10: codev-client tree and live status
+### Phase 11: codev-client tree and live status
 
 **Dependencies**: Phase 6, Phase 8
 
@@ -1001,7 +1028,7 @@ a gate approved.
 
 ---
 
-### Phase 11: codev-client tiling and mobile
+### Phase 12: codev-client tiling and mobile
 
 **Dependencies**: Phase 10
 
@@ -1054,7 +1081,7 @@ written.
 
 ---
 
-### Phase 12: Extension retirement
+### Phase 13: Extension retirement
 
 **Dependencies**: Phase 11
 
@@ -1097,7 +1124,7 @@ Manual: confirm the vscode README states unsupported.
 
 ---
 
-### Phase 13: Terminal layer deletion
+### Phase 14: Terminal layer deletion
 
 **Dependencies**: Phase 9, Phase 12
 
