@@ -37,6 +37,31 @@ Environment: `T3CODE_ROOT` (default `/Users/chris/dev/t3code`), `T3_HARNESS_PORT
 Binds loopback only. Spec 146's Security constraints make loopback the default and exposing an
 interface an explicit act; a test harness never exposes one.
 
+## Cold-start evidence
+
+`smoke.mjs` brings the server up from cold twice and records what happened. Phase 1's criterion
+is that it comes up twice from cold, and a test refuses the evidence once `t3-server.mjs` or
+`smoke.mjs` is newer than it.
+
+```bash
+nvm use 22
+node tools/t3-server/smoke.mjs --runs 2 > codev/research/146-harness-coldstart-evidence.json
+```
+
+**The redirection is part of the command.** `smoke.mjs` prints to stdout and writes nothing, so
+running it without one re-does the entire cold start and leaves the evidence exactly as stale as
+it was — a slow no-op that looks like work. Node 22 because the server needs `node:sqlite`.
+
+## Node 22 is required, and `start` checks it
+
+`npx` inherits the Node that invoked it, so the server runs on whatever version you are on.
+Below 22 it fails on `node:sqlite` and exits. `start` refuses before spawning rather than
+letting `ready` spend its full 180-second timeout reporting that the server "did not answer" —
+true, and pointing at the network instead of at the version.
+
+`start` also confirms the child is still alive after `spawn` and surfaces its log's error lines.
+`spawn` succeeding means a process was created, not that it stayed.
+
 ## What this harness does NOT pin
 
 **The server binary.** `start` runs the published `t3` CLI against the pinned checkout. The
