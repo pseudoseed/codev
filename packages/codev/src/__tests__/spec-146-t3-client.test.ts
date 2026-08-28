@@ -246,6 +246,24 @@ describe('spec 146 phase 2: the cursor advances after the handler, never before'
     await cursor.apply({ sequence: 1 }, () => {});
     expect(persisted).toEqual([1]);
   });
+
+  it('runs the handler for a redelivered item but does NOT walk backwards', async () => {
+    // The cursor was only ever monotonic by accident: its single caller
+    // filtered duplicates first. reconcileTo is a second caller, so the
+    // invariant has to live in the type. A cursor that moves backwards
+    // re-requests a span whose handlers already ran, on every attempt.
+    const persisted: number[] = [];
+    const cursor = new SequenceCursor(0, (s) => void persisted.push(s));
+    const seen: number[] = [];
+
+    await cursor.apply({ sequence: 10 }, (i) => void seen.push(i.sequence));
+    await cursor.apply({ sequence: 4 }, (i) => void seen.push(i.sequence));
+    await cursor.apply({ sequence: 10 }, (i) => void seen.push(i.sequence));
+
+    expect(seen, 'redelivery must still reach the handler').toEqual([10, 4, 10]);
+    expect(cursor.applied, 'a lower sequence must not move the cursor').toBe(10);
+    expect(persisted, 'and must not persist a lower value either').toEqual([10]);
+  });
 });
 
 // ---------------------------------------------------------------- auth

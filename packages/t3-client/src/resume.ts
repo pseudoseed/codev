@@ -195,9 +195,20 @@ export class SequenceCursor {
   /**
    * Run `handler` for an item, then advance. If the handler throws, the cursor
    * does NOT move, so the item is redelivered on the next resubscription.
+   *
+   * The advance is monotonic. Applying an item at or below the cursor still
+   * runs the handler -- redelivery is the whole point of at-least-once -- but
+   * must not move the cursor backwards, because the persisted value would then
+   * re-request a span whose handlers have already completed, forever.
+   *
+   * This guard was unreachable for as long as the only caller filtered
+   * duplicates before calling. That filter is the caller's optimisation, not
+   * this type's invariant, and `reconcileTo` is the second caller that made the
+   * difference matter.
    */
   async apply(item: SequencedItem, handler: (item: SequencedItem) => void | Promise<void>): Promise<void> {
     await handler(item);
+    if (item.sequence <= this.#applied) return;
     this.#applied = item.sequence;
     await this.persist(item.sequence);
   }

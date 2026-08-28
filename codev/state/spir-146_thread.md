@@ -1472,3 +1472,40 @@ held one open across a 36-minute pause, crossing the 30-minute reaper plus the
 teardown was purely my client's total-duration timeout — the server side of the
 24-hour gate already has evidence, and what Phase 3 adds is that
 `packages/t3-client` no longer tears itself down.
+
+## A third shape of fix-defect (architect, 2026-08-28)
+
+The architect named a third one, and it is distinct from the two already in this
+thread:
+
+1. **A fix that reached beyond its target.** The SIGTERM that killed every
+   listener on the port; `git add tools/t3-server/` sweeping the data directory.
+   Catching question: what *can* this reach, not what will it reach today?
+2. **A fix that failed to reach the path it created.** The backoff guard that
+   reset on `synchronized`, exempting the handler-failure path introduced in the
+   same commit. Catching question: which paths reach this guard, including the
+   new ones?
+3. **A fix that made an unreachable defect reachable.** `SequenceCursor.apply`
+   was always non-monotonic. The only caller filtered duplicates before calling,
+   and that accident was the protection. `reconcileTo` removed it. Catching
+   question: what does this fix make newly *possible*?
+
+The general form: **an invariant defended by a caller is not an invariant, it is
+a convention.** `reconcileTo` is what a second caller does to a convention.
+
+Fixed now in `packages/t3-client/src/resume.ts`: `apply` still runs the handler
+for a redelivered item — redelivery is the point of at-least-once — but will not
+move or persist a lower sequence. Test: a redelivered item reaches the handler
+three times while the cursor stays at 10 and persists once.
+
+## Owed to the review doc: why iteration 2 had no rebuttals
+
+Iteration 2 accepted nine findings and disputed none, while iterations 1 and 2 of
+Phase 1 both contained disputes that were correct. A round with no rebuttals is
+either a good round or a compliant one, and the review doc has to say which
+rather than letting the reader assume the flattering reading. The evidence for
+"good round" is that the nine were checkable against files — `RpcMessage.ts`
+line ranges, a measured 88 reconnects in 100ms, five files visible in
+`git status` as modified-not-staged — and every one reproduced when I checked it
+myself. The honest caveat is that a round where nothing is checkable is exactly
+the round where compliance is invisible, so the count alone proves nothing.
