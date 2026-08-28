@@ -1,9 +1,54 @@
 id: '146'
 title: codev-client-on-the-t3code-ser
 protocol: spir
-phase: plan
-plan_phases: []
-current_plan_phase: null
+phase: implement
+plan_phases:
+  - id: phase_1
+    title: Vendored t3code contract with drift detection
+    status: in_progress
+  - id: phase_2
+    title: t3code RPC transport client
+    status: pending
+  - id: phase_3
+    title: porch-driver session lifecycle and crash recovery
+    status: pending
+  - id: phase_4
+    title: Message delivery semantics
+    status: pending
+  - id: phase_5
+    title: codev-agent protocol state service
+    status: pending
+  - id: phase_6
+    title: Approval capability and threat model
+    status: pending
+  - id: phase_7
+    title: Transport and service security posture
+    status: pending
+  - id: phase_8
+    title: Thread identity in status.yaml and global.db
+    status: pending
+  - id: phase_9
+    title: Architect threads and afx command parity
+    status: pending
+  - id: phase_10
+    title: Full protocol on a second driver
+    status: pending
+  - id: phase_11
+    title: codev-client tree and live status
+    status: pending
+  - id: phase_12
+    title: codev-client tiling and mobile
+    status: pending
+  - id: phase_13
+    title: Extension retirement
+    status: pending
+  - id: phase_14
+    title: Terminal layer deletion
+    status: pending
+  - id: phase_15
+    title: Terminal schema drop
+    status: pending
+current_plan_phase: phase_1
 gates:
   spec-approval:
     status: approved
@@ -18,10 +63,10 @@ gates:
   verify-approval:
     status: pending
 iteration: 1
-build_complete: true
+build_complete: false
 history: []
 started_at: '2026-08-28T15:56:27.086Z'
-updated_at: '2026-08-28T16:28:36.957Z'
+updated_at: '2026-08-28T16:28:43.512Z'
 context_refreshes:
   - boundary: enter:plan
     at: '2026-08-28T15:58:58.492Z'
