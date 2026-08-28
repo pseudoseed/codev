@@ -806,3 +806,36 @@ three-states problem the live harness already fixed for itself — `demonstrated
 it, and #130's mutex makes the third state reachable on any machine running two
 suites. Filed against nothing yet; recorded here so a later phase that touches
 `checks.ts` has the case.
+
+### The snapshot fallback has a cheap, deterministic trigger — criterion D is now buildable
+
+`apps/server/src/ws.ts:1493-1526` is the whole of it:
+
+```
+const replayGap = headSequence - afterSequence;
+if (replayGap >= 0 && replayGap <= THREAD_RESUME_MAX_GAP) { …replay… }
+// Gap too large (or cursor ahead of authoritative state): fall
+// through to the snapshot path
+```
+
+`THREAD_RESUME_MAX_GAP = 1_000` (`ws.ts:330`). So there are **two** paths into the
+snapshot fallback, and the second is the useful one:
+
+- `replayGap > 1000` — needs a thousand global events. Expensive to manufacture.
+- `replayGap < 0` — `afterSequence` **ahead of** the server's head. Free:
+  subscribe with `afterSequence: head + 1`.
+
+The second is not a contrivance. It is exactly what porch sees after the server's
+database is restored from a backup or rolled back while porch's persisted cursor
+survives — a real crash-recovery case, and the one where silently accepting a
+snapshot as if it were the requested range loses every event in between. So D gets
+tested against server-issued state with no synthetic sequences and no thousand-event
+warm-up.
+
+**Sequences are global, not per-thread.** `readEvents(afterSequence, replayGap)`
+reads the global log and *then* filters with `isThisThreadDetailEvent`. So the
+"missing range" for criterion C is a thread-filtered subset of a global counter,
+and consecutive events on one thread are not consecutive numbers. A C test that
+asserts the replayed sequences are contiguous integers would fail on a correct
+server. The spike avoided this by comparing `eventId` lists against a control
+connection rather than by arithmetic on sequences — copy that, not the shortcut.
