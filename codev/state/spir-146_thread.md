@@ -1026,3 +1026,23 @@ re-read the file and did not notice.
 The test that catches it drives three events whose handlers take 30ms, 15ms and
 1ms. An unsequenced implementation completes them 12, 11, 10. A test with equal
 durations would pass against the broken code, which is why the durations descend.
+
+### Phase 1's staleness guard caught Phase 2 editing the harness
+
+The full suite failed on one test, and it was one I wrote in Phase 1:
+
+    t3-server.mjs changed after the cold-start evidence was recorded — re-run
+    `node tools/t3-server/smoke.mjs --runs 2` rather than trusting a stale result
+
+Adding the node-version and child-survival guards changed the harness, which made
+`146-harness-coldstart-evidence.json` a record of a program that no longer exists.
+The test compares mtimes and refuses.
+
+Worth noting because it is the only check today that fired **before** anything
+went wrong, rather than after. Everything else on this list was found by reading
+code or by a failure. This one is a check whose whole job is to notice that
+evidence and the thing it describes have drifted apart, and it did that across a
+phase boundary, against its own author.
+
+Re-running the smoke is the fix. Not deleting the assertion, and not touching the
+mtime.
