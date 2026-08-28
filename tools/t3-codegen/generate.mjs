@@ -129,10 +129,51 @@ for (const file of pin.closure.slice().sort()) {
 
 const SR = await import('effect/SchemaRepresentation');
 
-/** Emit a JSON Schema document for one Effect schema, or record why we could not. */
+/**
+ * Emit the JSON Schema for one Effect schema.
+ *
+ * Returns only the root. Callers that keep the result MUST go through
+ * `emitWithDefs`, because a document's `$defs` are not optional decoration: the
+ * root is full of `$ref`s into them. An earlier version of this file returned
+ * `doc.schema ?? doc` and discarded `doc.$defs` — which produced 105 dangling
+ * `$ref`s, made `shapeCheck` return `matches: true` at every one of them, and
+ * turned 111 positions in `types.d.ts` into `unknown`. Three reviewers caught it
+ * independently. Use this only where the root alone is the question, as in the
+ * loss scan on primitive schemas.
+ */
 function emit(schema) {
   const doc = SR.toJsonSchemaDocument(SR.toRepresentation(schema.ast));
   return doc.schema ?? doc;
+}
+
+/** Emit root plus definitions, namespaced so two schemas cannot collide. */
+function emitWithDefs(schema, namespace) {
+  const doc = SR.toJsonSchemaDocument(SR.toRepresentation(schema.ast));
+  const root = doc.schema ?? doc;
+  const defs = doc.$defs ?? doc.definitions ?? {};
+
+  // `toJsonSchemaDocument` names definitions per-document (`Objects_1`, ...), so
+  // merging several documents into one file would alias unrelated shapes onto the
+  // same key. Namespace by the schema we are emitting.
+  const rename = (name) => `${namespace}__${name}`;
+  const rewrite = (node) => {
+    if (Array.isArray(node)) return node.map(rewrite);
+    if (!node || typeof node !== 'object') return node;
+    const out = {};
+    for (const [key, value] of Object.entries(node)) {
+      if (key === '$ref' && typeof value === 'string') {
+        const match = /^#\/(?:\$defs|definitions)\/(.+)$/.exec(value);
+        out[key] = match ? `#/$defs/${rename(match[1])}` : value;
+      } else {
+        out[key] = rewrite(value);
+      }
+    }
+    return out;
+  };
+
+  const namespacedDefs = {};
+  for (const [name, value] of Object.entries(defs)) namespacedDefs[rename(name)] = rewrite(value);
+  return { root: rewrite(root), defs: namespacedDefs };
 }
 
 /**
@@ -174,6 +215,8 @@ const orchestration = await import(pathToFileURL(join(stagingDir, 'orchestration
 const git = await import(pathToFileURL(join(stagingDir, 'git.ts')).href);
 
 const schemas = {};
+/** Shared `$defs` pool. Every `$ref` in `schemas` resolves into this. */
+const allDefs = {};
 const lossy = [];
 const unrepresented = [];
 const methods = {};
@@ -181,7 +224,9 @@ const methods = {};
 function record(name, schema) {
   if (name in schemas) return;
   try {
-    schemas[name] = emit(schema);
+    const { root, defs } = emitWithDefs(schema, name);
+    schemas[name] = root;
+    Object.assign(allDefs, defs);
   } catch (error) {
     unrepresented.push({ name, reason: String(error).split('\n')[0] });
   }
@@ -294,19 +339,31 @@ for (const name of ['OrchestrationEvent', 'ClientOrchestrationCommand']) {
 // source, so the declarations carry no reference to `effect` and
 // `packages/types` keeps zero dependencies of any kind.
 
-function tsTypeFor(node, indent = 0) {
+function tsTypeFor(node, indent = 0, seen = new Set()) {
   const pad = '  '.repeat(indent);
   if (!node || typeof node !== 'object') return 'unknown';
+
+  // Resolve $refs against the shared pool. Falling through to `unknown` here is
+  // what turned 111 positions of this file into `unknown` before definitions were
+  // carried; a cycle guard keeps a self-referential schema from recursing forever.
+  if (typeof node.$ref === 'string') {
+    const key = /^#\/\$defs\/(.+)$/.exec(node.$ref)?.[1];
+    if (!key) return 'unknown';
+    if (seen.has(key)) return 'unknown';
+    const target = allDefs[key];
+    if (!target) return 'unknown';
+    return tsTypeFor(target, indent, new Set([...seen, key]));
+  }
   if (Array.isArray(node.enum)) return node.enum.map((v) => JSON.stringify(v)).join(' | ');
-  if (Array.isArray(node.anyOf)) return node.anyOf.map((n) => tsTypeFor(n, indent)).join(' | ');
-  if (Array.isArray(node.oneOf)) return node.oneOf.map((n) => tsTypeFor(n, indent)).join(' | ');
+  if (Array.isArray(node.anyOf)) return node.anyOf.map((n) => tsTypeFor(n, indent, seen)).join(' | ');
+  if (Array.isArray(node.oneOf)) return node.oneOf.map((n) => tsTypeFor(n, indent, seen)).join(' | ');
   switch (node.type) {
     case 'string': return 'string';
     case 'integer':
     case 'number': return 'number';
     case 'boolean': return 'boolean';
     case 'null': return 'null';
-    case 'array': return node.items ? `ReadonlyArray<${tsTypeFor(node.items, indent)}>` : 'ReadonlyArray<unknown>';
+    case 'array': return node.items ? `ReadonlyArray<${tsTypeFor(node.items, indent, seen)}>` : 'ReadonlyArray<unknown>';
     case 'object': {
       const props = node.properties ?? {};
       const names = Object.keys(props);
@@ -314,7 +371,7 @@ function tsTypeFor(node, indent = 0) {
       const required = new Set(node.required ?? []);
       const lines = names.map((key) => {
         const opt = required.has(key) ? '' : '?';
-        return `${pad}  readonly ${JSON.stringify(key)}${opt}: ${tsTypeFor(props[key], indent + 1)};`;
+        return `${pad}  readonly ${JSON.stringify(key)}${opt}: ${tsTypeFor(props[key], indent + 1, seen)};`;
       });
       return `{\n${lines.join('\n')}\n${pad}}`;
     }
@@ -425,6 +482,9 @@ const schemaModule =
   `// Source: ${pin.repo} @ ${pin.commit}\n` +
   '//\n' +
   '// A LOWER BOUND on t3code\'s validation, not an equivalent. See LOSSY.md.\n\n' +
+  'export const t3Defs = ' +
+  JSON.stringify(allDefs, null, 2) +
+  ' as const;\n\n' +
   'export const t3Schemas = ' +
   JSON.stringify(schemas, null, 2) +
   ' as const;\n\n' +
@@ -432,9 +492,26 @@ const schemaModule =
   JSON.stringify(methods, null, 2) +
   ' as const;\n';
 
+// A guard, not a formality: if any `$ref` in the emitted schemas points at a
+// definition we did not carry, `shapeCheck` would pass anything at that position.
+// That defect shipped once; it does not ship twice.
+const refRe = /"\$ref":\s*"#\/\$defs\/([^"]+)"/g;
+const dangling = new Set();
+for (const match of JSON.stringify(schemas).matchAll(refRe)) {
+  if (!(match[1] in allDefs)) dangling.add(match[1]);
+}
+if (dangling.size > 0) {
+  fail(
+    `${dangling.size} dangling $ref(s) with no definition: ${[...dangling].slice(0, 5).join(', ')}.\n` +
+      `shapeCheck would silently report a match at every one of them.`,
+  );
+}
+
+const document = { $defs: allDefs, schemas };
+
 const artifacts = {
   'schema.ts': schemaModule,
-  'schema.json': JSON.stringify(schemas, null, 2) + '\n',
+  'schema.json': JSON.stringify(document, null, 2) + '\n',
   'source-hash.json': JSON.stringify(sourceHash, null, 2) + '\n',
   'methods.json': JSON.stringify(methods, null, 2) + '\n',
   'types.d.ts': dtsLines.join('\n'),

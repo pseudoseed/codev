@@ -3,6 +3,902 @@
 //
 // A LOWER BOUND on t3code's validation, not an equivalent. See LOSSY.md.
 
+export const t3Defs = {
+  "dispatchCommandInput__Objects_": {
+    "type": "object",
+    "properties": {
+      "provider": {
+        "anyOf": [
+          {},
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "instanceId": {
+        "anyOf": [
+          {},
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "model": {},
+      "options": {
+        "anyOf": [
+          {},
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "model"
+    ],
+    "additionalProperties": false
+  },
+  "subscribeThreadOutput__Objects_": {
+    "type": "object",
+    "properties": {
+      "provider": {
+        "anyOf": [
+          {},
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "instanceId": {
+        "anyOf": [
+          {},
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "model": {},
+      "options": {
+        "anyOf": [
+          {},
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "model"
+    ],
+    "additionalProperties": false
+  },
+  "subscribeThreadOutput__Objects_1": {
+    "type": "object",
+    "properties": {
+      "projectId": {
+        "type": "string"
+      },
+      "repository": {
+        "type": "string"
+      },
+      "number": {
+        "type": "integer",
+        "allOf": [
+          {
+            "minimum": 1
+          }
+        ]
+      },
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "projectId",
+      "repository",
+      "number",
+      "url"
+    ],
+    "additionalProperties": false
+  },
+  "subscribeThreadOutput__Objects_2": {
+    "type": "object",
+    "properties": {
+      "threadId": {
+        "type": "string"
+      },
+      "planId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "threadId",
+      "planId"
+    ],
+    "additionalProperties": false
+  },
+  "subscribeThreadOutput__Objects_3": {
+    "type": "object",
+    "properties": {
+      "requestId": {
+        "type": "string"
+      },
+      "startedAt": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "requestId",
+      "startedAt"
+    ],
+    "additionalProperties": false
+  },
+  "subscribeThreadOutput__Union_": {
+    "anyOf": [
+      {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "image"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "mimeType": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              },
+              {
+                "maximum": 10485760
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "name",
+          "mimeType",
+          "sizeBytes"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "subscribeThreadOutput__Objects_4": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "tone": {
+        "type": "string",
+        "enum": [
+          "info",
+          "tool",
+          "approval",
+          "error"
+        ]
+      },
+      "kind": {
+        "type": "string"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "payload": {},
+      "turnId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "sequence": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "createdAt": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "tone",
+      "kind",
+      "summary",
+      "payload",
+      "turnId",
+      "createdAt"
+    ],
+    "additionalProperties": false
+  },
+  "subscribeThreadOutput__Objects_5": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "additions": {
+        "type": "integer",
+        "allOf": [
+          {
+            "minimum": 0
+          }
+        ]
+      },
+      "deletions": {
+        "type": "integer",
+        "allOf": [
+          {
+            "minimum": 0
+          }
+        ]
+      }
+    },
+    "required": [
+      "path",
+      "kind",
+      "additions",
+      "deletions"
+    ],
+    "additionalProperties": false
+  },
+  "subscribeThreadOutput__Objects_6": {
+    "type": "object",
+    "properties": {
+      "threadId": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "idle",
+          "starting",
+          "running",
+          "ready",
+          "interrupted",
+          "stopped",
+          "error"
+        ]
+      },
+      "providerName": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "providerInstanceId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "runtimeMode": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "approval-required",
+              "auto-accept-edits",
+              "auto",
+              "full-access"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "activeTurnId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "lastError": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "updatedAt": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "threadId",
+      "status",
+      "providerName",
+      "activeTurnId",
+      "lastError",
+      "updatedAt"
+    ],
+    "additionalProperties": false
+  },
+  "subscribeThreadOutput__Objects_7": {
+    "type": "object",
+    "properties": {
+      "providerTurnId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "providerItemId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "adapterKey": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "requestId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "ingestedAt": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "origin": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "surface": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "web",
+                      "desktop",
+                      "mobile"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "appVersion": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "additionalProperties": false
+  },
+  "subscribeThreadOutput__Objects_8": {
+    "type": "object",
+    "properties": {
+      "canonicalKey": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "git-remote"
+            ]
+          },
+          "remoteName": {
+            "type": "string"
+          },
+          "remoteUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "remoteName",
+          "remoteUrl"
+        ],
+        "additionalProperties": false
+      },
+      "rootPath": {
+        "type": "string"
+      },
+      "displayName": {
+        "type": "string"
+      },
+      "provider": {
+        "type": "string"
+      },
+      "owner": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "canonicalKey",
+      "locator"
+    ],
+    "additionalProperties": false
+  },
+  "subscribeThreadOutput__Objects_9": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "command": {
+        "type": "string"
+      },
+      "icon": {
+        "type": "string",
+        "enum": [
+          "play",
+          "test",
+          "lint",
+          "configure",
+          "build",
+          "debug"
+        ]
+      },
+      "runOnWorktreeCreate": {
+        "type": "boolean"
+      },
+      "previewUrl": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "autoOpenPreview": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "command",
+      "icon",
+      "runOnWorktreeCreate"
+    ],
+    "additionalProperties": false
+  },
+  "getTurnDiffInput__OrchestrationTurnDiffRange": {
+    "type": "object",
+    "properties": {
+      "fromTurnCount": {
+        "type": "integer",
+        "allOf": [
+          {
+            "minimum": 0
+          }
+        ]
+      },
+      "toTurnCount": {
+        "type": "integer",
+        "allOf": [
+          {
+            "minimum": 0
+          }
+        ]
+      },
+      "threadId": {
+        "type": "string"
+      },
+      "ignoreWhitespace": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "fromTurnCount",
+      "toTurnCount",
+      "threadId"
+    ],
+    "additionalProperties": false
+  },
+  "getTurnDiffOutput__OrchestrationTurnDiffRange": {
+    "type": "object",
+    "properties": {
+      "fromTurnCount": {
+        "type": "integer",
+        "allOf": [
+          {
+            "minimum": 0
+          }
+        ]
+      },
+      "toTurnCount": {
+        "type": "integer",
+        "allOf": [
+          {
+            "minimum": 0
+          }
+        ]
+      },
+      "threadId": {
+        "type": "string"
+      },
+      "diff": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "fromTurnCount",
+      "toTurnCount",
+      "threadId",
+      "diff"
+    ],
+    "additionalProperties": false
+  },
+  "OrchestrationEvent__Objects_": {
+    "type": "object",
+    "properties": {
+      "providerTurnId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "providerItemId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "adapterKey": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "requestId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "ingestedAt": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "origin": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "surface": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "web",
+                      "desktop",
+                      "mobile"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "appVersion": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "additionalProperties": false
+  },
+  "OrchestrationEvent__Objects_1": {
+    "type": "object",
+    "properties": {
+      "canonicalKey": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "git-remote"
+            ]
+          },
+          "remoteName": {
+            "type": "string"
+          },
+          "remoteUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "remoteName",
+          "remoteUrl"
+        ],
+        "additionalProperties": false
+      },
+      "rootPath": {
+        "type": "string"
+      },
+      "displayName": {
+        "type": "string"
+      },
+      "provider": {
+        "type": "string"
+      },
+      "owner": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "canonicalKey",
+      "locator"
+    ],
+    "additionalProperties": false
+  },
+  "OrchestrationEvent__Objects_2": {
+    "type": "object",
+    "properties": {
+      "provider": {
+        "anyOf": [
+          {},
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "instanceId": {
+        "anyOf": [
+          {},
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "model": {},
+      "options": {
+        "anyOf": [
+          {},
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "model"
+    ],
+    "additionalProperties": false
+  },
+  "OrchestrationEvent__Objects_3": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "command": {
+        "type": "string"
+      },
+      "icon": {
+        "type": "string",
+        "enum": [
+          "play",
+          "test",
+          "lint",
+          "configure",
+          "build",
+          "debug"
+        ]
+      },
+      "runOnWorktreeCreate": {
+        "type": "boolean"
+      },
+      "previewUrl": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "autoOpenPreview": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "command",
+      "icon",
+      "runOnWorktreeCreate"
+    ],
+    "additionalProperties": false
+  },
+  "ClientOrchestrationCommand__Objects_": {
+    "type": "object",
+    "properties": {
+      "provider": {
+        "anyOf": [
+          {},
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "instanceId": {
+        "anyOf": [
+          {},
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "model": {},
+      "options": {
+        "anyOf": [
+          {},
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "model"
+    ],
+    "additionalProperties": false
+  }
+} as const;
+
 export const t3Schemas = {
   "dispatchCommandInput": {
     "anyOf": [
@@ -42,7 +938,7 @@ export const t3Schemas = {
               {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/Objects_"
+                    "$ref": "#/$defs/dispatchCommandInput__Objects_"
                   },
                   {
                     "type": "null"
@@ -108,7 +1004,7 @@ export const t3Schemas = {
               {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/Objects_"
+                    "$ref": "#/$defs/dispatchCommandInput__Objects_"
                   },
                   {
                     "type": "null"
@@ -287,7 +1183,7 @@ export const t3Schemas = {
             "type": "string"
           },
           "modelSelection": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/dispatchCommandInput__Objects_"
           },
           "runtimeMode": {
             "type": "string",
@@ -653,7 +1549,7 @@ export const t3Schemas = {
           "modelSelection": {
             "anyOf": [
               {
-                "$ref": "#/$defs/Objects_"
+                "$ref": "#/$defs/dispatchCommandInput__Objects_"
               },
               {
                 "type": "null"
@@ -969,7 +1865,7 @@ export const t3Schemas = {
           "modelSelection": {
             "anyOf": [
               {
-                "$ref": "#/$defs/Objects_"
+                "$ref": "#/$defs/dispatchCommandInput__Objects_"
               },
               {
                 "type": "null"
@@ -1019,7 +1915,7 @@ export const t3Schemas = {
                             "type": "string"
                           },
                           "modelSelection": {
-                            "$ref": "#/$defs/Objects_"
+                            "$ref": "#/$defs/dispatchCommandInput__Objects_"
                           },
                           "runtimeMode": {
                             "type": "string",
@@ -1464,7 +2360,7 @@ export const t3Schemas = {
                     "type": "string"
                   },
                   "modelSelection": {
-                    "$ref": "#/$defs/Objects_"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_"
                   },
                   "runtimeMode": {
                     "type": "string",
@@ -1514,7 +2410,7 @@ export const t3Schemas = {
                       {
                         "anyOf": [
                           {
-                            "$ref": "#/$defs/Objects_1"
+                            "$ref": "#/$defs/subscribeThreadOutput__Objects_1"
                           },
                           {
                             "type": "null"
@@ -1579,7 +2475,7 @@ export const t3Schemas = {
                           "sourceProposedPlan": {
                             "anyOf": [
                               {
-                                "$ref": "#/$defs/Objects_2"
+                                "$ref": "#/$defs/subscribeThreadOutput__Objects_2"
                               },
                               {
                                 "type": "null"
@@ -1736,7 +2632,7 @@ export const t3Schemas = {
                       {
                         "anyOf": [
                           {
-                            "$ref": "#/$defs/Objects_3"
+                            "$ref": "#/$defs/subscribeThreadOutput__Objects_3"
                           },
                           {
                             "type": "null"
@@ -1782,7 +2678,7 @@ export const t3Schemas = {
                             {
                               "type": "array",
                               "items": {
-                                "$ref": "#/$defs/Union_"
+                                "$ref": "#/$defs/subscribeThreadOutput__Union_"
                               }
                             },
                             {
@@ -1904,7 +2800,7 @@ export const t3Schemas = {
                   "activities": {
                     "type": "array",
                     "items": {
-                      "$ref": "#/$defs/Objects_4"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_4"
                     }
                   },
                   "checkpoints": {
@@ -1937,7 +2833,7 @@ export const t3Schemas = {
                         "files": {
                           "type": "array",
                           "items": {
-                            "$ref": "#/$defs/Objects_5"
+                            "$ref": "#/$defs/subscribeThreadOutput__Objects_5"
                           }
                         },
                         "assistantMessageId": {
@@ -1969,7 +2865,7 @@ export const t3Schemas = {
                   "session": {
                     "anyOf": [
                       {
-                        "$ref": "#/$defs/Objects_6"
+                        "$ref": "#/$defs/subscribeThreadOutput__Objects_6"
                       },
                       {
                         "type": "null"
@@ -2133,7 +3029,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -2158,7 +3054,7 @@ export const t3Schemas = {
                           {
                             "anyOf": [
                               {
-                                "$ref": "#/$defs/Objects_8"
+                                "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                               },
                               {
                                 "type": "null"
@@ -2173,7 +3069,7 @@ export const t3Schemas = {
                       "defaultModelSelection": {
                         "anyOf": [
                           {
-                            "$ref": "#/$defs/Objects_"
+                            "$ref": "#/$defs/subscribeThreadOutput__Objects_"
                           },
                           {
                             "type": "null"
@@ -2200,7 +3096,7 @@ export const t3Schemas = {
                       "scripts": {
                         "type": "array",
                         "items": {
-                          "$ref": "#/$defs/Objects_9"
+                          "$ref": "#/$defs/subscribeThreadOutput__Objects_9"
                         }
                       },
                       "createdAt": {
@@ -2302,7 +3198,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -2341,7 +3237,7 @@ export const t3Schemas = {
                           {
                             "anyOf": [
                               {
-                                "$ref": "#/$defs/Objects_8"
+                                "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                               },
                               {
                                 "type": "null"
@@ -2358,7 +3254,7 @@ export const t3Schemas = {
                           {
                             "anyOf": [
                               {
-                                "$ref": "#/$defs/Objects_"
+                                "$ref": "#/$defs/subscribeThreadOutput__Objects_"
                               },
                               {
                                 "type": "null"
@@ -2413,7 +3309,7 @@ export const t3Schemas = {
                           {
                             "type": "array",
                             "items": {
-                              "$ref": "#/$defs/Objects_9"
+                              "$ref": "#/$defs/subscribeThreadOutput__Objects_9"
                             }
                           },
                           {
@@ -2512,7 +3408,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -2617,7 +3513,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -2638,7 +3534,7 @@ export const t3Schemas = {
                         "type": "string"
                       },
                       "modelSelection": {
-                        "$ref": "#/$defs/Objects_"
+                        "$ref": "#/$defs/subscribeThreadOutput__Objects_"
                       },
                       "runtimeMode": {
                         "anyOf": [
@@ -2790,7 +3686,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -2895,7 +3791,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -3004,7 +3900,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -3109,7 +4005,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -3218,7 +4114,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -3331,7 +4227,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -3444,7 +4340,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -3557,7 +4453,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -3676,7 +4572,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -3781,7 +4677,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -3890,7 +4786,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -3942,7 +4838,7 @@ export const t3Schemas = {
                           {
                             "anyOf": [
                               {
-                                "$ref": "#/$defs/Objects_3"
+                                "$ref": "#/$defs/subscribeThreadOutput__Objects_3"
                               },
                               {
                                 "type": "null"
@@ -3957,7 +4853,7 @@ export const t3Schemas = {
                       "modelSelection": {
                         "anyOf": [
                           {
-                            "$ref": "#/$defs/Objects_"
+                            "$ref": "#/$defs/subscribeThreadOutput__Objects_"
                           },
                           {
                             "type": "null"
@@ -4003,7 +4899,7 @@ export const t3Schemas = {
                           {
                             "anyOf": [
                               {
-                                "$ref": "#/$defs/Objects_1"
+                                "$ref": "#/$defs/subscribeThreadOutput__Objects_1"
                               },
                               {
                                 "type": "null"
@@ -4106,7 +5002,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -4221,7 +5117,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -4340,7 +5236,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -4373,7 +5269,7 @@ export const t3Schemas = {
                           {
                             "type": "array",
                             "items": {
-                              "$ref": "#/$defs/Union_"
+                              "$ref": "#/$defs/subscribeThreadOutput__Union_"
                             }
                           },
                           {
@@ -4494,7 +5390,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -4514,7 +5410,7 @@ export const t3Schemas = {
                       "modelSelection": {
                         "anyOf": [
                           {
-                            "$ref": "#/$defs/Objects_"
+                            "$ref": "#/$defs/subscribeThreadOutput__Objects_"
                           },
                           {
                             "type": "null"
@@ -4564,7 +5460,7 @@ export const t3Schemas = {
                       "sourceProposedPlan": {
                         "anyOf": [
                           {
-                            "$ref": "#/$defs/Objects_2"
+                            "$ref": "#/$defs/subscribeThreadOutput__Objects_2"
                           },
                           {
                             "type": "null"
@@ -4663,7 +5559,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -4778,7 +5674,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -4898,7 +5794,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -5011,7 +5907,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -5125,7 +6021,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -5235,7 +6131,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -5340,7 +6236,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -5355,7 +6251,7 @@ export const t3Schemas = {
                         "type": "string"
                       },
                       "session": {
-                        "$ref": "#/$defs/Objects_6"
+                        "$ref": "#/$defs/subscribeThreadOutput__Objects_6"
                       }
                     },
                     "required": [
@@ -5445,7 +6341,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -5616,7 +6512,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -5655,7 +6551,7 @@ export const t3Schemas = {
                       "files": {
                         "type": "array",
                         "items": {
-                          "$ref": "#/$defs/Objects_5"
+                          "$ref": "#/$defs/subscribeThreadOutput__Objects_5"
                         }
                       },
                       "assistantMessageId": {
@@ -5765,7 +6661,7 @@ export const t3Schemas = {
                     ]
                   },
                   "metadata": {
-                    "$ref": "#/$defs/Objects_7"
+                    "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                   },
                   "type": {
                     "type": "string",
@@ -5780,7 +6676,7 @@ export const t3Schemas = {
                         "type": "string"
                       },
                       "activity": {
-                        "$ref": "#/$defs/Objects_4"
+                        "$ref": "#/$defs/subscribeThreadOutput__Objects_4"
                       }
                     },
                     "required": [
@@ -5817,10 +6713,10 @@ export const t3Schemas = {
     ]
   },
   "getTurnDiffInput": {
-    "$ref": "#/$defs/OrchestrationTurnDiffRange"
+    "$ref": "#/$defs/getTurnDiffInput__OrchestrationTurnDiffRange"
   },
   "getTurnDiffOutput": {
-    "$ref": "#/$defs/OrchestrationTurnDiffRange"
+    "$ref": "#/$defs/getTurnDiffOutput__OrchestrationTurnDiffRange"
   },
   "searchThreadsInput": {
     "type": "object",
@@ -6348,7 +7244,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -6373,7 +7269,7 @@ export const t3Schemas = {
                   {
                     "anyOf": [
                       {
-                        "$ref": "#/$defs/Objects_1"
+                        "$ref": "#/$defs/OrchestrationEvent__Objects_1"
                       },
                       {
                         "type": "null"
@@ -6388,7 +7284,7 @@ export const t3Schemas = {
               "defaultModelSelection": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/Objects_2"
+                    "$ref": "#/$defs/OrchestrationEvent__Objects_2"
                   },
                   {
                     "type": "null"
@@ -6415,7 +7311,7 @@ export const t3Schemas = {
               "scripts": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/$defs/Objects_3"
+                  "$ref": "#/$defs/OrchestrationEvent__Objects_3"
                 }
               },
               "createdAt": {
@@ -6517,7 +7413,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -6556,7 +7452,7 @@ export const t3Schemas = {
                   {
                     "anyOf": [
                       {
-                        "$ref": "#/$defs/Objects_1"
+                        "$ref": "#/$defs/OrchestrationEvent__Objects_1"
                       },
                       {
                         "type": "null"
@@ -6573,7 +7469,7 @@ export const t3Schemas = {
                   {
                     "anyOf": [
                       {
-                        "$ref": "#/$defs/Objects_2"
+                        "$ref": "#/$defs/OrchestrationEvent__Objects_2"
                       },
                       {
                         "type": "null"
@@ -6628,7 +7524,7 @@ export const t3Schemas = {
                   {
                     "type": "array",
                     "items": {
-                      "$ref": "#/$defs/Objects_3"
+                      "$ref": "#/$defs/OrchestrationEvent__Objects_3"
                     }
                   },
                   {
@@ -6727,7 +7623,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -6832,7 +7728,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -6853,7 +7749,7 @@ export const t3Schemas = {
                 "type": "string"
               },
               "modelSelection": {
-                "$ref": "#/$defs/Objects_2"
+                "$ref": "#/$defs/OrchestrationEvent__Objects_2"
               },
               "runtimeMode": {
                 "anyOf": [
@@ -7005,7 +7901,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -7110,7 +8006,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -7219,7 +8115,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -7324,7 +8220,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -7433,7 +8329,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -7546,7 +8442,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -7659,7 +8555,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -7772,7 +8668,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -7891,7 +8787,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -7996,7 +8892,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -8105,7 +9001,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -8185,7 +9081,7 @@ export const t3Schemas = {
               "modelSelection": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/Objects_2"
+                    "$ref": "#/$defs/OrchestrationEvent__Objects_2"
                   },
                   {
                     "type": "null"
@@ -8360,7 +9256,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -8475,7 +9371,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -8594,7 +9490,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -8788,7 +9684,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -8808,7 +9704,7 @@ export const t3Schemas = {
               "modelSelection": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/Objects_2"
+                    "$ref": "#/$defs/OrchestrationEvent__Objects_2"
                   },
                   {
                     "type": "null"
@@ -8970,7 +9866,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -9085,7 +9981,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -9205,7 +10101,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -9318,7 +10214,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -9432,7 +10328,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -9542,7 +10438,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -9647,7 +10543,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -9837,7 +10733,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -10008,7 +10904,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -10188,7 +11084,7 @@ export const t3Schemas = {
             ]
           },
           "metadata": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/OrchestrationEvent__Objects_"
           },
           "type": {
             "type": "string",
@@ -10327,7 +11223,7 @@ export const t3Schemas = {
               {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/Objects_"
+                    "$ref": "#/$defs/ClientOrchestrationCommand__Objects_"
                   },
                   {
                     "type": "null"
@@ -10393,7 +11289,7 @@ export const t3Schemas = {
               {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/Objects_"
+                    "$ref": "#/$defs/ClientOrchestrationCommand__Objects_"
                   },
                   {
                     "type": "null"
@@ -10572,7 +11468,7 @@ export const t3Schemas = {
             "type": "string"
           },
           "modelSelection": {
-            "$ref": "#/$defs/Objects_"
+            "$ref": "#/$defs/ClientOrchestrationCommand__Objects_"
           },
           "runtimeMode": {
             "type": "string",
@@ -10938,7 +11834,7 @@ export const t3Schemas = {
           "modelSelection": {
             "anyOf": [
               {
-                "$ref": "#/$defs/Objects_"
+                "$ref": "#/$defs/ClientOrchestrationCommand__Objects_"
               },
               {
                 "type": "null"
@@ -11254,7 +12150,7 @@ export const t3Schemas = {
           "modelSelection": {
             "anyOf": [
               {
-                "$ref": "#/$defs/Objects_"
+                "$ref": "#/$defs/ClientOrchestrationCommand__Objects_"
               },
               {
                 "type": "null"
@@ -11304,7 +12200,7 @@ export const t3Schemas = {
                             "type": "string"
                           },
                           "modelSelection": {
-                            "$ref": "#/$defs/Objects_"
+                            "$ref": "#/$defs/ClientOrchestrationCommand__Objects_"
                           },
                           "runtimeMode": {
                             "type": "string",

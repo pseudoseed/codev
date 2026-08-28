@@ -13,7 +13,12 @@ export type dispatchCommandInput = {
   readonly "title": string;
   readonly "workspaceRoot": string;
   readonly "createWorkspaceRootIfMissing"?: boolean | null;
-  readonly "defaultModelSelection"?: unknown | null | null;
+  readonly "defaultModelSelection"?: {
+    readonly "provider"?: unknown | null;
+    readonly "instanceId"?: unknown | null;
+    readonly "model": unknown;
+    readonly "options"?: unknown | null;
+  } | null | null;
   readonly "createdAt": string;
 } | {
   readonly "type": "project.meta.update";
@@ -21,7 +26,12 @@ export type dispatchCommandInput = {
   readonly "projectId": string;
   readonly "title"?: string | null;
   readonly "workspaceRoot"?: string | null;
-  readonly "defaultModelSelection"?: unknown | null | null;
+  readonly "defaultModelSelection"?: {
+    readonly "provider"?: unknown | null;
+    readonly "instanceId"?: unknown | null;
+    readonly "model": unknown;
+    readonly "options"?: unknown | null;
+  } | null | null;
   readonly "defaultThreadEnvMode"?: "local" | "worktree" | null | null;
   readonly "faviconPath"?: string | null | null;
   readonly "scripts"?: ReadonlyArray<{
@@ -44,7 +54,12 @@ export type dispatchCommandInput = {
   readonly "threadId": string;
   readonly "projectId": string;
   readonly "title": string;
-  readonly "modelSelection": unknown;
+  readonly "modelSelection": {
+    readonly "provider"?: unknown | null;
+    readonly "instanceId"?: unknown | null;
+    readonly "model": unknown;
+    readonly "options"?: unknown | null;
+  };
   readonly "runtimeMode": "approval-required" | "auto-accept-edits" | "auto" | "full-access";
   readonly "interactionMode"?: "default" | "plan" | null;
   readonly "branch": string | null;
@@ -101,7 +116,12 @@ export type dispatchCommandInput = {
   readonly "threadId": string;
   readonly "title"?: string | null;
   readonly "regenerateTitle"?: true | null;
-  readonly "modelSelection"?: unknown | null;
+  readonly "modelSelection"?: {
+    readonly "provider"?: unknown | null;
+    readonly "instanceId"?: unknown | null;
+    readonly "model": unknown;
+    readonly "options"?: unknown | null;
+  } | null;
   readonly "branch"?: string | null | null;
   readonly "expectedBranch"?: string | null | null;
   readonly "worktreePath"?: string | null | null;
@@ -145,7 +165,12 @@ export type dispatchCommandInput = {
       readonly "sizeBytes": number;
     }>;
   };
-  readonly "modelSelection"?: unknown | null;
+  readonly "modelSelection"?: {
+    readonly "provider"?: unknown | null;
+    readonly "instanceId"?: unknown | null;
+    readonly "model": unknown;
+    readonly "options"?: unknown | null;
+  } | null;
   readonly "titleSeed"?: string | null;
   readonly "runtimeMode": "approval-required" | "auto-accept-edits" | "auto" | "full-access";
   readonly "interactionMode": "default" | "plan";
@@ -153,7 +178,12 @@ export type dispatchCommandInput = {
     readonly "createThread"?: {
       readonly "projectId": string;
       readonly "title": string;
-      readonly "modelSelection": unknown;
+      readonly "modelSelection": {
+        readonly "provider"?: unknown | null;
+        readonly "instanceId"?: unknown | null;
+        readonly "model": unknown;
+        readonly "options"?: unknown | null;
+      };
       readonly "runtimeMode": "approval-required" | "auto-accept-edits" | "auto" | "full-access";
       readonly "interactionMode": "default" | "plan";
       readonly "branch": string | null;
@@ -228,12 +258,22 @@ export type subscribeThreadOutput = {
       readonly "id": string;
       readonly "projectId": string;
       readonly "title": string;
-      readonly "modelSelection": unknown;
+      readonly "modelSelection": {
+        readonly "provider"?: unknown | null;
+        readonly "instanceId"?: unknown | null;
+        readonly "model": unknown;
+        readonly "options"?: unknown | null;
+      };
       readonly "runtimeMode": "approval-required" | "auto-accept-edits" | "auto" | "full-access";
       readonly "interactionMode"?: "default" | "plan" | null;
       readonly "branch": string | null;
       readonly "worktreePath": string | null;
-      readonly "linkedPullRequest"?: unknown | null | null;
+      readonly "linkedPullRequest"?: {
+        readonly "projectId": string;
+        readonly "repository": string;
+        readonly "number": number;
+        readonly "url": string;
+      } | null | null;
       readonly "latestTurn": {
         readonly "turnId": string;
         readonly "state": "running" | "interrupted" | "completed" | "error";
@@ -241,7 +281,10 @@ export type subscribeThreadOutput = {
         readonly "startedAt": string | null;
         readonly "completedAt": string | null;
         readonly "assistantMessageId": string | null;
-        readonly "sourceProposedPlan"?: unknown | null;
+        readonly "sourceProposedPlan"?: {
+          readonly "threadId": string;
+          readonly "planId": string;
+        } | null;
       } | null;
       readonly "createdAt": string;
       readonly "updatedAt": string;
@@ -252,13 +295,22 @@ export type subscribeThreadOutput = {
       readonly "snoozedAt"?: string | null | null;
       readonly "pinnedAt"?: string | null | null;
       readonly "pinOrderKey"?: string | null | null;
-      readonly "titleRegeneration"?: unknown | null | null;
+      readonly "titleRegeneration"?: {
+        readonly "requestId": string;
+        readonly "startedAt": string;
+      } | null | null;
       readonly "deletedAt": string | null;
       readonly "messages": ReadonlyArray<{
         readonly "id": string;
         readonly "role": "user" | "assistant" | "system";
         readonly "text": string;
-        readonly "attachments"?: ReadonlyArray<unknown> | null;
+        readonly "attachments"?: ReadonlyArray<{
+          readonly "type": "image";
+          readonly "id": string;
+          readonly "name": string;
+          readonly "mimeType": string;
+          readonly "sizeBytes": number;
+        }> | null;
         readonly "turnId": string | null;
         readonly "streaming": boolean;
         readonly "createdAt": string;
@@ -273,17 +325,40 @@ export type subscribeThreadOutput = {
         readonly "createdAt": string;
         readonly "updatedAt": string;
       }> | null;
-      readonly "activities": ReadonlyArray<unknown>;
+      readonly "activities": ReadonlyArray<{
+        readonly "id": string;
+        readonly "tone": "info" | "tool" | "approval" | "error";
+        readonly "kind": string;
+        readonly "summary": string;
+        readonly "payload": unknown;
+        readonly "turnId": string | null;
+        readonly "sequence"?: number | null;
+        readonly "createdAt": string;
+      }>;
       readonly "checkpoints": ReadonlyArray<{
         readonly "turnId": string;
         readonly "checkpointTurnCount": number;
         readonly "checkpointRef": string;
         readonly "status": "ready" | "missing" | "error";
-        readonly "files": ReadonlyArray<unknown>;
+        readonly "files": ReadonlyArray<{
+          readonly "path": string;
+          readonly "kind": string;
+          readonly "additions": number;
+          readonly "deletions": number;
+        }>;
         readonly "assistantMessageId": string | null;
         readonly "completedAt": string;
       }>;
-      readonly "session": unknown | null;
+      readonly "session": {
+        readonly "threadId": string;
+        readonly "status": "idle" | "starting" | "running" | "ready" | "interrupted" | "stopped" | "error";
+        readonly "providerName": string | null;
+        readonly "providerInstanceId"?: string | null;
+        readonly "runtimeMode"?: "approval-required" | "auto-accept-edits" | "auto" | "full-access" | null;
+        readonly "activeTurnId": string | null;
+        readonly "lastError": string | null;
+        readonly "updatedAt": string;
+      } | null;
     };
     readonly "page"?: {
       readonly "beforeCursor": string | null;
@@ -303,16 +378,51 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "project.created";
     readonly "payload": {
       readonly "projectId": string;
       readonly "title": string;
       readonly "workspaceRoot": string;
-      readonly "repositoryIdentity"?: unknown | null | null;
-      readonly "defaultModelSelection": unknown | null;
+      readonly "repositoryIdentity"?: {
+        readonly "canonicalKey": string;
+        readonly "locator": {
+          readonly "source": "git-remote";
+          readonly "remoteName": string;
+          readonly "remoteUrl": string;
+        };
+        readonly "rootPath"?: string;
+        readonly "displayName"?: string;
+        readonly "provider"?: string;
+        readonly "owner"?: string;
+        readonly "name"?: string;
+      } | null | null;
+      readonly "defaultModelSelection": {
+        readonly "provider"?: unknown | null;
+        readonly "instanceId"?: unknown | null;
+        readonly "model": unknown;
+        readonly "options"?: unknown | null;
+      } | null;
       readonly "faviconPath"?: string | null | null;
-      readonly "scripts": ReadonlyArray<unknown>;
+      readonly "scripts": ReadonlyArray<{
+        readonly "id": string;
+        readonly "name": string;
+        readonly "command": string;
+        readonly "icon": "play" | "test" | "lint" | "configure" | "build" | "debug";
+        readonly "runOnWorktreeCreate": boolean;
+        readonly "previewUrl"?: string | null;
+        readonly "autoOpenPreview"?: boolean | null;
+      }>;
       readonly "createdAt": string;
       readonly "updatedAt": string;
     };
@@ -325,17 +435,52 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "project.meta-updated";
     readonly "payload": {
       readonly "projectId": string;
       readonly "title"?: string | null;
       readonly "workspaceRoot"?: string | null;
-      readonly "repositoryIdentity"?: unknown | null | null;
-      readonly "defaultModelSelection"?: unknown | null | null;
+      readonly "repositoryIdentity"?: {
+        readonly "canonicalKey": string;
+        readonly "locator": {
+          readonly "source": "git-remote";
+          readonly "remoteName": string;
+          readonly "remoteUrl": string;
+        };
+        readonly "rootPath"?: string;
+        readonly "displayName"?: string;
+        readonly "provider"?: string;
+        readonly "owner"?: string;
+        readonly "name"?: string;
+      } | null | null;
+      readonly "defaultModelSelection"?: {
+        readonly "provider"?: unknown | null;
+        readonly "instanceId"?: unknown | null;
+        readonly "model": unknown;
+        readonly "options"?: unknown | null;
+      } | null | null;
       readonly "defaultThreadEnvMode"?: "local" | "worktree" | null | null;
       readonly "faviconPath"?: string | null | null;
-      readonly "scripts"?: ReadonlyArray<unknown> | null;
+      readonly "scripts"?: ReadonlyArray<{
+        readonly "id": string;
+        readonly "name": string;
+        readonly "command": string;
+        readonly "icon": "play" | "test" | "lint" | "configure" | "build" | "debug";
+        readonly "runOnWorktreeCreate": boolean;
+        readonly "previewUrl"?: string | null;
+        readonly "autoOpenPreview"?: boolean | null;
+      }> | null;
       readonly "updatedAt": string;
     };
   } | {
@@ -347,7 +492,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "project.deleted";
     readonly "payload": {
       readonly "projectId": string;
@@ -362,13 +517,28 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.created";
     readonly "payload": {
       readonly "threadId": string;
       readonly "projectId": string;
       readonly "title": string;
-      readonly "modelSelection": unknown;
+      readonly "modelSelection": {
+        readonly "provider"?: unknown | null;
+        readonly "instanceId"?: unknown | null;
+        readonly "model": unknown;
+        readonly "options"?: unknown | null;
+      };
       readonly "runtimeMode"?: "approval-required" | "auto-accept-edits" | "auto" | "full-access" | null;
       readonly "interactionMode"?: "default" | "plan" | null;
       readonly "branch": string | null;
@@ -385,7 +555,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.deleted";
     readonly "payload": {
       readonly "threadId": string;
@@ -400,7 +580,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.archived";
     readonly "payload": {
       readonly "threadId": string;
@@ -416,7 +606,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.unarchived";
     readonly "payload": {
       readonly "threadId": string;
@@ -431,7 +631,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.settled";
     readonly "payload": {
       readonly "threadId": string;
@@ -447,7 +657,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.unsettled";
     readonly "payload": {
       readonly "threadId": string;
@@ -463,7 +683,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.snoozed";
     readonly "payload": {
       readonly "threadId": string;
@@ -480,7 +710,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.unsnoozed";
     readonly "payload": {
       readonly "threadId": string;
@@ -496,7 +736,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.pinned";
     readonly "payload": {
       readonly "threadId": string;
@@ -513,7 +763,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.unpinned";
     readonly "payload": {
       readonly "threadId": string;
@@ -528,7 +788,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.pin-reordered";
     readonly "payload": {
       readonly "threadId": string;
@@ -544,18 +814,41 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.meta-updated";
     readonly "payload": {
       readonly "threadId": string;
       readonly "title"?: string | null;
       readonly "regenerateTitle"?: true | null;
       readonly "previousTitle"?: string | null;
-      readonly "titleRegeneration"?: unknown | null | null;
-      readonly "modelSelection"?: unknown | null;
+      readonly "titleRegeneration"?: {
+        readonly "requestId": string;
+        readonly "startedAt": string;
+      } | null | null;
+      readonly "modelSelection"?: {
+        readonly "provider"?: unknown | null;
+        readonly "instanceId"?: unknown | null;
+        readonly "model": unknown;
+        readonly "options"?: unknown | null;
+      } | null;
       readonly "branch"?: string | null | null;
       readonly "worktreePath"?: string | null | null;
-      readonly "linkedPullRequest"?: unknown | null | null;
+      readonly "linkedPullRequest"?: {
+        readonly "projectId": string;
+        readonly "repository": string;
+        readonly "number": number;
+        readonly "url": string;
+      } | null | null;
       readonly "updatedAt": string;
     };
   } | {
@@ -567,7 +860,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.runtime-mode-set";
     readonly "payload": {
       readonly "threadId": string;
@@ -583,7 +886,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.interaction-mode-set";
     readonly "payload": {
       readonly "threadId": string;
@@ -599,14 +912,30 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.message-sent";
     readonly "payload": {
       readonly "threadId": string;
       readonly "messageId": string;
       readonly "role": "user" | "assistant" | "system";
       readonly "text": string;
-      readonly "attachments"?: ReadonlyArray<unknown> | null;
+      readonly "attachments"?: ReadonlyArray<{
+        readonly "type": "image";
+        readonly "id": string;
+        readonly "name": string;
+        readonly "mimeType": string;
+        readonly "sizeBytes": number;
+      }> | null;
       readonly "turnId": string | null;
       readonly "streaming": boolean;
       readonly "createdAt": string;
@@ -621,16 +950,34 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.turn-start-requested";
     readonly "payload": {
       readonly "threadId": string;
       readonly "messageId": string;
-      readonly "modelSelection"?: unknown | null;
+      readonly "modelSelection"?: {
+        readonly "provider"?: unknown | null;
+        readonly "instanceId"?: unknown | null;
+        readonly "model": unknown;
+        readonly "options"?: unknown | null;
+      } | null;
       readonly "titleSeed"?: string | null;
       readonly "runtimeMode"?: "approval-required" | "auto-accept-edits" | "auto" | "full-access" | null;
       readonly "interactionMode"?: "default" | "plan" | null;
-      readonly "sourceProposedPlan"?: unknown | null;
+      readonly "sourceProposedPlan"?: {
+        readonly "threadId": string;
+        readonly "planId": string;
+      } | null;
       readonly "createdAt": string;
     };
   } | {
@@ -642,7 +989,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.turn-interrupt-requested";
     readonly "payload": {
       readonly "threadId": string;
@@ -658,7 +1015,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.approval-response-requested";
     readonly "payload": {
       readonly "threadId": string;
@@ -675,7 +1042,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.user-input-response-requested";
     readonly "payload": {
       readonly "threadId": string;
@@ -692,7 +1069,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.checkpoint-revert-requested";
     readonly "payload": {
       readonly "threadId": string;
@@ -708,7 +1095,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.reverted";
     readonly "payload": {
       readonly "threadId": string;
@@ -723,7 +1120,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.session-stop-requested";
     readonly "payload": {
       readonly "threadId": string;
@@ -738,11 +1145,30 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.session-set";
     readonly "payload": {
       readonly "threadId": string;
-      readonly "session": unknown;
+      readonly "session": {
+        readonly "threadId": string;
+        readonly "status": "idle" | "starting" | "running" | "ready" | "interrupted" | "stopped" | "error";
+        readonly "providerName": string | null;
+        readonly "providerInstanceId"?: string | null;
+        readonly "runtimeMode"?: "approval-required" | "auto-accept-edits" | "auto" | "full-access" | null;
+        readonly "activeTurnId": string | null;
+        readonly "lastError": string | null;
+        readonly "updatedAt": string;
+      };
     };
   } | {
     readonly "sequence": number;
@@ -753,7 +1179,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.proposed-plan-upserted";
     readonly "payload": {
       readonly "threadId": string;
@@ -776,7 +1212,17 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.turn-diff-completed";
     readonly "payload": {
       readonly "threadId": string;
@@ -784,7 +1230,12 @@ export type subscribeThreadOutput = {
       readonly "checkpointTurnCount": number;
       readonly "checkpointRef": string;
       readonly "status": "ready" | "missing" | "error";
-      readonly "files": ReadonlyArray<unknown>;
+      readonly "files": ReadonlyArray<{
+        readonly "path": string;
+        readonly "kind": string;
+        readonly "additions": number;
+        readonly "deletions": number;
+      }>;
       readonly "assistantMessageId": string | null;
       readonly "completedAt": string;
     };
@@ -797,18 +1248,47 @@ export type subscribeThreadOutput = {
     readonly "commandId": string | null;
     readonly "causationEventId": string | null;
     readonly "correlationId": string | null;
-    readonly "metadata": unknown;
+    readonly "metadata": {
+      readonly "providerTurnId"?: string | null;
+      readonly "providerItemId"?: string | null;
+      readonly "adapterKey"?: string | null;
+      readonly "requestId"?: string | null;
+      readonly "ingestedAt"?: string | null;
+      readonly "origin"?: {
+        readonly "surface"?: "web" | "desktop" | "mobile" | null;
+        readonly "appVersion"?: string | null;
+      } | null;
+    };
     readonly "type": "thread.activity-appended";
     readonly "payload": {
       readonly "threadId": string;
-      readonly "activity": unknown;
+      readonly "activity": {
+        readonly "id": string;
+        readonly "tone": "info" | "tool" | "approval" | "error";
+        readonly "kind": string;
+        readonly "summary": string;
+        readonly "payload": unknown;
+        readonly "turnId": string | null;
+        readonly "sequence"?: number | null;
+        readonly "createdAt": string;
+      };
     };
   };
 };
 
-export type getTurnDiffInput = unknown;
+export type getTurnDiffInput = {
+  readonly "fromTurnCount": number;
+  readonly "toTurnCount": number;
+  readonly "threadId": string;
+  readonly "ignoreWhitespace"?: boolean;
+};
 
-export type getTurnDiffOutput = unknown;
+export type getTurnDiffOutput = {
+  readonly "fromTurnCount": number;
+  readonly "toTurnCount": number;
+  readonly "threadId": string;
+  readonly "diff": string;
+};
 
 export type searchThreadsInput = {
   readonly "query": string;
@@ -904,16 +1384,51 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "project.created";
   readonly "payload": {
     readonly "projectId": string;
     readonly "title": string;
     readonly "workspaceRoot": string;
-    readonly "repositoryIdentity"?: unknown | null | null;
-    readonly "defaultModelSelection": unknown | null;
+    readonly "repositoryIdentity"?: {
+      readonly "canonicalKey": string;
+      readonly "locator": {
+        readonly "source": "git-remote";
+        readonly "remoteName": string;
+        readonly "remoteUrl": string;
+      };
+      readonly "rootPath"?: string;
+      readonly "displayName"?: string;
+      readonly "provider"?: string;
+      readonly "owner"?: string;
+      readonly "name"?: string;
+    } | null | null;
+    readonly "defaultModelSelection": {
+      readonly "provider"?: unknown | null;
+      readonly "instanceId"?: unknown | null;
+      readonly "model": unknown;
+      readonly "options"?: unknown | null;
+    } | null;
     readonly "faviconPath"?: string | null | null;
-    readonly "scripts": ReadonlyArray<unknown>;
+    readonly "scripts": ReadonlyArray<{
+      readonly "id": string;
+      readonly "name": string;
+      readonly "command": string;
+      readonly "icon": "play" | "test" | "lint" | "configure" | "build" | "debug";
+      readonly "runOnWorktreeCreate": boolean;
+      readonly "previewUrl"?: string | null;
+      readonly "autoOpenPreview"?: boolean | null;
+    }>;
     readonly "createdAt": string;
     readonly "updatedAt": string;
   };
@@ -926,17 +1441,52 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "project.meta-updated";
   readonly "payload": {
     readonly "projectId": string;
     readonly "title"?: string | null;
     readonly "workspaceRoot"?: string | null;
-    readonly "repositoryIdentity"?: unknown | null | null;
-    readonly "defaultModelSelection"?: unknown | null | null;
+    readonly "repositoryIdentity"?: {
+      readonly "canonicalKey": string;
+      readonly "locator": {
+        readonly "source": "git-remote";
+        readonly "remoteName": string;
+        readonly "remoteUrl": string;
+      };
+      readonly "rootPath"?: string;
+      readonly "displayName"?: string;
+      readonly "provider"?: string;
+      readonly "owner"?: string;
+      readonly "name"?: string;
+    } | null | null;
+    readonly "defaultModelSelection"?: {
+      readonly "provider"?: unknown | null;
+      readonly "instanceId"?: unknown | null;
+      readonly "model": unknown;
+      readonly "options"?: unknown | null;
+    } | null | null;
     readonly "defaultThreadEnvMode"?: "local" | "worktree" | null | null;
     readonly "faviconPath"?: string | null | null;
-    readonly "scripts"?: ReadonlyArray<unknown> | null;
+    readonly "scripts"?: ReadonlyArray<{
+      readonly "id": string;
+      readonly "name": string;
+      readonly "command": string;
+      readonly "icon": "play" | "test" | "lint" | "configure" | "build" | "debug";
+      readonly "runOnWorktreeCreate": boolean;
+      readonly "previewUrl"?: string | null;
+      readonly "autoOpenPreview"?: boolean | null;
+    }> | null;
     readonly "updatedAt": string;
   };
 } | {
@@ -948,7 +1498,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "project.deleted";
   readonly "payload": {
     readonly "projectId": string;
@@ -963,13 +1523,28 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.created";
   readonly "payload": {
     readonly "threadId": string;
     readonly "projectId": string;
     readonly "title": string;
-    readonly "modelSelection": unknown;
+    readonly "modelSelection": {
+      readonly "provider"?: unknown | null;
+      readonly "instanceId"?: unknown | null;
+      readonly "model": unknown;
+      readonly "options"?: unknown | null;
+    };
     readonly "runtimeMode"?: "approval-required" | "auto-accept-edits" | "auto" | "full-access" | null;
     readonly "interactionMode"?: "default" | "plan" | null;
     readonly "branch": string | null;
@@ -986,7 +1561,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.deleted";
   readonly "payload": {
     readonly "threadId": string;
@@ -1001,7 +1586,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.archived";
   readonly "payload": {
     readonly "threadId": string;
@@ -1017,7 +1612,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.unarchived";
   readonly "payload": {
     readonly "threadId": string;
@@ -1032,7 +1637,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.settled";
   readonly "payload": {
     readonly "threadId": string;
@@ -1048,7 +1663,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.unsettled";
   readonly "payload": {
     readonly "threadId": string;
@@ -1064,7 +1689,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.snoozed";
   readonly "payload": {
     readonly "threadId": string;
@@ -1081,7 +1716,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.unsnoozed";
   readonly "payload": {
     readonly "threadId": string;
@@ -1097,7 +1742,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.pinned";
   readonly "payload": {
     readonly "threadId": string;
@@ -1114,7 +1769,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.unpinned";
   readonly "payload": {
     readonly "threadId": string;
@@ -1129,7 +1794,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.pin-reordered";
   readonly "payload": {
     readonly "threadId": string;
@@ -1145,7 +1820,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.meta-updated";
   readonly "payload": {
     readonly "threadId": string;
@@ -1156,7 +1841,12 @@ export type OrchestrationEvent = {
       readonly "requestId": string;
       readonly "startedAt": string;
     } | null | null;
-    readonly "modelSelection"?: unknown | null;
+    readonly "modelSelection"?: {
+      readonly "provider"?: unknown | null;
+      readonly "instanceId"?: unknown | null;
+      readonly "model": unknown;
+      readonly "options"?: unknown | null;
+    } | null;
     readonly "branch"?: string | null | null;
     readonly "worktreePath"?: string | null | null;
     readonly "linkedPullRequest"?: {
@@ -1176,7 +1866,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.runtime-mode-set";
   readonly "payload": {
     readonly "threadId": string;
@@ -1192,7 +1892,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.interaction-mode-set";
   readonly "payload": {
     readonly "threadId": string;
@@ -1208,7 +1918,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.message-sent";
   readonly "payload": {
     readonly "threadId": string;
@@ -1236,12 +1956,27 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.turn-start-requested";
   readonly "payload": {
     readonly "threadId": string;
     readonly "messageId": string;
-    readonly "modelSelection"?: unknown | null;
+    readonly "modelSelection"?: {
+      readonly "provider"?: unknown | null;
+      readonly "instanceId"?: unknown | null;
+      readonly "model": unknown;
+      readonly "options"?: unknown | null;
+    } | null;
     readonly "titleSeed"?: string | null;
     readonly "runtimeMode"?: "approval-required" | "auto-accept-edits" | "auto" | "full-access" | null;
     readonly "interactionMode"?: "default" | "plan" | null;
@@ -1260,7 +1995,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.turn-interrupt-requested";
   readonly "payload": {
     readonly "threadId": string;
@@ -1276,7 +2021,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.approval-response-requested";
   readonly "payload": {
     readonly "threadId": string;
@@ -1293,7 +2048,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.user-input-response-requested";
   readonly "payload": {
     readonly "threadId": string;
@@ -1310,7 +2075,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.checkpoint-revert-requested";
   readonly "payload": {
     readonly "threadId": string;
@@ -1326,7 +2101,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.reverted";
   readonly "payload": {
     readonly "threadId": string;
@@ -1341,7 +2126,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.session-stop-requested";
   readonly "payload": {
     readonly "threadId": string;
@@ -1356,7 +2151,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.session-set";
   readonly "payload": {
     readonly "threadId": string;
@@ -1380,7 +2185,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.proposed-plan-upserted";
   readonly "payload": {
     readonly "threadId": string;
@@ -1403,7 +2218,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.turn-diff-completed";
   readonly "payload": {
     readonly "threadId": string;
@@ -1429,7 +2254,17 @@ export type OrchestrationEvent = {
   readonly "commandId": string | null;
   readonly "causationEventId": string | null;
   readonly "correlationId": string | null;
-  readonly "metadata": unknown;
+  readonly "metadata": {
+    readonly "providerTurnId"?: string | null;
+    readonly "providerItemId"?: string | null;
+    readonly "adapterKey"?: string | null;
+    readonly "requestId"?: string | null;
+    readonly "ingestedAt"?: string | null;
+    readonly "origin"?: {
+      readonly "surface"?: "web" | "desktop" | "mobile" | null;
+      readonly "appVersion"?: string | null;
+    } | null;
+  };
   readonly "type": "thread.activity-appended";
   readonly "payload": {
     readonly "threadId": string;
@@ -1453,7 +2288,12 @@ export type ClientOrchestrationCommand = {
   readonly "title": string;
   readonly "workspaceRoot": string;
   readonly "createWorkspaceRootIfMissing"?: boolean | null;
-  readonly "defaultModelSelection"?: unknown | null | null;
+  readonly "defaultModelSelection"?: {
+    readonly "provider"?: unknown | null;
+    readonly "instanceId"?: unknown | null;
+    readonly "model": unknown;
+    readonly "options"?: unknown | null;
+  } | null | null;
   readonly "createdAt": string;
 } | {
   readonly "type": "project.meta.update";
@@ -1461,7 +2301,12 @@ export type ClientOrchestrationCommand = {
   readonly "projectId": string;
   readonly "title"?: string | null;
   readonly "workspaceRoot"?: string | null;
-  readonly "defaultModelSelection"?: unknown | null | null;
+  readonly "defaultModelSelection"?: {
+    readonly "provider"?: unknown | null;
+    readonly "instanceId"?: unknown | null;
+    readonly "model": unknown;
+    readonly "options"?: unknown | null;
+  } | null | null;
   readonly "defaultThreadEnvMode"?: "local" | "worktree" | null | null;
   readonly "faviconPath"?: string | null | null;
   readonly "scripts"?: ReadonlyArray<{
@@ -1484,7 +2329,12 @@ export type ClientOrchestrationCommand = {
   readonly "threadId": string;
   readonly "projectId": string;
   readonly "title": string;
-  readonly "modelSelection": unknown;
+  readonly "modelSelection": {
+    readonly "provider"?: unknown | null;
+    readonly "instanceId"?: unknown | null;
+    readonly "model": unknown;
+    readonly "options"?: unknown | null;
+  };
   readonly "runtimeMode": "approval-required" | "auto-accept-edits" | "auto" | "full-access";
   readonly "interactionMode"?: "default" | "plan" | null;
   readonly "branch": string | null;
@@ -1541,7 +2391,12 @@ export type ClientOrchestrationCommand = {
   readonly "threadId": string;
   readonly "title"?: string | null;
   readonly "regenerateTitle"?: true | null;
-  readonly "modelSelection"?: unknown | null;
+  readonly "modelSelection"?: {
+    readonly "provider"?: unknown | null;
+    readonly "instanceId"?: unknown | null;
+    readonly "model": unknown;
+    readonly "options"?: unknown | null;
+  } | null;
   readonly "branch"?: string | null | null;
   readonly "expectedBranch"?: string | null | null;
   readonly "worktreePath"?: string | null | null;
@@ -1585,7 +2440,12 @@ export type ClientOrchestrationCommand = {
       readonly "sizeBytes": number;
     }>;
   };
-  readonly "modelSelection"?: unknown | null;
+  readonly "modelSelection"?: {
+    readonly "provider"?: unknown | null;
+    readonly "instanceId"?: unknown | null;
+    readonly "model": unknown;
+    readonly "options"?: unknown | null;
+  } | null;
   readonly "titleSeed"?: string | null;
   readonly "runtimeMode": "approval-required" | "auto-accept-edits" | "auto" | "full-access";
   readonly "interactionMode": "default" | "plan";
@@ -1593,7 +2453,12 @@ export type ClientOrchestrationCommand = {
     readonly "createThread"?: {
       readonly "projectId": string;
       readonly "title": string;
-      readonly "modelSelection": unknown;
+      readonly "modelSelection": {
+        readonly "provider"?: unknown | null;
+        readonly "instanceId"?: unknown | null;
+        readonly "model": unknown;
+        readonly "options"?: unknown | null;
+      };
       readonly "runtimeMode": "approval-required" | "auto-accept-edits" | "auto" | "full-access";
       readonly "interactionMode": "default" | "plan";
       readonly "branch": string | null;

@@ -58,6 +58,28 @@ export class UnsupportedKeywordError extends Error {
   }
 }
 
+/**
+ * Thrown when a `$ref` cannot be resolved.
+ *
+ * This is its own error because an unresolvable `$ref` is the worst possible
+ * silent pass: the checker would walk into an empty schema, find nothing to
+ * check, and report a match. The generator emitted 105 dangling `$ref`s once and
+ * this checker reported every payload valid. It throws now.
+ */
+export class UnresolvedRefError extends Error {
+  constructor(
+    readonly ref: string,
+    readonly path: string,
+  ) {
+    super(
+      `shape-check could not resolve "${ref}" (at ${path || '/'}). ` +
+        `Pass the generated $defs as the third argument to shapeCheck. ` +
+        `Refusing to report a match for a schema that was never loaded.`,
+    );
+    this.name = 'UnresolvedRefError';
+  }
+}
+
 /** Every keyword the generator is known to emit. Anything else throws. */
 const SUPPORTED = new Set([
   'type',
@@ -79,6 +101,7 @@ const SUPPORTED = new Set([
 ]);
 
 type JsonSchema = Record<string, unknown>;
+type Defs = Record<string, JsonSchema>;
 
 function typeOf(value: unknown): string {
   if (value === null) return 'null';
@@ -94,14 +117,34 @@ function assertKnownKeywords(schema: JsonSchema, path: string): void {
   }
 }
 
-function check(value: unknown, schema: JsonSchema, path: string, out: ShapeMismatch[]): void {
+function check(
+  value: unknown,
+  schema: JsonSchema,
+  path: string,
+  out: ShapeMismatch[],
+  defs: Defs,
+  seen: ReadonlySet<string>,
+): void {
   assertKnownKeywords(schema, path);
+
+  // Resolve before anything else. A `$ref` node carries no constraints of its
+  // own, so continuing past it means checking nothing and reporting a match.
+  if (typeof schema.$ref === 'string') {
+    const key = /^#\/(?:\$defs|definitions)\/(.+)$/.exec(schema.$ref)?.[1];
+    const target = key ? defs[key] : undefined;
+    if (!target) throw new UnresolvedRefError(schema.$ref, path);
+    // A self-referential schema is legal; re-entering it on the same value is not.
+    if (!seen.has(key as string)) {
+      check(value, target, path, out, defs, new Set([...seen, key as string]));
+    }
+    return;
+  }
 
   const branches = (schema.anyOf ?? schema.oneOf) as JsonSchema[] | undefined;
   if (branches) {
     const anyMatched = branches.some((branch) => {
       const scratch: ShapeMismatch[] = [];
-      check(value, branch, path, scratch);
+      check(value, branch, path, scratch, defs, seen);
       return scratch.length === 0;
     });
     if (!anyMatched) {
@@ -111,7 +154,7 @@ function check(value: unknown, schema: JsonSchema, path: string, out: ShapeMisma
   }
 
   if (Array.isArray(schema.allOf)) {
-    for (const sub of schema.allOf as JsonSchema[]) check(value, sub, path, out);
+    for (const sub of schema.allOf as JsonSchema[]) check(value, sub, path, out, defs, seen);
   }
 
   if (Array.isArray(schema.enum)) {
@@ -154,7 +197,7 @@ function check(value: unknown, schema: JsonSchema, path: string, out: ShapeMisma
   }
 
   if (Array.isArray(value) && schema.items) {
-    value.forEach((item, index) => check(item, schema.items as JsonSchema, `${path}/${index}`, out));
+    value.forEach((item, index) => check(item, schema.items as JsonSchema, `${path}/${index}`, out, defs, seen));
   }
 
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
@@ -168,7 +211,7 @@ function check(value: unknown, schema: JsonSchema, path: string, out: ShapeMisma
     }
 
     for (const [key, sub] of Object.entries(properties)) {
-      if (key in record) check(record[key], sub, `${path}/${key}`, out);
+      if (key in record) check(record[key], sub, `${path}/${key}`, out, defs, seen);
     }
 
     if (schema.additionalProperties === false) {
@@ -184,12 +227,16 @@ function check(value: unknown, schema: JsonSchema, path: string, out: ShapeMisma
 /**
  * Check a value against one schema from the generated document.
  *
- * Throws `UnsupportedKeywordError` rather than passing when the schema uses a
- * keyword this checker does not implement.
+ * Throws `UnsupportedKeywordError` for a keyword it does not implement, and
+ * `UnresolvedRefError` for a `$ref` it cannot follow. Both are refusals to report
+ * a match for something that was never checked.
+ *
+ * @param defs the generated `$defs` pool. Required whenever the schema contains
+ *   a `$ref`, which most of the generated payload schemas do.
  */
-export function shapeCheck(value: unknown, schema: JsonSchema): ShapeCheckResult {
+export function shapeCheck(value: unknown, schema: JsonSchema, defs: Defs = {}): ShapeCheckResult {
   const mismatches: ShapeMismatch[] = [];
-  check(value, schema, '', mismatches);
+  check(value, schema, '', mismatches, defs, new Set());
   return { matches: mismatches.length === 0, mismatches };
 }
 
