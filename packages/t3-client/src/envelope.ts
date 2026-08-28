@@ -232,8 +232,58 @@ export function decodeFrames(raw: string): ServerFrame[] {
       // present a degraded connection as a working one.
       throw new MalformedFrameError(raw, `unknown server frame tag "${tag}"`);
     }
+    // The tag alone is not the frame. A `Chunk` with no `values` and an `Exit`
+    // with a malformed `exit` both used to pass here and then throw deep inside
+    // dispatch — in the socket's message listener, where a throw reaches no call
+    // site and leaves every pending request to time out. Validate the shape at
+    // the boundary, where the failure has somewhere to go.
+    assertFrameShape(candidate as Record<string, unknown>, tag, raw);
     return candidate as ServerFrame;
   });
+}
+
+/**
+ * Check that a frame carries the fields its tag promises.
+ *
+ * Deliberately shallow: it verifies the envelope's own structure, not the domain
+ * payload inside it — that is `checked.ts`'s job against the vendored contract.
+ * The line between them is that this module owns what Effect's transport
+ * guarantees, and nothing here should need the t3code contract to decide.
+ */
+function assertFrameShape(frame: Record<string, unknown>, tag: string, raw: string): void {
+  const hasId = (): boolean => typeof frame.requestId === 'string' || typeof frame.requestId === 'number';
+
+  switch (tag) {
+    case 'Chunk':
+      if (!hasId()) throw new MalformedFrameError(raw, 'Chunk has no requestId');
+      if (!Array.isArray(frame.values)) throw new MalformedFrameError(raw, 'Chunk has no values array');
+      return;
+    case 'Exit': {
+      if (!hasId()) throw new MalformedFrameError(raw, 'Exit has no requestId');
+      const exit = frame.exit as { _tag?: unknown; cause?: unknown } | undefined;
+      if (!exit || typeof exit !== 'object') throw new MalformedFrameError(raw, 'Exit has no exit object');
+      if (exit._tag === 'Success') return;
+      if (exit._tag === 'Failure') {
+        // The array shape is the whole reason this check exists: a Failure whose
+        // cause is a bare object reads as a valid exit and then breaks `.map`
+        // inside dispatch.
+        if (!Array.isArray(exit.cause)) {
+          throw new MalformedFrameError(raw, 'Exit Failure cause is not an array');
+        }
+        return;
+      }
+      throw new MalformedFrameError(raw, `Exit has unknown exit tag "${String(exit._tag)}"`);
+    }
+    case 'Defect':
+      if (!('defect' in frame)) throw new MalformedFrameError(raw, 'Defect has no defect field');
+      return;
+    case 'ClientProtocolError':
+      if (!('error' in frame)) throw new MalformedFrameError(raw, 'ClientProtocolError has no error field');
+      return;
+    default:
+      // Pong carries nothing.
+      return;
+  }
 }
 
 /** Did this exit succeed? */

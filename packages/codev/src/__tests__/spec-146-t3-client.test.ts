@@ -26,8 +26,8 @@ import {
 } from '../../../t3-client/src/envelope.js';
 import { classifyResume, SequenceCursor } from '../../../t3-client/src/resume.js';
 import { assertTransportSafe, missingScopes, webSocketUrl } from '../../../t3-client/src/auth.js';
-import { exponentialBackoff } from '../../../t3-client/src/socket.js';
-import { T3Client, NotConnectedError, type SocketLike } from '../../../t3-client/src/client.js';
+import { exponentialBackoff, ManagedSocket } from '../../../t3-client/src/socket.js';
+import { T3Client, NotConnectedError, ProtocolError, type SocketLike } from '../../../t3-client/src/client.js';
 import { checkPayload, checkableMethods, PayloadShapeError } from '../../../t3-client/src/checked.js';
 import { ResumingSubscription, SubscriptionTerminatedError } from '../../../t3-client/src/subscription.js';
 
@@ -596,7 +596,11 @@ describe('spec 146 phase 2: a subscription that survives a drop', () => {
       ),
     });
     const running = sub.run();
-    await new Promise((r) => setTimeout(r, 10));
+    // 120ms, not 10: a handler-failure attempt now counts toward the backoff
+    // streak, so the retry is 50ms out rather than immediate. That delay is the
+    // fix for the measured 88-reconnects-per-100ms storm, and this test has to
+    // wait for it rather than assert it away.
+    await new Promise((r) => setTimeout(r, 120));
     sub.stop();
     await running;
 
@@ -1120,5 +1124,232 @@ describe('spec 146 phase 2: a non-retryable stream error is surfaced, not retrie
     sub.stop();
     await running;
     expect(attempts).toBeGreaterThan(1);
+  });
+});
+
+describe('spec 146 phase 2: reconnects are bounded on BOTH spinning paths', () => {
+  const event = (sequence: number) => ({ kind: 'event', event: { sequence } });
+  const sync = { kind: 'synchronized' };
+
+  const wiring = (onValue: (v: unknown, s: number | null) => void, extra: Record<string, unknown> = {}) => ({
+    method: 'orchestration.subscribeThread',
+    payload: {},
+    sequenceOf: (v: unknown) => (v as { event?: { sequence?: number } })?.event?.sequence ?? null,
+    isSnapshot: () => false,
+    isSynchronized: (v: unknown) => (v as { kind?: string })?.kind === 'synchronized',
+    onValue,
+    onResume: () => {},
+    ...extra,
+  });
+
+  it('bounds reconnects when a handler fails deterministically', async () => {
+    // Measured by a review lane at 88 reconnects in 100ms before the fix. The
+    // iteration-1 backoff reset the streak on `synchronized`, and a
+    // handler-failure stream DOES synchronize — the sync check runs before the
+    // failure guard — so the guard exempted the path the same iteration added.
+    //
+    // Against a real server each of those reconnects is a WebSocket ticket plus
+    // an upgrade.
+    let attempts = 0;
+    const client = {
+      async stream(_m: string, _p: Record<string, unknown>, onValue: (v: unknown) => void) {
+        attempts += 1;
+        onValue(sync);
+        onValue(event(10));
+        return undefined;
+      },
+    };
+    const sub = new ResumingSubscription(async () => ({ client: client as never, close: () => {} }), {
+      ...wiring(
+        () => {
+          throw new Error('handler always fails');
+        },
+        { onHandlerError: () => {} },
+      ),
+    });
+
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 300));
+    sub.stop();
+    await running;
+
+    // Backoff is 50ms, 100ms, 200ms, … so 300ms admits a handful, not dozens.
+    expect(attempts, `expected a bounded number of reconnects, got ${attempts}`).toBeLessThan(10);
+    expect(attempts, 'it must still retry at all').toBeGreaterThan(1);
+  });
+
+  it('bounds reconnects when the stream delivers nothing at all', async () => {
+    // The path iteration 1 fixed, which had no test — grep for `streak` returned
+    // nothing. An untested guard is a guard nobody notices the loss of.
+    let attempts = 0;
+    const client = {
+      async stream() {
+        attempts += 1;
+        return undefined;
+      },
+    };
+    const sub = new ResumingSubscription(async () => ({ client: client as never, close: () => {} }), {
+      ...wiring(() => {}),
+    });
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 300));
+    sub.stop();
+    await running;
+
+    expect(attempts).toBeLessThan(10);
+    expect(attempts).toBeGreaterThan(1);
+  });
+
+  it('does NOT back off a subscription that is making progress', async () => {
+    // The other half: a guard that slows down healthy reconnects would be its own
+    // defect. An attempt that synchronizes and applies events resets the streak.
+    let attempts = 0;
+    const client = {
+      async stream(_m: string, _p: Record<string, unknown>, onValue: (v: unknown) => void) {
+        attempts += 1;
+        onValue(sync);
+        onValue(event(attempts));
+        return undefined;
+      },
+    };
+    const sub = new ResumingSubscription(async () => ({ client: client as never, close: () => {} }), {
+      ...wiring(() => {}),
+    });
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 100));
+    sub.stop();
+    await running;
+
+    expect(attempts, 'a progressing subscription must not be throttled').toBeGreaterThan(10);
+  });
+});
+
+describe('spec 146 phase 2: a terminal connection error fails every pending call at once', () => {
+  function wired() {
+    const sent: string[] = [];
+    let onMessage: ((event: { data: unknown }) => void) | undefined;
+    const socket = {
+      send: (data: string) => void sent.push(data),
+      close: () => {},
+      addEventListener: (type: string, listener: unknown) => {
+        if (type === 'message') onMessage = listener as typeof onMessage;
+      },
+      readyState: 1,
+    } as unknown as SocketLike;
+    return { sent, socket, emit: (frame: unknown) => onMessage?.({ data: JSON.stringify([frame]) }) };
+  }
+
+  it('fails every in-flight request on ClientProtocolError instead of leaving them to time out', async () => {
+    // It used to fall to the out-of-band handler, so each pending call waited out
+    // its own timeout on a connection the server had already declared broken.
+    const w = wired();
+    const client = new T3Client(w.socket, { checkPayloads: false });
+    const a = client.call('vcs.status', {});
+    const b = client.call('vcs.status', {});
+    expect(client.inFlight).toBe(2);
+
+    w.emit({ _tag: 'ClientProtocolError', error: { _tag: 'RpcClientError', reason: 'bad frame' } });
+
+    await expect(a).rejects.toBeInstanceOf(ProtocolError);
+    await expect(b).rejects.toBeInstanceOf(ProtocolError);
+    expect(client.inFlight).toBe(0);
+  });
+
+  it('fails every in-flight request on a malformed frame', async () => {
+    // Previously `onMalformed` returned and the pending calls sat until their own
+    // timeouts; without `onMalformed` the throw happened inside the socket's
+    // message listener, where it reached no call site at all. Either way the
+    // caller waited on a connection it could no longer read.
+    const w = wired();
+    const malformed: Error[] = [];
+    const client = new T3Client(w.socket, {
+      checkPayloads: false,
+      onMalformed: (error) => void malformed.push(error),
+    });
+    const call = client.call('vcs.status', {});
+    expect(client.inFlight).toBe(1);
+
+    // A Chunk with no values array: a known tag whose shape is wrong.
+    w.emit({ _tag: 'Chunk', requestId: 1 });
+
+    await expect(call).rejects.toThrow(/no values array/);
+    expect(malformed.length, 'onMalformed still fires').toBe(1);
+    expect(client.inFlight).toBe(0);
+  });
+});
+
+describe('spec 146 phase 2: the envelope validates shape, not just the tag', () => {
+  it('rejects a Chunk with no values array', () => {
+    expect(() => decodeFrames(JSON.stringify({ _tag: 'Chunk', requestId: 1 }))).toThrow(
+      /no values array/,
+    );
+  });
+
+  it('rejects an Exit whose Failure cause is not an array', () => {
+    // The exact shape that used to pass decoding and then break `.map` inside
+    // dispatch, in the socket's message listener.
+    expect(() =>
+      decodeFrames(
+        JSON.stringify({
+          _tag: 'Exit',
+          requestId: 1,
+          exit: { _tag: 'Failure', cause: { _tag: 'Fail', error: {} } },
+        }),
+      ),
+    ).toThrow(/cause is not an array/);
+  });
+
+  it('rejects an Exit with an unknown exit tag', () => {
+    expect(() =>
+      decodeFrames(JSON.stringify({ _tag: 'Exit', requestId: 1, exit: { _tag: 'Maybe' } })),
+    ).toThrow(/unknown exit tag/);
+  });
+
+  it('still accepts well-formed frames', () => {
+    expect(decodeFrames(JSON.stringify({ _tag: 'Chunk', requestId: 1, values: [1] }))).toHaveLength(1);
+    expect(
+      decodeFrames(JSON.stringify({ _tag: 'Exit', requestId: 1, exit: { _tag: 'Success', value: 1 } })),
+    ).toHaveLength(1);
+    expect(decodeFrames(JSON.stringify({ _tag: 'Pong' }))).toHaveLength(1);
+  });
+});
+
+describe('spec 146 phase 2: ManagedSocket notices an ESTABLISHED socket closing', () => {
+  it('fires onDrop and leaves state closed when a live connection dies', async () => {
+    // It used to ignore close once the open promise had settled, so onDrop never
+    // fired for a live connection loss and `state` stayed 'open' on a dead
+    // socket — the one case onDrop's own doc was written for.
+    const listeners: Record<string, Array<() => void>> = {};
+    const socket = {
+      send: () => {},
+      close: () => {},
+      addEventListener: (type: string, listener: () => void) => {
+        (listeners[type] ??= []).push(listener);
+      },
+      readyState: 1,
+    };
+
+    const drops: Array<{ willRetry: boolean }> = [];
+    const managed = new ManagedSocket(
+      () => 'ws://127.0.0.1:1/ws',
+      () => socket as never,
+      exponentialBackoff({ maxAttempts: 1 }),
+      { onDrop: (info) => void drops.push(info) },
+    );
+
+    const connecting = managed.connect();
+    // `connect` awaits `urlFor()` before it constructs the socket, so the
+    // listeners do not exist yet on this tick. Yield until they do rather than
+    // firing into an empty array and timing out.
+    while (!listeners.open?.length) await new Promise((r) => setTimeout(r, 1));
+    for (const open of listeners.open) open();
+    await connecting;
+    expect(managed.state).toBe('open');
+
+    for (const close of listeners.close ?? []) close();
+
+    expect(drops, 'an established close must report a drop').toHaveLength(1);
+    expect(drops[0].willRetry, 'reopening is the caller’s decision').toBe(false);
+    expect(managed.state).toBe('closed');
   });
 });

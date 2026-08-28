@@ -56,11 +56,17 @@ export interface ManagedSocketEvents {
   /** A connection came up. `reconnected` distinguishes the first from the rest. */
   readonly onOpen?: (info: { readonly reconnected: boolean; readonly attempt: number }) => void;
   /**
-   * The connection dropped.
+   * The connection dropped — either an attempt that failed to open, or an
+   * established socket that closed.
    *
-   * Fired BEFORE any reconnect attempt, so a caller can mark its subscriptions
-   * stale. A caller that learns about the drop only after the socket is back has
-   * no way to tell that its event stream has a hole in it.
+   * Fired BEFORE any reconnect, so a caller can mark its subscriptions stale. A
+   * caller that learns about the drop only after the socket is back has no way to
+   * tell that its event stream has a hole in it.
+   *
+   * `willRetry` is true only for a failed *open*, which this class retries
+   * itself. An established socket closing reports `willRetry: false` and
+   * `attempt: 0`, because reopening it is the caller's decision — see the note on
+   * `#onEstablishedClose`.
    */
   readonly onDrop?: (info: { readonly willRetry: boolean; readonly attempt: number }) => void;
   /** Retries are exhausted or the policy said stop. Terminal. */
@@ -77,7 +83,16 @@ export interface SocketFactory {
 }
 
 /**
- * A socket that reconnects, and tells you when it did.
+ * A socket that retries its connection attempts, and reports when an established
+ * one drops.
+ *
+ * **It does not silently reopen a socket the caller is already holding.** An
+ * earlier version of this comment said "a socket that reconnects", which
+ * over-claimed in the direction that mattered: `connect()` retries an attempt
+ * that fails to *open*, and a drop after that is reported through `onDrop` for
+ * the caller to act on. `ResumingSubscription` is the caller that does, opening a
+ * fresh transport per attempt — which is required anyway, because a t3code
+ * WebSocket ticket is single-use.
  *
  * The URL is produced per attempt rather than captured once, because a t3code
  * WebSocket ticket is short-lived: reusing the original URL after a long backoff
@@ -165,10 +180,36 @@ export class ManagedSocket {
         reject(new Error(`socket error: ${String((event as { message?: string })?.message ?? 'unknown')}`));
       }) as never);
       socket.addEventListener('close', (() => {
-        if (settled) return;
+        if (settled) {
+          // An ESTABLISHED socket closed. Previously this branch returned and
+          // nothing else was listening, so `onDrop` never fired for a live
+          // connection loss and `state` stayed `'open'` on a dead socket — while
+          // `onDrop`'s own doc says it fires "BEFORE any reconnect attempt, so a
+          // caller can mark its subscriptions stale", which is the case it was
+          // written for and the only one it did not cover.
+          this.#onEstablishedClose();
+          return;
+        }
         settled = true;
         reject(new Error('socket closed before opening'));
       }) as never);
     });
+  }
+
+  /**
+   * A connection that was open has gone.
+   *
+   * This reports; it does not reconnect. `connect()` retries an attempt that
+   * fails to open, and the caller re-invokes it after a drop — `ResumingSubscription`
+   * does exactly that, opening a fresh transport per attempt because a t3code
+   * WebSocket ticket is single-use. Reconnecting here would hand the caller a
+   * socket it is not holding, so the honest division is: this class knows the
+   * connection died and says so; the caller decides what to reopen.
+   */
+  #onEstablishedClose(): void {
+    if (this.#state !== 'open') return;
+    this.#state = 'closed';
+    if (this.#stopped) return;
+    this.events.onDrop?.({ willRetry: false, attempt: 0 });
   }
 }

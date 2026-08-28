@@ -72,6 +72,15 @@ const run = (cmd) => execFileSync('node', [harness, cmd], { encoding: 'utf8' });
 const id = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 const now = () => new Date().toISOString();
 
+/** `git ...` in the repo, or null when it cannot be determined — never a guess. */
+const gitOrNull = (args) => {
+  try {
+    return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim();
+  } catch {
+    return null;
+  }
+};
+
 const results = [];
 
 /**
@@ -498,6 +507,18 @@ console.log(
   JSON.stringify(
     {
       criterion: 'Spec 146 Phase 2 live integration',
+      // Stamped so a re-run is distinguishable from a stale file. Without these,
+      // a run after a fix and the file it was meant to replace are byte-identical,
+      // and "I re-ran it" is unverifiable from the artifact — which a review lane
+      // pointed out about exactly that claim.
+      ranAt: new Date().toISOString(),
+      nodeVersion: process.version,
+      clientCommit: gitOrNull(['rev-parse', 'HEAD']),
+      clientTreeDirty: (() => {
+        const porcelain = gitOrNull(['status', '--porcelain']);
+        if (porcelain === null) return null;
+        return porcelain.split('\n').filter((line) => line.trim() && !line.startsWith('??')).length > 0;
+      })(),
       scenarios: results,
       limits: {
         scenarioC:

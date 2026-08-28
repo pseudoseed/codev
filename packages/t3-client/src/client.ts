@@ -29,6 +29,7 @@ import {
   interrupt,
   request,
   type ChunkFrame,
+  type ClientProtocolErrorFrame,
   type ExitFrame,
   type ServerFrame,
 } from './envelope.js';
@@ -55,6 +56,23 @@ export class NotConnectedError extends Error {
         `at the call site, rather than being held somewhere the caller cannot see.`,
     );
     this.name = 'NotConnectedError';
+  }
+}
+
+/**
+ * The server reported a protocol error against every in-flight request.
+ *
+ * Distinct from `RpcFailureError`, which is one request failing: this is the
+ * connection itself being declared unusable, so it is not attributable to the
+ * call that happens to receive it.
+ */
+export class ProtocolError extends Error {
+  constructor(readonly serverError: unknown) {
+    super(
+      `t3code reported a client protocol error, failing every in-flight request: ` +
+        `${JSON.stringify(serverError).slice(0, 300)}`,
+    );
+    this.name = 'ProtocolError';
   }
 }
 
@@ -129,11 +147,15 @@ export class T3Client {
     try {
       frames = decodeFrames(raw);
     } catch (error) {
-      if (this.options.onMalformed) {
-        this.options.onMalformed(error as Error);
-        return;
-      }
-      throw error;
+      // A frame we cannot read means the connection is saying something we do not
+      // understand — every pending request on it is now unanswerable. Failing
+      // them is not optional: previously `onMalformed` returned and the calls sat
+      // until their timeouts, and without `onMalformed` the throw happened inside
+      // the socket's message listener, where it reached no call site at all.
+      this.options.onMalformed?.(error as Error);
+      this.#failAllPending(error as Error);
+      if (!this.options.onMalformed) throw error;
+      return;
     }
     for (const frame of frames) this.#dispatch(frame);
   }
@@ -196,9 +218,34 @@ export class T3Client {
         }
         return;
       }
+      case 'ClientProtocolError': {
+        // Terminal for the whole connection, not information. Effect's own client
+        // converts this into a failure for every outstanding request, and it must
+        // here too: leaving them pending means each one waits out its timeout on
+        // a connection the server has already told us is broken.
+        const error = new ProtocolError((frame as ClientProtocolErrorFrame).error);
+        this.options.onOutOfBand?.(frame);
+        this.#failAllPending(error);
+        return;
+      }
       default:
         this.options.onOutOfBand?.(frame);
     }
+  }
+
+  /**
+   * Fail every in-flight request with the same error.
+   *
+   * Used for anything that ends the connection's usefulness rather than one
+   * request: a protocol error, an unreadable frame, a close. A caller waiting on
+   * a promise must learn that now, not when its own timeout expires.
+   */
+  #failAllPending(error: Error): void {
+    for (const [, pending] of this.#pending) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.#pending.clear();
   }
 
   /**

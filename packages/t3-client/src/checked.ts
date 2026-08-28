@@ -93,7 +93,12 @@ const schemas = t3Schemas as Record<string, unknown>;
  * are deliberately left to propagate.
  */
 export function checkPayload(method: string, role: PayloadRole, value: unknown): CheckOutcome {
-  const entry = methods[method];
+  // `Object.hasOwn`, not a bare lookup: `methods['constructor']` returns a
+  // function from the prototype, which is truthy, and the outcome then falls
+  // through to "names no output schema" instead of "no contract entry". Both are
+  // `unchecked` so the verdict was safe, but the reason was wrong, and a wrong
+  // reason on a diagnostic is how the next person loses an hour.
+  const entry = Object.hasOwn(methods, method) ? methods[method] : undefined;
   if (!entry) {
     return {
       status: 'unchecked',

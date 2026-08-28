@@ -336,11 +336,20 @@ export class ResumingSubscription {
 
       if (streamFailure !== null) throw new SubscriptionTerminatedError(streamFailure);
 
-      // A stream that delivered nothing and never synchronized is the shape that
-      // spins: resubscribe, get nothing, resubscribe. Back off on the streak so a
-      // server ending streams instantly does not become a hot loop. Reset as soon
-      // as one produces anything, so an ordinary reconnect pays no penalty.
-      this.#emptyStreak = synchronized || catchUp.length > 0 ? 0 : this.#emptyStreak + 1;
+      // Two shapes spin, and the first version of this guard only covered one.
+      //
+      //  - A stream that delivered nothing and never synchronized: resubscribe,
+      //    get nothing, resubscribe.
+      //  - A stream whose HANDLER failed. That one delivers and synchronizes —
+      //    the sync check runs before the failure guard — so resetting the streak
+      //    on `synchronized` exempted exactly the path the same iteration added.
+      //    Measured by a review lane at **88 reconnects in 100ms**, each one a
+      //    WebSocket ticket and an upgrade against a real server.
+      //
+      // So a fruitless attempt is one that produced no progress OR ended in a
+      // handler failure. Reset only when an attempt actually got somewhere.
+      const madeProgress = (synchronized || catchUp.length > 0) && handlerFailure === null;
+      this.#emptyStreak = madeProgress ? 0 : this.#emptyStreak + 1;
       const backoff =
         this.#emptyStreak > 0 ? Math.min(50 * 2 ** (this.#emptyStreak - 1), 5_000) : 0;
 
