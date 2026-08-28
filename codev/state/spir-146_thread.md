@@ -1562,3 +1562,42 @@ and still be pointed away from the fix.** Same defect as a test pointed away fro
 the bug, one level up, and it produces the more dangerous reading: a green
 mutation result reads as "this test is worthless" and would have had me rewrite
 a test that was already right.
+
+## Phase 2 iteration 3 — eight findings, and the same shape twice
+
+codex REQUEST_CHANGES (4), claude REQUEST_CHANGES (1 blocking, 3 non-blocking).
+All eight accepted, none disputed. I opened every cited file before accepting,
+and checked the two server-side claims against the vendored source rather than
+against the review text.
+
+**The blocking one is the third shape again, from the same method.**
+`reconcileTo`, added in iteration 2 to make a past-the-head gap recoverable, is
+forward-only — and the past-the-head gap is by construction the case where the
+server's head is *below* the cursor. Every value a caller could reconcile to is
+below `applied`, so the early return fires and the call does nothing. The
+recovery could not run in the one scenario its own doc comment named.
+
+The silence is the worse half. `queuedThrough` starts each attempt at `applied`,
+so with the cursor stuck high, every live event the restored server emits is
+discarded as already-queued: no `onValue`, no `onHandlerError`, no second gap,
+because the stream is synchronized and healthy. One gap reported, then permanent
+deafness that looks like a quiet thread.
+
+So `reconcileTo` has now produced a defect in two consecutive iterations — first
+by giving `SequenceCursor.apply` a second caller and exposing its
+non-monotonicity, then by being unable to perform the move it exists for. Both
+are the same question unasked: **what does this fix make newly possible?**
+
+`resetTo` is the fix: explicit, either-direction, persists, and closes the
+in-flight stream so `queuedThrough` is re-derived. `reconcileTo` stays
+forward-only, because a late snapshot must not be able to walk the cursor back.
+
+**The covering test was pointed one case to the left.** It reconciled
+5,000 → 9,000, which is the `replayGap > 1000` branch, while its comment claimed
+criterion D's ahead-of-head scenario. A comment naming the right scenario over a
+test exercising the wrong one is the version of "pointed away from the bug" that
+survives review, because the reader checks the comment.
+
+Seventeen fixes now go through the mutation harness and all seventeen go red
+without their fix. Ten of the 27 added tests remain asserted, and the plan says
+which are which rather than letting the count imply otherwise.

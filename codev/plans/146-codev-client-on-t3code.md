@@ -444,6 +444,17 @@ claim stops being a one-off observation and becomes a tested property.
 - [x] Reconnect resubscribes with `afterSequence` at the last applied sequence. **`subscription.ts`.**
       `socket.ts` restores a transport; this restores the subscription, which is a different job
       nothing was doing. A first subscription sends no cursor and its snapshot is not a gap.
+
+      **Recovering a past-the-head gap needs a BACKWARDS move, and iteration 2's `reconcileTo` was
+      forward-only.** `ws.ts:1492-1526` takes the snapshot path when `replayGap = headSequence -
+      afterSequence` is negative, so every value a caller could reconcile to is below `applied` and
+      the early return made the call a no-op — the documented recovery could not run in the one
+      scenario its own comment named. Worse than a failed recovery: `queuedThrough` starts each
+      attempt at `applied`, so every live event a restored server emitted was discarded as
+      already-queued, with no `onValue`, no `onHandlerError` and no second gap. One gap reported,
+      then permanent silence that looked like a quiet thread. `resetTo` is the explicit,
+      either-direction reset; it persists and ends the in-flight stream. `reconcileTo` stays
+      forward-only so a late snapshot cannot walk the cursor back.
 - [x] If the server answers a resubscription with a snapshot instead of the requested range, the
       client reports a **gap** as its own distinct signal. It does not return an empty range, and
       it does not return a range that looks complete. "I could not tell" and "there was nothing"
@@ -477,15 +488,17 @@ claim stops being a one-off observation and becomes a tested property.
       "refused as a duplicate" needs a different response from "the request failed". The first
       implementation threw a plain `Error` with the payload stringified into the message, which
       made that distinction reachable only by matching on text.
-- [x] Tests for this phase. 75 in `spec-146-t3-client.test.ts`, plus six live scenarios. (59 at
-      the end of iteration 1; the 16 added since cover the review findings.)
+- [x] Tests for this phase. 86 in `spec-146-t3-client.test.ts`, plus six live scenarios. (59 at
+      the end of iteration 1; the 27 added since cover the review findings.)
 
-      **Eight of those are measured, not asserted.** `codev/research/146-phase2-mutation-check.py`
-      reverts one fix at a time and reports whether its test goes red: the cursor monotonicity
-      guard, the handler-failure backoff, both frame-shape validations, the `ClientProtocolError`
-      fail-all, the idle-timer rearm, the terminal-error deny-list, and the stop-after-handler-
-      failure chain guard. All eight fail without their fix. The remaining eight are asserted, and
-      this sentence says so rather than letting the count imply otherwise.
+      **Seventeen of those are measured, not asserted.** `codev/research/146-phase2-mutation-check.py`
+      reverts one fix at a time and reports whether its test goes red. All seventeen fail without
+      their fix: the cursor monotonicity guard, the handler-failure backoff, all four frame-shape
+      validations, the `ClientProtocolError` fail-all, the idle-timer rearm, the three terminal
+      error names, the stop-after-handler-failure chain guard, `resetTo`'s backwards move, the
+      deferred `onResume`, the `stop()`-during-backoff wake, and the `Interrupt` on a shape-check
+      rejection. The remaining ten are asserted, and this sentence says so rather than letting the
+      count imply otherwise.
 
       One of the eight first reported STILL PASSES, and the test was fine: the mutation had been
       pointed at the duplicate filter rather than at the chain guard that actually stops the
