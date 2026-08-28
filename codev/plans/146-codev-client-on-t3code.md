@@ -445,7 +445,9 @@ claim stops being a one-off observation and becomes a tested property.
       ASC` and *then* filtered to the subscribed thread (`OrchestrationEventStore.ts:160-181`,
       `ws.ts:1498-1508`) — so a correct replay on a server with any second active thread is sparse
       by construction, and that check fired on every healthy resume. It agreed with its unit tests,
-      which fed it consecutive integers, and with the live run, which had one active thread.
+      which fed it consecutive integers and so shared its premise. The live run did **not** agree:
+      it recorded `not-demonstrated` with `observedSequences: []`, having never seen a
+      server-issued sequence. It abstained and said so, and the abstention was read as support.
       A hole inside a replayed range is **not detectable from sequence numbers**, the code now says
       so, and the detectable gap is the protocol-level one: the server declined the cursor.
 - [x] With the server unreachable, every call fails loudly at the call site. There is no silent
