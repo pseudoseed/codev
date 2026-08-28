@@ -655,6 +655,17 @@ involved.
 - [x] Role prompts are delivered as the first turn's content, replacing `buildScriptRoleInjection`
       and `buildRoleInjection`. There is no argv and no shell fragment to build, because there is
       no CLI. The role text is also written into the worktree for a human to read.
+
+      **Half-met until iteration 2, and the live record is what showed it.** `roleContent` was
+      written to `.builder-role.md` and sent nowhere, while `turn.ts` claimed the opposite;
+      scenario A's first turn carried only its own text. `DriverThread` now holds the role from
+      `create` and composes it into whichever turn starts first, consumed only after the start is
+      ACCEPTED — a role delivered twice is survivable, a builder running with none is not.
+
+      Proven live rather than by payload shape alone: the thread is created with a role carrying
+      a token, and the model answers the first turn with it (`roleDeliveredInFirstTurn: true`,
+      `roleNotRepeatedAfterwards: true`). A role the harness passed and the agent never received
+      looks identical from outside until something asks the model for what only the role knew.
 - [x] `worktree-setup.ts` reimplements the Claude write-guard from #1018 and `opencode.json`
       placement. If either cannot be reproduced, its absence is recorded explicitly in the phase
       commit rather than discovered later — the spec permits deliberate acceptance, not silent

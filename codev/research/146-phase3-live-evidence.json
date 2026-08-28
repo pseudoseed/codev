@@ -1,9 +1,9 @@
 {
   "criterion": "Spec 146 Phase 3 live integration",
-  "ranAt": "2026-08-28T22:43:20.398Z",
+  "ranAt": "2026-08-28T23:23:40.347Z",
   "nodeVersion": "v22.22.2",
   "t3Version": "t3@0.0.35",
-  "clientCommit": "05a37e44215d8eba9e374cf6ef90c838ca9f8113",
+  "clientCommit": "5f6beaa9ea3fb4acb985f97a452f29d33ba2f31d",
   "clientTreeDirty": false,
   "harness": "codex",
   "model": "gpt-5.6-luna",
@@ -12,19 +12,21 @@
       "scenario": "A: a thread on a worktree, a turn to settle, an external write read back",
       "state": "demonstrated",
       "stateMeaning": "Ran against a live pinned server and passed.",
-      "turn1": "TURN1_READY",
-      "turn2": "I’ll read `external.txt` from the working directory and return its contents in the requested format.EXTERNAL_SEEN_EXT_XNY5R8EM",
+      "turn1": "TURN1_READY_ROLE_C5X082JZ",
+      "turn2": "I’ll read `external.txt` from the current working directory and return its contents in the requested format.EXTERNAL_SEEN_EXT_YZKR3BCR",
+      "roleDeliveredInFirstTurn": true,
+      "roleNotRepeatedAfterwards": true,
       "checkRanInWorktree": true,
       "checkShell": "bash",
-      "note": "two turns settled, and the second read a file written between them by a process porch spawned"
+      "note": "two turns settled, the FIRST carried the role prompt (the model answered with a token only the role contained), and the second read a file written between them by a process porch spawned"
     },
     {
       "scenario": "B: a turn interrupted mid-shell settles, and its side effect is absent",
       "state": "not-demonstrated",
       "stateMeaning": "The scenario did not run to a verdict — preconditions absent, or nothing to observe. This says NOTHING about whether the code works, and is not a failure.",
-      "turnId": "01a04a8a-de26-7bc1-9663-79597d13b6b1",
+      "turnId": "01a04aaf-cd97-7523-8b23-d4c0409cdc96",
       "sawToolActivity": true,
-      "settledAfterMs": 23,
+      "settledAfterMs": 37,
       "settledWithActiveTurnIdNull": true,
       "sideEffectAtSettle": "ABSENT",
       "sideEffectAfterCommandWindow": "PRESENT",
@@ -59,11 +61,11 @@
       "scenario": "D: a subscription under traffic survives 360s without a timeout or a resubscription",
       "state": "demonstrated",
       "stateMeaning": "Ran against a live pinned server and passed.",
-      "elapsedMs": 372895,
+      "elapsedMs": 375356,
       "heartbeats": 17,
       "subscriptionAttempts": 1,
-      "handlerCalls": 155,
-      "note": "held 373s under traffic on ONE subscription attempt; the old 300s total budget would have torn it down"
+      "handlerCalls": 153,
+      "note": "held 375s under traffic on ONE subscription attempt; the old 300s total budget would have torn it down"
     },
     {
       "scenario": "E: a driver killed between the journal write and the dispatch does not apply the command twice",
@@ -75,14 +77,14 @@
           {
             "mode": "journal-before-dispatch",
             "about": "to journal, then die before dispatching",
-            "commandId": "dfbb2b15-4aaa-473c-bb5b-275208ea8503"
+            "commandId": "25a2d072-c1d0-477a-bb9c-39fbcaba3b3f"
           }
         ],
         "pendingAfterCrash": [
-          "dfbb2b15-4aaa-473c-bb5b-275208ea8503"
+          "25a2d072-c1d0-477a-bb9c-39fbcaba3b3f"
         ],
         "replayed": [
-          "dfbb2b15-4aaa-473c-bb5b-275208ea8503"
+          "25a2d072-c1d0-477a-bb9c-39fbcaba3b3f"
         ],
         "applicationsObserved": 1,
         "appliedExactlyOnce": true
@@ -93,14 +95,14 @@
           {
             "mode": "journal-after-dispatch",
             "about": "to journal, dispatch, then die before recording the outcome",
-            "commandId": "df41a693-e6ab-4078-9099-5ff67a842794"
+            "commandId": "931cf441-64b3-44ee-98e6-0391c4186f53"
           }
         ],
         "pendingAfterCrash": [
-          "df41a693-e6ab-4078-9099-5ff67a842794"
+          "931cf441-64b3-44ee-98e6-0391c4186f53"
         ],
         "replayed": [
-          "df41a693-e6ab-4078-9099-5ff67a842794"
+          "931cf441-64b3-44ee-98e6-0391c4186f53"
         ],
         "applicationsObserved": 1,
         "appliedExactlyOnce": true
