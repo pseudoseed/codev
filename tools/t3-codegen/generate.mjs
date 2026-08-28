@@ -421,7 +421,32 @@ rmSync(stagingDir, { recursive: true, force: true });
 
 if (checkOnly) {
   if (drifted.length > 0) {
-    fail(`Generated artifacts are stale: ${drifted.join(', ')}. Run \`pnpm --filter @cluesmith/t3-codegen generate\`.`);
+    const hashMoved = drifted.includes('source-hash.json');
+    const shapesMoved = drifted.includes('schema.json') || drifted.includes('schema.ts');
+
+    // The three outcomes are deliberately not collapsed into two. A source-hash
+    // change with an unchanged schema is the case the whole two-layer design
+    // exists for: the emitter is blind to constraints behind a transform, so
+    // "no schema diff" is NOT "no effect" — it is "effect unknown". Reporting
+    // that as a pass, or as an ordinary staleness, is the failure this guards.
+    if (hashMoved && !shapesMoved) {
+      fail(
+        `UPSTREAM CHANGED; EFFECT ON CONSUMED SHAPES UNKNOWN.\n` +
+          `  source-hash.json moved: the pinned contract source is not what it was.\n` +
+          `  schema.json did not: the emitter sees no difference.\n\n` +
+          `This is NOT a false positive and NOT a formatting nit. All 20 schemas in\n` +
+          `generated/LOSSY.md — every branded id in the contract — emit unconstrained, so a\n` +
+          `relaxed constraint lands exactly here with a zero-byte schema diff.\n` +
+          `Read the source diff before regenerating. Stale artifacts: ${drifted.join(', ')}`,
+      );
+    }
+    fail(
+      `Generated artifacts are stale: ${drifted.join(', ')}.\n` +
+        (shapesMoved
+          ? `A shape Codev consumes changed — diff schema.json to see what.\n`
+          : '') +
+        `Run \`pnpm --filter @cluesmith/t3-codegen generate\`.`,
+    );
   }
   console.log('[t3-codegen] artifacts are up to date');
 } else {
