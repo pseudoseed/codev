@@ -11,10 +11,12 @@ so these derived artifacts leave this repository inside a distributed package. M
 its notice to travel with the distribution, which is why this file sits beside them rather
 than in a place a packaging step might drop.
 
+The notice below is reproduced verbatim from `LICENSE` at the pinned commit.
+
 ```
 MIT License
 
-Copyright (c) t3code contributors
+Copyright (c) 2026 T3 Tools Inc.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

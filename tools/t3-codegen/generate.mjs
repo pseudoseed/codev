@@ -204,6 +204,13 @@ function exportedConstNames(file) {
  * `Schema.brand(...)` sit on the decoded side of the transforms in question, so
  * both are constraints the emitter can lose.
  */
+function sourceTransforms(file, name) {
+  const src = readFileSync(join(stagingDir, file), 'utf8');
+  const re = new RegExp(`export const ${name}\\s*=([\\s\\S]*?);\\n`, 'm');
+  const body = re.exec(src)?.[1] ?? '';
+  return /Schema\.decodeTo\(/.test(body);
+}
+
 function sourceConstrains(file, name) {
   const src = readFileSync(join(stagingDir, file), 'utf8');
   const re = new RegExp(`export const ${name}\\s*=([\\s\\S]*?);\\n`, 'm');
@@ -259,6 +266,24 @@ async function scanForLoss() {
         (typeof candidate === 'object' || typeof candidate === 'function') && candidate.ast !== undefined;
 
       if (isSchema) {
+        // A `decodeTo` transform with NO check still loses something: the emitted
+        // schema records nothing about the decoding. `TrimmedString` is that case —
+        // it trims, and `{"type":"string"}` does not say so, so a consumer cannot
+        // tell that " x " and "x" are the same value to the server. The plan names
+        // it among the three hardest cases, so it is reported rather than skipped
+        // for lacking a `.check(`.
+        if (!sourceConstrains(file, name) && sourceTransforms(file, name)) {
+          try {
+            const emitted = emit(candidate);
+            if (isBare(emitted)) {
+              lossy.push({
+                file, name, emitted: JSON.stringify(emitted),
+                note: 'transform not represented: decoding alters the value and the schema does not say so',
+              });
+            }
+          } catch { /* unrepresented is recorded elsewhere */ }
+          continue;
+        }
         if (!sourceConstrains(file, name)) continue;
         let emitted;
         try {
@@ -397,6 +422,20 @@ dtsLines.push(`export type T3MethodName = ${Object.keys(methods).map((m) => JSON
 
 // ---------------------------------------------------------------- reports
 
+// The upstream notice is read from the pinned checkout and reproduced VERBATIM.
+// An earlier version paraphrased the copyright line as "t3code contributors";
+// upstream actually says "Copyright (c) 2026 T3 Tools Inc." MIT requires the
+// notice, not a summary of it, so it is never hand-written here.
+const licensePath = join(t3Root, 'LICENSE');
+if (!existsSync(licensePath)) {
+  fail(
+    `No LICENSE at ${licensePath}. These artifacts are derived from MIT-licensed source and\n` +
+      `ship inside a published package; the notice must travel with them. Refusing to emit\n` +
+      `attribution invented from memory.`,
+  );
+}
+const upstreamLicense = readFileSync(licensePath, 'utf8').trimEnd();
+
 const attribution = `# Attribution
 
 The files in this directory are **generated from t3code**, which is MIT licensed.
@@ -410,28 +449,10 @@ so these derived artifacts leave this repository inside a distributed package. M
 its notice to travel with the distribution, which is why this file sits beside them rather
 than in a place a packaging step might drop.
 
+The notice below is reproduced verbatim from \`LICENSE\` at the pinned commit.
+
 \`\`\`
-MIT License
-
-Copyright (c) t3code contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+${upstreamLicense}
 \`\`\`
 `;
 
@@ -468,7 +489,12 @@ Generated. Schemas the emitter could not represent at all. An entry here is more
 than one in LOSSY.md: there is no JSON Schema for it, so \`shape-check.ts\` cannot check it
 in any form.
 
-${unrepresented.length === 0 ? '_None. Every schema in the closure was representable._' : unrepresented.map((u) => `- \`${u.name}\` — ${u.reason}`).join('\n')}
+**Scope:** this covers the ${Object.keys(schemas).length} schemas Codev actually consumes plus every
+schema reached by the loss scan — not literally every export in the closure. A schema nothing here
+imports is never emitted, so it can be neither represented nor unrepresented. Claiming "every schema
+in the closure was representable" would assert something this tool never tested.
+
+${unrepresented.length === 0 ? `_None of the ${Object.keys(schemas).length} consumed schemas failed to emit._` : unrepresented.map((u) => `- \`${u.name}\` — ${u.reason}`).join('\n')}
 `;
 
 // ---------------------------------------------------------------- write / check

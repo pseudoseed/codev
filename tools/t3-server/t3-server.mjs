@@ -24,7 +24,7 @@
  */
 
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, openSync, closeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -73,7 +73,24 @@ function acquire() {
     say(`fetching ${pin.commit.slice(0, 12)}...`);
     gitIn(t3Root, 'fetch', 'origin');
   }
-  say('acquire ok — run `verify` before trusting it');
+
+  // Actually check it out. An earlier version fetched and then said "acquire ok",
+  // leaving the tree wherever it already was — so `acquire` reported success
+  // without acquiring anything, and only `verify` would have noticed.
+  const head = gitIn(t3Root, 'rev-parse', 'HEAD');
+  if (head !== pin.commit) {
+    const dirty = gitIn(t3Root, 'status', '--porcelain');
+    if (dirty) {
+      die(
+        MISMATCH,
+        `Checkout has uncommitted changes; refusing to check out ${pin.commit.slice(0, 12)} over them.\n${dirty}`,
+      );
+    }
+    say(`checking out ${pin.commit.slice(0, 12)} (was ${head.slice(0, 12)})`);
+    gitIn(t3Root, 'checkout', '--detach', pin.commit);
+  }
+
+  verify();
 }
 
 // ------------------------------------------------------------------ verify
@@ -145,19 +162,25 @@ function start() {
 
   say(`starting on 127.0.0.1:${port} with data dir ${dataDir}`);
 
+  const log = join(runtimeDir, 'server.log');
+  writeFileSync(log, '');
+
+  // The child's stdio goes STRAIGHT to a file descriptor, never through a pipe
+  // this process holds. An earlier version attached `child.stdout.on('data')`
+  // handlers here: the server came up fine and then died the moment its parent
+  // did, because writing to a broken pipe kills it. A harness whose server only
+  // survives while the shell that started it survives is not a harness.
+  const logFd = openSync(log, 'a');
+
   // Loopback only. Spec 146's Security constraints make loopback the default and
   // exposing an interface an explicit action; a test harness never exposes one.
   const child = spawn(
     'npx',
     ['--yes', 't3@latest', 'serve', '--host', '127.0.0.1', '--port', String(port), '--base-dir', dataDir, t3Root],
-    { cwd: t3Root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
+    { cwd: t3Root, detached: true, stdio: ['ignore', logFd, logFd] },
   );
 
-  const log = join(runtimeDir, 'server.log');
-  writeFileSync(log, '');
-  child.stdout.on('data', (d) => writeFileSync(log, d, { flag: 'a' }));
-  child.stderr.on('data', (d) => writeFileSync(log, d, { flag: 'a' }));
-
+  closeSync(logFd);
   writeFileSync(pidFile, String(child.pid));
   writeFileSync(portFile, String(port));
   child.unref();
@@ -168,10 +191,59 @@ function start() {
   say(`checkout is pinned, the server binary is not.`);
 }
 
+/**
+ * Wait until the server answers, with a bound. Returns true when it is up.
+ *
+ * `start` returning is NOT evidence the server is up — `npx` may still be
+ * downloading. A phase that dispatches immediately after `start` would fail for
+ * a reason that has nothing to do with what it was testing.
+ */
+async function waitReady(timeoutMs = 180_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(3000) });
+      if (response.status > 0) return true;
+    } catch {
+      /* not up yet */
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  return false;
+}
+
+/** Read the pairing token the server prints on startup. */
+function pairingToken() {
+  const log = join(runtimeDir, 'server.log');
+  if (!existsSync(log)) return null;
+  return /Token:\s*([A-Z0-9]+)/.exec(readFileSync(log, 'utf8'))?.[1] ?? null;
+}
+
+async function ready() {
+  const up = await waitReady();
+  if (!up) die(MISMATCH, `Server did not answer on 127.0.0.1:${port} within the timeout.`);
+  const token = pairingToken();
+  if (!token) die(UNDETERMINED, 'Server is answering but printed no pairing token; cannot authenticate.');
+  say(`ready on 127.0.0.1:${port}; pairing token present`);
+  console.log(JSON.stringify({ port, token, pairingUrl: `http://127.0.0.1:${port}/pair#token=${token}` }, null, 2));
+}
+
 function stop() {
   const pid = readPid();
   if (!pid) {
-    say('nothing running');
+    // Still sweep the port: a previous run may have left a listener with no
+    // matching pid file, and reporting "nothing running" while a server holds
+    // the port is the same lie as a check that passes without looking.
+    try {
+      const holders = execFileSync('lsof', ['-t', `-iTCP:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' })
+        .split('\n').map((l) => Number(l.trim())).filter((n) => Number.isInteger(n) && n > 0);
+      for (const holder of holders) {
+        try { process.kill(holder, 'SIGTERM'); } catch { /* gone */ }
+      }
+      say(holders.length > 0 ? `no pid file, but released port ${port} (pids ${holders.join(', ')})` : 'nothing running');
+    } catch {
+      say('nothing running');
+    }
     return;
   }
   try {
@@ -182,6 +254,20 @@ function stop() {
     } catch { /* already gone */ }
   }
   rmSync(pidFile, { force: true });
+
+  // The recorded pid is the `npx` wrapper; the server is its grandchild and can
+  // outlive a group signal. Without this the port stays bound, and a later
+  // "cold" start would silently reuse the previous server — making a
+  // start-twice proof a proof of nothing.
+  try {
+    const holders = execFileSync('lsof', ['-t', `-iTCP:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' })
+      .split('\n').map((l) => Number(l.trim())).filter((n) => Number.isInteger(n) && n > 0);
+    for (const holder of holders) {
+      try { process.kill(holder, 'SIGTERM'); } catch { /* gone */ }
+    }
+    if (holders.length > 0) say(`released port ${port} (pids ${holders.join(', ')})`);
+  } catch { /* lsof exits non-zero when nothing is listening */ }
+
   say(`stopped pid ${pid}`);
 }
 
@@ -213,9 +299,10 @@ switch (command) {
   case 'acquire': acquire(); break;
   case 'verify': verify(); break;
   case 'start': start(); break;
+  case 'ready': await ready(); break;
   case 'stop': stop(); break;
   case 'status': status(); break;
   default:
-    console.error('usage: t3-server.mjs <acquire|verify|start|stop|status>');
+    console.error('usage: t3-server.mjs <acquire|verify|start|ready|stop|status>');
     process.exit(UNDETERMINED);
 }
