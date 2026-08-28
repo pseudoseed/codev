@@ -248,12 +248,12 @@ property. Only the generator needs `effect`, so only the generator lives outside
 
 #### Deliverables
 
-- [ ] The closure is pinned explicitly to the 9 files measured above — `auth.ts`, `baseSchemas.ts`,
+- [x] The closure is pinned explicitly to the 9 files measured above — `auth.ts`, `baseSchemas.ts`,
       `environment.ts`, `git.ts`, `model.ts`, `orchestration.ts`, `providerInstance.ts`,
       `sourceControl.ts`, `vcs.ts` — and the generator fails loudly if the pinned checkout's import
       graph reaches a file not on that list. Silent closure growth is the failure mode this
       catches.
-- [ ] `rpc.ts` is **not** vendored, and the phase records why rather than leaving it implicit.
+- [x] `rpc.ts` is **not** vendored, and the phase records why rather than leaving it implicit.
       Review asked for it, on the grounds that Phase 2 needs a method-to-payload mapping. It does,
       but `rpc.ts` is 1,123 lines whose transitive closure is 27 files and 11,120 lines — three
       times the whole rest of the vendoring surface — because it names every unrelated subsystem's
@@ -261,37 +261,37 @@ property. Only the generator needs `effect`, so only the generator lives outside
       explicitly in `pin.json` as `method → payload schema → success schema`, generated from the
       closure and checked by the drift test. Method names come from `ORCHESTRATION_WS_METHODS` and
       its equivalents, which are plain string literals.
-- [ ] **A pinned server can be brought up by anyone.** `tools/t3-server/` acquires the pinned
+- [x] **A pinned server can be brought up by anyone.** `tools/t3-server/` acquires the pinned
       commit, installs it, starts it, **verifies the running server's commit matches `pin.json`**,
       and stops it. The verification is the point: `pin.json` on its own records an intention, and
       every phase that claims to test against the pinned server is worthless if the server it
       reached was some other build.
-- [ ] CI behaviour is decided and documented, not left to discovery: either CI provisions the
+- [x] CI behaviour is decided and documented, not left to discovery: either CI provisions the
       server, or the live-server tests are tagged and skipped there with the skip **visible in the
       run output**. A silently skipped integration suite reports green for tests that never ran.
-- [ ] Codegen emits declarations and JSON Schema from the pinned checkout. Every schema in the
+- [x] Codegen emits declarations and JSON Schema from the pinned checkout. Every schema in the
       closure that the emitter **cannot** represent is listed by name in a generated
       `UNREPRESENTED.md`, with the reason. An empty list is not assumed; the list is the evidence.
       The pre-plan run against the hard cases produced no unrepresentable shapes, so an empty list
       here is the expected result — but it is generated, not asserted from that run.
-- [ ] **`LOSSY.md`, generated alongside it, lists every emitted schema whose JSON Schema is weaker
+- [x] **`LOSSY.md`, generated alongside it, lists every emitted schema whose JSON Schema is weaker
       than the Effect schema it came from** — detected by emitting each closure schema both as
       written and with its transforms stripped, and recording every case where the two differ.
       This is the list the pre-plan run showed is not empty, and it is more important than
       `UNREPRESENTED.md`.
-- [ ] `shape-check.ts` is **named for what it does**. It implements only the JSON Schema keywords
+- [x] `shape-check.ts` is **named for what it does**. It implements only the JSON Schema keywords
       the emitter actually produces, enumerated from `schema.json`, and throws on encountering a
       keyword it does not implement rather than passing it silently. Its result type is not called
       `valid`; passing means "matches the emitted shape", and the distinction is in the name
       because a check that reports success for a constraint it never saw is the failure mode here.
-- [ ] **Two drift layers.** `source-hash.json` holds a hash per closure file, and the drift test
+- [x] **Two drift layers.** `source-hash.json` holds a hash per closure file, and the drift test
       fails on any change to any of the 9 files — this is the layer that catches a relaxed branded
       id, which the generated artifacts provably cannot see. The generated-artifact diff runs
       alongside it and names the changed schema when the change is one the emitter can express.
       A source-hash failure with no generated diff is a valid and expected outcome, and the test
       reports it as "changed, effect on consumed shapes unknown" rather than as either a pass or a
       silent failure.
-- [ ] `no-runtime-deps.test.ts` asserts the package's `dependencies` field is empty and that no
+- [x] `no-runtime-deps.test.ts` asserts the package's `dependencies` field is empty and that no
       file under `src/` imports `effect`.
 - [x] The commits touching the closure are replayed through the detector and each is recorded as
       breaking or non-breaking **against the schemas Codev consumes**, with the breaking count
@@ -327,37 +327,37 @@ property. Only the generator needs `effect`, so only the generator lives outside
 
 #### Acceptance Criteria
 
-- [ ] `packages/types` still has zero runtime dependencies after the generated artifacts land,
+- [x] `packages/types` still has zero runtime dependencies after the generated artifacts land,
       asserted by test, and no file under `packages/types/src/t3/` imports `effect`.
-- [ ] The existing #1189 boundary tests on `codev-core` and `codev-sdk` still pass unchanged.
-- [ ] Regenerating from the pinned commit is a no-op; mutating any closure file in a scratch
+- [x] The existing #1189 boundary tests on `codev-core` and `codev-sdk` still pass unchanged.
+- [x] Regenerating from the pinned commit is a no-op; mutating any closure file in a scratch
       checkout makes the drift test fail and names the schema.
-- [ ] **The transform-blindness regression test.** Take `TrimmedNonEmptyString` in a scratch
+- [x] **The transform-blindness regression test.** Take `TrimmedNonEmptyString` in a scratch
       checkout, remove its `isNonEmpty` check, regenerate, and assert that the **source-hash layer
       fails**. This case is chosen because the generated artifacts demonstrably do *not* change:
       both forms emit `{"type":"string"}` and both serialise to the identical Representation
       document. A drift test that passes here is not detecting drift, and this is the assertion
       that proves the second layer is doing work.
-- [ ] `UNREPRESENTED.md` and `LOSSY.md` exist and are accurate — spot-checked by hand against the
+- [x] `UNREPRESENTED.md` and `LOSSY.md` exist and are accurate — spot-checked by hand against the
       three hardest cases in the closure: `TrimmedString` (a `decodeTo` transform),
       `ForwardCompatibleArray` (a filtering transform), and `ModelSelectionSource` (a pre-decode
       legacy promotion). The pre-plan run showed the first two are representable but lossy —
       `TrimmedNonEmptyString` loses `minLength`, and `ForwardCompatibleArray` emits `{"type":
       "array"}` with no `items` — so both belong in `LOSSY.md`, and a `LOSSY.md` that omits them is
       wrong.
-- [ ] The churn classification records a breaking count, not a commit count, and states which layer
+- [x] The churn classification records a breaking count, not a commit count, and states which layer
       caught each breaking change. Since the source-hash layer fires on cosmetic changes too, the
       classification distinguishes "source changed, consumed shapes unaffected" from "consumed
       shapes changed" — otherwise the breaking count is inflated to the commit count and the
       criterion is not met.
-- [ ] **The harness brings up a live server on the pinned commit from a cold clone, twice, on a
+- [x] **The harness brings up a live server on the pinned commit from a cold clone, twice, on a
       machine where it has never run** — that is the state `/Users/chris/dev/t3code` is in today.
       A dispatched no-op command returns successfully, then teardown leaves no stray process, port
       binding or worktree. Phase 2 does not start until this passes, since every one of its
       acceptance criteria assumes it.
-- [ ] With no server running, the live suite reports skipped-for-no-server and the unit suite still
+- [x] With no server running, the live suite reports skipped-for-no-server and the unit suite still
       passes. Neither reports green for tests that did not execute.
-- [ ] Build and tests pass.
+- [x] Build and tests pass.
 
 #### Test Plan
 

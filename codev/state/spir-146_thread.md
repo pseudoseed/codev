@@ -267,3 +267,162 @@ that serves it. If those diverge, `verify` cannot see it.
   and passing the schema to `shapeCheck` removes the JSON-import machinery, and
   with it the copy-into-dist step that would pass CI and fail at runtime.
 - Criterion 12 marked done with the real figure and its caveats.
+
+### Phase 1 review round: three lanes, one defect, and it was mine
+
+gemini, codex and claude all returned REQUEST_CHANGES and all three independently
+found the same thing. They were right and it was serious.
+
+**`emit()` returned `doc.schema ?? doc` and threw away `doc.$defs`.** That left
+**105 dangling `$ref`s** in `schema.json`. `shape-check.ts` listed `$ref` as a
+supported keyword but never resolved it — so it walked into nothing, found no
+constraints, and returned `matches: true` at all 105 positions. `types.d.ts` fell
+through to `unknown` at 111 positions. Claude confirmed it empirically:
+`defaultModelSelection: 12345` returned `matches: true`, zero mismatches.
+
+That is the **fifth** instance of the same failure shape on this project — a
+check reporting success while measuring nothing — and the first one that was in
+the deliverable rather than in my tooling. The module whose entire stated purpose
+is "I could not tell must never be spelled the same as yes" was doing exactly
+that.
+
+`shapeCheck` had **no tests at all**, which is why nothing caught it. It now has
+18, weighted towards the ways a checker can lie: an unresolvable `$ref` throws,
+an unimplemented keyword throws, every generated schema is walked asserting no
+`UnresolvedRefError`, and one test asserts `shapeCheck` **accepts** `cwd: ''`
+because the server rejects it — so nobody can mistake `matches` for validity.
+
+Claude also verified a claim before recommending the fix, and it changed the fix:
+`#/$defs/Objects_` names four *different* shapes across four documents, so merging
+definitions naively would alias unrelated schemas. The fix namespaces per
+top-level schema.
+
+**Other findings, all verified before acting:**
+
+- **Licence.** ATTRIBUTION.md said "Copyright (c) 2026 t3code contributors".
+  Upstream says "Copyright (c) 2026 T3 Tools Inc." I paraphrased a legal notice
+  from memory. It is now read verbatim from the pinned `LICENSE` at generation
+  time, and generation fails if that file is absent.
+- **A silent skip in my own test.** The hash-verification test `return`ed early
+  with a `console.warn` when no checkout was present, and vitest reported it
+  green. Now `ctx.skip()`.
+- **`TrimmedString` missing from LOSSY.md.** My detector required a `.check(`;
+  `TrimmedString` is a bare `decodeTo`. But a transform with no check still loses
+  information — it trims, and `{"type":"string"}` does not say so. 22 lossy now.
+- **`UNREPRESENTED.md` overclaimed**, saying every schema in the closure was
+  representable while only covering schemas that passed through `record()`.
+- **`ForwardCompatibleArray` missing** — a function returning a schema, so it had
+  no `.ast` and was skipped. Combinators are now probed by application.
+
+**Rejected:** codex said the loss detector should implement "transform-stripping
+comparison" as planned. The heuristic finds all three named cases and the
+committed probe proves the underlying claim directly; a second mechanism would
+add surface without adding evidence.
+
+### The criterion that gates Phase 2 — passed
+
+`tools/t3-server/smoke.mjs`, two runs, both green: stop → acquire → verify →
+start → ready → authenticate → dispatch a real `orchestration.dispatchCommand` →
+`Exit: Success` → port free after teardown.
+
+**It also confirmed Phase 2's central premise early.** `smoke.mjs` speaks the
+`layerJson` envelope as plain JSON with **no Effect at all**, and the server
+accepted it. That was the finding the whole plan rests on, and it is now
+demonstrated against a live server rather than inferred from reading
+`RpcMessage.ts`.
+
+Two real bugs found by actually running it:
+
+1. **I invented the auth endpoints.** t3 uses `POST /oauth/token`, form-encoded,
+   with its own `urn:t3:params:oauth:token-type:environment-bootstrap`, and
+   `/api/auth/websocket-ticket`. The proven spike had all of this; I should have
+   read it rather than guessed.
+2. **`stop` did not free the port.** It killed the recorded pid, but that is the
+   `npx` wrapper and the server is its grandchild. A later "cold" start would
+   have silently reused the previous server — making a start-twice proof a proof
+   of nothing. It now sweeps the port, including when there is no pid file.
+
+Also fixed: the server came up and then died with its parent, because I piped its
+stdio through the spawning process. stdio now goes to a file descriptor directly.
+
+### Note to self, per the architect
+
+**Read the proven spike before writing anything that talks to the t3code
+server.** I invented `/api/auth/token` with an RFC-standard subject_token_type
+and got a 404, when the working flow was sitting in
+`codev/experiments/146-t3code-porch-proof/` and `/Users/chris/dev/t3code-spike/
+spike.mjs` the whole time: `POST /oauth/token`, form-encoded,
+`urn:t3:params:oauth:token-type:environment-bootstrap`, then
+`/api/auth/websocket-ticket`.
+
+The pid bug is the more dangerous of the two. A `stop` that reports success while
+leaving the grandchild alive makes a later cold start silently warm — the same
+failure family as the other five, wearing different clothes.
+
+**Verified, not assumed:** with `T3CODE_ROOT` pointing at nothing, the suite
+reports `23 passed | 1 skipped`. The hash test skips rather than passing. I had
+marked that criterion done before testing it, which would have been the sixth
+instance; testing it made the checkbox earned.
+
+Phase 1 closed: build green, full suite 6201 passed / 48 skipped, plus 180 in the
+v2 suite. 42 spec-146 tests.
+
+### The pattern, for the review doc
+
+Seven instances on this project of one failure shape: **a check that reports
+success while measuring nothing.** Recording it once as a pattern rather than
+seven times as incidents, per the architect.
+
+Mine, five:
+
+1. **The emitter probe.** I could have reasoned that `toJsonSchemaDocument`
+   preserves constraints. Running it showed it drops checks behind a `decodeTo`
+   transform, so a drift test built on it would report success on a relaxed
+   branded id. Caught *before* review, by predicting what the check should find
+   and noticing it found nothing.
+2. **The loss detector's `typeof` guard.** Effect 4 schemas are callable, so
+   `typeof candidate === 'object'` skipped every schema and `LOSSY.md` said
+   "none detected" on a contract that degrades 22.
+3. **The churn classifier staging into `/tmp`,** where Node cannot resolve
+   `effect`. Every commit came back `unbuildable`, which reads as "nothing to
+   classify" rather than "the harness is broken".
+4. **`shapeCheck` at 105 `$ref` positions.** The module whose stated purpose is
+   preventing this did it: `$ref` was listed as supported, never resolved, so it
+   walked into nothing and returned `matches: true`. It had no tests.
+5. **`stop` that did not free the port.** It killed the recorded pid — the `npx`
+   wrapper — while the server, its grandchild, kept listening. A later "cold"
+   start would silently have been warm.
+
+Framework, two — both now in #151:
+
+6. **porch cannot distinguish contention from failure.** It reported
+   `CHECKS FAILED` for a suite that passes, because "another run holds the lock"
+   and "the tests failed" arrive at the same exit code.
+7. **`porch done` from the wrong cwd exits 0 having done nothing.** It resolves
+   the project from cwd, printed "Project 146 not found", and returned success.
+
+Two things generalise. **Predicting what a check should find before running it**
+is what caught 2 and would have caught 4 sooner — a test that only proves the
+happy path passes against the broken version too. And **a distinct signal for
+"could not tell"** is the fix in every case: three exit codes in the harness,
+`unclassifiable` as a third churn verdict, `ctx.skip()` instead of an early
+`return`, and `UnresolvedRefError` instead of a silent walk.
+
+### Correction: PID 61593 was not in my worktree
+
+I told the architect another agent was running test suites in my worktree and
+colliding with porch. Half wrong. 61593 is a legitimate builder in a **different
+repository** (`dvarr/.builders/aspir-230`), and `--dangerously-skip-permissions`
+is normal for a builder start script.
+
+The real cause is #130's fix working as designed: `vitest-global-setup.ts` holds
+a loopback mutex on port **13999** so two full-suite runs cannot collide on
+shared Tower state, and that lock is **machine-wide, not workspace-scoped**. Any
+project running its suite blocks mine. Two builders queueing, nothing wrong.
+
+Worth keeping because the shape of my error is familiar: I saw a `claude
+--dangerously-skip-permissions # Role: Builder` process, matched it against the
+agent that *had* genuinely been editing my plan file earlier, and concluded it
+was the same actor. It was not. I checked my own pid chain before acting and
+asked rather than killing, which is the only reason this is a note and not an
+incident.
