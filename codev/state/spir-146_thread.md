@@ -1522,3 +1522,26 @@ layer, so a check that depended on it would have to be rewritten then.
 
 Written into the plan's Phase 3 deliverable rather than left here, because a
 ruling that lives only in a thread is a ruling the phase prompt never shows.
+
+## The re-run that ran, passed, and produced nothing
+
+Re-running the live scenarios after the cursor fix, so the evidence artifact
+would name the commit that was actually reviewed: the run completed, printed
+five demonstrated scenarios, exited 2 as designed for criterion C's abstention —
+and `git status codev/research/` was **empty**. The artifact still carried
+`clientCommit: 088f8e109` and a `ranAt` from an hour and a half earlier.
+
+The harness prints progress to **stderr** and the JSON artifact to **stdout**.
+My wrapper captured `2>&1`, so the artifact went into a merged stream and
+nothing wrote the file. Every signal I had said the run was fine: exit code as
+expected, five DEMONSTRATED lines, full JSON visible in the output.
+
+Same family as the abstention rule, from the artifact side: **a run that
+succeeds and writes nothing is indistinguishable from a run that wrote the same
+thing again.** The only check that caught it was comparing `ranAt` against the
+clock, which is exactly what the `ranAt` stamp was added for one iteration
+earlier — added because a stale file and a fresh one were byte-identical, and
+now used to catch a fresh run that produced no file at all.
+
+The wrapper now keeps the streams apart, validates the output parses as JSON
+before overwriting, and refuses to overwrite on a scenario failure.

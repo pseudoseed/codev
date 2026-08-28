@@ -1,9 +1,9 @@
 {
   "criterion": "Spec 146 Phase 2 live integration",
-  "ranAt": "2026-08-28T20:02:17.432Z",
+  "ranAt": "2026-08-28T20:28:29.691Z",
   "nodeVersion": "v22.22.2",
-  "clientCommit": "088f8e109b824506dc12048c90dd43a9be02e455",
-  "clientTreeDirty": false,
+  "clientCommit": "281e847546c23ae8422c03a9c7f84b1daf93f220",
+  "clientTreeDirty": true,
   "scenarios": [
     {
       "scenario": "A: connect, dispatch, subscribe, stream",
