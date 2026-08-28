@@ -450,7 +450,7 @@ claim stops being a one-off observation and becomes a tested property.
       so, and the detectable gap is the protocol-level one: the server declined the cursor.
 - [x] With the server unreachable, every call fails loudly at the call site. There is no silent
       queue at this layer.
-- [x] Tests for this phase. 46 in `spec-146-t3-client.test.ts`.
+- [x] Tests for this phase. 49 in `spec-146-t3-client.test.ts`, plus six live scenarios.
 
 #### Acceptance Criteria
 
@@ -496,8 +496,19 @@ claim stops being a one-off observation and becomes a tested property.
 
 Unit: envelope round-trip for every shape; gap detection; backoff.
 
-Integration, against a live pinned server: the four acceptance scenarios above. This phase is not
+Integration, against a live pinned server: the acceptance scenarios above. This phase is not
 complete on unit tests — the whole point is what the real server does.
+
+Six live scenarios ran, five demonstrated (`codev/research/146-phase2-live-evidence.json`).
+Two were added because a passing run could not otherwise be told from an empty one:
+
+- **E** reports *which* methods were shape-checked. A-D all passing with checking on reads the
+  same whether every payload matched or every method reported `unchecked` and nothing was
+  looked at. All three exercised methods have a generated schema and every live payload matched.
+- **F** drives `ResumingSubscription` against the real server. It was unit-tested against a fake
+  only, which is the shape of thing this project has been bitten by twice.
+
+The live harness requires **Node 22** (`nvm use 22`) — the t3 server needs `node:sqlite`.
 
 ---
 
