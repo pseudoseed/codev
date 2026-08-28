@@ -417,8 +417,18 @@ claim stops being a one-off observation and becomes a tested property.
 
 #### Deliverables
 
-- [x] Envelope encode/decode for all ten wire shapes, validated against
-      `RpcMessage.ts` as the reference.
+- [x] Envelope encode/decode for every wire shape, validated against `RpcMessage.ts` as the
+      reference.
+
+      **This box was ticked while wrong, and review caught three errors in it.** `ExitEncoded`
+      (`RpcMessage.ts:257-275`) declares `cause: ReadonlyArray<{Fail} | {Die} | {Interrupt}>`
+      because an Effect cause is a tree; it was modelled as a single object, so `cause._tag` read
+      `undefined` and `RpcFailureError` carried no kind and no tag — the named error built for
+      Phase 3 to branch on could not have been branched on. `ClientProtocolError` is in
+      `FromServerEncoded` (`:192-197`) and was rejected as an unknown tag, turning "your protocol
+      is wrong" into "this connection is unreadable". `ClientEnd` is in `FromServer`, the *decoded*
+      union, not `FromServerEncoded`, and was being accepted. All three fixed; the count is five
+      client shapes and five server shapes, and `ClientEnd` is not one of them.
 - [x] Streaming calls send `Ack` per received `Chunk`. The server enables ack-based backpressure
       (`RpcServer.ts:115`, `supportsAck`), so a client that does not acknowledge stalls its own
       stream after the server's buffer fills. This is a protocol obligation, not an optimisation,
@@ -438,6 +448,14 @@ claim stops being a one-off observation and becomes a tested property.
       client reports a **gap** as its own distinct signal. It does not return an empty range, and
       it does not return a range that looks complete. "I could not tell" and "there was nothing"
       must not be spelled the same way.
+
+      **Also corrected: a failing handler used to skip its event.** `enqueue` swallowed handler
+      rejections while `queuedThrough` advanced at enqueue time, so an event whose handler threw was
+      permanently skipped whenever a later event in the same stream succeeded — with no signal.
+      Both review lanes found it independently and one reproduced it. A failure now stops the
+      stream, reports through `onHandlerError`, and leaves the cursor where it was so the
+      resubscription redelivers. The old test failed the handler on the *last* event before a drop,
+      the one arrangement in which the bug cannot appear.
 
       **Corrected during the phase.** The first implementation also reported a gap whenever the
       returned sequences were not consecutive integers. t3code's `sequence` is a **single global
@@ -459,7 +477,7 @@ claim stops being a one-off observation and becomes a tested property.
       "refused as a duplicate" needs a different response from "the request failed". The first
       implementation threw a plain `Error` with the payload stringified into the message, which
       made that distinction reachable only by matching on text.
-- [x] Tests for this phase. 52 in `spec-146-t3-client.test.ts`, plus six live scenarios.
+- [x] Tests for this phase. 59 in `spec-146-t3-client.test.ts`, plus six live scenarios.
 
 #### Acceptance Criteria
 
