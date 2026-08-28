@@ -195,6 +195,11 @@ The requirement, stated so it is actually true:
 - **The host stores a verifier, never a replayable credential.** Builders have shell on the same
   machine as `codev-agent`, so a token sitting on disk is a token they can read. The host keeps
   a hash; the secret lives with the human's client session.
+- **Two concrete traps, both verified in the code.** Tower's existing request auth is a *shared*
+  key at `~/.agent-farm/local-key`, mode 0600, owned by the same user a builder runs as. It is a
+  machine boundary and cannot distinguish a human from an agent, so the approval capability must
+  not reuse it. And `spawn-worktree.ts` symlinks the workspace `.env` into every builder
+  worktree, so the capability must never be stored there. A test asserts both.
 - `codev-agent` refuses issuance to any caller it can identify as a builder or architect process,
   and issuance is not reachable without a human-paired session.
 - Every approval records the capability id, machine, and timestamp in `status.yaml`.
@@ -301,10 +306,21 @@ the remote, mobile or multi-machine benefit. Rejected.
 ## Constraints
 
 - **Self-hosted only.** No Clerk, no relay, no account.
-- **Vendor the contract.** `@t3tools/contracts` is unpublished, so Codev vendors the schema types
-  from a pinned t3code commit into `packages/types`, with a documented refresh procedure and a
-  test that fails when the vendored copy drifts from the pinned server. "Breaks become compile
-  errors" is only true once this exists.
+- **Vendor the contract, at build time, keeping `packages/types` runtime-free.** `@t3tools/contracts`
+  is unpublished. The vendored surface is the transitive closure of `orchestration.ts`, `git.ts`
+  and `auth.ts`: 9 files, 3,663 lines, not the whole 19,662-line package. `rpc.ts` is **not**
+  vendored; Codev declares its own minimal RpcGroup as the spike did.
+
+  Under `RpcSerialization.layerJson` the wire envelope is about ten tagged JSON shapes with the
+  method name as the tag and an opaque payload, so the server never requires the client to hold
+  the domain contract. That is why the spike worked with `Schema.Unknown`. Runtime schemas are
+  therefore needed only to validate t3code's domain payloads, never to speak the protocol, so the
+  vendoring is a **build-time codegen step**: `effect` is a devDependency of the codegen tool, the
+  tool emits type declarations plus a JSON Schema document, and `packages/types` keeps zero
+  runtime dependencies. The #1189 boundary tests stay green.
+
+  A drift test fails when the generated output diverges from the pinned commit. "Breaks become
+  compile errors" is only true once this exists.
 - **Pin the server by commit**, not by tag. Upgrades are deliberate.
 - Gates and phase state live in `status.yaml`, written only by porch.
 - Framework changes land in `codev/` and `codev-skeleton/` both.
@@ -361,12 +377,20 @@ The mailbox is replaced only if these hold, otherwise it stays:
 - Multi-day gate retention behaves like the proven 36-minute case. One reap plus one server
   restart was actually elapsed.
 - Real Codev worktrees cost more disk than the 8-12 MiB measured against a seed repository.
-- Contract churn is survivable. **Now measured, and it is high.** `orchestration.ts` has 89
-  commits since 2026-02-07, against 2,812 commits repo-wide, so roughly 14 commits a month land
-  on the single file this integration depends on most. That count is commits, not breaking
-  changes; classifying them is still a pre-deletion gate. But it is enough to say the vendoring
-  constraint and the drift test are load-bearing rather than precautionary, and that a pinned
-  commit will go stale in weeks, not years.
+- Contract churn is survivable. **Measured twice, and the second measurement is worse.** The
+  first counted 89 commits to `orchestration.ts` since 2026-02-07. The real dependency surface is
+  the transitive closure of `orchestration.ts`, `git.ts` and `auth.ts`, which is 9 files and
+  3,663 lines, and those 9 files have taken **184 commits in the same period, about 27 a month**.
+
+  Compounding it: t3code pins `effect: 4.0.0-beta.103` (`pnpm-workspace.yaml:48`) and the RPC
+  modules it uses live under `effect/unstable/`. So the dependency is a pre-1.0 beta of a library,
+  on a path that library itself marks unstable, moving at 27 commits a month.
+
+  This is the weakest point of the whole plan and it should not be softened. It does not reverse
+  the decision, because the alternative is a PTY layer that produced six bugs in one week, but it
+  does mean the drift test and the pinned commit are the load-bearing parts of this spec rather
+  than precautions. Classifying those 184 commits as breaking or non-breaking is criterion 12 and
+  gates deletion.
 
 ## Success Criteria
 
