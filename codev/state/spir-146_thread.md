@@ -141,3 +141,58 @@ rather than a Phase 14 surprise.
 Recording the provenance anyway. A review lane mutating the artifact under review
 is worth knowing about, and I committed defensively throughout so nothing of mine
 could be lost to a concurrent write.
+
+### Review round 2 (claude, re-run to porch's path)
+
+Second claude review verified every load-bearing citation in the plan against
+the tree independently and they held. It then found six real defects I had
+missed. All verified before acting:
+
+1. **A circular dependency between Phase 5 and Phase 8.** Phase 5's thread
+   registry reads `architect.thread_id` / `builders.thread_id`; Phase 8 added
+   those columns and depended on Phase 5. Neither was buildable. Fixed by
+   splitting schema from use: the columns land in Phase 5 (the first phase that
+   needs them to exist), Phase 8 keeps everything that writes them.
+2. **Phases 11 and 12 asserted criteria owned by phases they did not depend on**
+   — criterion 9b needs Phase 6's capability, criterion 15 and the iPad run need
+   Phase 7's credentials and pairing. A builder could legally have started the
+   client with no auth layer built.
+3. **Phase 14's PTY surgery was under-specified and mis-scoped.** The spec says
+   five files reach the PTY manager; the measurement says twelve. Worse, four of
+   them are components the spec *keeps* — `tower-routes.ts` (7 terminal refs),
+   `tower-server.ts` (2), `tower-tunnel.ts` (1), `session-log-sweep.ts` (1). A
+   flat delete list would have removed the HTTP server the spec preserves. Each
+   file is now marked delete or edit.
+4. **The sdk terminal surface does not die with `apps/web`.** An earlier revision
+   of my plan said it did. `apps/vscode/src/connection-manager.ts:2-3` imports
+   `TowerClient` and `backoffDelayMs`, `terminal-manager.ts:7` imports
+   `TerminalType`. Phase 13 keeps `apps/vscode` in the tree *specifically* so
+   upstream's 173 commits merge cleanly, and Phase 14 would have removed the
+   exports it compiles against — destroying the benefit Phase 13 exists to buy.
+   Ruled: `tower-client` is retained as a compile-only surface.
+5. **MIT attribution was missing.** `@cluesmith/codev-types` is published,
+   Apache-2.0, `files: ["src","dist"]`. Generated artifacts derived from MIT
+   t3code source would have shipped inside a distribution with no notice. That
+   is a licence obligation, not tidiness.
+6. **`tools/` is outside the workspace globs** (`packages/*`, `apps/*`), so the
+   codegen's `effect` devDependency would never install.
+
+One reviewer claim did **not** hold: `afx shell` was flagged as PTY-coupled.
+`commands/shell.ts` has no import from `terminal/`. Only `attach.ts` does.
+Recorded in the plan as checked so it is not re-opened.
+
+### The opencode / porch conflict
+
+Porch enforced a 4-way review while the architect had ruled opencode dropped
+(issue #150 — it is sandboxed out of `/Users/chris/dev/t3code` and could not read
+a single file the plan is about). I refused to hand-edit `status.yaml` and put
+the decision to the architect. They resolved it through the supported path:
+removed opencode from `porch.consultation.models` in `.codev/config.json`, which
+is the setting porch reads to build its required-lane list. The 4-way became a
+3-way without touching state by hand.
+
+### Gate
+
+`plan-approval` requested with structured content. 15 phases, checks green,
+3-way review complete: gemini APPROVE, codex REQUEST_CHANGES addressed, claude
+REQUEST_CHANGES twice, both addressed.
