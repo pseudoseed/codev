@@ -105,6 +105,8 @@ export class ManagedSocket {
   #everConnected = false;
   #stopped = false;
   #timer: ReturnType<typeof setTimeout> | null = null;
+  /** Resolver for the backoff sleep, so `stop()` can end it instead of stranding it. */
+  #wakeRetry: (() => void) | null = null;
 
   constructor(
     private readonly urlFor: () => string | Promise<string>,
@@ -123,6 +125,13 @@ export class ManagedSocket {
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
     this.#state = 'closed';
+    // Clearing the timer strands whoever is awaiting it. `connect()` sleeps on a
+    // promise this timer resolves, so a `stop()` during backoff left that call
+    // pending forever -- a hang, not a rejection, and therefore invisible to a
+    // caller with no timeout of its own.
+    const wake = this.#wakeRetry;
+    this.#wakeRetry = null;
+    wake?.();
   }
 
   /**
@@ -157,7 +166,10 @@ export class ManagedSocket {
         }
         await new Promise<void>((resolve) => {
           this.#timer = setTimeout(resolve, delay);
+          this.#wakeRetry = resolve;
         });
+        this.#wakeRetry = null;
+        if (this.#stopped) throw new Error('ManagedSocket stopped while waiting to retry');
       }
     }
   }

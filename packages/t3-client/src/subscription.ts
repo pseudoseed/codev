@@ -117,6 +117,13 @@ const TERMINAL_ERROR_NAMES = new Set([
   'RpcFailureError',
   'UnresolvedRefError',
   'UnsupportedKeywordError',
+  // Both say the connection cannot be read, not that it was lost. Resubscribing
+  // re-runs the same decode against the same server and fails the same way, so
+  // retrying turns a protocol fault into a quiet loop -- the behaviour iteration
+  // 1 removed for validation errors, reintroduced by iteration 2's own new
+  // failure paths.
+  'ProtocolError',
+  'MalformedFrameError',
 ]);
 
 const defaultIsRetryable = (error: unknown): boolean => {
@@ -150,7 +157,7 @@ export class ResumingSubscription {
     private readonly connect: () => Promise<SubscriptionTransport>,
     private readonly options: ResumingSubscriptionOptions,
   ) {
-    this.#cursor = new SequenceCursor(options.startAfter ?? 0, options.persist);
+    this.#cursor = new SequenceCursor(options.startAfter ?? 0, (value) => options.persist?.(value));
   }
 
   /** The last sequence whose handler completed. Safe to resume from. */
@@ -159,23 +166,54 @@ export class ResumingSubscription {
   }
 
   /**
-   * Move the cursor after reconciling a gap out of band.
+   * Move the cursor FORWARD after reconciling a gap out of band.
    *
-   * Without this a past-the-head gap is unrecoverable in band: the snapshot
-   * carries no sequence, so the cursor never advances, and every subsequent
-   * attempt re-sends the same stale cursor and gets the same snapshot. That is
-   * exactly the scenario criterion D demonstrates against a live server — a
-   * cursor surviving a restore of the server's database — so it is the case most
-   * likely to be met in production, not a corner.
+   * The caller reconciles from the snapshot it was handed, then calls this. A
+   * lower value is refused, because a stale snapshot arriving late must not walk
+   * the cursor back over events already applied.
    *
-   * The caller reconciles from the snapshot it was handed, then calls this. The
-   * cursor only ever moves forward here: accepting a lower value would re-deliver
-   * events already applied and, worse, would let a stale snapshot walk the cursor
-   * backwards.
+   * This is the wrong method for a cursor that is AHEAD of the server's head —
+   * see `resetTo`. That case needs a backwards move by construction, and this
+   * method's early return made it a silent no-op.
    */
   reconcileTo(sequence: number): void {
     if (sequence <= this.#cursor.applied) return;
-    this.#cursor = new SequenceCursor(sequence, this.options.persist);
+    this.#cursor = new SequenceCursor(sequence, (value) => this.options.persist?.(value));
+    void this.options.persist?.(sequence);
+  }
+
+  /**
+   * Reset the cursor to a reconciled position, in either direction.
+   *
+   * `ws.ts:1492-1526` computes `replayGap = headSequence - afterSequence` and
+   * takes the snapshot path when that gap is negative — a cursor AHEAD of the
+   * server's head, which is what a restore or rollback of the server's database
+   * produces. Recovering from it means moving the cursor **down**, so
+   * `reconcileTo` cannot do it: every candidate value is below `applied` and its
+   * early return makes the call a no-op.
+   *
+   * The consequence was worse than a failed recovery. `queuedThrough` starts each
+   * attempt at `applied`, so with the cursor stuck at a huge value every live
+   * event the restored server emits is discarded as already-queued — no
+   * `onValue`, no `onHandlerError`, no second gap, because the stream is
+   * synchronized and healthy. One gap reported, then permanent silence that looks
+   * like a quiet thread. "I could not tell" spelled exactly like "nothing
+   * happened", in the module written to keep those apart.
+   *
+   * Separate from `reconcileTo` and deliberately named, because a backwards move
+   * must be something a caller chooses, never something a late snapshot does to
+   * it by accident.
+   */
+  resetTo(sequence: number): void {
+    this.#cursor = new SequenceCursor(sequence, (value) => this.options.persist?.(value));
+    // Persisted here, not left to the next applied event: a reconciled position
+    // that dies with the process is not a recovery, it is the same snapshot cycle
+    // again on restart.
+    void this.options.persist?.(sequence);
+    // End the stream in flight. `queuedThrough` is derived from `applied` when the
+    // attempt opens, so a stream running under the old cursor goes on discarding
+    // everything below it no matter what the cursor now says.
+    this.#transport?.close();
   }
 
   /** Stop reconnecting and close the current transport. Idempotent. */
@@ -276,13 +314,33 @@ export class ResumingSubscription {
             if (!synchronized) {
               synchronized = true;
               this.#everSubscribed = true;
-              this.options.onResume(
-                resuming
-                  ? classifyResume(requestedAfter, catchUp, snapshot)
-                  : // Not a resume: report what arrived without pretending the
-                    // snapshot was a failure to replay something we never asked for.
-                    { kind: 'replayed', items: catchUp, lastSequence: this.#cursor.applied, duplicatesDropped: 0 },
-                { attempt: this.#attempt, resumed: resuming },
+              // Computed here, delivered behind the handler chain. `catchUp`
+              // stops growing once `synchronized` is set (see below), so the
+              // outcome is final at this point -- but the handlers it describes
+              // have only been QUEUED. Reporting a `gap` before the snapshot
+              // handler has run lets a caller call `reconcileTo()` against data
+              // that was never applied, and if that handler then fails the
+              // cursor has already moved past it. That is the same at-least-once
+              // violation iteration 1 fixed, one layer up.
+              const resumeOutcome = resuming ? classifyResume(requestedAfter, catchUp, snapshot) : null;
+              const meta = { attempt: this.#attempt, resumed: resuming };
+              enqueue(
+                () =>
+                  this.options.onResume(
+                    resumeOutcome ??
+                      // Not a resume: report what arrived without pretending the
+                      // snapshot was a failure to replay something we never asked
+                      // for. `applied` is read HERE, not at synchronization, or it
+                      // reports 0 while the handlers that move it are still queued.
+                      {
+                        kind: 'replayed' as const,
+                        items: catchUp,
+                        lastSequence: this.#cursor.applied,
+                        duplicatesDropped: 0,
+                      },
+                    meta,
+                  ),
+                null,
               );
             }
             return;

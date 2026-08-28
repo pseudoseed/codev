@@ -509,6 +509,35 @@ describe('spec 146 phase 2: inbound payloads are shape-checked, and a pass is no
     expect(client.uncheckedMethods.get('some.unknown.method')).toMatch(/no generated contract entry/);
   });
 
+  it('INTERRUPTS the server when a streamed chunk fails its shape check', async () => {
+    // Abandoning the request without interrupting leaves the server producing
+    // values for a reader that has gone -- the same hazard the idle timeout
+    // closed, one branch over. We are giving up precisely because we cannot read
+    // what is arriving, so there is no chance of it fixing itself.
+    const sent: string[] = [];
+    let onMessage: ((event: { data: unknown }) => void) | undefined;
+    const socket: SocketLike = {
+      send: (data) => void sent.push(data),
+      close: () => {},
+      addEventListener: (type: string, listener: never) => {
+        if (type === 'message') onMessage = listener as unknown as typeof onMessage;
+      },
+      readyState: 1,
+    } as unknown as SocketLike;
+
+    const client = new T3Client(socket);
+    const promise = client.stream('vcs.createWorktree', {}, () => {});
+    const id = JSON.parse(sent[0]).id;
+    onMessage?.({
+      data: JSON.stringify([{ _tag: 'Chunk', requestId: id, values: [{ worktree: 'nope' }] }]),
+    });
+
+    await expect(promise).rejects.toThrow(PayloadShapeError);
+    const interrupts = sent.map((f) => JSON.parse(f)).filter((f) => f._tag === 'Interrupt');
+    expect(interrupts, 'a stream we can no longer read must be interrupted').toHaveLength(1);
+    expect(interrupts[0].requestId).toBe(id);
+  });
+
   it('can be turned off, and then checks nothing at all', async () => {
     const sent: string[] = [];
     let onMessage: ((event: { data: unknown }) => void) | undefined;
@@ -1329,6 +1358,49 @@ describe('spec 146 phase 2: the envelope validates shape, not just the tag', () 
     ).toThrow(/unknown exit tag/);
   });
 
+  it('rejects a Chunk whose values array is empty', () => {
+    // `NonEmptyReadonlyArray<unknown>` (RpcMessage.ts:232). An empty chunk is not
+    // a chunk that carried nothing; it is a frame the contract does not allow,
+    // and accepting it means acking a delivery that never happened.
+    expect(() =>
+      decodeFrames(JSON.stringify([{ _tag: 'Chunk', requestId: '1', values: [] }])),
+    ).toThrow(MalformedFrameError);
+  });
+
+  it('rejects a cause entry that is a shapeless object', () => {
+    // `[{}]` satisfied the array check and then produced an RpcFailureError with
+    // no kind and no tag -- the exact symptom iteration 1 fixed in the TYPE and
+    // left unenforced on the wire.
+    expect(() =>
+      decodeFrames(
+        JSON.stringify([
+          { _tag: 'Exit', requestId: '1', exit: { _tag: 'Failure', cause: [{}] } },
+        ]),
+      ),
+    ).toThrow(MalformedFrameError);
+  });
+
+  it('rejects a Fail with no error and a Die with no defect', () => {
+    for (const cause of [[{ _tag: 'Fail' }], [{ _tag: 'Die' }]]) {
+      expect(() =>
+        decodeFrames(
+          JSON.stringify([{ _tag: 'Exit', requestId: '1', exit: { _tag: 'Failure', cause } }]),
+        ),
+      ).toThrow(MalformedFrameError);
+    }
+  });
+
+  it('accepts an Interrupt carrying only its tag', () => {
+    // `fiberId` is `number | undefined` (RpcMessage.ts:270-272) and JSON drops an
+    // undefined field, so requiring the key would reject a valid frame.
+    const frames = decodeFrames(
+      JSON.stringify([
+        { _tag: 'Exit', requestId: '1', exit: { _tag: 'Failure', cause: [{ _tag: 'Interrupt' }] } },
+      ]),
+    );
+    expect(frames).toHaveLength(1);
+  });
+
   it('still accepts well-formed frames', () => {
     expect(decodeFrames(JSON.stringify({ _tag: 'Chunk', requestId: 1, values: [1] }))).toHaveLength(1);
     expect(
@@ -1498,6 +1570,206 @@ describe('spec 146 phase 2: a past-the-head gap can be reconciled in band', () =
     expect(sub.applied).toBe(100);
     sub.stop();
     await running;
+  });
+});
+
+describe('spec 146 phase 2: a cursor AHEAD of the head is recoverable, and its events arrive', () => {
+  it('resetTo moves the cursor down, persists it, and live events flow again', async () => {
+    // `ws.ts:1492-1526` computes `replayGap = headSequence - afterSequence` and
+    // takes the snapshot path when that is negative. Recovering means moving the
+    // cursor DOWN, which `reconcileTo` refuses by design — so the documented
+    // in-band recovery could not fire in the one scenario it names. Worse than a
+    // failed recovery: `queuedThrough` starts each attempt at `applied`, so every
+    // live event the restored server emits was discarded as already-queued, with
+    // no onValue, no onHandlerError and no second gap.
+    const calls: Array<Record<string, unknown>> = [];
+    const persisted: number[] = [];
+    let attempt = 0;
+    const client = {
+      async stream(_m: string, payload: Record<string, unknown>, onValue: (v: unknown) => void) {
+        calls.push(payload);
+        attempt += 1;
+        if (attempt === 1) {
+          // Cursor is past the head, so the server answers with a snapshot.
+          onValue({ kind: 'snapshot', snapshot: { head: 100 } });
+          onValue({ kind: 'synchronized' });
+          return undefined;
+        }
+        onValue({ kind: 'synchronized' });
+        for (const sequence of [101, 102, 103]) onValue({ kind: 'event', event: { sequence } });
+        return undefined;
+      },
+    };
+
+    const applied: number[] = [];
+    const sub: ResumingSubscription = new ResumingSubscription(
+      async () => ({ client: client as never, close: () => {} }),
+      {
+        method: 'orchestration.subscribeThread',
+        payload: {},
+        sequenceOf: (v: unknown) => (v as { event?: { sequence?: number } })?.event?.sequence ?? null,
+        isSnapshot: (v: unknown) => (v as { kind?: string })?.kind === 'snapshot',
+        isSynchronized: (v: unknown) => (v as { kind?: string })?.kind === 'synchronized',
+        onValue: (_v, sequence) => {
+          if (sequence !== null) applied.push(sequence);
+        },
+        onResume: (outcome) => {
+          // What a caller does after reconciling a snapshot whose head is BELOW
+          // the cursor it sent.
+          if ((outcome as { kind: string }).kind === 'gap') sub.resetTo(100);
+        },
+        persist: (sequence) => void persisted.push(sequence),
+        startAfter: 5_000_000,
+        delayBetweenAttemptsMs: 2,
+      },
+    );
+
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 80));
+    sub.stop();
+    await running;
+
+    expect(calls[0].afterSequence).toBe(5_000_000);
+    expect(calls[1].afterSequence, 'the reset cursor must be used').toBe(100);
+    expect(applied, 'live events below the old cursor must not be silently dropped').toEqual([
+      101, 102, 103,
+    ]);
+    expect(persisted[0], 'a reconciled position that dies with the process is not a recovery').toBe(100);
+    expect(sub.applied).toBe(103);
+  });
+
+  it('reconcileTo is still forward-only, so a stale snapshot cannot walk the cursor back', async () => {
+    // resetTo exists BECAUSE reconcileTo must stay refusing this: a late snapshot
+    // arriving after the cursor moved on must not redeliver applied events.
+    const client = {
+      async stream(_m: string, _p: Record<string, unknown>, onValue: (v: unknown) => void) {
+        onValue({ kind: 'event', event: { sequence: 100 } });
+        onValue({ kind: 'synchronized' });
+        return undefined;
+      },
+    };
+    const sub = new ResumingSubscription(async () => ({ client: client as never, close: () => {} }), {
+      method: 'orchestration.subscribeThread',
+      payload: {},
+      sequenceOf: (v: unknown) => (v as { event?: { sequence?: number } })?.event?.sequence ?? null,
+      isSnapshot: () => false,
+      isSynchronized: (v: unknown) => (v as { kind?: string })?.kind === 'synchronized',
+      onValue: () => {},
+      onResume: () => {},
+      delayBetweenAttemptsMs: 2,
+    });
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 20));
+    sub.reconcileTo(5);
+    expect(sub.applied).toBe(100);
+    sub.resetTo(5);
+    expect(sub.applied, 'the explicit reset is the one that may go backwards').toBe(5);
+    sub.stop();
+    await running;
+  });
+});
+
+describe('spec 146 phase 2: onResume lands BEHIND the handlers it describes', () => {
+  it('reports only after the queued handlers have run', async () => {
+    // It used to fire the moment the synchronized marker arrived, while every
+    // onValue -- including the snapshot's -- was still queued on the chain. A
+    // caller reacting to a gap by reconciling therefore moved the cursor before
+    // the snapshot handler had run, and a failure in that handler left the cursor
+    // past data never applied.
+    const order: string[] = [];
+    const client = {
+      async stream(_m: string, _p: Record<string, unknown>, onValue: (v: unknown) => void) {
+        onValue({ kind: 'event', event: { sequence: 1 } });
+        onValue({ kind: 'synchronized' });
+        return undefined;
+      },
+    };
+    const sub = new ResumingSubscription(async () => ({ client: client as never, close: () => {} }), {
+      method: 'orchestration.subscribeThread',
+      payload: {},
+      sequenceOf: (v: unknown) => (v as { event?: { sequence?: number } })?.event?.sequence ?? null,
+      isSnapshot: () => false,
+      isSynchronized: (v: unknown) => (v as { kind?: string })?.kind === 'synchronized',
+      onValue: async () => {
+        await new Promise((r) => setTimeout(r, 15));
+        order.push('handler');
+      },
+      onResume: (outcome) => {
+        order.push('resume');
+        // And the reported position reflects the handlers that have run, rather
+        // than the 0 it read at synchronization time.
+        expect((outcome as { lastSequence: number }).lastSequence).toBe(1);
+      },
+      delayBetweenAttemptsMs: 2,
+    });
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 60));
+    sub.stop();
+    await running;
+
+    expect(order[0], 'the handler must complete before the resume is reported').toBe('handler');
+    expect(order).toContain('resume');
+  });
+});
+
+describe('spec 146 phase 2: a connection error the server declared is terminal, not retryable', () => {
+  for (const name of ['ProtocolError', 'MalformedFrameError']) {
+    it(`surfaces ${name} instead of resubscribing on it`, async () => {
+      // Both say the connection cannot be READ, not that it was lost.
+      // Resubscribing re-runs the same decode against the same server and fails
+      // the same way, which is the quiet reconnect loop iteration 1 removed for
+      // validation errors and iteration 2 reintroduced with its own new failures.
+      let attempts = 0;
+      const client = {
+        async stream() {
+          attempts += 1;
+          const error = new Error('the connection cannot be read');
+          error.name = name;
+          throw error;
+        },
+      };
+      const sub = new ResumingSubscription(async () => ({ client: client as never, close: () => {} }), {
+        method: 'orchestration.subscribeThread',
+        payload: {},
+        sequenceOf: () => null,
+        isSnapshot: () => false,
+        isSynchronized: () => false,
+        onValue: () => {},
+        onResume: () => {},
+      });
+
+      await expect(sub.run()).rejects.toThrow(SubscriptionTerminatedError);
+      expect(attempts, `${name} must not be retried`).toBe(1);
+    });
+  }
+});
+
+describe('spec 146 phase 2: stop() during backoff ends connect(), it does not strand it', () => {
+  it('rejects rather than leaving the caller pending forever', async () => {
+    // stop() cleared the retry timer without resolving the promise connect() was
+    // awaiting, so the call hung -- not rejected, hung, and therefore invisible
+    // to any caller without a timeout of its own.
+    const managed = new ManagedSocket(
+      () => 'ws://127.0.0.1:1/ws',
+      () => {
+        throw new Error('refused');
+      },
+      { delayMs: () => 10_000 },
+    );
+
+    const connecting = managed.connect();
+    let settled = false;
+    void connecting.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+
+    // Let it fail once and enter the 10s backoff.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled, 'it should still be sleeping on the retry').toBe(false);
+
+    managed.stop();
+    await expect(connecting).rejects.toThrow(/stopped/);
   });
 });
 

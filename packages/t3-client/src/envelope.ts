@@ -257,6 +257,10 @@ function assertFrameShape(frame: Record<string, unknown>, tag: string, raw: stri
     case 'Chunk':
       if (!hasId()) throw new MalformedFrameError(raw, 'Chunk has no requestId');
       if (!Array.isArray(frame.values)) throw new MalformedFrameError(raw, 'Chunk has no values array');
+      // `NonEmptyReadonlyArray<unknown>` (RpcMessage.ts:232). An empty chunk is
+      // not a chunk that carried nothing -- it is a frame the contract does not
+      // allow, and accepting it means acking a delivery that never happened.
+      if (frame.values.length === 0) throw new MalformedFrameError(raw, 'Chunk values array is empty');
       return;
     case 'Exit': {
       if (!hasId()) throw new MalformedFrameError(raw, 'Exit has no requestId');
@@ -269,6 +273,28 @@ function assertFrameShape(frame: Record<string, unknown>, tag: string, raw: stri
         // inside dispatch.
         if (!Array.isArray(exit.cause)) {
           throw new MalformedFrameError(raw, 'Exit Failure cause is not an array');
+        }
+        // Entries are `Fail{error} | Die{defect} | Interrupt{fiberId}`
+        // (RpcMessage.ts:256-273). An array of shapeless objects satisfied the
+        // array check and then produced an RpcFailureError with no kind and no
+        // tag -- the exact symptom iteration 1 fixed in the TYPE and left
+        // unenforced on the wire.
+        for (const entry of exit.cause) {
+          const kind = (entry as { _tag?: unknown } | null)?._tag;
+          if (kind === 'Fail') {
+            if (!('error' in (entry as object))) {
+              throw new MalformedFrameError(raw, 'Exit cause Fail has no error');
+            }
+          } else if (kind === 'Die') {
+            if (!('defect' in (entry as object))) {
+              throw new MalformedFrameError(raw, 'Exit cause Die has no defect');
+            }
+          } else if (kind !== 'Interrupt') {
+            // Interrupt carries only `_tag`: its `fiberId` is `number | undefined`
+            // and JSON drops an undefined field, so requiring the key would
+            // reject a valid frame.
+            throw new MalformedFrameError(raw, `Exit cause entry has unknown tag "${String(kind)}"`);
+          }
         }
         return;
       }

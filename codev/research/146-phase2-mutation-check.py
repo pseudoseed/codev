@@ -60,6 +60,60 @@ MUTATIONS = [
         '        chain = chain.then(async () => {',
         'does not apply a later event after an earlier handler failed in the same stream',
     ),
+    (
+        'packages/t3-client/src/subscription.ts',
+        "  resetTo(sequence: number): void {\n    this.#cursor",
+        "  resetTo(sequence: number): void {\n    if (sequence <= this.#cursor.applied) return;\n    this.#cursor",
+        'resetTo moves the cursor down, persists it, and live events flow again',
+    ),
+    (
+        'packages/t3-client/src/subscription.ts',
+        "              enqueue(\n                () =>\n                  this.options.onResume(",
+        "              void ((() =>\n                  this.options.onResume(",
+        'reports only after the queued handlers have run',
+    ),
+    (
+        'packages/t3-client/src/subscription.ts',
+        "  'ProtocolError',\n  'MalformedFrameError',\n",
+        '',
+        'surfaces ProtocolError instead of resubscribing on it',
+    ),
+    (
+        'packages/t3-client/src/subscription.ts',
+        "  'ProtocolError',\n  'MalformedFrameError',\n",
+        '',
+        'surfaces MalformedFrameError instead of resubscribing on it',
+    ),
+    (
+        'packages/t3-client/src/socket.ts',
+        '    const wake = this.#wakeRetry;\n    this.#wakeRetry = null;\n    wake?.();',
+        '',
+        'rejects rather than leaving the caller pending forever',
+    ),
+    (
+        'packages/t3-client/src/envelope.ts',
+        "      if (frame.values.length === 0) throw new MalformedFrameError(raw, 'Chunk values array is empty');\n",
+        '',
+        'rejects a Chunk whose values array is empty',
+    ),
+    (
+        'packages/t3-client/src/envelope.ts',
+        '        for (const entry of exit.cause) {',
+        '        for (const entry of [] as unknown[]) {',
+        'rejects a cause entry that is a shapeless object',
+    ),
+    (
+        'packages/t3-client/src/envelope.ts',
+        '        for (const entry of exit.cause) {',
+        '        for (const entry of [] as unknown[]) {',
+        'rejects a Fail with no error and a Die with no defect',
+    ),
+    (
+        'packages/t3-client/src/client.ts',
+        '            try {\n              this.#sendRaw(interrupt(chunk.requestId));\n            } catch {\n              /* the socket is already gone; nothing to interrupt through */\n            }\n',
+        '',
+        'INTERRUPTS the server when a streamed chunk fails its shape check',
+    ),
 ]
 
 for path, fixed, unfixed, test_name in MUTATIONS:

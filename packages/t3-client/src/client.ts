@@ -196,6 +196,16 @@ export class T3Client {
           if (failure) {
             this.#pending.delete(chunk.requestId);
             if (pending.timer) clearTimeout(pending.timer);
+            // Tell the server to stop, exactly as the idle timeout does. We are
+            // abandoning this request because we cannot read what it is sending;
+            // leaving it uninterrupted keeps the server producing values for a
+            // reader that has gone, which is the hazard the timeout path closed
+            // one branch over.
+            try {
+              this.#sendRaw(interrupt(chunk.requestId));
+            } catch {
+              /* the socket is already gone; nothing to interrupt through */
+            }
             pending.reject(failure);
             return;
           }
