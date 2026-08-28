@@ -12,8 +12,12 @@
  *   B. a stream longer than the server's buffer completes — AND an ack-suppressed
  *      client stalls, because a test that cannot fail proves nothing
  *   C. socket killed mid-stream; resubscription replays exactly the missing range
+ *      — groundwork only here. Proving it needs a control connection and an
+ *        eventId comparison against a thread that is actually generating events,
+ *        which is Phase 3's exit conditions.
  *   D. a resubscription answered with a snapshot reports a GAP, distinguishable
- *      from both success and empty
+ *      from both success and empty — discharged live, by putting the cursor past
+ *      the server's head so the SERVER chooses the snapshot path.
  *
  * Scenario B's control is the point. "The stream completed" is consistent with
  * acks being honoured AND with the server not needing them at this volume. Only
@@ -69,8 +73,22 @@ const results = [];
  * false sometimes meant the second and sometimes the third. A boolean plus
  * documentation is a boolean plus a thing nobody reads.
  */
+/**
+ * What each state means, emitted WITH the result rather than kept in a document
+ * beside it. An earlier version of the evidence file carried these as hand-added
+ * keys the script never produced, so a re-run would have silently dropped them and
+ * the file would have quietly disagreed with the run that made it.
+ */
+const STATE_MEANING = {
+  demonstrated: 'Ran against a live pinned server and passed.',
+  'not-demonstrated':
+    'The scenario did not run to a verdict — preconditions absent, or nothing to observe. ' +
+    'This says NOTHING about whether the code works, and is not a failure.',
+  failed: 'Ran against a live pinned server and the behaviour was wrong.',
+};
+
 const record = (name, state, detail) => {
-  results.push({ scenario: name, state, ...detail });
+  results.push({ scenario: name, state, stateMeaning: STATE_MEANING[state], ...detail });
   const label = { demonstrated: 'DEMONSTRATED', 'not-demonstrated': 'NOT-DEMONSTRATED', failed: 'FAILED' }[state];
   console.error(`[live] ${label} ${name}${detail?.note ? ` — ${detail.note}` : ''}`);
 };
@@ -251,7 +269,7 @@ try {
     });
   }
 
-  // ------------------------------------------------------------ C + D: resume classification
+  // ------------------------------------------------------------ C groundwork: real sequences
   {
     // Exercised against real sequence numbers observed on the wire rather than
     // synthesised, so the classifier is judged on the server's actual numbering.
@@ -289,7 +307,7 @@ try {
     // this scenario removed an element and asserted `gap`, which only produced a
     // gap because the run had one active thread. Phase 3 discharges C and D with
     // a control connection and eventId comparison, which can actually tell.
-    record('C+D: resume classification on real sequences', observed ? 'demonstrated' : 'not-demonstrated', {
+    record('C groundwork: classification against server-issued sequences', observed ? 'demonstrated' : 'not-demonstrated', {
       observedSequences: seqs.slice(0, 8),
       sequencesAreSparse: observed && seqs.some((s, i) => i > 0 && s !== seqs[i - 1] + 1),
       replayed: replayed?.kind ?? null,
@@ -298,6 +316,68 @@ try {
       gapDistinctFromEmpty: withSnapshot?.kind === 'gap' && classifyResume(0, []).kind === 'empty',
       note: observed ? 'classified against server-issued sequence numbers' : 'no sequenced items observed',
     });
+  }
+
+  // ------------------------------------------------------------ D: a REAL snapshot fallback
+  {
+    // Criterion D, discharged live rather than deferred.
+    //
+    // `ws.ts:1493-1526` falls through to the snapshot path when the replay gap
+    // exceeds THREAD_RESUME_MAX_GAP (1,000) **or when the cursor is ahead of the
+    // server's head**. The second costs nothing to trigger and is the real case:
+    // porch's persisted cursor surviving a restore or rollback of the server's
+    // database. So this is not a contrivance to make the branch fire — it is the
+    // failure the branch exists for.
+    //
+    // The point is that the SERVER sends the snapshot. An earlier version of this
+    // scenario passed a hand-made object as `snapshotSeen` and checked that the
+    // classifier said "gap", which tests the classifier against itself.
+    const { thread } = globalThis.__phase2;
+    const { client, socket } = await connect();
+
+    const AHEAD = 5_000_000; // comfortably past any head this harness can reach
+    let sawSnapshot = null;
+    const collected = [];
+    await new Promise((res) => {
+      const timer = setTimeout(res, 15_000);
+      client
+        .stream(
+          'orchestration.subscribeThread',
+          { threadId: thread, afterSequence: AHEAD, requestCompletionMarker: true },
+          (v) => {
+            if (v?.kind === 'snapshot') sawSnapshot = v.snapshot ?? {};
+            if (v?.kind === 'event' && typeof v.event?.sequence === 'number') {
+              collected.push({ sequence: v.event.sequence });
+            }
+            if (v?.kind === 'synchronized') {
+              clearTimeout(timer);
+              res();
+            }
+          },
+        )
+        .catch(() => {});
+    });
+    socket.close();
+
+    const outcome = classifyResume(AHEAD, collected, sawSnapshot);
+    const empty = classifyResume(AHEAD, []);
+    const distinguishable = outcome.kind === 'gap' && empty.kind === 'empty';
+
+    record(
+      'D: cursor ahead of head forces a real snapshot, classified as a gap',
+      sawSnapshot === null ? 'not-demonstrated' : distinguishable ? 'demonstrated' : 'failed',
+      {
+        requestedAfter: AHEAD,
+        serverSentSnapshot: sawSnapshot !== null,
+        outcomeKind: outcome.kind,
+        emptyKind: empty.kind,
+        gapDistinctFromEmpty: distinguishable,
+        note:
+          sawSnapshot === null
+            ? 'server did not send a snapshot for a cursor past its head; the fallback was not exercised'
+            : 'server answered a past-the-head cursor with a snapshot, and it is reported as a gap',
+      },
+    );
   }
 } finally {
   try {
@@ -312,10 +392,32 @@ console.log(
     {
       criterion: 'Spec 146 Phase 2 live integration',
       scenarios: results,
+      limits: {
+        scenarioCplusD:
+          'What C and D need is NOT what this scenario checks. t3code numbers events on a ' +
+          'SINGLE GLOBAL counter (one `sequence` column on orchestration_events, read ' +
+          '`WHERE sequence > ? ORDER BY sequence ASC` and then filtered to the subscribed ' +
+          'thread), so a sparse range is the normal shape and carries no information about ' +
+          'loss. Proving the client replays exactly the missing range needs a second, ' +
+          'never-dropped control connection and an eventId comparison, against a thread that ' +
+          'is actually generating events. That is Phase 3 work, and it is recorded in Phase ' +
+          "3's exit conditions as Phase 2's criteria.",
+        harness:
+          'The pinned checkout is verified; the `t3` CLI binary running against it is NOT ' +
+          'pinned. A divergence between the two is invisible to `verify`.',
+        doNotRead:
+          'A `not-demonstrated` scenario is not a failing one. Read the per-scenario ' +
+          '`stateMeaning`, which is emitted by the run rather than added afterwards.',
+      },
       summary: {
         demonstrated: results.filter((r) => r.state === 'demonstrated').map((r) => r.scenario),
         notDemonstrated: notDemonstrated.map((r) => r.scenario),
         failed: failed.map((r) => r.scenario),
+        note:
+          "Three states, not a boolean. 'demonstrated', 'not-demonstrated' and 'failed' are " +
+          'different facts, and an earlier version of this file collapsed the last two into ' +
+          'allScenariosPassed:false with a prose note explaining the difference. A boolean ' +
+          'plus documentation is a boolean plus a thing nobody reads.',
       },
     },
     null,
