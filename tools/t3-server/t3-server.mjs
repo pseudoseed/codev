@@ -185,8 +185,64 @@ function readPid() {
   }
 }
 
+/**
+ * The t3 server needs `node:sqlite`, which is Node 22+.
+ *
+ * Checked BEFORE spawning, because the failure without this check is
+ * unrecognisable: `npx t3 serve` inherits our Node, the server writes
+ * `Error: No such built-in module: node:sqlite` into its log and exits, `start`
+ * still prints "started pid N", and `ready` then spends 180 seconds waiting for
+ * a process that has been dead the whole time before reporting that the server
+ * "did not answer". Every word of that is true and all of it points at the
+ * network. That happened, and it cost the run.
+ */
+function assertNodeVersion() {
+  const major = Number(process.versions.node.split('.')[0]);
+  if (major < 22) {
+    die(
+      MISMATCH,
+      `Node ${process.versions.node} cannot run the t3 server: it requires \`node:sqlite\`, ` +
+        `which arrived in Node 22.\n` +
+        `  \`npx\` inherits this process's Node, so the server would start, fail on the missing\n` +
+        `  module, and exit before answering anything.\n` +
+        `  Re-run under Node 22, e.g. \`nvm use 22\`.`,
+    );
+  }
+}
+
+/**
+ * Confirm the spawned server is still alive a moment after `spawn` returned.
+ *
+ * `spawn` succeeding means a process was created, not that it stayed. Reporting
+ * "started pid N" for a process that has already exited is a check announcing a
+ * result it never measured, which is the failure mode this whole harness exists
+ * to avoid making.
+ */
+function assertChildSurvived(pid) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      // Redact first: the log is read below and may hold a pairing token.
+      pairingToken();
+      const log = join(runtimeDir, 'server.log');
+      const tail = existsSync(log)
+        ? readFileSync(log, 'utf8').split('\n').filter((line) => /error|fatal|cannot/i.test(line)).slice(-3).join('\n')
+        : '';
+      die(
+        MISMATCH,
+        `Server process ${pid} exited immediately after starting.\n` +
+          (tail ? `  From its log:\n    ${tail.replace(/\n/g, '\n    ')}` : '  Its log records nothing.'),
+      );
+    }
+    execFileSync('sleep', ['0.25']);
+  }
+}
+
 function start() {
   verify();
+  assertNodeVersion();
 
   const existing = readPid();
   if (existing) die(MISMATCH, `A harness server is already running (pid ${existing}). Run \`stop\` first.`);
@@ -222,6 +278,8 @@ function start() {
   writeFileSync(pidFile, String(child.pid));
   writeFileSync(portFile, String(port));
   child.unref();
+
+  assertChildSurvived(child.pid);
 
   say(`started pid ${child.pid}; log at ${log}`);
   say(`NOTE: the published t3 CLI is used to serve the pinned checkout. If the CLI and the`);
