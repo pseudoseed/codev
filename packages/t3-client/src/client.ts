@@ -98,8 +98,15 @@ interface Pending {
 const OPEN = 1;
 
 export interface T3ClientOptions {
-  /** How long to wait for an `Exit` before giving up. Streams override per call. */
+  /** How long to wait for an `Exit` on a non-streaming call. */
   readonly requestTimeoutMs?: number;
+  /**
+   * How long a stream may be **silent** before it is abandoned. Default 300s.
+   *
+   * Idle, not total: a subscription under traffic must not be torn down for
+   * being long-lived, and Phase 3 holds one across a gate that can last a day.
+   */
+  readonly streamIdleTimeoutMs?: number;
   /** Called for any frame not attributable to a request — `Defect`, `Pong`. */
   readonly onOutOfBand?: (frame: ServerFrame) => void;
   /**
@@ -333,21 +340,42 @@ export class T3Client {
     timeoutMs?: number,
   ): Promise<unknown> {
     const id = this.#nextId++;
-    const ms = timeoutMs ?? this.options.requestTimeoutMs ?? 300_000;
+    // IDLE, not total. A stream's timeout counts silence, not duration.
+    //
+    // This was a total-duration timeout, so a healthy subscription under
+    // continuous traffic was torn down and resubscribed every 300 seconds, and it
+    // gave up without telling the server — leaving the work running server-side
+    // with nothing reading it. Phase 3 holds a subscription across a gate that
+    // may last a day; a 5-minute total budget is not a timeout, it is a lease
+    // nobody asked for.
+    const ms = timeoutMs ?? this.options.streamIdleTimeoutMs ?? 300_000;
 
     return await new Promise<unknown>((resolve, reject) => {
+      const armIdleTimer = () => {
+        if (pending.timer) clearTimeout(pending.timer);
+        pending.timer = setTimeout(() => {
+          this.#pending.delete(id);
+          // Tell the server to stop. Abandoning the request silently leaves it
+          // producing values for a client that has gone.
+          try {
+            this.#sendRaw(interrupt(id));
+          } catch {
+            /* the socket is already gone; nothing to interrupt through */
+          }
+          reject(new RequestTimeoutError(method, ms));
+        }, ms);
+      };
+
       const pending: Pending = {
         method,
         resolve,
         reject,
         onChunk: (values) => {
+          armIdleTimer();
           for (const value of values) onValue(value);
         },
       };
-      pending.timer = setTimeout(() => {
-        this.#pending.delete(id);
-        reject(new RequestTimeoutError(method, ms));
-      }, ms);
+      armIdleTimer();
       this.#pending.set(id, pending);
 
       try {

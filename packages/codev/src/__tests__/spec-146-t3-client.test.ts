@@ -27,7 +27,7 @@ import {
 import { classifyResume, SequenceCursor } from '../../../t3-client/src/resume.js';
 import { assertTransportSafe, missingScopes, webSocketUrl } from '../../../t3-client/src/auth.js';
 import { exponentialBackoff, ManagedSocket } from '../../../t3-client/src/socket.js';
-import { T3Client, NotConnectedError, ProtocolError, type SocketLike } from '../../../t3-client/src/client.js';
+import { T3Client, NotConnectedError, ProtocolError, RequestTimeoutError, type SocketLike } from '../../../t3-client/src/client.js';
 import { checkPayload, checkableMethods, PayloadShapeError } from '../../../t3-client/src/checked.js';
 import { ResumingSubscription, SubscriptionTerminatedError } from '../../../t3-client/src/subscription.js';
 
@@ -1351,5 +1351,128 @@ describe('spec 146 phase 2: ManagedSocket notices an ESTABLISHED socket closing'
     expect(drops, 'an established close must report a drop').toHaveLength(1);
     expect(drops[0].willRetry, 'reopening is the caller’s decision').toBe(false);
     expect(managed.state).toBe('closed');
+  });
+});
+
+describe('spec 146 phase 2: a stream times out on SILENCE, not on duration', () => {
+  it('does not abandon a stream that keeps delivering', async () => {
+    // It was a total-duration timeout, so a healthy subscription under continuous
+    // traffic was torn down and resubscribed every 300 seconds. Phase 3 holds a
+    // subscription across a gate that can last a day.
+    vi.useFakeTimers();
+    try {
+      const sent: string[] = [];
+      let onMessage: ((event: { data: unknown }) => void) | undefined;
+      const socket = {
+        send: (data: string) => void sent.push(data),
+        close: () => {},
+        addEventListener: (type: string, listener: unknown) => {
+          if (type === 'message') onMessage = listener as typeof onMessage;
+        },
+        readyState: 1,
+      } as unknown as SocketLike;
+
+      const client = new T3Client(socket, { checkPayloads: false, streamIdleTimeoutMs: 1000 });
+      const seen: unknown[] = [];
+      const promise = client.stream('orchestration.subscribeThread', {}, (v) => seen.push(v));
+      const id = JSON.parse(sent[0]).id;
+      let settled = false;
+      void promise.then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+
+      // Five chunks, each 800ms apart: well past the 1000ms budget in total, but
+      // never 1000ms of silence.
+      for (let i = 0; i < 5; i += 1) {
+        await vi.advanceTimersByTimeAsync(800);
+        onMessage?.({ data: JSON.stringify([{ _tag: 'Chunk', requestId: id, values: [i] }]) });
+      }
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(settled, 'a stream under traffic must not time out').toBe(false);
+      expect(seen).toHaveLength(5);
+
+      // Now go quiet past the idle budget.
+      await vi.advanceTimersByTimeAsync(1500);
+      await expect(promise).rejects.toBeInstanceOf(RequestTimeoutError);
+
+      // And it told the server to stop rather than abandoning the work silently.
+      const interrupts = sent.map((f) => JSON.parse(f)).filter((f) => f._tag === 'Interrupt');
+      expect(interrupts, 'a timeout must interrupt the server-side request').toHaveLength(1);
+      expect(interrupts[0].requestId).toBe(id);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('spec 146 phase 2: a past-the-head gap can be reconciled in band', () => {
+  it('moves the cursor forward, so the same stale cursor is not re-sent forever', async () => {
+    // The snapshot carries no sequence, so the cursor never advances on its own:
+    // every attempt re-sent the same stale cursor and got the same snapshot. That
+    // is the scenario criterion D demonstrates live — a cursor surviving a
+    // restore of the server's database.
+    const calls: Array<Record<string, unknown>> = [];
+    const client = {
+      async stream(_m: string, payload: Record<string, unknown>, onValue: (v: unknown) => void) {
+        calls.push(payload);
+        onValue({ kind: 'snapshot', snapshot: { threads: [] } });
+        onValue({ kind: 'synchronized' });
+        return undefined;
+      },
+    };
+
+    const sub = new ResumingSubscription(async () => ({ client: client as never, close: () => {} }), {
+      method: 'orchestration.subscribeThread',
+      payload: {},
+      sequenceOf: () => null,
+      isSnapshot: (v: unknown) => (v as { kind?: string })?.kind === 'snapshot',
+      isSynchronized: (v: unknown) => (v as { kind?: string })?.kind === 'synchronized',
+      onValue: () => {},
+      onResume: (outcome) => {
+        // What a real caller does: reconcile from the snapshot, then tell the
+        // subscription where it now stands.
+        if ((outcome as { kind: string }).kind === 'gap') sub.reconcileTo(9_000);
+      },
+      startAfter: 5_000,
+      delayBetweenAttemptsMs: 2,
+    });
+
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 40));
+    sub.stop();
+    await running;
+
+    expect(calls[0].afterSequence).toBe(5_000);
+    expect(calls[1].afterSequence, 'the reconciled cursor must be used').toBe(9_000);
+  });
+
+  it('refuses to move the cursor backwards', async () => {
+    // A stale snapshot walking the cursor back would redeliver applied events and
+    // break the monotonicity everything else here relies on.
+    const client = {
+      async stream(_m: string, _p: Record<string, unknown>, onValue: (v: unknown) => void) {
+        onValue({ kind: 'event', event: { sequence: 100 } });
+        onValue({ kind: 'synchronized' });
+        return undefined;
+      },
+    };
+    const sub = new ResumingSubscription(async () => ({ client: client as never, close: () => {} }), {
+      method: 'orchestration.subscribeThread',
+      payload: {},
+      sequenceOf: (v: unknown) => (v as { event?: { sequence?: number } })?.event?.sequence ?? null,
+      isSnapshot: () => false,
+      isSynchronized: (v: unknown) => (v as { kind?: string })?.kind === 'synchronized',
+      onValue: () => {},
+      onResume: () => {},
+      delayBetweenAttemptsMs: 2,
+    });
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 20));
+    sub.reconcileTo(5);
+    expect(sub.applied).toBe(100);
+    sub.stop();
+    await running;
   });
 });

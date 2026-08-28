@@ -158,6 +158,26 @@ export class ResumingSubscription {
     return this.#cursor.applied;
   }
 
+  /**
+   * Move the cursor after reconciling a gap out of band.
+   *
+   * Without this a past-the-head gap is unrecoverable in band: the snapshot
+   * carries no sequence, so the cursor never advances, and every subsequent
+   * attempt re-sends the same stale cursor and gets the same snapshot. That is
+   * exactly the scenario criterion D demonstrates against a live server — a
+   * cursor surviving a restore of the server's database — so it is the case most
+   * likely to be met in production, not a corner.
+   *
+   * The caller reconciles from the snapshot it was handed, then calls this. The
+   * cursor only ever moves forward here: accepting a lower value would re-deliver
+   * events already applied and, worse, would let a stale snapshot walk the cursor
+   * backwards.
+   */
+  reconcileTo(sequence: number): void {
+    if (sequence <= this.#cursor.applied) return;
+    this.#cursor = new SequenceCursor(sequence, this.options.persist);
+  }
+
   /** Stop reconnecting and close the current transport. Idempotent. */
   stop(): void {
     this.#stopped = true;
