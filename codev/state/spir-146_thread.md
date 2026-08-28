@@ -839,3 +839,40 @@ and consecutive events on one thread are not consecutive numbers. A C test that
 asserts the replayed sequences are contiguous integers would fail on a correct
 server. The spike avoided this by comparing `eventId` lists against a control
 connection rather than by arithmetic on sequences — copy that, not the shortcut.
+
+### A Phase 2 defect found by Phase 3 groundwork, fixed before the phase closed
+
+`classifyResume` asserted `first === afterSequence + 1` and then walked the list
+demanding `previous + 1`. Both are arithmetic on a counter that is **global**, not
+per-thread: `orchestration_events` has one `sequence` column
+(`OrchestrationEventStore.ts:160-181`, `WHERE sequence > ? ORDER BY sequence ASC`)
+and `ws.ts:1498-1508` filters that global stream down to the subscribed thread.
+
+On any server with a second active thread, a correct replay after 45 looks like
+`48, 51, 52`. The old code called that a gap — twice over, once for the late start
+and once for each "hole". Every healthy resume on a busy server would have been a
+gap, and porch would have reconciled from snapshots forever while reporting that
+it was detecting loss.
+
+**Why nothing caught it.** The unit tests fed it consecutive integers. The live run
+classified real sequences and passed — because that run had exactly one active
+thread, so the global counter and the thread's counter were the same numbers. Code,
+tests and live evidence all agreed. This is the pattern already in this thread
+stated in its general form: *agreement between tools built from the same assumption
+is not corroboration, it is the assumption repeated.* Three instruments, one
+premise, and the premise was never checked against the server. What broke the tie
+was not another instrument — it was reading `readFromSequence`'s SQL.
+
+**The fix, and what it gives up.** `contiguous` is renamed `replayed`, because
+"the server honoured the cursor" is what is actually established and "the range has
+no holes" is not knowable here. Events at or below the cursor are dropped as the
+redelivery t3code performs deliberately (`ws.ts:1481`), not flagged. `gap` is kept
+for the two cases that are real and protocol-level: a snapshot answer, and a
+response violating ascending order.
+
+A hole inside a replayed range is now **explicitly undetectable at this layer**,
+said in the file and asserted by a test that shows the two responses are identical.
+That is a genuine loss of capability compared with what the old code claimed — but
+the old code did not have the capability, it had a false positive on every busy
+server. Phase 3's exit conditions discharge the real check the way the spike did:
+a control connection and an `eventId` comparison.
