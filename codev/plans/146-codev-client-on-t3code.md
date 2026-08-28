@@ -1210,10 +1210,20 @@ Phase 15, behind a release checkpoint.
       unused, which is precisely the state the spec requires a release to ship in before they are
       dropped.
 - [ ] All 33 non-test mailbox references and the five files reaching the PTY manager are resolved,
-      not left dangling. Two of the 33 are **features the spec keeps**, not call sites to unwire:
-      `servers/cron-delivery.ts` and `servers/delayed-send.ts` both import `db/mailbox.js`
-      directly, and they move onto Phase 4's scheduled-delivery path here. `commands/inbox.ts`
-      follows whichever ruling Phase 4 recorded.
+      not left dangling. **Four of the 33 are features or commands the spec keeps**, not call sites
+      to unwire. Each is named, because a builder who treats them as unwiring removes behaviour
+      silently:
+      - `servers/cron-delivery.ts:27-29` and `servers/delayed-send.ts` import `db/mailbox.js`
+        directly. Both move onto Phase 4's scheduled-delivery path here.
+      - `commands/cleanup.ts:17` imports `dismissHeldForAgent` from `db/mailbox.js`. `afx cleanup`
+        is one of the six commands the spec's open question 4 preserves, so its held-message
+        teardown needs an equivalent on the thread path, or an explicit ruling that a settled
+        thread has nothing to dismiss.
+      - `commands/status.ts` renders `heldCount` and `mailboxEscalated` per builder. "Held" is a
+        render-gate concept with no thread-path equivalent, so those columns either retire or point
+        at pre-due scheduled messages — the same ruling Phase 4 makes for `afx inbox`, applied
+        consistently rather than per call site.
+      `commands/inbox.ts` follows whichever ruling Phase 4 recorded.
 - [ ] Every framework change is mirrored in `codev-skeleton/`, and the whole repo is grepped across
       both trees before this is called done.
 - [ ] `codev-skeleton/` documents running a t3code server as an install requirement, which it
@@ -1303,12 +1313,12 @@ is a fact to look up, not to assume.
 | 27 contract commits a month, and the source-hash layer fires on cosmetic changes too | High | Medium | The closure is 9 files, so each fire is a bounded read; the generated diff runs alongside and answers "did anything we consume change" in most cases without a manual read |
 | Ack backpressure missed, streams stall under load | Medium | High | Phase 2 tests it directly, with an ack-suppressed control that must stall |
 | Delivery semantics fail, mailbox cannot be deleted | Medium | Medium | Phase 4 runs early and its failure is an expected outcome the spec already rules on, not a blocker |
-| The approval boundary is claimed stronger than it is | Medium | High | Phase 5 states the loopback-attribution limit in the threat model and tests the refusal that actually matters |
-| A second driver behaves differently | Medium | High | Phase 9 runs the full protocol on two drivers before any deletion |
-| The 24-hour gate is discovered late and stalls the schedule | Medium | Medium | Started in Phase 9, four phases before it is needed |
+| The approval boundary is claimed stronger than it is | Medium | High | Phase 6 states the loopback-attribution limit in the threat model and tests the refusal that actually matters |
+| A second driver behaves differently | Medium | High | Phase 10 runs the full protocol on two drivers before any deletion |
+| The 24-hour gate is discovered late and stalls the schedule | Medium | Medium | Started in Phase 10, four phases before it is needed |
 | Architect cutover loses conversation state | Medium | High | One workspace at a time, `/arch-save` first, and the spec's rollback order: stop new spawns, drain, only then revert schema |
-| Tiling ships as a wireframe that passes tests | Medium | High | Phase 11 asserts measured geometry and computed font size from the rendered page under Playwright, not from stylesheets |
-| Deleting the mailbox silently removes `afx send --delay` and cron notifications | **Confirmed** | High | Both hard-import `db/mailbox.js` (`cron-delivery.ts:27-29`, `delayed-send.ts`) while the spec keeps both features. Phase 4 builds durable scheduled delivery on the thread path; Phase 13 moves them onto it rather than treating them as call sites to unwire |
+| Tiling ships as a wireframe that passes tests | Medium | High | Phase 12 asserts measured geometry and computed font size from the rendered page under Playwright, not from stylesheets |
+| Deleting the mailbox silently removes `afx send --delay` and cron notifications | **Confirmed** | High | Both hard-import `db/mailbox.js` (`cron-delivery.ts:27-29`, `delayed-send.ts`) while the spec keeps both features. Phase 4 builds durable scheduled delivery on the thread path; Phase 14 moves them onto it rather than treating them as call sites to unwire |
 | The live-server harness is improvised per phase, or never built | Medium | High | The pinned clone has no `node_modules` and has never been installed. Phase 1 owns the harness and Phase 2 does not start until it comes up twice from cold; absence reports as skipped, never as pass |
 
 ## Documentation Updates
