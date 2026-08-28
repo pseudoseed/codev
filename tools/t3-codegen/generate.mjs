@@ -573,7 +573,7 @@ if (checkOnly) {
         `UPSTREAM CHANGED; EFFECT ON CONSUMED SHAPES UNKNOWN.\n` +
           `  source-hash.json moved: the pinned contract source is not what it was.\n` +
           `  schema.json did not: the emitter sees no difference.\n\n` +
-          `This is NOT a false positive and NOT a formatting nit. All 20 schemas in\n` +
+          `This is NOT a false positive and NOT a formatting nit. All ${lossy.length} schemas in\n` +
           `generated/LOSSY.md — every branded id in the contract — emit unconstrained, so a\n` +
           `relaxed constraint lands exactly here with a zero-byte schema diff.\n` +
           `Read the source diff before regenerating. Stale artifacts: ${drifted.join(', ')}`,

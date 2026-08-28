@@ -369,9 +369,24 @@ v2 suite. 42 spec-146 tests.
 
 ### The pattern, for the review doc
 
-Seven instances on this project of one failure shape: **a check that reports
-success while measuring nothing.** Recording it once as a pattern rather than
-seven times as incidents, per the architect.
+Nine instances on this project of one failure shape: **a check that reports a
+result it never measured.** Recording it once as a pattern rather than nine times
+as incidents.
+
+**It is not a builder problem, and the review doc must not frame it as one.**
+Five are mine, two are porch's, one is the harness's, and the ninth is the
+architect's — their verification of my remediation piped a grep into `head` and
+chained the verdict `echo` on `head`'s exit code. `head` exits 0 on empty input,
+so it printed FOUND for all 25 commits it examined, including provably clean
+ones. They caught it only because the output was too uniform to be true. A check
+that reports positive regardless is the same defect as one that reports negative
+regardless; the direction is incidental.
+
+The instance that best shows the cost is the near-miss: the architect handed me
+`git rebase --onto 8f2a2c195 a8c583dc4~1`, but `a8c583dc4~1` **is**
+`8f2a2c195`, so it would have rebased onto itself, replayed the blob-carrying
+commits unchanged, and exited 0. Had I trusted that exit code we would have
+force-pushed the secrets back up while believing they were gone.
 
 Mine, five:
 
@@ -393,20 +408,33 @@ Mine, five:
    wrapper — while the server, its grandchild, kept listening. A later "cold"
    start would silently have been warm.
 
-Framework, two — both now in #151:
+Framework and process, four:
 
 6. **porch cannot distinguish contention from failure.** It reported
    `CHECKS FAILED` for a suite that passes, because "another run holds the lock"
    and "the tests failed" arrive at the same exit code.
 7. **`porch done` from the wrong cwd exits 0 having done nothing.** It resolves
    the project from cwd, printed "Project 146 not found", and returned success.
+8. **`classify-churn` exited 1 on an empty commit range** — the normal state
+   right at the pin — so `REFRESH.md`'s own step 2 failed whenever it had
+   nothing to report.
+9. **A verification whose verdict was chained on `head`'s exit code**, so it
+   reported FOUND unconditionally. The architect's, on my remediation.
 
-Two things generalise. **Predicting what a check should find before running it**
+Three things generalise. **A verdict must never be chained on a pipeline's last
+stage** — `head`, `tail` and `grep -c` all exit 0 on empty input, so
+`cmd | head && echo FOUND` is an unconditional FOUND. **Predicting what a check
+should find before running it**
 is what caught 2 and would have caught 4 sooner — a test that only proves the
 happy path passes against the broken version too. And **a distinct signal for
 "could not tell"** is the fix in every case: three exit codes in the harness,
 `unclassifiable` as a third churn verdict, `ctx.skip()` instead of an early
 `return`, and `UnresolvedRefError` instead of a silent walk.
+
+And **two tests of the same kind are one test run twice.** When the architect
+gated the secret-scrub on two `--diff-filter=A` greps, I added a third that
+walks each commit's *tree* instead of its diff. They kept it, on the reasoning
+that the first two shared a failure mode.
 
 ### Correction: PID 61593 was not in my worktree
 

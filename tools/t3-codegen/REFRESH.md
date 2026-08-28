@@ -17,9 +17,16 @@ silently drifting.
 
 ## Why this needs doing often
 
-184 commits landed on the closure between 2026-02-07 and 2026-08-25 — roughly 27 a month.
+55 commits touched the closure between 2026-06-01 and the pin — roughly 20 a month. Of the 21
+that changed a shape Codev consumes, **0 are confirmed breaking**, 3 are non-breaking and 18 are
+undecidable because they alter unions. See `codev/research/146-contract-churn-classification.md`.
+
+So the pin does not go stale as fast as raw commit counts suggest — but 18 undecidable plus 32
+`source-only` commits means most churn has **unknown** effect rather than a known-safe one, which
+is why this procedure exists at all rather than a "check the changelog" habit.
+
 t3code also pins `effect: 4.0.0-beta.103` and imports its RPC from `effect/unstable/rpc/*`, a
-pre-1.0 beta on a path the library marks unstable. A pin here goes stale in weeks.
+pre-1.0 beta on a path the library marks unstable.
 
 ## The two drift layers, and which one matters
 
@@ -27,7 +34,7 @@ pre-1.0 beta on a path the library marks unstable. A pin here goes stale in week
 
 `toJsonSchemaDocument` drops checks applied on the decoded side of a `decodeTo` transform.
 `TrimmedNonEmptyString` is exactly that shape, and it is the base of every branded id in the
-contract, so all 20 schemas in `generated/LOSSY.md` emit as unconstrained. If upstream relaxed
+contract, so every schema listed in `generated/LOSSY.md` emits as unconstrained. If upstream relaxed
 a branded id tomorrow, **not one byte of the generated output would change.** Only the source
 hash catches it.
 

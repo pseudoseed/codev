@@ -7,8 +7,9 @@
  * equivalent. `toJsonSchemaDocument` drops checks applied on the decoded side of
  * a `decodeTo` transform, and `TrimmedNonEmptyString` is exactly that shape — so
  * every branded id in the contract (`ThreadId`, `ProjectId`, `CommandId`,
- * `TurnId`, `MessageId`, …) emits as an unconstrained string. 20 such schemas are
- * listed in `generated/LOSSY.md`.
+ * `TurnId`, `MessageId`, …) emits as an unconstrained string. Every such schema is
+ * listed in `generated/LOSSY.md`, which the generator writes — count deliberately
+ * not repeated here, because a hardcoded one goes stale the moment upstream moves.
  *
  * A pass therefore means "matches the emitted shape". It does NOT mean the server
  * will accept the payload, and no call site may treat it as though it does. That

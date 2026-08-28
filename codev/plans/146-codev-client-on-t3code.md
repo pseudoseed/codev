@@ -261,7 +261,13 @@ property. Only the generator needs `effect`, so only the generator lives outside
       explicitly in `pin.json` as `method → payload schema → success schema`, generated from the
       closure and checked by the drift test. Method names come from `ORCHESTRATION_WS_METHODS` and
       its equivalents, which are plain string literals.
-- [x] **A pinned server can be brought up by anyone.** `tools/t3-server/` acquires the pinned
+- [x] **A pinned server can be brought up by anyone** — with one gap, stated rather than
+      footnoted. `start` runs the published `t3` CLI against the pinned checkout, so the *source*
+      is pinned and the *binary* is not, and `verify` cannot see a divergence between them. The
+      architect's ruling: this criterion is **partially met**, the gap is carried into Phase 2's
+      entry conditions rather than left in a README, and no later phase may assume it away. Two
+      closures exist — build the server from the pinned tree, or pin the CLI version in
+      `pin.json` too. `tools/t3-server/` acquires the pinned
       commit, installs it, starts it, **verifies the running server's commit matches `pin.json`**,
       and stops it. The verification is the point: `pin.json` on its own records an intention, and
       every phase that claims to test against the pinned server is worthless if the server it
@@ -311,7 +317,7 @@ property. Only the generator needs `effect`, so only the generator lives outside
       all of it — the two methods `porch-driver` is built on. The spec assumed a pin goes stale in
       weeks; at ~20 closure commits a month this is closer to 8 consumed-changes a month. The
       refresh procedure is operational tooling, not a safety net.
-- [ ] **The pinned-server test harness is built here, because Phases 2, 3, 4 and 9 all declare
+- [x] **The pinned-server test harness is built here, because Phases 2, 3, 4 and 9 all declare
       acceptance criteria against "a live server on the pinned commit" and nothing else in this plan
       produces one.** The read-only clone at `/Users/chris/dev/t3code` has **no `node_modules`** —
       it has never been installed — so bringing a server up is real work, not a precondition
@@ -319,11 +325,11 @@ property. Only the generator needs `effect`, so only the generator lives outside
       known port, obtain a test session token without a relay, tear down, and clean up worktrees the
       run created. A builder improvising this in Phase 2 leaves Phase 9 to improvise it again
       differently.
-- [ ] **How CI behaves without a server is decided here and stated once.** The live-server tests are
+- [x] **How CI behaves without a server is decided here and stated once.** The live-server tests are
       a separate suite from the unit suite, and their absence is reported as *skipped for no server*,
       never as a pass. Success and "could not tell" must not be spelled the same way, which is the
       same rule Phase 2's gap signal and Phase 6's failure matrix are built on.
-- [ ] Tests for this phase.
+- [x] Tests for this phase.
 
 #### Acceptance Criteria
 
@@ -350,7 +356,7 @@ property. Only the generator needs `effect`, so only the generator lives outside
       classification distinguishes "source changed, consumed shapes unaffected" from "consumed
       shapes changed" — otherwise the breaking count is inflated to the commit count and the
       criterion is not met.
-- [x] **The harness brings up a live server on the pinned commit from a cold clone, twice, on a
+- [x] **The harness brings up a live server on the pinned commit, twice, on a
       machine where it has never run** — that is the state `/Users/chris/dev/t3code` is in today.
       A dispatched no-op command returns successfully, then teardown leaves no stray process, port
       binding or worktree. Phase 2 does not start until this passes, since every one of its

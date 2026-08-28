@@ -20,6 +20,11 @@ import {
   UnsupportedKeywordError,
   UnresolvedRefError,
 } from '../../../types/src/t3/shape-check.js';
+// Imported through the PACKAGE ENTRY POINT, not the file, so this exercises the
+// `./t3` export map and the re-export list. Nothing did before, which is how
+// `t3Defs` and `UnresolvedRefError` came to be missing from it — the tests
+// reached past the surface that consumers actually use.
+import * as t3Entry from '../../../types/src/t3/index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..', '..');
@@ -165,6 +170,36 @@ describe('shapeCheck: against the real generated contract', () => {
       { cwd: '', refName: 'HEAD', path: null },
       schemas.VcsCreateWorktreeInput,
       defs,
+    );
+    expect(result.matches).toBe(true);
+  });
+});
+
+describe('spec 146: the ./t3 entry point exports what a consumer needs', () => {
+  /**
+   * Phase 2 imports from `@cluesmith/codev-types/t3`, not from the files. Two
+   * things were missing from that surface and reviews caught both: `t3Defs`,
+   * without which `shapeCheck` throws on every ref-carrying schema, and
+   * `UnresolvedRefError`, without which a caller cannot tell a resolution
+   * failure from a genuine mismatch.
+   */
+  it('exports the schemas AND the defs they $ref into', () => {
+    expect(t3Entry.t3Schemas).toBeDefined();
+    expect(t3Entry.t3Defs, 'shapeCheck is unusable on ref-carrying schemas without this').toBeDefined();
+    expect(t3Entry.t3Methods).toBeDefined();
+  });
+
+  it('exports both error types, so a caller can catch them by name', () => {
+    expect(t3Entry.UnsupportedKeywordError).toBeDefined();
+    expect(t3Entry.UnresolvedRefError).toBeDefined();
+  });
+
+  it('is usable end to end through the entry point alone', () => {
+    // The actual Phase 2 call shape. If this throws, Phase 2 is blocked.
+    const result = t3Entry.shapeCheck(
+      { cwd: '/repo', refName: 'HEAD', path: null },
+      t3Entry.t3Schemas.VcsCreateWorktreeInput as Record<string, unknown>,
+      t3Entry.t3Defs as Record<string, Record<string, unknown>>,
     );
     expect(result.matches).toBe(true);
   });

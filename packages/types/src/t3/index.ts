@@ -8,7 +8,7 @@
  * Two things a consumer must know before using any of this:
  *
  * 1. **The generated types and schema are a lower bound.** `generated/LOSSY.md`
- *    lists 20 schemas — every branded id in the contract among them — whose
+ *    lists every schema — every branded id in the contract among them — whose
  *    constraints do not survive JSON Schema emission. Matching the shape is not
  *    the same as being acceptable to the server.
  *
@@ -18,7 +18,15 @@
  */
 
 export type { ShapeCheckResult, ShapeMismatch } from './shape-check.js';
-export { shapeCheck, describeMismatches, UnsupportedKeywordError } from './shape-check.js';
+export {
+  shapeCheck,
+  describeMismatches,
+  UnsupportedKeywordError,
+  // Exported because a caller must be able to CATCH it. shapeCheck throws this
+  // rather than matching when a `$ref` will not resolve, and a consumer that
+  // cannot name the error cannot distinguish it from a genuine mismatch.
+  UnresolvedRefError,
+} from './shape-check.js';
 export type * from './generated/types.js';
 /**
  * `t3Defs` is exported alongside the schemas because **`shapeCheck` needs it**.
