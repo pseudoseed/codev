@@ -52,6 +52,18 @@ if (!existsSync(join(distDir, 'client.js'))) {
 const { T3Client } = await import(join(distDir, 'client.js'));
 const { classifyResume } = await import(join(distDir, 'resume.js'));
 const auth = await import(join(distDir, 'auth.js'));
+const { checkableMethods } = await import(join(distDir, 'checked.js'));
+
+/**
+ * Every client this run opens, so the scenarios can report which methods were
+ * actually shape-checked.
+ *
+ * Without this, "scenario A passed with checking on" looks exactly the same
+ * whether every payload was checked and matched, or every method reported
+ * `unchecked` and nothing was looked at. That is the defect this project keeps
+ * finding, and it would be one to leave in the instrument that reports on it.
+ */
+const clients = [];
 
 const port = Number(process.env.T3_HARNESS_PORT ?? 3799);
 const base = `http://127.0.0.1:${port}`;
@@ -147,7 +159,9 @@ async function connect({ suppressAcks = false } = {}) {
       return socket.readyState;
     },
   };
-  return { client: new T3Client(adapter, { requestTimeoutMs: 45_000 }), socket, scopes: access.scope };
+  const client = new T3Client(adapter, { requestTimeoutMs: 45_000 });
+  clients.push(client);
+  return { client, socket, scopes: access.scope };
 }
 
 // ---------------------------------------------------------------- setup
@@ -376,6 +390,40 @@ try {
           sawSnapshot === null
             ? 'server did not send a snapshot for a cursor past its head; the fallback was not exercised'
             : 'server answered a past-the-head cursor with a snapshot, and it is reported as a gap',
+      },
+    );
+  }
+
+  // ------------------------------------------------------------ E: what the checker actually checked
+  {
+    // Payload shape-checking is ON for every client above. This scenario reports
+    // what that amounted to, because "the scenarios passed" is consistent with
+    // "every payload matched" AND with "nothing was checked at all".
+    const unchecked = new Map();
+    for (const client of clients) {
+      for (const [method, reason] of client.uncheckedMethods) unchecked.set(method, reason);
+    }
+    const exercised = [
+      'orchestration.dispatchCommand',
+      'orchestration.subscribeThread',
+      'vcs.createWorktree',
+    ];
+    const covered = new Set(checkableMethods());
+    const notCovered = exercised.filter((m) => !covered.has(m));
+    const checkedAndMatched = exercised.filter((m) => covered.has(m) && !unchecked.has(m));
+
+    record(
+      'E: inbound payloads were shape-checked against the vendored contract',
+      checkedAndMatched.length === exercised.length ? 'demonstrated' : 'not-demonstrated',
+      {
+        methodsExercised: exercised,
+        checkedAndMatched,
+        notInGeneratedContract: notCovered,
+        reportedUnchecked: Object.fromEntries(unchecked),
+        note:
+          checkedAndMatched.length === exercised.length
+            ? 'every exercised method has a generated schema, and every live payload matched it'
+            : 'at least one exercised method was NOT checked; scenarios A-D say nothing about its payloads',
       },
     );
   }

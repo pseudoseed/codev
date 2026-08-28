@@ -28,6 +28,10 @@
     "./checked": {
       "types": "./src/checked.ts",
       "default": "./dist/checked.js"
+    },
+    "./subscription": {
+      "types": "./src/subscription.ts",
+      "default": "./dist/subscription.js"
     }
   },
   "files": [

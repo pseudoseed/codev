@@ -28,6 +28,7 @@ import { assertTransportSafe, missingScopes, webSocketUrl } from '../../../t3-cl
 import { exponentialBackoff } from '../../../t3-client/src/socket.js';
 import { T3Client, NotConnectedError, type SocketLike } from '../../../t3-client/src/client.js';
 import { checkPayload, checkableMethods, PayloadShapeError } from '../../../t3-client/src/checked.js';
+import { ResumingSubscription } from '../../../t3-client/src/subscription.js';
 
 // ---------------------------------------------------------------- envelope
 
@@ -484,5 +485,138 @@ describe('spec 146 phase 2: inbound payloads are shape-checked, and a pass is no
     // being a flag nobody wired up.
     await expect(promise).resolves.toEqual({ worktree: 'nope' });
     expect(client.uncheckedMethods.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------- resuming subscription
+
+describe('spec 146 phase 2: a subscription that survives a drop', () => {
+  /**
+   * A fake client whose `stream` hands back a scripted set of values and then
+   * either ends (server closed the stream) or throws (socket dropped).
+   */
+  function scriptedTransport(script: Array<{ values: unknown[]; drop?: boolean }>) {
+    const calls: Array<Record<string, unknown>> = [];
+    let turn = 0;
+    const client = {
+      async stream(_method: string, payload: Record<string, unknown>, onValue: (v: unknown) => void) {
+        calls.push(payload);
+        const step = script[turn] ?? { values: [], drop: false };
+        turn += 1;
+        for (const value of step.values) onValue(value);
+        if (step.drop) throw new Error('socket dropped');
+        return undefined;
+      },
+    };
+    return { calls, connect: async () => ({ client: client as never, close: () => {} }) };
+  }
+
+  const event = (sequence: number) => ({ kind: 'event', event: { sequence } });
+  const sync = { kind: 'synchronized' };
+  const snap = { kind: 'snapshot', snapshot: { threads: [] } };
+
+  const wiring = (onValue: (v: unknown, s: number | null) => void, onResume: (o: never, i: never) => void) => ({
+    method: 'orchestration.subscribeThread',
+    payload: { threadId: 't' },
+    sequenceOf: (v: unknown) => (v as { event?: { sequence?: number } })?.event?.sequence ?? null,
+    isSnapshot: (v: unknown) => (v as { kind?: string })?.kind === 'snapshot',
+    isSynchronized: (v: unknown) => (v as { kind?: string })?.kind === 'synchronized',
+    onValue,
+    onResume: onResume as never,
+  });
+
+  it('sends NO afterSequence on a first subscription, and a snapshot then is not a gap', async () => {
+    // The distinction that keeps gaps meaningful: reporting one at every startup
+    // would train the caller to ignore them.
+    const outcomes: string[] = [];
+    const t = scriptedTransport([{ values: [snap, sync] }]);
+    const sub = new ResumingSubscription(t.connect, {
+      ...wiring(() => {}, ((o: { kind: string }) => void outcomes.push(o.kind)) as never),
+    });
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 5));
+    sub.stop();
+    await running;
+
+    expect(t.calls[0]).not.toHaveProperty('afterSequence');
+    expect(outcomes[0]).toBe('replayed');
+  });
+
+  it('resubscribes with afterSequence at the last APPLIED sequence after a drop', async () => {
+    // The deliverable, asserted on the wire rather than in a comment.
+    const t = scriptedTransport([
+      { values: [event(10), event(11), sync], drop: true },
+      { values: [event(12), sync] },
+    ]);
+    const sub = new ResumingSubscription(t.connect, { ...wiring(() => {}, (() => {}) as never) });
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 10));
+    sub.stop();
+    await running;
+
+    expect(t.calls[1].afterSequence).toBe(11);
+    expect(sub.applied).toBe(12);
+  });
+
+  it('does not advance past an event whose handler threw, so it is redelivered', async () => {
+    let attempts = 0;
+    const t = scriptedTransport([
+      { values: [event(10), sync], drop: true },
+      { values: [event(10), sync] },
+    ]);
+    const sub = new ResumingSubscription(t.connect, {
+      ...wiring(
+        () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error('handler failed');
+        },
+        (() => {}) as never,
+      ),
+    });
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 10));
+    sub.stop();
+    await running;
+
+    // Cursor never moved past 10 on the first pass, so the resubscription asked
+    // for it again and the handler saw it twice. At-least-once, by construction.
+    expect(t.calls[1].afterSequence).toBe(0);
+    expect(attempts).toBe(2);
+  });
+
+  it('reports a GAP when a RESUME is answered with a snapshot', async () => {
+    const outcomes: Array<{ kind: string }> = [];
+    const t = scriptedTransport([
+      { values: [event(10), sync], drop: true },
+      { values: [snap, sync] },
+    ]);
+    const sub = new ResumingSubscription(t.connect, {
+      ...wiring(() => {}, ((o: { kind: string }) => void outcomes.push(o)) as never),
+    });
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 10));
+    sub.stop();
+    await running;
+
+    expect(outcomes[0].kind).toBe('replayed'); // first subscription
+    expect(outcomes[1].kind).toBe('gap'); // the resume was declined
+  });
+
+  it('does not re-run the handler for events at or below the cursor', async () => {
+    const seen: number[] = [];
+    const t = scriptedTransport([
+      { values: [event(10), event(11), sync], drop: true },
+      // t3code overlaps deliberately: 11 comes back on the resume.
+      { values: [event(11), event(12), sync] },
+    ]);
+    const sub = new ResumingSubscription(t.connect, {
+      ...wiring((_v, s) => void (s !== null && seen.push(s)), (() => {}) as never),
+    });
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 10));
+    sub.stop();
+    await running;
+
+    expect(seen).toEqual([10, 11, 12]);
   });
 });

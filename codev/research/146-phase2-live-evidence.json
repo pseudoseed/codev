@@ -43,6 +43,24 @@
       "emptyKind": "empty",
       "gapDistinctFromEmpty": true,
       "note": "server answered a past-the-head cursor with a snapshot, and it is reported as a gap"
+    },
+    {
+      "scenario": "E: inbound payloads were shape-checked against the vendored contract",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "methodsExercised": [
+        "orchestration.dispatchCommand",
+        "orchestration.subscribeThread",
+        "vcs.createWorktree"
+      ],
+      "checkedAndMatched": [
+        "orchestration.dispatchCommand",
+        "orchestration.subscribeThread",
+        "vcs.createWorktree"
+      ],
+      "notInGeneratedContract": [],
+      "reportedUnchecked": {},
+      "note": "every exercised method has a generated schema, and every live payload matched it"
     }
   ],
   "limits": {
@@ -55,7 +73,8 @@
     "demonstrated": [
       "A: connect, dispatch, subscribe, stream",
       "B: acks honoured (with ack-suppressed control)",
-      "D: cursor ahead of head forces a real snapshot, classified as a gap"
+      "D: cursor ahead of head forces a real snapshot, classified as a gap",
+      "E: inbound payloads were shape-checked against the vendored contract"
     ],
     "notDemonstrated": [
       "C groundwork: classification against server-issued sequences"
