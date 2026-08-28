@@ -59,8 +59,13 @@ const commits = git('log', '--format=%H|%ad|%s', '--date=short', '--reverse', si
   .slice(0, limit);
 
 if (commits.length === 0) {
-  console.error('[classify-churn] no commits touch the closure in that range');
-  process.exit(1);
+  // Exit 0. An empty range is the NORMAL state right after a refresh — the pin is
+  // current and nothing new has landed. Exiting non-zero here made the documented
+  // refresh procedure's own step 2 fail whenever it had nothing to report, which
+  // is "nothing to do" spelled exactly like "something went wrong".
+  console.error('[classify-churn] no commits touch the closure in that range — nothing to classify');
+  console.log(JSON.stringify({ range: since, total: 0, counts: {}, rows: [] }, null, 2));
+  process.exit(0);
 }
 
 console.error(`[classify-churn] classifying ${commits.length} commits touching the closure...`);
@@ -127,6 +132,82 @@ function sourceOf(sha) {
   return parts;
 }
 
+
+/**
+ * Classify a schema change as breaking or non-breaking FOR A CLIENT.
+ *
+ * Criterion 12 asks for breaking/non-breaking, and an earlier version of this
+ * tool answered a different question: it reported every emitted-schema change as
+ * "the breaking count". That is a superset. Adding an optional field changes the
+ * emitted schema and breaks nobody. Codex caught the conflation in review and was
+ * right; the count it produced was an upper bound wearing a precise name.
+ *
+ * Breaking, from the perspective of a client Codev writes:
+ *   - a property we send stops being accepted (removed from properties)
+ *   - a property becomes required that was not
+ *   - a type narrows (string -> integer), or an enum loses a member
+ *   - additionalProperties tightens to false
+ * Non-breaking:
+ *   - a new optional property appears
+ *   - an enum gains a member
+ *   - descriptions, titles, ordering
+ *
+ * Anything this cannot decide is returned as `unknown` rather than guessed. The
+ * whole point of the exercise is not to spell "I could not tell" like "fine".
+ */
+function classifyChange(before, after) {
+  const reasons = [];
+  let unknown = false;
+
+  const walk = (a, b, path) => {
+    if (a === undefined || b === undefined) return;
+    if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) {
+      if (JSON.stringify(a) !== JSON.stringify(b)) reasons.push(`${path}: value changed`);
+      return;
+    }
+
+    if (a.type !== b.type && (a.type || b.type)) {
+      reasons.push(`${path}: type ${a.type ?? '?'} -> ${b.type ?? '?'}`);
+    }
+
+    if (Array.isArray(a.enum) && Array.isArray(b.enum)) {
+      const removed = a.enum.filter((v) => !b.enum.includes(v));
+      if (removed.length) reasons.push(`${path}: enum lost ${JSON.stringify(removed)}`);
+    }
+
+    const aReq = new Set(a.required ?? []);
+    const bReq = new Set(b.required ?? []);
+    for (const key of bReq) if (!aReq.has(key)) reasons.push(`${path}/${key}: became required`);
+
+    const aProps = a.properties ?? {};
+    const bProps = b.properties ?? {};
+    for (const key of Object.keys(aProps)) {
+      if (!(key in bProps)) reasons.push(`${path}/${key}: property removed`);
+      else walk(aProps[key], bProps[key], `${path}/${key}`);
+    }
+
+    if (a.additionalProperties !== false && b.additionalProperties === false) {
+      reasons.push(`${path}: additionalProperties tightened to false`);
+    }
+
+    // Unions are where this classifier stops being confident. Rather than
+    // pretending, mark the whole comparison unknown.
+    if (Array.isArray(a.anyOf) || Array.isArray(b.anyOf) || Array.isArray(a.oneOf) || Array.isArray(b.oneOf)) {
+      if (JSON.stringify(a) !== JSON.stringify(b)) unknown = true;
+    }
+  };
+
+  try {
+    walk(before, after, '');
+  } catch {
+    unknown = true;
+  }
+
+  if (reasons.length > 0) return { verdict: 'breaking', reasons: reasons.slice(0, 4) };
+  if (unknown) return { verdict: 'unknown', reasons: ['union shape changed; not decidable here'] };
+  return { verdict: 'non-breaking', reasons: [] };
+}
+
 const rows = [];
 let previous = null;
 let previousSource = null;
@@ -151,8 +232,22 @@ for (const [index, commit] of commits.entries()) {
     const changedMethods = Object.keys(emitted.schemas).filter((m) => emitted.schemas[m] !== previous[m]);
     const sourceChanged = pin.closure.some((f) => source[f] !== previousSource[f]);
     if (changedMethods.length > 0) {
-      verdict = 'consumed-change';
-      detail = changedMethods.join(', ');
+      // Split consumed-change into breaking / non-breaking / undecidable rather
+      // than calling the whole set "breaking".
+      const verdicts = changedMethods.map((m) => {
+        const [beforeIn, beforeOut] = String(previous[m]).split('|');
+        const [afterIn, afterOut] = String(emitted.schemas[m]).split('|');
+        const parse = (t) => { try { return JSON.parse(t); } catch { return undefined; } };
+        const a = classifyChange(parse(beforeIn), parse(afterIn));
+        const b = classifyChange(parse(beforeOut), parse(afterOut));
+        const worst = [a, b].find((v) => v.verdict === 'breaking')
+          ?? [a, b].find((v) => v.verdict === 'unknown') ?? a;
+        return { method: m, ...worst };
+      });
+      const anyBreaking = verdicts.some((v) => v.verdict === 'breaking');
+      const anyUnknown = verdicts.some((v) => v.verdict === 'unknown');
+      verdict = anyBreaking ? 'breaking' : anyUnknown ? 'consumed-change-undecidable' : 'non-breaking';
+      detail = verdicts.map((v) => `${v.method}: ${v.verdict}${v.reasons.length ? ' (' + v.reasons[0] + ')' : ''}`).join('; ');
     } else if (sourceChanged) {
       verdict = 'source-only';
       detail = pin.closure.filter((f) => source[f] !== previousSource[f]).join(', ');

@@ -13,12 +13,15 @@ For each commit touching the pinned closure, the tool reads that commit's nine c
 emits JSON Schema for the eight RPC methods Codev calls, and diffs against the previous commit's
 emission. It does not read commit messages and it does not count commits.
 
-Four verdicts, and the fourth matters:
+Six verdicts. The distinctions between them are the whole point — collapsing any two produces a
+tidier number and a false one:
 
 | Verdict | Meaning |
 |---|---|
-| `consumed-change` | The emitted schema for a method Codev calls changed. **This is the breaking count.** |
-| `source-only` | Closure source changed; emitted output did not. |
+| `breaking` | A consumed shape changed in a way that breaks a client: a property removed, one became required, a type narrowed, an enum lost a member, or `additionalProperties` tightened. **This is the breaking count.** |
+| `non-breaking` | A consumed shape changed compatibly — a new optional property, a new enum member. |
+| `consumed-change-undecidable` | A consumed shape changed inside a **union**, where breakage depends on which variant the client sends. Not decidable from the schema diff, so not guessed. |
+| `source-only` | Closure source changed; emitted output did not. **Not "safe"** — see limit 3. |
 | `unclassifiable` | The **pinned** Effect could not represent that commit's contracts. Not breaking, not safe — unknown. |
 | `baseline` | The first commit in range; nothing to diff against. |
 
@@ -28,21 +31,31 @@ Four verdicts, and the fourth matters:
 
 | Verdict | Count |
 |---|---|
-| `consumed-change` | **21** |
+| `breaking` | **0** |
+| `non-breaking` | 3 |
+| `consumed-change-undecidable` | 18 |
 | `source-only` | 32 |
 | `unclassifiable` | 1 |
 | `baseline` | 1 |
 
-**The breaking count is 21 of 54 classifiable commits — 39%.** Roughly every third commit that
-touches the closure changes a shape Codev consumes.
+**An earlier version of this report said "the breaking count is 21, 39%". That was wrong, and a
+reviewer caught it.** It counted every commit whose emitted schema changed and called that set
+breaking. That is a **superset**: adding an optional field changes the emitted schema and breaks
+nobody. The number was an upper bound wearing a precise name, which is worse than no number.
 
-Narrower windows agree, so this is not an artefact of where the window starts:
+Classified properly — required-property additions, property removals, type narrowing, enum members
+lost, `additionalProperties` tightening — **not one commit in the window is confirmed breaking for
+a client.** Three are demonstrably non-breaking.
 
-| Since | consumed-change | source-only |
-|---|---|---|
-| 2026-06-01 | 21 | 32 |
-| 2026-07-01 | 17 | 23 |
-| 2026-08-01 | 10 | 11 |
+### Why 18 are undecidable, and why that is the honest answer
+
+The payloads Codev consumes most are large unions: `ClientOrchestrationCommand` is a
+`Schema.Union`, and `subscribeThread`'s output is a union of stream items. When a union changes,
+deciding whether a *client* breaks requires knowing which variant that client sends, which the
+schema diff alone does not say. The classifier returns `unknown` rather than guessing.
+
+18 undecidable is a large fraction, and inflating it into either column would produce a
+better-looking report and a false one.
 
 ### Which methods absorb the churn
 
@@ -55,7 +68,8 @@ Narrower windows agree, so this is not an artefact of where the window starts:
 | `vcs.status` | 1 |
 
 The two methods `porch-driver` is built on are the two that change most. That is the integration's
-central risk stated as a measurement rather than a worry.
+central risk stated as a measurement rather than a worry — and it is unchanged by the correction
+above, since it counts *change*, not *breakage*.
 
 ## Three limits on this number, stated plainly
 
