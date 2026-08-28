@@ -89,6 +89,8 @@ of the same contract.
 | Interrupt | `thread.turn.interrupt` |
 | Gate requested | `thread.meta.update` title, `thread.pin`, `thread.activity.append` |
 | Builder finished | `thread.settle` |
+| Architect session | `thread.create` rooted at the workspace, not a builder worktree |
+| Human approves a gate | authenticated client session calls porch; porch writes `status.yaml` |
 | Resume after restart | persist last applied sequence; resubscribe with `afterSequence` |
 
 **2. `codev-client`.** A web client served by or beside t3code's server.
@@ -96,6 +98,10 @@ of the same contract.
 - A left sidebar tree: machine, then workspace, then architects, then that architect's builders.
 - Every row carries live status: working, turning, blocked on a named gate, or settled.
 - A tiled pane grid inside a workspace for four to six builders, plus a pane for the architect.
+- **Architects are threads too.** One model for both: an architect is a t3code thread whose
+  worktree is the workspace root rather than a builder worktree. Talking to an architect is
+  `thread.turn.start` on its thread. This is what makes the architect reachable from an iPad,
+  and it removes the last reason to keep a PTY.
 - On a narrow viewport the grid pages rather than shrinks.
 - Reachable over a tailnet from an iPad.
 - Connected to more than one machine's server at once.
@@ -124,12 +130,37 @@ structured gate-request block carrying question, choices and consequences. Phase
 client and are dropped, their intent moving to `codev-client`. Success criteria here require the
 structured content, not a bare gate name.
 
+### Gate approval
+
+Approving from the UI is in scope, and the reasoning is worth stating because it reverses an
+earlier non-goal.
+
+`--a-human-explicitly-approved-this` was never a strong control. It is a string, and any agent
+with shell access can type it. It works today because agents are told not to, not because they
+cannot. A button in a client behind a single-use pairing token and a per-machine revocable
+session is a *stronger* guarantee that a human acted, not a weaker one.
+
+So the control moves from a flag to the session:
+
+- `porch approve` grows an authenticated path that records **who** approved, from which client
+  session, and when. The approval is written to `status.yaml` by porch as it is today.
+- The existing flag stays for terminal use. It is not the security boundary and the spec stops
+  describing it as one.
+- An agent-held credential cannot approve. Approval requires a session minted by human pairing,
+  and porch records the distinction.
+- Every approval is auditable after the fact: session id, machine, timestamp, gate.
+
+The UI shows the gate's structured question and choices from #128, and the human picks one.
+
 ### Extensions and adopters
 
 `apps/vscode` and `apps/streamdeck` both reach terminal APIs directly and break when terminal
-session management is deleted. They are **in scope for migration**, not exempt: each moves to
-`porch-driver` before the deletion phase, or is explicitly retired first. Neither may be
-discovered broken after the fact.
+session management is deleted.
+
+**Ruled: both are retired, not migrated.** The owner does not use the VS Code extension and has
+never used the Stream Deck plugin. Migrating them would cost more than the client itself and
+serve nobody. Retirement is explicit and lands *before* the deletion phase, so neither is
+discovered broken after the fact. Recent Stream Deck work (specs 1463, 1465) is written off.
 
 `codev-skeleton/` gains an optional t3code dependency. An adopter without a t3code server keeps
 the existing behavior until the deletion phase, at which point running a server becomes a
@@ -146,8 +177,8 @@ documented install requirement.
 
 ## Non-Goals
 
-- Approving a gate from the UI. Approval keeps requiring `--a-human-explicitly-approved-this` at
-  a terminal. The UI shows that a gate is waiting and what it asks; it does not grant it.
+- Approving a gate from an *unauthenticated* surface, or by any agent. Approval requires a human
+  acting in an authenticated client session. See "Gate approval" below.
 - Forking t3code.
 - Enabling T3 Connect or any cloud relay.
 - Replacing `afx` as a CLI.
@@ -272,7 +303,11 @@ The mailbox is replaced only if these hold, otherwise it stays:
 - [ ] 8. With one server stopped, its subtree is marked disconnected with a last-updated
   timestamp. Other machines stay live. Nothing renders blank and nothing renders stale without
   saying so.
-- [ ] 9. `apps/vscode` and `apps/streamdeck` work against `porch-driver`, or are retired.
+- [ ] 9. `apps/vscode` and `apps/streamdeck` are retired, with their removal landed before the
+  deletion phase.
+- [ ] 9b. A human approves a real gate from the client, and porch records the approving session
+  id, machine and timestamp in `status.yaml`.
+- [ ] 9c. An agent-held credential is refused when it attempts the same approval.
 - [ ] 10. At least two provider drivers pass criterion 1, not only Codex.
 - [ ] 11. A 24-hour gate resumes with context. **Gates the deletion phase.**
 - [ ] 12. Contract churn is measured and recorded. **Gates the deletion phase.**
@@ -321,20 +356,23 @@ The mailbox is replaced only if these hold, otherwise it stays:
 
 ## Open Questions
 
-**Critical, answer before planning:**
+**Resolved by the architect, recorded here:**
 
-1. Does `codev-client` live inside t3code's `apps/` as a sibling, or as a separate app served
-   beside it? A sibling gets their build and auth for free but couples every upgrade.
-2. Do `apps/vscode` and `apps/streamdeck` migrate or retire? Criterion 9 requires one or the other.
+1. **Where `codev-client` lives: a separate app in the Codev repo, served beside the t3code
+   server.** Not a sibling in their `apps/`. The churn measurement decides it: 89 commits to
+   `orchestration.ts` in six months means living in their tree turns every upgrade into a merge
+   conflict on someone else's release cadence. Beside it, Codev owns its own build, release and
+   auth wiring, and pays only for the vendored types, which the drift test already covers.
+2. **`apps/vscode` and `apps/streamdeck`: retired.** See Extensions and adopters.
+3. **The architect is a thread.** See Desired State.
 
-**Important:**
+**Important, still open:**
 
-3. Does `afx` become a thin CLI over `porch-driver`, or keep its own path?
-4. What is the coexistence window, and what drains before the mailbox and PTY manager are removed?
-
-**Nice to know:**
-
-5. Is the architect itself a t3code thread, or does it stay a plain terminal?
+4. Does `afx` become a thin CLI over `porch-driver`, or keep its own path?
+5. What is the coexistence window, and what drains before the mailbox and PTY manager are removed?
+6. If the architect is a thread, what happens to `afx send architect` and sibling-architect
+   addressing? Likely a turn on the target architect's thread, but the multi-architect naming in
+   #47 needs a mapping.
 
 ## References
 
