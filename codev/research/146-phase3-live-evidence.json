@@ -1,9 +1,9 @@
 {
   "criterion": "Spec 146 Phase 3 live integration",
-  "ranAt": "2026-08-28T21:58:52.826Z",
+  "ranAt": "2026-08-28T22:43:20.398Z",
   "nodeVersion": "v22.22.2",
   "t3Version": "t3@0.0.35",
-  "clientCommit": "7b2277e5f000c5edb620e523494684713933ad52",
+  "clientCommit": "05a37e44215d8eba9e374cf6ef90c838ca9f8113",
   "clientTreeDirty": false,
   "harness": "codex",
   "model": "gpt-5.6-luna",
@@ -13,7 +13,7 @@
       "state": "demonstrated",
       "stateMeaning": "Ran against a live pinned server and passed.",
       "turn1": "TURN1_READY",
-      "turn2": "I’ll read `external.txt` from the working directory and return its contents in the requested format.EXTERNAL_SEEN_EXT_DATP0V0F",
+      "turn2": "I’ll read `external.txt` from the working directory and return its contents in the requested format.EXTERNAL_SEEN_EXT_XNY5R8EM",
       "checkRanInWorktree": true,
       "checkShell": "bash",
       "note": "two turns settled, and the second read a file written between them by a process porch spawned"
@@ -22,9 +22,9 @@
       "scenario": "B: a turn interrupted mid-shell settles, and its side effect is absent",
       "state": "not-demonstrated",
       "stateMeaning": "The scenario did not run to a verdict — preconditions absent, or nothing to observe. This says NOTHING about whether the code works, and is not a failure.",
-      "turnId": "01a04a62-2775-7861-a6a9-d052f811e295",
+      "turnId": "01a04a8a-de26-7bc1-9663-79597d13b6b1",
       "sawToolActivity": true,
-      "settledAfterMs": 27,
+      "settledAfterMs": 23,
       "settledWithActiveTurnIdNull": true,
       "sideEffectAtSettle": "ABSENT",
       "sideEffectAfterCommandWindow": "PRESENT",
@@ -35,22 +35,35 @@
       "scenario": "C: a socket killed mid-stream replays exactly the missing range (Phase 2 criterion C)",
       "state": "demonstrated",
       "stateMeaning": "Ran against a live pinned server and passed.",
-      "lastBeforeDrop": 44,
+      "lastBeforeDrop": 43,
       "settledSequence": 51,
-      "missingRangeSize": 7,
+      "missingRangeSize": 8,
+      "subscriptionAttempts": 2,
+      "outcomes": [
+        {
+          "kind": "empty",
+          "attempt": 1,
+          "resumed": true
+        },
+        {
+          "kind": "replayed",
+          "attempt": 2,
+          "resumed": true
+        }
+      ],
       "comparedAgainst": "a control subscription that never dropped",
       "completionEventReplayed": true,
-      "note": "the replayed eventIds equal the control connection's record over the same window"
+      "note": "ResumingSubscription resubscribed at its own applied cursor after the socket was killed, and the eventIds it applied equal the control connection's record over the same window"
     },
     {
       "scenario": "D: a subscription under traffic survives 360s without a timeout or a resubscription",
       "state": "demonstrated",
       "stateMeaning": "Ran against a live pinned server and passed.",
-      "elapsedMs": 373610,
+      "elapsedMs": 372895,
       "heartbeats": 17,
       "subscriptionAttempts": 1,
-      "handlerCalls": 153,
-      "note": "held 374s under traffic on ONE subscription attempt; the old 300s total budget would have torn it down"
+      "handlerCalls": 155,
+      "note": "held 373s under traffic on ONE subscription attempt; the old 300s total budget would have torn it down"
     },
     {
       "scenario": "E: a driver killed between the journal write and the dispatch does not apply the command twice",
@@ -62,14 +75,14 @@
           {
             "mode": "journal-before-dispatch",
             "about": "to journal, then die before dispatching",
-            "commandId": "de09f8b9-8887-4991-9859-0e240b1d5448"
+            "commandId": "dfbb2b15-4aaa-473c-bb5b-275208ea8503"
           }
         ],
         "pendingAfterCrash": [
-          "de09f8b9-8887-4991-9859-0e240b1d5448"
+          "dfbb2b15-4aaa-473c-bb5b-275208ea8503"
         ],
         "replayed": [
-          "de09f8b9-8887-4991-9859-0e240b1d5448"
+          "dfbb2b15-4aaa-473c-bb5b-275208ea8503"
         ],
         "applicationsObserved": 1,
         "appliedExactlyOnce": true
@@ -80,14 +93,14 @@
           {
             "mode": "journal-after-dispatch",
             "about": "to journal, dispatch, then die before recording the outcome",
-            "commandId": "4a0dbf09-8653-40f2-8802-d7c21a54756c"
+            "commandId": "df41a693-e6ab-4078-9099-5ff67a842794"
           }
         ],
         "pendingAfterCrash": [
-          "4a0dbf09-8653-40f2-8802-d7c21a54756c"
+          "df41a693-e6ab-4078-9099-5ff67a842794"
         ],
         "replayed": [
-          "4a0dbf09-8653-40f2-8802-d7c21a54756c"
+          "df41a693-e6ab-4078-9099-5ff67a842794"
         ],
         "applicationsObserved": 1,
         "appliedExactlyOnce": true
@@ -98,15 +111,15 @@
       "scenario": "F: a driver killed between the handler and the cursor write REPROCESSES the event",
       "state": "demonstrated",
       "stateMeaning": "Ran against a live pinned server and passed.",
-      "startAt": 241,
-      "killedSequence": 242,
-      "cursorAfterCrash": 241,
+      "startAt": 243,
+      "killedSequence": 244,
+      "cursorAfterCrash": 243,
       "appliedBeforeRestart": [
-        "242"
+        "244"
       ],
       "appliedAfterRestart": [
-        "242",
-        "242"
+        "244",
+        "244"
       ],
       "childKilled": true,
       "note": "the handler ran, the process was SIGKILLed before the cursor advanced, and the same sequence was delivered and applied again after restart — skipped would have been the loss"
