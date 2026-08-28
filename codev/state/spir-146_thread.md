@@ -786,3 +786,23 @@ it leaks a worktree, and a retry creates a second one. `thread.create` carries a
 `worktree-setup.ts` has to reconcile that itself — probably by making the branch
 name deterministic from the project and phase, so a retry collides visibly
 instead of succeeding twice.
+
+### The Phase 2 check failed once, and the failure was not in the code
+
+`porch check 146` reported `✗ tests (198.1s)` on the first run after the context
+compact. The visible lines were `[codev tests] Another Vitest run owns shared
+Tower state; waiting.` and some `pr-create:` stderr that belongs to passing tests.
+
+Cause: the detached `porch done 146` started before the compact was still running
+its own vitest against the same machine-wide Tower-state mutex (#130). Two suites,
+one shared port. Run alone, the suite is clean — 6236 passed, 48 skipped, plus 180
+in `apps/v2`, exit 0.
+
+The thing to carry forward is not "it was flaky." It is that a **check failure and
+a check that could not run were spelled the same way**: `RESULT: CHECKS FAILED`,
+with the contention notice buried among unrelated stderr. That is the same
+three-states problem the live harness already fixed for itself — `demonstrated` /
+`not-demonstrated` / `failed`. Porch's check runner has the two-state version of
+it, and #130's mutex makes the third state reachable on any machine running two
+suites. Filed against nothing yet; recorded here so a later phase that touches
+`checks.ts` has the case.
