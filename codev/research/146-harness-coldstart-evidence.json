@@ -1,0 +1,30 @@
+{
+  "criterion": "Phase 1: harness brings up a live pinned server, twice, with a real dispatched command",
+  "pinnedCommit": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
+  "runs": [
+    {
+      "run": 1,
+      "startedAt": "2026-08-28T17:01:39.043Z",
+      "pairingTokenPresent": true,
+      "scopes": "orchestration:read orchestration:operate terminal:operate review:write relay:read",
+      "dispatchExit": "Success",
+      "dispatchSucceeded": true,
+      "portFreeAfterStop": true,
+      "ok": true,
+      "durationMs": 5087
+    },
+    {
+      "run": 2,
+      "startedAt": "2026-08-28T17:01:44.130Z",
+      "pairingTokenPresent": true,
+      "scopes": "orchestration:read orchestration:operate terminal:operate review:write relay:read",
+      "dispatchExit": "Success",
+      "dispatchSucceeded": true,
+      "portFreeAfterStop": true,
+      "ok": true,
+      "durationMs": 4746
+    }
+  ],
+  "allRunsPassed": true,
+  "gatesPhase2": true
+}

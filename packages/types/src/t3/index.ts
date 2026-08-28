@@ -20,4 +20,14 @@
 export type { ShapeCheckResult, ShapeMismatch } from './shape-check.js';
 export { shapeCheck, describeMismatches, UnsupportedKeywordError } from './shape-check.js';
 export type * from './generated/types.js';
-export { t3Schemas, t3Methods } from './generated/schema.js';
+/**
+ * `t3Defs` is exported alongside the schemas because **`shapeCheck` needs it**.
+ * The generated payload schemas carry `$ref`s into this pool, and `shapeCheck`
+ * throws `UnresolvedRefError` rather than silently matching when it cannot
+ * resolve one. Exporting the schemas without the defs would make every
+ * ref-carrying schema unusable at the call site — caught in review before
+ * Phase 2 consumed it.
+ *
+ *     shapeCheck(payload, t3Schemas.dispatchCommandInput, t3Defs)
+ */
+export { t3Schemas, t3Defs, t3Methods } from './generated/schema.js';

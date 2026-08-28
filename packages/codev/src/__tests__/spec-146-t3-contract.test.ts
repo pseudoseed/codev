@@ -22,6 +22,13 @@ const generated = join(t3Root, 'generated');
 
 const readJson = (p: string) => JSON.parse(readFileSync(p, 'utf8'));
 
+/**
+ * `schema.json` is a document: `{ $defs, schemas }`. It carries `$defs` because
+ * the roots are full of `$ref`s into them — an earlier version emitted the roots
+ * alone and left 105 dangling refs.
+ */
+const readSchemas = () => readJson(join(generated, 'schema.json')).schemas as Record<string, any>;
+
 describe('spec 146: packages/types stays dependency-free', () => {
   it('declares no runtime dependencies', () => {
     const pkg = readJson(join(typesRoot, 'package.json'));
@@ -82,7 +89,7 @@ describe('spec 146: generated artifacts are present and self-describing', () => 
 
   it('maps every pinned method to a schema that exists', () => {
     const methods = readJson(join(generated, 'methods.json'));
-    const schemas = readJson(join(generated, 'schema.json'));
+    const schemas = readSchemas();
     expect(Object.keys(methods).length).toBeGreaterThan(0);
     for (const [method, spec] of Object.entries<Record<string, string | null>>(methods)) {
       if (spec.input) expect(schemas[spec.input as string], `${method} input`).toBeDefined();
@@ -107,8 +114,7 @@ describe('spec 146: the emitter is lossy, and says so', () => {
   });
 
   it('shows branded ids emitting as bare strings in the schema itself', () => {
-    const schemas = readJson(join(generated, 'schema.json'));
-    const worktree = schemas.VcsCreateWorktreeInput;
+    const worktree = readSchemas().VcsCreateWorktreeInput;
     // `cwd` is TrimmedNonEmptyString upstream; here it is an unconstrained string.
     // Asserting the weakness keeps anyone from "fixing" the docs to claim otherwise.
     expect(worktree.properties.cwd).toEqual({ type: 'string' });
@@ -116,16 +122,18 @@ describe('spec 146: the emitter is lossy, and says so', () => {
 });
 
 describe('spec 146: source-hash is the drift detector the schema cannot be', () => {
-  it('hashes match the pinned checkout when it is available', () => {
+  it('hashes match the pinned checkout when it is available', (ctx) => {
     const pin = readJson(join(t3Root, 'pin.json'));
     const t3 = process.env.T3CODE_ROOT ?? '/Users/chris/dev/t3code';
     const contracts = join(t3, pin.contractsRoot);
 
     if (!existsSync(contracts)) {
-      // A missing checkout must not read as a pass. Vitest surfaces the skip.
-      console.warn(
-        `[spec-146] SKIPPED hash verification: no t3code checkout at ${t3}. ` +
-          `This is "could not check", not "checked and fine".`,
+      // `ctx.skip()`, not `return`. An earlier version returned early with a
+      // console.warn, and vitest reported the test GREEN — a check that did not
+      // run, spelled exactly like a check that passed. Review caught it. This is
+      // the whole lesson of this phase applied to the phase's own tests.
+      ctx.skip(
+        `no t3code checkout at ${t3}: could not verify hashes. This is "could not check", not "fine".`,
       );
       return;
     }
@@ -167,7 +175,7 @@ describe('spec 146: source-hash is the drift detector the schema cannot be', () 
     // removing `isNonEmpty` upstream produces a zero-byte diff in schema.json.
     // Only the source hash can catch it. If this ever fails, the emitter improved
     // and the second layer can be reconsidered — until then it is load-bearing.
-    const schemas = readJson(join(generated, 'schema.json'));
+    const schemas = readSchemas();
     const bareString = JSON.stringify({ type: 'string' });
     const idFields = [
       schemas.VcsCreateWorktreeInput.properties.cwd,
@@ -176,5 +184,77 @@ describe('spec 146: source-hash is the drift detector the schema cannot be', () 
     for (const field of idFields) {
       expect(JSON.stringify(field)).toBe(bareString);
     }
+  });
+});
+
+describe('spec 146: the harness criterion that gates Phase 2', () => {
+  /**
+   * The plan makes this explicit: "Phase 2 does not start until this passes,
+   * since every one of its acceptance criteria assumes it."
+   *
+   * The proof needs a live server and Node 22, which this suite has neither of,
+   * so the run is recorded and asserted here. Reproduce:
+   *
+   *   PATH=$HOME/.nvm/versions/node/v22.22.2/bin:$PATH \
+   *     node tools/t3-server/smoke.mjs --runs 2
+   */
+  const evidence = readJson(join(repoRoot, 'codev', 'research', '146-harness-coldstart-evidence.json'));
+
+  it('ran twice, not once — a single run cannot show teardown works', () => {
+    expect(evidence.runs.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('dispatched a real command and got Success, not merely an open port', () => {
+    for (const run of evidence.runs) {
+      expect(run.dispatchExit, `run ${run.run}`).toBe('Success');
+      expect(run.dispatchSucceeded, `run ${run.run}`).toBe(true);
+    }
+  });
+
+  it('left no port bound after teardown, so the second run was genuinely cold', () => {
+    // Without this the start-twice proof proves nothing: run 2 would just be
+    // talking to the server run 1 left behind.
+    for (const run of evidence.runs) {
+      expect(run.portFreeAfterStop, `run ${run.run}`).toBe(true);
+    }
+  });
+
+  it('was run against the commit this repo pins', () => {
+    expect(evidence.pinnedCommit).toBe(readJson(join(t3Root, 'pin.json')).commit);
+  });
+
+  it('passed every run', () => {
+    expect(evidence.allRunsPassed).toBe(true);
+  });
+});
+
+describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () => {
+  /**
+   * Eighth instance of this project's recurring defect, caught by running the
+   * documented refresh procedure rather than trusting that I had written it
+   * correctly. REFRESH.md step 2 classifies churn since the current pin — and at
+   * the pin that range is empty, which is the NORMAL state right after a refresh.
+   * The classifier exited 1, so the documented step failed whenever it had
+   * nothing to report.
+   *
+   * Asserted at the source rather than by running the tool, which needs Node 22
+   * and a checkout that this suite has neither of.
+   */
+  it('the churn classifier exits 0 on an empty range', () => {
+    const src = readFileSync(
+      join(repoRoot, 'tools', 't3-codegen', 'classify-churn.mjs'),
+      'utf8',
+    );
+    const emptyBranch = /no commits touch the closure in that range[\s\S]{0,400}?process\.exit\((\d)\)/.exec(src);
+    expect(emptyBranch, 'the empty-range branch should still exist').not.toBeNull();
+    expect(emptyBranch?.[1], 'an empty range is not a failure').toBe('0');
+  });
+
+  it('the harness keeps a third exit code for "could not determine"', () => {
+    // 0 verified, 1 mismatch, 3 could-not-determine. Collapsing 3 into either of
+    // the others is what makes a missing checkout read as a passing check.
+    const src = readFileSync(join(repoRoot, 'tools', 't3-server', 't3-server.mjs'), 'utf8');
+    expect(src).toMatch(/const UNDETERMINED = 3/);
+    expect(src).toMatch(/die\(\s*UNDETERMINED/);
   });
 });

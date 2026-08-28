@@ -17,6 +17,7 @@ Each entry is a schema the source constrains (via `.check`, `Schema.brand` or `m
 whose emitted JSON Schema carries no constraint at all. Every field typed with one of these
 degrades wherever it appears in `schema.json`.
 
+- `TrimmedString` (`baseSchemas.ts`) → `{"type":"string"}`
 - `TrimmedNonEmptyString` (`baseSchemas.ts`) → `{"type":"string"}`
 - `ForwardCompatibleArray` (`baseSchemas.ts`) → `{"type":"array"}`
 - `ThreadId` (`baseSchemas.ts`) → `{"type":"string"}`
