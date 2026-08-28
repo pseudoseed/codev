@@ -80,12 +80,14 @@ the phase order follows it literally:
   honest, can a client speak the protocol correctly under reconnect and backpressure, can porch's
   check-then-advance loop survive its own crash, and can messages meet the five delivery semantics
   the spec makes the mailbox's deletion conditional on.
-- **Phases 5-6** build the security boundary and the service that hosts it, because the approval
-  threat model is the one piece of design the spec explicitly refuses to settle.
-- **Phases 7-9** make the dual-write cutover representable, move architects onto threads, and prove
-  a full protocol run on a second driver.
-- **Phases 10-11** build the client.
-- **Phases 12-13** retire the extensions and delete the terminal half.
+- **Phases 5-7** build `codev-agent`, then the approval boundary it issues, then the transport and
+  service security posture around both. The approval threat model is the one piece of design the
+  spec explicitly refuses to settle, and it cannot be built before its issuer exists.
+- **Phases 8-10** make the dual-write cutover representable in both stores, move architects onto
+  threads with the rest of `afx` following, and prove a full protocol run on a second driver.
+- **Phases 11-12** build the client.
+- **Phases 13-15** retire the extensions, delete the terminal half, and drop its schema behind a
+  release checkpoint.
 
 Two prerequisites are already met and are not phases here. #128's phases 1 and 2 have shipped:
 `porch gate --request-file` and `packages/codev/src/commands/porch/gate-request.ts` exist, so the
@@ -93,11 +95,11 @@ structured gate record success criterion 3 depends on is available today.
 
 ### What each phase is allowed to assume
 
-Phases 1-4 run against a live t3code server started from the pinned commit; none of them may be
-marked complete on the strength of a unit test alone. Phases 10-11 are the only phases that touch
-`apps/`, and both are verified in a browser under Playwright against real viewport sizes, because
-a green component suite cannot detect the layout regressions success criteria 4, 4b and 5 are
-written to catch.
+Phases 1-4 run against a live t3code server started from the pinned commit, brought up by the
+harness Phase 1 builds; none of them may be marked complete on the strength of a unit test alone.
+Phases 11-12 are the only phases that touch `apps/`, and both are verified in a browser under
+Playwright against real viewport sizes, because a green component suite cannot detect the layout
+regressions success criteria 4, 4b and 5 are written to catch.
 
 ## Phases (Machine Readable)
 
@@ -507,9 +509,81 @@ matters.
 
 ---
 
-### Phase 5: Approval capability and threat model
+### Phase 5: codev-agent protocol state service
 
 **Dependencies**: Phase 3
+
+#### Objective
+
+Turn Tower into `codev-agent`: the same process with its terminal half removed, serving protocol
+state to a browser that has no filesystem access to the machine. Produce the failure matrix the
+architect deferred to plan work.
+
+This phase runs **before** the approval capability, not after. Review caught the original ordering
+backwards: `codev-agent` is the issuer, so its routes and its session notion have to exist before
+anything can be issued against them.
+
+This phase does not delete anything. It adds the protocol-state surface and the identity maps
+alongside the existing terminal surface, which is what makes the dual-write window in Phase 8
+possible.
+
+#### Files to Create / Modify
+
+- `packages/codev/src/agent-farm/servers/agent-routes.ts` — protocol state HTTP surface.
+- `packages/codev/src/agent-farm/servers/agent-state-stream.ts` — porch state change stream.
+- `packages/codev/src/agent-farm/servers/thread-registry.ts` — architect-name to `threadId`, and
+  builder-id to `threadId`.
+- `packages/codev/src/agent-farm/servers/status-reader.ts` — `status.yaml` reads, scoped per
+  worktree.
+- `codev/resources/146-codev-agent-failure-matrix.md`
+- `packages/codev/src/agent-farm/servers/__tests__/`
+
+#### Deliverables
+
+- [ ] Reads `status.yaml` and serves phase, gates and the #128 structured gate content already
+      produced by `gate-request.ts`.
+- [ ] Streams porch state changes, so the client does not poll.
+- [ ] Holds the architect-name to `threadId` map, backed by the existing `architect` table keyed on
+      `workspace_path` and name, and the builder-id to `threadId` join.
+- [ ] Defines the **human-paired session** that Phase 6 issues capabilities against: what
+      constitutes one, how `codev-agent` recognises it, and its lifetime. This is the bridge review
+      found missing — without it, "issuance is not reachable without a human-paired session" is a
+      sentence with no referent. The approval *invocation* itself lands in Phase 6, behind that
+      phase's check.
+- [ ] **The failure matrix**, covering at minimum: `codev-agent` down; `codev-agent` up but t3code
+      down; t3code up but `codev-agent` down; `status.yaml` unreadable or malformed; a thread with
+      no porch record; a porch record whose thread no longer exists; `global.db` locked; a
+      capability presented after revocation; and disagreement between `status.yaml` and thread
+      state. Each row states the signal emitted, what the client renders, and whether it is
+      auto-resolved. Per the spec, disagreement is **reported, never auto-resolved**.
+- [ ] Each failure mode emits its own distinct signal. An unreachable server, an empty result and a
+      malformed file must not be spelled the same way, because a partial answer reads as a complete
+      negative one.
+- [ ] A thread with no matching porch record renders as **unmanaged**, never hidden.
+- [ ] Tests for this phase.
+
+#### Acceptance Criteria
+
+- [ ] With porch state changing on disk, a connected client receives the change without polling.
+- [ ] A blocked gate's structured question and choices are served, not just the gate name.
+- [ ] Every row of the failure matrix has a test asserting its distinct signal.
+- [ ] Startup reconciliation reports a `status.yaml`-versus-thread disagreement and does not
+      resolve it.
+- [ ] The terminal surface still works; nothing is removed in this phase.
+- [ ] Build and tests pass.
+
+#### Test Plan
+
+Unit: status reading including malformed input; the registry joins; each failure signal.
+
+Integration: state stream against real porch writes; a human-paired session recognised and an
+unpaired one refused.
+
+---
+
+### Phase 6: Approval capability and threat model
+
+**Dependencies**: Phase 5
 
 #### Objective
 
@@ -528,6 +602,11 @@ already had two versions of this claim falsified:
 3. **The workspace `.env` is symlinked into every builder worktree**
    (`spawn-worktree.ts:88-96`). Any secret placed there is readable by every builder, so the
    capability must not live in `.env`, and a test must assert that it does not.
+4. **`approve()` mutates before it authorizes.** Raised in review and confirmed: the verify
+   auto-completion and the gate auto-creation branches both call `writeStateAndCommit` *above* the
+   `hasHumanFlag` test at `index.ts:898`. So an unauthorized call already writes and commits
+   `status.yaml` before being refused. Moving the check to the top of the function is part of this
+   phase, not a follow-up.
 
 #### Files to Create / Modify
 
@@ -557,7 +636,13 @@ already had two versions of this claim falsified:
       is not directly attributable, so the refusal is a defence-in-depth layer and the
       verifier-not-credential property is the actual boundary. Claiming otherwise is what got the
       previous two revisions falsified.
-- [ ] Every approval records capability id, machine and timestamp in `status.yaml`.
+- [ ] **Authorization happens before any mutation.** The capability check moves to the top of
+      `approve()`, above the verify auto-completion and gate auto-creation branches. A refused call
+      writes nothing and commits nothing.
+- [ ] Every approval records **the approving session id**, the capability id, the machine and the
+      timestamp in `status.yaml`. Success criterion 9b names the session id specifically, so
+      recording only the capability id would not satisfy it; both are stored because they answer
+      different questions — which credential was used, and which human session used it.
 - [ ] The threat model document covers issuance root of trust, storage, expiry, revocation, replay
       and CSRF, and states plainly what the design does **not** stop: a human who holds the
       capability can hand it to an agent, and no design prevents that.
@@ -573,7 +658,10 @@ already had two versions of this claim falsified:
       Success criterion 9c requires the first; the second exists because of the symlink above.
 - [ ] A replayed approval nonce is refused.
 - [ ] Revoking one machine's capability leaves another machine's approvals working.
-- [ ] `status.yaml` records capability id, machine and timestamp on a real approval.
+- [ ] **A refused approval leaves `status.yaml` byte-identical and adds no commit.** This is
+      asserted by hashing the file and counting commits either side of the refused call, because
+      the current code would fail it.
+- [ ] `status.yaml` records session id, capability id, machine and timestamp on a real approval.
 - [ ] Build and tests pass.
 
 #### Test Plan
@@ -585,69 +673,6 @@ builder's environment and assert refusal.
 
 Manual: read the threat model against this phase's code and confirm every claim in it is one the
 code actually makes true. Any claim that is aspirational is deleted rather than softened.
-
----
-
-### Phase 6: codev-agent protocol state service
-
-**Dependencies**: Phase 5
-
-#### Objective
-
-Turn Tower into `codev-agent`: the same process with its terminal half removed, serving protocol
-state to a browser that has no filesystem access to the machine. Produce the failure matrix the
-architect deferred to plan work.
-
-This phase does not delete anything. It adds the protocol-state surface and the identity maps
-alongside the existing terminal surface, which is what makes the dual-write window in Phase 7
-possible.
-
-#### Files to Create / Modify
-
-- `packages/codev/src/agent-farm/servers/agent-routes.ts` — protocol state HTTP surface.
-- `packages/codev/src/agent-farm/servers/agent-state-stream.ts` — porch state change stream.
-- `packages/codev/src/agent-farm/servers/thread-registry.ts` — architect-name to `threadId`, and
-  builder-id to `threadId`.
-- `packages/codev/src/agent-farm/servers/status-reader.ts` — `status.yaml` reads, scoped per
-  worktree.
-- `codev/resources/146-codev-agent-failure-matrix.md`
-- `packages/codev/src/agent-farm/servers/__tests__/`
-
-#### Deliverables
-
-- [ ] Reads `status.yaml` and serves phase, gates and the #128 structured gate content already
-      produced by `gate-request.ts`.
-- [ ] Streams porch state changes, so the client does not poll.
-- [ ] Holds the architect-name to `threadId` map, backed by the existing `architect` table keyed on
-      `workspace_path` and name, and the builder-id to `threadId` join.
-- [ ] Invokes `porch approve` behind Phase 5's capability check.
-- [ ] **The failure matrix**, covering at minimum: `codev-agent` down; `codev-agent` up but t3code
-      down; t3code up but `codev-agent` down; `status.yaml` unreadable or malformed; a thread with
-      no porch record; a porch record whose thread no longer exists; `global.db` locked; a
-      capability presented after revocation; and disagreement between `status.yaml` and thread
-      state. Each row states the signal emitted, what the client renders, and whether it is
-      auto-resolved. Per the spec, disagreement is **reported, never auto-resolved**.
-- [ ] Each failure mode emits its own distinct signal. An unreachable server, an empty result and a
-      malformed file must not be spelled the same way, because a partial answer reads as a complete
-      negative one.
-- [ ] A thread with no matching porch record renders as **unmanaged**, never hidden.
-- [ ] Tests for this phase.
-
-#### Acceptance Criteria
-
-- [ ] With porch state changing on disk, a connected client receives the change without polling.
-- [ ] A blocked gate's structured question and choices are served, not just the gate name.
-- [ ] Every row of the failure matrix has a test asserting its distinct signal.
-- [ ] Startup reconciliation reports a `status.yaml`-versus-thread disagreement and does not
-      resolve it.
-- [ ] The terminal surface still works; nothing is removed in this phase.
-- [ ] Build and tests pass.
-
-#### Test Plan
-
-Unit: status reading including malformed input; the registry joins; each failure signal.
-
-Integration: state stream against real porch writes; approval through the capability path.
 
 ---
 
