@@ -1601,3 +1601,28 @@ survives review, because the reader checks the comment.
 Seventeen fixes now go through the mutation harness and all seventeen go red
 without their fix. Ten of the 27 added tests remain asserted, and the plan says
 which are which rather than letting the count imply otherwise.
+
+## The check that failed on a test I did not touch
+
+`porch done` failed its tests check twice while `npm test` passed for me. The
+difference was the shell: under zsh the suite passed, under bash — which is what
+`.codev/config.json` configures porch to use — one test failed:
+
+```
+FAIL src/agent-farm/__tests__/spawn-gate-profile.test.ts
+Error: ENOTEMPTY: directory not empty, rmdir '.../spawn-gate-profile-EtxAou/.builders/maintain-aiT6'
+```
+
+Unrelated to spec 146: it is a teardown race. The test spawns a real terminal
+session into `.builders/<id>` and then `rmSync(ws, {recursive, force})`; a session
+still writing when the walk reaches that directory makes the remove fail with
+ENOTEMPTY even under `force`. It passes 3/3 in isolation and fails only in a
+loaded full-suite run.
+
+Fixed rather than skipped, because the proportionate fix is smaller than the
+annotation would have been: `maxRetries: 5, retryDelay: 50` on that one `rmSync`.
+No assertion changed. Full suite under bash: 6294 passed, 0 failed.
+
+Worth recording as a rule: **a green suite in one shell is not a green suite.**
+I ran the same command as porch, got exit 0, and concluded porch was wrong about
+its own check. The command was the same; the interpreter was not.
