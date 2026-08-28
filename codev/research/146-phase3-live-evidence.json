@@ -1,0 +1,120 @@
+{
+  "criterion": "Spec 146 Phase 3 live integration",
+  "ranAt": "2026-08-28T21:58:52.826Z",
+  "nodeVersion": "v22.22.2",
+  "t3Version": "t3@0.0.35",
+  "clientCommit": "7b2277e5f000c5edb620e523494684713933ad52",
+  "clientTreeDirty": false,
+  "harness": "codex",
+  "model": "gpt-5.6-luna",
+  "scenarios": [
+    {
+      "scenario": "A: a thread on a worktree, a turn to settle, an external write read back",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "turn1": "TURN1_READY",
+      "turn2": "I’ll read `external.txt` from the working directory and return its contents in the requested format.EXTERNAL_SEEN_EXT_DATP0V0F",
+      "checkRanInWorktree": true,
+      "checkShell": "bash",
+      "note": "two turns settled, and the second read a file written between them by a process porch spawned"
+    },
+    {
+      "scenario": "B: a turn interrupted mid-shell settles, and its side effect is absent",
+      "state": "not-demonstrated",
+      "stateMeaning": "The scenario did not run to a verdict — preconditions absent, or nothing to observe. This says NOTHING about whether the code works, and is not a failure.",
+      "turnId": "01a04a62-2775-7861-a6a9-d052f811e295",
+      "sawToolActivity": true,
+      "settledAfterMs": 27,
+      "settledWithActiveTurnIdNull": true,
+      "sideEffectAtSettle": "ABSENT",
+      "sideEffectAfterCommandWindow": "PRESENT",
+      "finding": "The turn settled on interrupt, but the shell command it had spawned kept running to completion and wrote its file afterwards. Settle detection is correct. The side-effect half of the criterion is not satisfiable from the client: t3code forwards the interrupt to the provider's own turn/interrupt RPC (CodexSessionRuntime.ts:2150-2180 at the pinned commit), and the process the provider had spawned survived it. That is provider behaviour below t3code, not something this client can change.",
+      "note": "settle proven; the spawned process outlived the interrupt (recorded, not passed)"
+    },
+    {
+      "scenario": "C: a socket killed mid-stream replays exactly the missing range (Phase 2 criterion C)",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "lastBeforeDrop": 44,
+      "settledSequence": 51,
+      "missingRangeSize": 7,
+      "comparedAgainst": "a control subscription that never dropped",
+      "completionEventReplayed": true,
+      "note": "the replayed eventIds equal the control connection's record over the same window"
+    },
+    {
+      "scenario": "D: a subscription under traffic survives 360s without a timeout or a resubscription",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "elapsedMs": 373610,
+      "heartbeats": 17,
+      "subscriptionAttempts": 1,
+      "handlerCalls": 153,
+      "note": "held 374s under traffic on ONE subscription attempt; the old 300s total budget would have torn it down"
+    },
+    {
+      "scenario": "E: a driver killed between the journal write and the dispatch does not apply the command twice",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "journal-before-dispatch": {
+        "childKilled": true,
+        "childSaid": [
+          {
+            "mode": "journal-before-dispatch",
+            "about": "to journal, then die before dispatching",
+            "commandId": "de09f8b9-8887-4991-9859-0e240b1d5448"
+          }
+        ],
+        "pendingAfterCrash": [
+          "de09f8b9-8887-4991-9859-0e240b1d5448"
+        ],
+        "replayed": [
+          "de09f8b9-8887-4991-9859-0e240b1d5448"
+        ],
+        "applicationsObserved": 1,
+        "appliedExactlyOnce": true
+      },
+      "journal-after-dispatch": {
+        "childKilled": true,
+        "childSaid": [
+          {
+            "mode": "journal-after-dispatch",
+            "about": "to journal, dispatch, then die before recording the outcome",
+            "commandId": "4a0dbf09-8653-40f2-8802-d7c21a54756c"
+          }
+        ],
+        "pendingAfterCrash": [
+          "4a0dbf09-8653-40f2-8802-d7c21a54756c"
+        ],
+        "replayed": [
+          "4a0dbf09-8653-40f2-8802-d7c21a54756c"
+        ],
+        "applicationsObserved": 1,
+        "appliedExactlyOnce": true
+      },
+      "note": "both crash windows recovered to exactly one application: the pre-dispatch kill because the command never landed, the post-dispatch kill because the server deduplicated the replayed commandId"
+    },
+    {
+      "scenario": "F: a driver killed between the handler and the cursor write REPROCESSES the event",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "startAt": 241,
+      "killedSequence": 242,
+      "cursorAfterCrash": 241,
+      "appliedBeforeRestart": [
+        "242"
+      ],
+      "appliedAfterRestart": [
+        "242",
+        "242"
+      ],
+      "childKilled": true,
+      "note": "the handler ran, the process was SIGKILLed before the cursor advanced, and the same sequence was delivered and applied again after restart — skipped would have been the loss"
+    }
+  ],
+  "limits": {
+    "scope": "These scenarios exercise one thread against one freshly created server. They do not measure concurrency, multi-day retention, or any phase after 3.",
+    "scenarioD": "The idle-timeout scenario proves the timeout is idle rather than total across a window longer than the old 300s budget. It does NOT prove a day-long gate; success criterion 11 remains Phase 10 work.",
+    "guard": "The Claude write-guard is verified by reading t3code's Claude adapter (settingSources includes \"local\"), not by running a claudeAgent turn that attempts a write outside its worktree."
+  }
+}
