@@ -61,6 +61,22 @@
       "notInGeneratedContract": [],
       "reportedUnchecked": {},
       "note": "every exercised method has a generated schema, and every live payload matched it"
+    },
+    {
+      "scenario": "F: ResumingSubscription drives a real subscription and stops on command",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "outcomes": [
+        {
+          "kind": "replayed",
+          "attempt": 1,
+          "resumed": false
+        }
+      ],
+      "itemsSeen": 1,
+      "firstOutcomeIsNotAGap": true,
+      "stopped": "stopped",
+      "note": "subscribed live, reported an outcome, and stopped when told"
     }
   ],
   "limits": {
@@ -74,7 +90,8 @@
       "A: connect, dispatch, subscribe, stream",
       "B: acks honoured (with ack-suppressed control)",
       "D: cursor ahead of head forces a real snapshot, classified as a gap",
-      "E: inbound payloads were shape-checked against the vendored contract"
+      "E: inbound payloads were shape-checked against the vendored contract",
+      "F: ResumingSubscription drives a real subscription and stops on command"
     ],
     "notDemonstrated": [
       "C groundwork: classification against server-issued sequences"
