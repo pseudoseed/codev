@@ -431,6 +431,14 @@ happy path passes against the broken version too. And **a distinct signal for
 `unclassifiable` as a third churn verdict, `ctx.skip()` instead of an early
 `return`, and `UnresolvedRefError` instead of a silent walk.
 
+And **a module can be fully tested and still be unusable through its own export
+map.** `shapeCheck` had 18 tests and 100% of its behaviour covered, and was
+broken for every consumer, because every test imported
+`../../types/src/t3/shape-check.js` — the *file*. `t3Defs` and
+`UnresolvedRefError` were missing from `index.ts`, so the first Phase 2 import
+would have thrown on a ref-carrying schema and been unable to catch the error by
+name. Test through the surface consumers use, not past it.
+
 And **two tests of the same kind are one test run twice.** When the architect
 gated the secret-scrub on two `--diff-filter=A` greps, I added a third that
 walks each commit's *tree* instead of its diff. They kept it, on the reasoning
