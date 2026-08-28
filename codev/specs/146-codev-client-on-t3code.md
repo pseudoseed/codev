@@ -1,4 +1,4 @@
-# Spec 146 — A Codev client on a self-hosted t3code server
+# Spec 146: a Codev client on a self-hosted t3code server
 
 **Issue:** #146
 **Status:** draft
@@ -9,15 +9,15 @@
 Codev's value is its protocol layer: porch's phase state machine, human gates, specs, plans and
 reviews, CMAP consultation, and the architect/builder model. None of that exists anywhere else.
 
-Everything underneath it — driving an agent process, knowing when a turn ended, delivering a
-message, cleaning up a worktree — Codev implements by simulating a human at a terminal. It types
+Everything underneath it, Codev implements by simulating a human at a terminal. Driving an agent
+process, knowing when a turn ended, delivering a message, cleaning up a worktree. It types
 into a PTY, screenshots the screen, and guesses from pixel geometry whether a prompt is ready.
 That approach cannot be made correct, and the bug record shows it: `no-region-end`,
 `busy-indicator`, `no-composer-marker`, `geometry-mismatch`, `user-text`. In a single recent
 session, six of eight issues worked were this layer (#47, #92, #93, #109, #126, #130) and two
 were porch (#102, #113).
 
-Separately, the surface a human uses to see what is happening is inadequate. The Tower dashboard
+Separately, what a human looks at to see all this is inadequate. The Tower dashboard
 is unreliable. The v2 client renders a workspace tree but has no tiling, no mobile, and no remote
 access. There is no way to watch four builders at once, and no way to check on them from an iPad.
 
@@ -43,7 +43,7 @@ Claude, Cursor, Grok, OpenCode) behind a common adapter. Event-sourced orchestra
 |---|---|
 | An external process can drive a session end to end | 262-line Node client: OAuth token exchange, worktree-backed thread, `thread.turn.start`, streamed events, `thread.turn.interrupt`. Prompt was `sleep 30; echo SHOULD_NOT_FINISH`; the marker never printed. A real process kill. |
 | Porch's check-then-advance loop works | Turn 1 settled, an external shell wrote a file in the thread's own `worktreePath`, turn 2 read the new value back. |
-| A gate can pause for hours | A real reap fired — `provider.session.reaped`, `idleDurationMs: 2094232`. After the reap *and* a server restart, an answer-free prompt recalled a filename that existed only in pre-reap conversation. |
+| A gate can pause for hours | A real reap fired: `provider.session.reaped`, `idleDurationMs: 2094232`. After the reap *and* a server restart, an answer-free prompt recalled a filename that existed only in pre-reap conversation. |
 | No completion event is lost on reconnect | Socket dropped mid-turn at sequence 45; `afterSequence: 45` replayed 46–54 matching the control connection exactly, completion included. |
 | Fully self-hosted | `docs/internals/t3-connect.md`: "T3 Connect is disabled in a fresh clone." The Clerk relay is opt-in. |
 | Reachable from an iPad without cloud | `npx t3 pair --tailscale`. |
@@ -53,18 +53,18 @@ Full report: `codev/research/146-t3code-porch-execution-proof.md`.
 
 **What t3code does not provide.** No workspace→architect→builder tree; its sidebar is a flat
 pinned thread list. No tiling of threads; split view exists only for terminals inside one thread.
-**No gate concept at all** — session status is `starting`/`running`/`ready`/`settled`, so a
+**No gate concept at all.** Session status is `starting`/`running`/`ready`/`settled`, so a
 builder blocked on `plan-approval` is indistinguishable from one that finished.
 
 ## Desired State
 
-Codev keeps its protocol layer and stops owning process control. t3code becomes the execution
-substrate. Codev ships a client of its own against t3code's server — not a fork of their app, a
+Codev keeps its protocol layer and stops owning process control. t3code runs the agent
+processes. Codev ships a client of its own against t3code's server. Not a fork of their app, a
 second client of the same typed contract.
 
 ### Three components
 
-**1. `porch-driver`** — a headless library that maps porch's model onto t3code commands.
+**1. `porch-driver`.** A headless library that maps porch's model onto t3code commands.
 
 | Porch concept | t3code mechanism |
 |---|---|
@@ -79,7 +79,7 @@ second client of the same typed contract.
 Porch remains the source of truth for phase and gate state in `status.yaml`. t3code holds no
 protocol state; it is told what to display.
 
-**2. `codev-client`** — a web client served by t3code's server or beside it.
+**2. `codev-client`.** A web client served by t3code's server or beside it.
 
 - A left sidebar tree: **workspace → architects → that architect's builders**, one row each,
   carrying live status: working, turning, blocked on a named gate, or settled.
@@ -134,8 +134,8 @@ CMAP, `afx` as a CLI, issue-driven work, and `codev-skeleton/` for adopters.
 
 ## Success Criteria
 
-1. `porch-driver` runs a complete BUGFIX protocol end to end on a t3code thread — spawn, phases,
-   checks between turns, a gate that pauses at least an hour, PR, merge — with no PTY involved.
+1. `porch-driver` runs a complete BUGFIX protocol end to end on a t3code thread, with no PTY
+   involved: spawn, phases, checks between turns, a gate that pauses at least an hour, PR, merge.
 2. Porch restarts mid-protocol, resubscribes with `afterSequence`, and loses no completion event.
 3. The client renders the tree with correct live status for every row, including a builder
    blocked on a named gate.
@@ -149,21 +149,21 @@ CMAP, `afx` as a CLI, issue-driven work, and `codev-skeleton/` for adopters.
 
 ## Test Scenarios
 
-1. **Full protocol, no PTY** — BUGFIX start to merge on a thread; assert no PTY code path runs.
-2. **Long gate** — a gate held past the reaper's threshold; resume retains context.
-3. **Orchestrator restart** — kill porch mid-phase, restart, resume by sequence, assert no gap.
-4. **Server unreachable** — stop the t3code server; client states it, tree does not go blank.
-5. **Six-pane tiling** — six live builders at 1440px, all legible.
-6. **Narrow viewport** — the same six page rather than shrink.
-7. **Two machines** — two servers, one client, both trees correct and independently live.
-8. **Gate visibility** — a blocked builder is visually distinct from a settled one at a glance.
+1. **Full protocol, no PTY.** BUGFIX start to merge on a thread; assert no PTY code path runs.
+2. **Long gate.** A gate held past the reaper's threshold; resume retains context.
+3. **Orchestrator restart.** Kill porch mid-phase, restart, resume by sequence, assert no gap.
+4. **Server unreachable.** Stop the t3code server; client states it, tree does not go blank.
+5. **Six-pane tiling.** Six live builders at 1440px, all legible.
+6. **Narrow viewport.** The same six page rather than shrink.
+7. **Two machines.** Two servers, one client, both trees correct and independently live.
+8. **Gate visibility.** A blocked builder is visually distinct from a settled one at a glance.
 
 ## Risks and Mitigation
 
 | Risk | Impact | Mitigation |
 |---|---|---|
 | t3code makes a breaking contract change | High | Pin the server version; upgrade deliberately; the contract is typed, so breaks are compile errors, not silent |
-| t3code is abandoned | High | MIT, cloned locally, and the porch layer is untouched by it — worst case Codev keeps a pinned server it owns |
+| t3code is abandoned | High | MIT, cloned locally, and the porch layer is untouched by it. Worst case Codev keeps a pinned server it owns |
 | Multi-day gates behave differently from a 36-minute one | High | Prove a 24-hour gate before deleting anything |
 | Deleting Tower loses something not yet identified | High | Delete only after the client reaches parity, in a separate phase, behind the passing suite |
 | Six panes is not enough | Medium | Measured at six; test the real ceiling before promising more |
@@ -179,9 +179,9 @@ CMAP, `afx` as a CLI, issue-driven work, and `codev-skeleton/` for adopters.
 ## References
 
 - Issue #146, and the architect ruling recorded on issue #128
-- `codev/research/146-t3code-porch-execution-proof.md` — all three proofs
-- `/Users/chris/dev/t3code-spike/` — the first spike script and its raw log
-- `/Users/chris/dev/t3code/packages/contracts/src/orchestration.ts` — the command and event contract
-- `/Users/chris/dev/t3code/packages/contracts/src/git.ts` — worktree and PR contracts
-- `/Users/chris/dev/t3code/docs/internals/t3-connect.md` — relay is opt-in
-- `/Users/chris/dev/t3code/docs/user/remote-access.md` — tailnet pairing
+- `codev/research/146-t3code-porch-execution-proof.md`: all three proofs
+- `/Users/chris/dev/t3code-spike/`: the first spike script and its raw log
+- `/Users/chris/dev/t3code/packages/contracts/src/orchestration.ts`: the command and event contract
+- `/Users/chris/dev/t3code/packages/contracts/src/git.ts`: worktree and PR contracts
+- `/Users/chris/dev/t3code/docs/internals/t3-connect.md`: relay is opt-in
+- `/Users/chris/dev/t3code/docs/user/remote-access.md`: tailnet pairing
