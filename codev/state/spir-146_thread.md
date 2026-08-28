@@ -941,3 +941,58 @@ the classifier said "gap". That tested the classifier against itself.
 first gave. It needs a control connection and an `eventId` comparison against a
 thread that is genuinely producing events, because a sparse range carries no
 information about loss.
+
+### Two Phase 2 deliverables had no implementation at all
+
+Found by reading the plan as a checklist before closing, rather than by any test.
+
+**"Payloads are shape-checked on the way in using Phase 1's `shape-check.ts`."**
+Nothing in `packages/t3-client` imported `shape-check`. Every payload went
+straight to the caller. Phase 1 built the checker, wrote 22 tests for it, fixed
+its `$ref` resolution and its excess-property direction — and Phase 2 never
+called it. A whole phase of work sitting behind an import nobody wrote.
+
+**"Reconnect resubscribes with `afterSequence` at the last applied sequence."**
+`socket.ts` reconnects and says in its own header that restoring a *subscription*
+is a different job that belongs elsewhere. Nowhere was elsewhere. `resume.ts`
+classified a resubscription that nothing performed; `SequenceCursor` tracked a
+cursor nothing sent. Only the live script sent `afterSequence`, by hand.
+
+Both are now built (`checked.ts`, `subscription.ts`) with 12 new tests.
+
+**Why the checklist caught what the tests could not.** Every test I had written
+passed, because tests test what exists. A deliverable with no implementation has
+no failing test — it has no test at all, and a green suite is silent about it.
+The earlier rule in this thread says a plan with ticked boxes is itself a check
+and lies the same way. The complement is the fix: **an unticked box is the only
+record that something is missing, so the plan has to be read, not just updated.**
+
+Both were unticked and honest. I nearly closed the phase anyway.
+
+### Three defects the new code found in itself
+
+- **The checker rejected three of my own transport tests.** They fed placeholder
+  values under real method names. That is the checker working, and the fix was to
+  say so at those call sites (`checkPayloads: false` with the reason) rather than
+  to loosen the checker.
+- **`ResumingSubscription` starved the event loop.** It resubscribed as soon as a
+  stream ended, awaiting only already-resolved promises. Those are microtasks, so
+  the timer queue was never reached: a `stop()` on a timer could not run and the
+  loop spun until the test worker was killed. Every iteration now ends on a
+  `setTimeout`, at zero if the caller wants no delay. On a real server, any stream
+  that closes fast would have done the same thing in production.
+- **`t3Methods` has `output: null` entries** (`vcs.removeWorktree`). A narrower
+  type annotation would have compiled with a cast and treated the hole as covered;
+  tsc refused it, and the hole is now reported as `unchecked`.
+
+### Criterion E, added because the evidence could not tell
+
+Scenarios A-D all passed with checking on. That result is identical whether every
+payload was checked and matched or every method reported `unchecked` and nothing
+was looked at. Scenario E reports which methods were actually checked:
+`orchestration.dispatchCommand`, `orchestration.subscribeThread` and
+`vcs.createWorktree`, all covered by a generated schema, all matched by live
+payloads, `reportedUnchecked: {}`.
+
+That is the first direct evidence that the vendored contract accepts real traffic
+from the pinned server, rather than merely accepting the fixtures I wrote for it.

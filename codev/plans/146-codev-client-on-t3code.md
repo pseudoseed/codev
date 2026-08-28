@@ -409,19 +409,24 @@ claim stops being a one-off observation and becomes a tested property.
 
 #### Deliverables
 
-- [ ] Envelope encode/decode for all ten wire shapes, validated against
+- [x] Envelope encode/decode for all ten wire shapes, validated against
       `RpcMessage.ts` as the reference.
-- [ ] Streaming calls send `Ack` per received `Chunk`. The server enables ack-based backpressure
+- [x] Streaming calls send `Ack` per received `Chunk`. The server enables ack-based backpressure
       (`RpcServer.ts:115`, `supportsAck`), so a client that does not acknowledge stalls its own
       stream after the server's buffer fills. This is a protocol obligation, not an optimisation,
       and it is why the phase exists separately from Phase 3.
-- [ ] Payloads are shape-checked on the way in using Phase 1's `shape-check.ts`. A payload that
+- [x] Payloads are shape-checked on the way in using Phase 1's `shape-check.ts`. **`checked.ts`,
+      wired into `T3Client` and on by default.** A method with no generated schema reports
+      `unchecked`, never `ok`, and lands on `client.uncheckedMethods`. Live scenario E records that
+      all three exercised methods were genuinely checked and matched. A payload that
       fails is surfaced as a named decode error carrying the method tag and the failing path. It is
       never coerced and never dropped silently. Per Phase 1, this is a lower bound on t3code's own
       validation and the code says so — no call site may treat a passing shape check as proof the
       payload is contract-valid.
-- [ ] Reconnect resubscribes with `afterSequence` at the last applied sequence.
-- [ ] If the server answers a resubscription with a snapshot instead of the requested range, the
+- [x] Reconnect resubscribes with `afterSequence` at the last applied sequence. **`subscription.ts`.**
+      `socket.ts` restores a transport; this restores the subscription, which is a different job
+      nothing was doing. A first subscription sends no cursor and its snapshot is not a gap.
+- [x] If the server answers a resubscription with a snapshot instead of the requested range, the
       client reports a **gap** as its own distinct signal. It does not return an empty range, and
       it does not return a range that looks complete. "I could not tell" and "there was nothing"
       must not be spelled the same way.
@@ -435,16 +440,17 @@ claim stops being a one-off observation and becomes a tested property.
       which fed it consecutive integers, and with the live run, which had one active thread.
       A hole inside a replayed range is **not detectable from sequence numbers**, the code now says
       so, and the detectable gap is the protocol-level one: the server declined the cursor.
-- [ ] With the server unreachable, every call fails loudly at the call site. There is no silent
+- [x] With the server unreachable, every call fails loudly at the call site. There is no silent
       queue at this layer.
-- [ ] Tests for this phase.
+- [x] Tests for this phase. 44 in `spec-146-t3-client.test.ts`.
 
 #### Acceptance Criteria
 
-- [ ] Against a live server on the pinned commit: connect, dispatch a command, subscribe to a
-      thread, receive a typed stream to completion.
-- [ ] A stream of more chunks than the server's buffer completes, proving acks are honoured. A
-      deliberately ack-suppressed client stalls, proving the test can tell the difference.
+- [x] **MET, live.** Against a live server on the pinned commit: connect, dispatch a command,
+      subscribe to a thread, receive a typed stream to completion. Scenario A.
+- [x] **MET, live.** A stream of more chunks than the server's buffer completes, proving acks are
+      honoured. A deliberately ack-suppressed client stalls, proving the test can tell the
+      difference. Scenario B: the suppressed client fell behind, so the control did its job.
 - [~] **PARTIALLY MET — discharged in Phase 3, and still Phase 2's criteria.** Socket killed
       mid-stream at a known sequence; resubscription replays exactly the missing range and the
       completion event is present.
@@ -476,7 +482,7 @@ claim stops being a one-off observation and becomes a tested property.
       t3code. These criteria are about whether **`packages/t3-client` requests and applies the
       range correctly**, which is a different claim. The spike's harness already solved the
       connect-and-kill mechanics; read it before writing this.
-- [ ] Build and tests pass.
+- [x] Build and tests pass.
 
 #### Test Plan
 
