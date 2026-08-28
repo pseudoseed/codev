@@ -485,9 +485,13 @@ of things it could touch.
    else held 3799 it would have killed a service this project has no business
    touching.
 
-Both worked. Both reached further than the problem did. The check is: having
-written the fix, ask what else it can reach — not what else it *will* reach on
-the failure in front of you.
+Both worked. Both reached further than the problem did.
+
+**The check, stated permanently: having written a fix, ask what else it CAN
+reach — not what else it *will* reach on the failure in front of you.** The
+second question is answered by the bug report and always looks reassuring; the
+first is answered by the code and is the one that finds the private keys and the
+unrelated service on port 3799.
 
 ### The comfortable half of the truth
 
@@ -506,6 +510,25 @@ I had reasoned about rather than the one I had measured, and "lower bound" is th
 version that makes the tool sound cautious. When a document states a one-sided
 invariant, the question is whether the other side was checked or merely not
 imagined.
+
+### Agreement between tools is not corroboration
+
+The `additionalProperties` defect is the most valuable of the phase for what it
+says about the *other* instruments. **Two of my own tools agreed with each other
+and were both wrong**: the churn classifier called an additive upstream field
+non-breaking, and `shapeCheck` would have rejected the payload carrying it. Each
+confirmed the other's picture of the contract, and the picture was wrong in both.
+
+**Agreement between tools built from the same assumption is not corroboration; it
+is the assumption repeated.** This is the same error as *two tests of the same
+kind are one test run twice*, one scale up — there it was two checks sharing a
+failure mode, here it is two tools sharing a premise. Both were caught the same
+way: by something that measured the *other* side, in this case t3code's actual
+decoder rather than my model of it.
+
+The operational form: when two of your instruments agree, ask what they share
+before treating it as confirmation. If the answer is "the same source of truth
+about the thing being measured", they have not agreed about reality.
 
 ### The counter-example, which matters as much as the failures
 
