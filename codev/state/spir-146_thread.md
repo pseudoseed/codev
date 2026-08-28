@@ -728,3 +728,35 @@ right" is a judgement about a list nobody checked against anything.
 `thread.session-set` with `activeTurnId != null`, then `null` — and confirms the
 plan's insistence that status alone cannot distinguish an interrupted turn from a
 finished one.
+
+### Two t3code facts Phase 3 must not get wrong
+
+**`orchestration.subscribeShell` is not a shell.** It streams the project/thread
+tree — `OrchestrationProjectShell`, `OrchestrationThreadShell`
+(`packages/contracts/src/orchestration.ts:454-564`). Running a command is
+`terminal.open` / `terminal.write` / `terminal.close`
+(`packages/contracts/src/rpc.ts:252-258`). A phase check wired to the first name
+because it reads like the right one would subscribe to a tree and wait forever.
+
+**A t3code terminal is a PTY, and its `exitCode` is the shell's, not the check's.**
+`TerminalOpenInput` (`packages/contracts/src/terminal.ts:39-46`) takes `cwd`,
+`worktreePath`, `cols`, `rows`, `env` — and **no command**. You open a shell and
+drive it with `terminal.write`. The `exited` event's `exitCode`
+(`terminal.ts:173`) fires when that shell exits. So `porch check` cannot read a
+check's exit status off the terminal directly: it needs the exit code carried out
+of the shell explicitly (a sentinel line, or a shell that runs the check and
+exits with its status). Reading the `exited` event as if it were the check's
+result is the same defect this project keeps producing — a verdict taken from
+something that was never measuring the thing.
+
+**Server-side `commandId` dedup exists, and it is stricter than "ignore repeats."**
+`OrchestrationCommandReceipts.upsert` is keyed by `commandId`
+(`apps/server/src/persistence/Services/OrchestrationCommandReceipts.ts:48`), and
+replaying an id against a *different* aggregate raises
+`OrchestrationCommandIdConflictError` (`apps/server/src/orchestration/Errors.ts:56`).
+That means the journal-before-dispatch design works — a crash between journal and
+dispatch replays the *same* id and the server absorbs it — but only if the journal
+stores the **command**, not just its id. A restart that re-mints a command under a
+recorded id gets a loud conflict, which is the good outcome; a restart that
+re-mints a *new* id under the same intent gets a silent double-apply, which is the
+criterion Phase 3 has to fail on.
