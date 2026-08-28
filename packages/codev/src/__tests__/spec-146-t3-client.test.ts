@@ -620,3 +620,81 @@ describe('spec 146 phase 2: a subscription that survives a drop', () => {
     expect(seen).toEqual([10, 11, 12]);
   });
 });
+
+describe('spec 146 phase 2: a subscription never answers with silence', () => {
+  const event = (sequence: number) => ({ kind: 'event', event: { sequence } });
+  const sync = { kind: 'synchronized' };
+
+  function scripted(script: Array<{ values: unknown[]; drop?: boolean }>) {
+    let turn = 0;
+    const client = {
+      async stream(_m: string, _p: Record<string, unknown>, onValue: (v: unknown) => void) {
+        const step = script[turn] ?? { values: [], drop: false };
+        turn += 1;
+        for (const value of step.values) onValue(value);
+        if (step.drop) throw new Error('dropped');
+        return undefined;
+      },
+    };
+    return async () => ({ client: client as never, close: () => {} });
+  }
+
+  it('reports a GAP when the stream ends before the server says catch-up finished', async () => {
+    // The failure this closes: the outcome callback fired only on `synchronized`,
+    // so a stream cut short produced NO outcome — not success, not gap, nothing.
+    // Silence is the one answer that must never be available here.
+    const outcomes: Array<{ kind: string; reason?: string }> = [];
+    const sub = new ResumingSubscription(scripted([{ values: [event(5)], drop: true }]), {
+      method: 'orchestration.subscribeThread',
+      payload: { threadId: 't' },
+      sequenceOf: (v: unknown) => (v as { event?: { sequence?: number } })?.event?.sequence ?? null,
+      isSnapshot: () => false,
+      isSynchronized: (v: unknown) => (v as { kind?: string })?.kind === 'synchronized',
+      onValue: () => {},
+      onResume: ((o: { kind: string; reason?: string }) => void outcomes.push(o)) as never,
+    });
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 10));
+    sub.stop();
+    await running;
+
+    expect(outcomes.length).toBeGreaterThan(0);
+    expect(outcomes[0].kind).toBe('gap');
+    expect(outcomes[0].reason).toMatch(/ended before/);
+  });
+
+  it('does not open another stream when stop() lands during connect', async () => {
+    let opened = 0;
+    const client = {
+      async stream(_m: string, _p: Record<string, unknown>, onValue: (v: unknown) => void) {
+        opened += 1;
+        onValue(sync);
+        return undefined;
+      },
+    };
+    let releaseConnect: (() => void) | undefined;
+    const connect = async () => {
+      await new Promise<void>((resolve) => {
+        releaseConnect = resolve;
+      });
+      return { client: client as never, close: () => {} };
+    };
+
+    const sub = new ResumingSubscription(connect, {
+      method: 'orchestration.subscribeThread',
+      payload: {},
+      sequenceOf: () => null,
+      isSnapshot: () => false,
+      isSynchronized: (v: unknown) => (v as { kind?: string })?.kind === 'synchronized',
+      onValue: () => {},
+      onResume: () => {},
+    });
+    const running = sub.run();
+    await new Promise((r) => setTimeout(r, 5));
+    sub.stop();
+    releaseConnect?.();
+    await running;
+
+    expect(opened).toBe(0);
+  });
+});

@@ -123,6 +123,13 @@ export class ResumingSubscription {
     while (!this.#stopped) {
       this.#attempt += 1;
       const transport = await this.connect();
+      // `connect` can take a while (backoff, a fresh ticket), and `stop()` may
+      // have landed during it. Without this the subscription opens one more
+      // stream after being told to stop, on a socket the caller believes is shut.
+      if (this.#stopped) {
+        transport.close();
+        return;
+      }
       this.#transport = transport;
 
       // A first subscription sends no cursor and gets a snapshot, which is
@@ -189,6 +196,27 @@ export class ResumingSubscription {
         // subscription is over and the loop opens a new one — unless stopped.
       } finally {
         await Promise.allSettled(pending);
+
+        // A stream that ended before synchronizing produced no outcome at all,
+        // so the caller heard nothing — neither success nor gap. Silence is the
+        // one answer that must never be available: the events between the cursor
+        // and wherever the server stopped are exactly what we cannot account for.
+        if (!synchronized) {
+          this.options.onResume(
+            {
+              kind: 'gap',
+              requestedAfter,
+              firstReceived: catchUp.length > 0 ? catchUp[0].sequence : null,
+              snapshot,
+              items: catchUp,
+              reason:
+                'the stream ended before the server signalled that catch-up was complete, ' +
+                'so whether the requested range arrived in full is unknown',
+            },
+            { attempt: this.#attempt, resumed: resuming },
+          );
+        }
+
         transport.close();
         this.#transport = null;
       }
