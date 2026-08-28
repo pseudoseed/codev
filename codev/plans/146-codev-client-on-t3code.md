@@ -627,7 +627,7 @@ involved.
       `cursor.ts`. A damaged cursor file throws rather than reading as 0: a cold start and an
       unreadable file are different facts, and spelling the second like the first would resubscribe
       from the beginning while looking correct.
-- [ ] Phase checks run as shell in the thread's own `worktreePath`, outside the thread, between
+- [x] Phase checks run as shell in the thread's own `worktreePath`, outside the thread, between
       turns.
 
       **Ruled by the architect: not through a t3code terminal.** porch spawns the check process

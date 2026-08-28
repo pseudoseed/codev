@@ -1,5 +1,13 @@
 """Confirm a Phase 3 test actually fails without the behaviour it names.
 
+NOT every property here is mutation-checkable, and the ones that are not are left
+out rather than listed with a green that means nothing. Specifically: `checks.ts`
+resolves on `exit` rather than `close` AND spawns `detached`, and on this platform
+either one alone bounds a compound command (measured: close+attached 20,018ms,
+exit+attached 705ms, close+detached 706ms). No test can go red for reverting just
+one, so no mutation claims otherwise. The grandchild test does discriminate
+`detached`.
+
 Same discipline as `146-phase2-mutation-check.py`: revert one property at a time,
 run the single test that claims it, put the file back in a `finally`. A test that
 passes with the property removed is not evidence of the property.
@@ -35,6 +43,18 @@ MUTATIONS = [
         "        throw new JournalCorruptError(this.path, index + 1, (error as Error).message);",
         "        return;",
         'a torn LAST line is recovered; a torn middle line is reported',
+    ),
+    (
+        f'{DRIVER}/commands.ts',
+        "    if (isServerRefusal(error)) journal.recordOutcome(commandId, 'failed', (error as Error).message);",
+        "    journal.recordOutcome(commandId, 'failed', (error as Error).message);",
+        'a command left UNANSWERED stays pending, because absent is not negative',
+    ),
+    (
+        f'{DRIVER}/commands.ts',
+        "  return (error as { name?: unknown } | null)?.name === 'RpcFailureError';",
+        "  return true;",
+        'an unrecognised error is treated as unanswered, not as a refusal',
     ),
     (
         f'{DRIVER}/cursor.ts',
@@ -107,6 +127,42 @@ MUTATIONS = [
         "  if (options.model === undefined) return { driverKind };",
         "  if (options.model === undefined) return { driverKind, modelSelection: { model: '' } };",
         'omits modelSelection entirely when no model was given',
+    ),
+    (
+        f'{DRIVER}/checks.ts',
+        "      detached: true,",
+        "      detached: false,",
+        'the timeout kills a backgrounded grandchild, not just the shell',
+    ),
+    (
+        f'{DRIVER}/checks.ts',
+        "  return { text: combined.slice(combined.length - cap), truncated: true };",
+        "  return { text: combined, truncated: false };",
+        'caps captured output and says it did',
+    ),
+    (
+        f'{DRIVER}/commands.ts',
+        "    this.#truncateTornTail();\n    const fd = openSync(this.path, 'a');",
+        "    const fd = openSync(this.path, 'a');",
+        'appending after a torn tail does not corrupt the journal',
+    ),
+    (
+        f'{DRIVER}/thread.ts',
+        "    if (!mapping.modelSelection) {\n      throw new ModelSelectionRequiredError(options.harnessName);\n    }",
+        "",
+        'refuses to create a thread with no model at all',
+    ),
+    (
+        f'{DRIVER}/thread.ts',
+        "    const turnId = await this.#withTimeout(started.running, remaining(), 'the turn to start');\n    await this.#withTimeout(started.settled, remaining(), 'the turn to settle');",
+        "    const turnId = await this.#withTimeout(started.running, options.timeoutMs, 'the turn to start');\n    await this.#withTimeout(started.settled, options.timeoutMs, 'the turn to settle');",
+        'spends ONE budget across a turn, not one per wait',
+    ),
+    (
+        f'{DRIVER}/harness-map.ts',
+        "export const RETIRED_HARNESS_NAMES: ReadonlyArray<string> = Object.freeze(['gemini']);",
+        "export const RETIRED_HARNESS_NAMES: ReadonlyArray<string> = Object.freeze(['gemini', 'cursor']);",
+        "the retired list matches Codev's own",
     ),
     (
         f'{DRIVER}/checks.ts',

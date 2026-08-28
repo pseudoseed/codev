@@ -30,9 +30,26 @@
  * partial line *anywhere else* is a damaged file, and answering both with "no
  * pending commands" would spell "I could not read this" exactly like "there is
  * nothing here" — so the second throws.
+ *
+ * **Tolerating the torn tail is not enough — it has to be removed.** The first
+ * version of this file skipped it on read and appended after it, so the next
+ * record was concatenated onto the partial line and became a corrupt line in the
+ * MIDDLE of the file. From then on every read threw, and recovery was dead
+ * permanently, one crash after the crash it was written to survive. So an append
+ * truncates a torn tail first, and the truncation is recorded rather than done
+ * quietly.
  */
 
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 
@@ -101,7 +118,27 @@ export class DispatchJournal {
     mkdirSync(dirname(path), { recursive: true });
   }
 
+  /**
+   * Cut a partial final line off before appending.
+   *
+   * Returns what was discarded, so a caller can log it — a torn record is a
+   * command whose intent was being written when the process died, and dropping it
+   * silently would be the same class of loss the journal exists to prevent. (The
+   * command itself is not lost: an intent that never finished being written also
+   * never reached dispatch.)
+   */
+  #truncateTornTail(): string | null {
+    if (!existsSync(this.path)) return null;
+    const raw = readFileSync(this.path, 'utf-8');
+    if (raw.length === 0 || raw.endsWith('\n')) return null;
+    const lastNewline = raw.lastIndexOf('\n');
+    const torn = raw.slice(lastNewline + 1);
+    writeFileSync(this.path, lastNewline === -1 ? '' : raw.slice(0, lastNewline + 1));
+    return torn;
+  }
+
   #append(record: JournalRecord): void {
+    this.#truncateTornTail();
     const fd = openSync(this.path, 'a');
     try {
       writeSync(fd, JSON.stringify(record) + '\n');
@@ -123,6 +160,16 @@ export class DispatchJournal {
   /** Record what happened to a dispatched command. */
   recordOutcome(commandId: string, status: 'dispatched' | 'failed', error?: string): void {
     this.#append({ kind: 'outcome', commandId, status, ...(error ? { error } : {}), at: new Date().toISOString() });
+  }
+
+  /**
+   * Remove a torn final line, returning it.
+   *
+   * Called automatically before every append; exposed so a recovering caller can
+   * report the repair instead of discovering the file had already been fixed.
+   */
+  repairTornTail(): string | null {
+    return this.#truncateTornTail();
   }
 
   /** Every record in order, with the torn-tail fact kept rather than hidden. */
@@ -172,6 +219,26 @@ export class DispatchJournal {
     }
     return pending;
   }
+}
+
+/**
+ * Did the server answer, and answer no?
+ *
+ * `RpcFailureError` is the server's own failure Exit — a decision. Everything
+ * else on this path (`NotConnectedError`, `RequestTimeoutError`, `ProtocolError`,
+ * `MalformedFrameError`, anything unrecognised) means no answer arrived, and an
+ * absent answer is not a negative one.
+ *
+ * Matched by `name` rather than `instanceof` so this module does not import the
+ * transport's error classes, and so an error that crossed a realm still
+ * classifies — the same reason `subscription.ts` matches by name.
+ *
+ * The default is deliberately "unanswered": a misclassified refusal costs one
+ * redundant re-dispatch that the server deduplicates, while a misclassified
+ * transport failure costs the command.
+ */
+export function isServerRefusal(error: unknown): boolean {
+  return (error as { name?: unknown } | null)?.name === 'RpcFailureError';
 }
 
 /** What `dispatch` needs of a transport. Injected, so no socket is required to test it. */
@@ -224,12 +291,20 @@ export async function dispatchCommand(
     journal.recordOutcome(commandId, 'dispatched');
     return { commandId, result };
   } catch (error) {
-    // Recorded as failed so recovery does not re-dispatch a command the server
-    // refused on its merits. A transport failure is the ambiguous case and is
-    // recorded the same way on purpose: re-dispatch is idempotent, so the cost of
-    // treating a refusal as settled is bounded, while re-dispatching a command
-    // the server rejected loops forever.
-    journal.recordOutcome(commandId, 'failed', (error as Error).message);
+    // A REFUSAL is settled. An UNANSWERED command is not.
+    //
+    // These must not be journalled the same way. The server answering "no" is a
+    // fact: re-dispatching it would replay a decision that was already made. A
+    // socket that died, a request that timed out, a connection declared unusable
+    // — none of those tell us whether the command landed, and recording them as
+    // `failed` spells "I could not tell" exactly like "no", which is how a command
+    // the server APPLIED gets dropped from recovery forever.
+    //
+    // So an unanswered command stays pending, and recovery re-dispatches it under
+    // the same `commandId`. That is safe by construction: t3code keys a receipt on
+    // `commandId` and returns the original result rather than applying twice
+    // (`OrchestrationEngine.ts:142-169` at the pinned commit).
+    if (isServerRefusal(error)) journal.recordOutcome(commandId, 'failed', (error as Error).message);
     throw error;
   }
 }

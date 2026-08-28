@@ -109,8 +109,16 @@ export interface CreateThreadOptions {
   readonly title: string;
   /** Codev harness name — mapped to a driver kind here, not passed through. */
   readonly harnessName: string;
-  /** `--model`. Rejected at spawn for a harness with no model selector. */
+  /**
+   * `--model`. Rejected at spawn for a harness with no model selector.
+   *
+   * Required in practice: `thread.create` lists `modelSelection` among its
+   * REQUIRED fields in the vendored contract, so a thread cannot be created
+   * without one. `defaultModel` covers the caller that has no `--model` to pass.
+   */
   readonly model?: string;
+  /** Used when `model` is absent. `thread.create` cannot omit `modelSelection`. */
+  readonly defaultModel?: string;
   readonly instanceId?: string;
   readonly worktreePath: string;
   readonly branch: string;
@@ -124,6 +132,23 @@ export interface CreateThreadOptions {
   readonly guardFiles?: ReadonlyArray<WorktreeFile>;
   /** Cap on retained events. Default 5,000. */
   readonly retainEvents?: number;
+}
+
+/**
+ * A thread was requested with no model.
+ *
+ * Separate from `ModelUnsupportedForDriverError`, which is "this harness cannot
+ * take a model": this one is "the contract requires one and none was given".
+ */
+export class ModelSelectionRequiredError extends Error {
+  constructor(readonly harnessName: string) {
+    super(
+      `A model is required to create a thread for the "${harnessName}" harness.\n` +
+        `  t3code's thread.create lists modelSelection among its required fields, so ` +
+        `there is no "let the server choose" here. Pass --model, or a defaultModel.`,
+    );
+    this.name = 'ModelSelectionRequiredError';
+  }
 }
 
 export interface DriverThreadDeps {
@@ -167,10 +192,21 @@ export class DriverThread {
   static async create(deps: DriverThreadDeps, options: CreateThreadOptions): Promise<DriverThread> {
     // Mapping first. A harness with no driver, or a model the harness cannot
     // honour, must fail here — before a thread exists to be left half-configured.
+    const model = options.model ?? options.defaultModel;
     const mapping = mapHarness(options.harnessName, {
-      model: options.model,
+      model,
       instanceId: options.instanceId,
     });
+
+    // `modelSelection` is REQUIRED on `thread.create` in the vendored contract, so
+    // omitting it does not "let the server default" — it produces a payload the
+    // server rejects, at a point where the caller has no way to read the refusal
+    // as "you forgot the model". `mapHarness` may legitimately omit it (a
+    // `thread.turn.start` does not require one), so the requirement is enforced
+    // here, where it applies, and it fails before any command is dispatched.
+    if (!mapping.modelSelection) {
+      throw new ModelSelectionRequiredError(options.harnessName);
+    }
 
     const threadId = options.threadId ?? newCommandId();
     const setup = planWorktreeSetup(mapping.driverKind, {
@@ -186,7 +222,7 @@ export class DriverThread {
       threadId,
       projectId: options.projectId,
       title: options.title,
-      ...(mapping.modelSelection === undefined ? {} : { modelSelection: mapping.modelSelection }),
+      modelSelection: mapping.modelSelection,
       runtimeMode: options.runtimeMode ?? 'full-access',
       interactionMode: options.interactionMode ?? 'default',
       branch: options.branch,
@@ -243,8 +279,14 @@ export class DriverThread {
     if (!event || event.aggregateId !== this.threadId) return;
     this.#events.push(event);
     if (this.#events.length > this.retainEvents) {
-      this.#events.splice(0, this.#events.length - this.retainEvents);
-      this.#droppedEvents += 1;
+      const dropped = this.#events.length - this.retainEvents;
+      this.#events.splice(0, dropped);
+      // Counted as EVENTS dropped, not as times the cap was hit. Today those
+      // agree, because `observe` takes one value at a time and the overflow is
+      // therefore always one — there is no test that can tell the two apart, and
+      // adding one that cannot fail would be worse than none. It is written this
+      // way so it stays correct if a batching path ever arrives.
+      this.#droppedEvents += dropped;
     }
   }
 
@@ -261,8 +303,13 @@ export class DriverThread {
       ...(this.mapping.modelSelection === undefined ? {} : { modelSelection: this.mapping.modelSelection }),
     });
 
-    const turnId = await this.#withTimeout(started.running, options.timeoutMs, 'the turn to start');
-    await this.#withTimeout(started.settled, options.timeoutMs, 'the turn to settle');
+    // ONE budget for the turn, not one per wait. Two `#withTimeout` calls each
+    // holding the full budget meant `timeoutMs: 60_000` could take 120 seconds —
+    // a timeout that does not bound what the caller asked it to bound.
+    const deadline = options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs;
+    const remaining = () => (deadline === undefined ? undefined : Math.max(deadline - Date.now(), 0));
+    const turnId = await this.#withTimeout(started.running, remaining(), 'the turn to start');
+    await this.#withTimeout(started.settled, remaining(), 'the turn to settle');
 
     const endSequence = this.lastSequence;
     return {

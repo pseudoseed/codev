@@ -163,7 +163,7 @@ async function main() {
 
     if (requested.has('a')) await scenarioA(thread, worktree);
     if (requested.has('b')) await scenarioB(thread);
-    if (requested.has('c')) await scenarioC({ thread, auth, tracker });
+    if (requested.has('c')) await scenarioC({ thread, auth });
     if (requested.has('d')) await scenarioD({ thread, auth });
     if (requested.has('e')) {
       await scenarioE({ thread, auth, journalDir, primary });
@@ -336,58 +336,85 @@ async function scenarioB(thread) {
 
 // ---------------------------------------------------------------- scenario C
 
-async function scenarioC({ thread, auth, tracker }) {
+async function scenarioC({ thread, auth }) {
   const name = 'C: a socket killed mid-stream replays exactly the missing range (Phase 2 criterion C)';
   try {
-    // A second connection, dropped deliberately while a turn is running.
-    const aux = await connect(baseUrl, auth.accessToken);
-    const auxSynced = deferred();
-    const auxSawRunning = deferred();
-    const auxEvents = [];
-    const auxStart = thread.lastSequence;
+    // The subscriber under test is the real `ResumingSubscription`, not a raw
+    // stream reopened by hand. Reopening one by hand proves the SERVER replays;
+    // the exit condition is about `packages/t3-client` resubscribing at its
+    // applied cursor and reporting what came back.
+    const appliedEventIds = [];
+    const appliedSequences = [];
+    const outcomes = [];
+    let liveSocket = null;
+    let resumeCount = 0;
 
-    const auxStream = aux.client.stream(
-      'orchestration.subscribeThread',
-      { threadId: thread.threadId, afterSequence: auxStart, requestCompletionMarker: true },
-      (value) => {
-        if (value?.kind === 'synchronized') auxSynced.resolve();
-        const event = asThreadEvent(value);
-        if (!event || event.aggregateId !== thread.threadId) return;
-        auxEvents.push(event);
-        const session = event.type === 'thread.session-set' ? event.payload?.session : null;
-        if (session?.activeTurnId != null) auxSawRunning.resolve();
+    const subscription = new ResumingSubscription(
+      async () => {
+        const connection = await connect(baseUrl, auth.accessToken);
+        liveSocket = connection;
+        return { client: connection.client, close: () => connection.close() };
+      },
+      {
+        method: 'orchestration.subscribeThread',
+        payload: { threadId: thread.threadId },
+        sequenceOf: (value) => asThreadEvent(value)?.sequence ?? null,
+        isSnapshot: (value) => value?.kind === 'snapshot' || value?.kind === 'thread-snapshot',
+        isSynchronized: (value) => value?.kind === 'synchronized',
+        onValue: (value, sequence) => {
+          const event = asThreadEvent(value);
+          if (!event || event.aggregateId !== thread.threadId || sequence === null) return;
+          appliedEventIds.push(event.eventId);
+          appliedSequences.push(sequence);
+        },
+        onResume: (outcome, info) => {
+          resumeCount += 1;
+          outcomes.push({ kind: outcome.kind, attempt: info.attempt, resumed: info.resumed });
+        },
+        startAfter: thread.lastSequence,
+        delayBetweenAttemptsMs: 100,
       },
     );
-    auxStream.catch(() => {});
-    await withTimeout(auxSynced.promise, 'aux subscription synchronized', 60_000);
 
-    const started = await thread.beginTurn('Run this shell command: sleep 8; printf REPLAY_CMD_DONE. Then reply exactly REPLAY_TURN_DONE.');
+    const running = subscription.run().catch((error) => ({ error: String(error?.message ?? error) }));
+    await withTimeout(
+      (async () => {
+        while (resumeCount === 0) await sleep(200);
+      })(),
+      'the resuming subscription to synchronize',
+      60_000,
+    );
+
+    const started = await thread.beginTurn(
+      'Run this shell command: sleep 8; printf REPLAY_CMD_DONE. Then reply exactly REPLAY_TURN_DONE.',
+    );
     await withTimeout(started.running, 'the replay turn to start', 5 * 60_000);
-    await withTimeout(auxSawRunning.promise, 'aux to observe the turn running', 5 * 60_000);
+    await withTimeout(
+      (async () => {
+        while (subscription.applied <= thread.lastSequence - 1 && appliedSequences.length === 0) await sleep(200);
+      })(),
+      'the subscription to apply an event from this turn',
+      2 * 60_000,
+    );
 
-    // Killed mid-stream, at a sequence we know because we watched it arrive.
-    const lastBeforeDrop = auxEvents.at(-1)?.sequence ?? auxStart;
-    aux.close();
+    // Killed mid-stream, at a sequence we know because the subscription applied it.
+    const lastBeforeDrop = subscription.applied;
+    const appliedBeforeDrop = appliedEventIds.length;
+    liveSocket.socket.close();
 
-    await withTimeout(started.settled, 'the turn to settle while aux is disconnected', 10 * 60_000);
+    await withTimeout(started.settled, 'the turn to settle across the drop', 10 * 60_000);
     const settledSequence = thread.lastSequence;
 
-    // Resubscribe from the last event the dropped socket actually applied.
-    const replay = await connect(baseUrl, auth.accessToken);
-    const replaySynced = deferred();
-    const replayEvents = [];
-    const replayStream = replay.client.stream(
-      'orchestration.subscribeThread',
-      { threadId: thread.threadId, afterSequence: lastBeforeDrop, requestCompletionMarker: true },
-      (value) => {
-        if (value?.kind === 'synchronized') replaySynced.resolve();
-        const event = asThreadEvent(value);
-        if (event && event.aggregateId === thread.threadId) replayEvents.push(event);
-      },
+    // Let the subscription resubscribe on its own and catch up.
+    await withTimeout(
+      (async () => {
+        while (subscription.applied < settledSequence) await sleep(300);
+      })(),
+      'the subscription to catch up to the settled sequence',
+      3 * 60_000,
     );
-    replayStream.catch(() => {});
-    await withTimeout(replaySynced.promise, 'replay subscription synchronized', 60_000);
-    replay.close();
+    subscription.stop();
+    await running;
 
     // The comparison is against the control connection's record, not against
     // arithmetic: the sequence is global and thread-filtered, so "consecutive"
@@ -395,36 +422,51 @@ async function scenarioC({ thread, auth, tracker }) {
     const expected = controlEvents
       .filter((event) => event.sequence > lastBeforeDrop && event.sequence <= settledSequence)
       .map((event) => event.eventId);
-    const replayed = replayEvents
-      .filter((event) => event.sequence <= settledSequence)
-      .map((event) => event.eventId);
-    const completionReplayed = replayEvents.some(
-      (event) => event.type === 'thread.session-set' && event.payload?.session?.activeTurnId === null,
+    const replayed = appliedEventIds
+      .slice(appliedBeforeDrop)
+      .filter((_, index) => appliedSequences[appliedBeforeDrop + index] <= settledSequence);
+    const completionReplayed = controlEvents.some(
+      (event) =>
+        event.sequence > lastBeforeDrop &&
+        event.sequence <= settledSequence &&
+        event.type === 'thread.session-set' &&
+        event.payload?.session?.activeTurnId === null,
     );
     const exact = JSON.stringify(expected) === JSON.stringify(replayed);
 
     record(
-      exact && completionReplayed && expected.length > 0
+      exact && completionReplayed && expected.length > 0 && resumeCount > 1
         ? demonstrated(name, {
             lastBeforeDrop,
             settledSequence,
             missingRangeSize: expected.length,
+            subscriptionAttempts: resumeCount,
+            outcomes,
             comparedAgainst: 'a control subscription that never dropped',
             completionEventReplayed: true,
-            note: 'the replayed eventIds equal the control connection\'s record over the same window',
+            note:
+              'ResumingSubscription resubscribed at its own applied cursor after the socket was ' +
+              "killed, and the eventIds it applied equal the control connection's record over the " +
+              'same window',
           })
         : expected.length === 0
-          ? notDemonstrated(name, { lastBeforeDrop, settledSequence, note: 'no events fell in the gap, so there was nothing to replay' })
+          ? notDemonstrated(name, {
+              lastBeforeDrop,
+              settledSequence,
+              note: 'no events fell in the gap, so there was nothing to replay',
+            })
           : failed(name, {
               lastBeforeDrop,
               settledSequence,
               expectedCount: expected.length,
               replayedCount: replayed.length,
+              subscriptionAttempts: resumeCount,
+              outcomes,
               completionEventReplayed: completionReplayed,
             }),
     );
   } catch (error) {
-    record(failed(name, { note: String(error?.message ?? error) }));
+    record(failed(name, { note: String(error?.stack ?? error) }));
   }
 }
 

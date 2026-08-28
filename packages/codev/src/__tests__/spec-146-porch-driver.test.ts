@@ -28,6 +28,7 @@ import {
   HARNESSES_ACCEPTING_MODEL,
   HARNESS_TO_DRIVER_KIND,
   ModelUnsupportedForDriverError,
+  RETIRED_HARNESS_NAMES,
   RetiredHarnessMappingError,
   T3_DRIVER_KINDS,
   UnmappedHarnessError,
@@ -38,6 +39,7 @@ import {
   DispatchJournal,
   JournalCorruptError,
   dispatchCommand,
+  isServerRefusal,
   newCommandId,
   recoverPendingCommands,
 } from '../../../porch-driver/src/commands.js';
@@ -53,7 +55,8 @@ import {
 } from '../../../porch-driver/src/turn.js';
 import { TurnActiveError, runPhaseCheck } from '../../../porch-driver/src/checks.js';
 import { applyWorktreeSetup, planWorktreeSetup } from '../../../porch-driver/src/worktree-setup.js';
-import { DriverThread, createWorktree } from '../../../porch-driver/src/thread.js';
+import { DriverThread, ModelSelectionRequiredError, createWorktree } from '../../../porch-driver/src/thread.js';
+import { checkPayload } from '../../../t3-client/src/checked.js';
 import { BUILTIN_HARNESSES, getBuiltinHarness, RETIRED_HARNESSES } from '../agent-farm/utils/harness.js';
 
 function tempDir(label: string): string {
@@ -135,7 +138,10 @@ describe('spec 146 phase 3: harness to driverKind', () => {
   });
 
   it('the retired list matches Codev\'s own', () => {
-    expect(Object.keys(RETIRED_HARNESSES).sort()).toEqual(['gemini']);
+    // Compares the two DUPLICATED sets, not the copy against a literal. A literal
+    // would go green while the copy and the real registry disagreed, which is the
+    // only failure this test exists to catch.
+    expect([...RETIRED_HARNESS_NAMES].sort()).toEqual(Object.keys(RETIRED_HARNESSES).sort());
   });
 
   it('maps --model onto modelSelection.model', () => {
@@ -272,6 +278,42 @@ describe('spec 146 phase 3: the dispatch journal', () => {
     }
   });
 
+  it('appending after a torn tail does not corrupt the journal', async () => {
+    // Tolerating the torn line on read is not enough: appending after it glues the
+    // next record onto the partial one, and from then on every read throws. One
+    // crash after the crash the journal exists to survive.
+    const dir = tempDir('journal-torn-append');
+    try {
+      const path = join(dir, 'commands.jsonl');
+      const journal = new DispatchJournal(path);
+      journal.recordIntent('cmd-a', 'thread.turn.start', { commandId: 'cmd-a' });
+      writeFileSync(path, readFileSync(path, 'utf-8') + '{"kind":"intent","comm', 'utf-8');
+
+      journal.recordIntent('cmd-b', 'thread.turn.start', { commandId: 'cmd-b' });
+
+      const reopened = new DispatchJournal(path);
+      expect(() => reopened.read()).not.toThrow();
+      expect(reopened.pending().map((r) => r.commandId)).toEqual(['cmd-a', 'cmd-b']);
+      expect(reopened.read().tornTail).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports what the torn tail contained rather than fixing it silently', () => {
+    const dir = tempDir('journal-torn-report');
+    try {
+      const path = join(dir, 'commands.jsonl');
+      const journal = new DispatchJournal(path);
+      journal.recordIntent('cmd-a', 'thread.turn.start', { commandId: 'cmd-a' });
+      writeFileSync(path, readFileSync(path, 'utf-8') + '{"partial', 'utf-8');
+      expect(journal.repairTornTail()).toBe('{"partial');
+      expect(journal.repairTornTail()).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('an absent journal is empty and not torn', () => {
     const dir = tempDir('journal-absent');
     try {
@@ -282,18 +324,43 @@ describe('spec 146 phase 3: the dispatch journal', () => {
     }
   });
 
-  it('a dispatch that the server refused is settled, not retried forever', async () => {
+  it('a command the server REFUSED is settled, not retried forever', async () => {
     const dir = tempDir('journal-refused');
     try {
       const path = join(dir, 'commands.jsonl');
       const journal = new DispatchJournal(path);
+      const refusal = Object.assign(new Error('the server said no'), { name: 'RpcFailureError' });
       await expect(
-        dispatchCommand({ async call() { throw new Error('refused'); } }, journal, { type: 'thread.create' }),
-      ).rejects.toThrow('refused');
+        dispatchCommand({ async call() { throw refusal; } }, journal, { type: 'thread.create' }),
+      ).rejects.toBe(refusal);
       expect(new DispatchJournal(path).pending()).toHaveLength(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('a command left UNANSWERED stays pending, because absent is not negative', async () => {
+    // A dead socket does not tell us whether the command landed. Recording it as
+    // failed would spell "I could not tell" exactly like "no", and a command the
+    // server had already applied would then never be recovered.
+    const dir = tempDir('journal-unanswered');
+    try {
+      const path = join(dir, 'commands.jsonl');
+      const journal = new DispatchJournal(path);
+      const dropped = Object.assign(new Error('socket closed'), { name: 'NotConnectedError' });
+      await expect(
+        dispatchCommand({ async call() { throw dropped; } }, journal, { type: 'thread.turn.start' }),
+      ).rejects.toBe(dropped);
+      expect(new DispatchJournal(path).pending()).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('an unrecognised error is treated as unanswered, not as a refusal', () => {
+    expect(isServerRefusal(new Error('who knows'))).toBe(false);
+    expect(isServerRefusal(Object.assign(new Error('no'), { name: 'RpcFailureError' }))).toBe(true);
+    expect(isServerRefusal(Object.assign(new Error('t'), { name: 'RequestTimeoutError' }))).toBe(false);
   });
 
   it('generates a distinct commandId per command when none is supplied', async () => {
@@ -600,6 +667,84 @@ describe('spec 146 phase 3: phase checks', () => {
     }
   });
 
+  it('the timeout bounds a COMPOUND command, which is what a real check is', async () => {
+    // `bash -lc 'sleep 30'` execs, so the shell's pid is the sleep's and killing
+    // it works. `sleep 20; true` forks, and signalling only the shell left the
+    // call running for the full 20 seconds against a 1-second budget. Every real
+    // check — `npm test`, `pnpm build` — is this shape.
+    const dir = tempDir('check-timeout-compound');
+    try {
+      const started = Date.now();
+      const result = await runPhaseCheck({
+        command: 'sleep 20; true',
+        cwd: dir,
+        timeoutMs: 700,
+        killGraceMs: 200,
+      });
+      const elapsed = Date.now() - started;
+      expect(result.timedOut).toBe(true);
+      expect(elapsed).toBeLessThan(6_000);
+      expect(result.durationMs).toBeLessThan(6_000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the timeout kills a backgrounded grandchild, not just the shell', async () => {
+    const dir = tempDir('check-timeout-grandchild');
+    try {
+      const marker = join(dir, 'grandchild-ran.txt');
+      const result = await runPhaseCheck({
+        command: `(sleep 3; touch ${JSON.stringify(marker)}) & sleep 20`,
+        cwd: dir,
+        timeoutMs: 700,
+        killGraceMs: 200,
+      });
+      expect(result.timedOut).toBe(true);
+      // Well past the grandchild's own sleep: if the group was not signalled, the
+      // marker is here.
+      await new Promise((resolve) => setTimeout(resolve, 4_000));
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a SIGTERM-ignoring check is still bounded', async () => {
+    const dir = tempDir('check-sigterm-ignored');
+    try {
+      const started = Date.now();
+      const result = await runPhaseCheck({
+        command: 'trap "" TERM; sleep 20',
+        cwd: dir,
+        timeoutMs: 500,
+        killGraceMs: 300,
+      });
+      expect(result.timedOut).toBe(true);
+      expect(Date.now() - started).toBeLessThan(6_000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('caps captured output and says it did', async () => {
+    const dir = tempDir('check-output-cap');
+    try {
+      const result = await runPhaseCheck({
+        command: 'for i in $(seq 1 500); do echo "0123456789"; done',
+        cwd: dir,
+        maxOutputBytes: 200,
+      });
+      expect(result.passed).toBe(true);
+      expect(result.stdout.length).toBeLessThanOrEqual(200);
+      expect(result.stdoutTruncated).toBe(true);
+      // The TAIL is what a failing check explains itself with.
+      expect(result.stdout.trim().endsWith('0123456789')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('records the interpreter it used', async () => {
     // Phase 2 had a teardown race that failed under bash and passed under zsh.
     const dir = tempDir('check-shell');
@@ -712,6 +857,7 @@ describe('spec 146 phase 3: the thread', () => {
         projectId: 'p1',
         title: 'a builder',
         harnessName: 'codex',
+        model: 'gpt-5.6-luna',
         worktreePath,
         branch: 'builder/x',
         threadId: 't1',
@@ -734,6 +880,39 @@ describe('spec 146 phase 3: the thread', () => {
     }
   });
 
+  it('always sends modelSelection on thread.create, which the contract requires', async () => {
+    const dir = tempDir('thread-model-required');
+    try {
+      const { dispatcher } = await makeThread(dir, { model: undefined, defaultModel: 'gpt-5.6-luna' });
+      const created = dispatcher.calls.find((c) => c.payload.type === 'thread.create')!;
+      expect(created.payload.modelSelection).toEqual({ instanceId: 'codex', model: 'gpt-5.6-luna' });
+
+      // And the payload passes the vendored contract's own input schema, which is
+      // where the omission would have been caught before it reached a server.
+      const outcome = checkPayload('orchestration.dispatchCommand', 'input', created.payload);
+      expect(outcome.status).not.toBe('failed');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to create a thread with no model at all', async () => {
+    const dir = tempDir('thread-no-model');
+    try {
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      const dispatcher = recordingDispatcher();
+      await expect(
+        DriverThread.create(
+          { dispatcher, journal, tracker: new TurnTracker() },
+          { projectId: 'p1', title: 't', harnessName: 'codex', worktreePath: dir, branch: 'b' },
+        ),
+      ).rejects.toThrow(ModelSelectionRequiredError);
+      expect(dispatcher.calls).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('fails before creating a thread when the harness cannot be mapped', async () => {
     const dir = tempDir('thread-unmapped');
     try {
@@ -742,7 +921,7 @@ describe('spec 146 phase 3: the thread', () => {
       await expect(
         DriverThread.create(
           { dispatcher, journal, tracker: new TurnTracker() },
-          { projectId: 'p1', title: 't', harnessName: 'nope', worktreePath: dir, branch: 'b' },
+          { projectId: 'p1', title: 't', harnessName: 'nope', model: 'x', worktreePath: dir, branch: 'b' },
         ),
       ).rejects.toThrow(UnmappedHarnessError);
       // Nothing was dispatched, so there is no half-configured thread.
@@ -842,6 +1021,25 @@ describe('spec 146 phase 3: the thread', () => {
     try {
       const { thread } = await makeThread(dir);
       await expect(thread.runTurn('x', { timeoutMs: 20 })).rejects.toThrow(/still be running/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('spends ONE budget across a turn, not one per wait', async () => {
+    // Two waits each holding the full budget made `timeoutMs: 60_000` take up to
+    // 120 seconds — a timeout that does not bound what the caller asked it to.
+    const dir = tempDir('thread-one-budget');
+    try {
+      const { thread } = await makeThread(dir);
+      const started = Date.now();
+      const promise = thread.runTurn('x', { timeoutMs: 400 });
+      // Running arrives late in the budget; settling never does. With one shared
+      // budget the whole call ends at ~400ms. With a budget per wait it ends at
+      // ~750ms, so the bound below is what separates them.
+      setTimeout(() => thread.observe(sessionSet('t1', 2, 'turn-1')), 350);
+      await expect(promise).rejects.toThrow(/still be running/);
+      expect(Date.now() - started).toBeLessThan(600);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
