@@ -395,6 +395,12 @@ importers:
         specifier: ^4.0.15
         version: 4.1.4(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@28.1.0)(vite@6.4.2(@types/node@22.19.17)(tsx@4.21.0)(yaml@2.9.0))
 
+  packages/t3-client:
+    devDependencies:
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+
   packages/types:
     devDependencies:
       typescript:
@@ -5545,7 +5551,7 @@ snapshots:
       obug: 2.1.1
       std-env: 4.0.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.4(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@28.1.0)(vite@6.4.2(@types/node@22.19.17)(tsx@4.21.0)(yaml@2.9.0))
+      vitest: 4.1.4(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@26.1.0)(vite@6.4.2(@types/node@22.19.17)(tsx@4.21.0)(yaml@2.9.0))
 
   '@vitest/expect@4.1.4':
     dependencies:
