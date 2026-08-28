@@ -393,15 +393,19 @@ console.log(
       criterion: 'Spec 146 Phase 2 live integration',
       scenarios: results,
       limits: {
-        scenarioCplusD:
-          'What C and D need is NOT what this scenario checks. t3code numbers events on a ' +
-          'SINGLE GLOBAL counter (one `sequence` column on orchestration_events, read ' +
-          '`WHERE sequence > ? ORDER BY sequence ASC` and then filtered to the subscribed ' +
-          'thread), so a sparse range is the normal shape and carries no information about ' +
-          'loss. Proving the client replays exactly the missing range needs a second, ' +
-          'never-dropped control connection and an eventId comparison, against a thread that ' +
-          'is actually generating events. That is Phase 3 work, and it is recorded in Phase ' +
-          "3's exit conditions as Phase 2's criteria.",
+        scenarioC:
+          'Criterion C is NOT checked by the C groundwork scenario, and that scenario is not ' +
+          'evidence for it. t3code numbers events on a SINGLE GLOBAL counter (one `sequence` ' +
+          'column on orchestration_events, read `WHERE sequence > ? ORDER BY sequence ASC` and ' +
+          'then filtered to the subscribed thread), so a sparse range is the normal shape and ' +
+          'carries no information about loss. Proving the client replays exactly the missing ' +
+          'range needs a second, never-dropped control connection and an eventId comparison, ' +
+          'against a thread that is actually generating events. That is Phase 3 work, recorded ' +
+          "in Phase 3's exit conditions as Phase 2's criterion.",
+        scenarioD:
+          'Criterion D IS discharged here, by scenario D. The server chooses the snapshot path ' +
+          'itself because the cursor is past its head (ws.ts:1493-1526); nothing about the ' +
+          'response is manufactured by this script.',
         harness:
           'The pinned checkout is verified; the `t3` CLI binary running against it is NOT ' +
           'pinned. A divergence between the two is invisible to `verify`.',

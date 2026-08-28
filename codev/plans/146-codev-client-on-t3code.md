@@ -448,11 +448,17 @@ claim stops being a one-off observation and becomes a tested property.
 - [~] **PARTIALLY MET — discharged in Phase 3, and still Phase 2's criteria.** Socket killed
       mid-stream at a known sequence; resubscription replays exactly the missing range and the
       completion event is present.
-- [~] **PARTIALLY MET — same.** A forced snapshot response produces a gap signal distinguishable
-      from both success and empty.
+- [x] **MET, live.** A forced snapshot response produces a gap signal distinguishable from both
+      success and empty. Discharged in Phase 2 after all, not deferred: `ws.ts:1493-1526` takes the
+      snapshot path when the cursor is **ahead of the server's head**, not only when the replay gap
+      exceeds 1,000, so `afterSequence: 5_000_000` makes the **server** choose the snapshot with no
+      warm-up. The run records `serverSentSnapshot: true`, `outcomeKind: "gap"`,
+      `gapDistinctFromEmpty: true` (`codev/research/146-phase2-live-evidence.json`). The previous
+      version of this scenario handed the classifier a hand-made snapshot object and checked that
+      it said "gap", which tested the classifier against itself.
 
-      **Why they moved, and what "moved" does not mean.** Both need a real event stream to kill a
-      socket in the middle of. An idle thread emits about two items and no server-issued sequence
+      **Why C moved, and what "moved" does not mean.** (D no longer moves — see above; it is met
+      live in this phase.) C needs a real event stream to kill a socket in the middle of. An idle thread emits about two items and no server-issued sequence
       numbers, so there is nothing to classify. Manufacturing traffic would test the classifier
       against synthetic sequences — a third instrument agreeing with the other two because they
       share a premise, which is the failure this project has already been bitten by twice.
@@ -553,11 +559,11 @@ Checked at the end of this phase, not inherited from its start.
       over the same window — which is what `proof.mjs:428-437` does. A test that asserts the
       replayed sequences are consecutive is testing the counter, not the replay, and will fail on
       a correct server the moment a second thread is active.
-- [ ] **Phase 2's criterion D, discharged here.** A resubscription answered with a snapshot
-      produces a gap signal distinguishable from both success and empty, against server-issued
-      sequences rather than synthetic ones.
+- [x] **Phase 2's criterion D — already discharged, in Phase 2.** Left here as a record of where
+      it was expected to land, not as work. See Phase 2's criteria and
+      `codev/research/146-phase2-live-evidence.json`.
 
-      **The trigger is deterministic and cheap.** `ws.ts:1493-1526` falls through to the snapshot
+      **The trigger, for reference.** `ws.ts:1493-1526` falls through to the snapshot
       path when `replayGap > THREAD_RESUME_MAX_GAP` (1,000, `ws.ts:330`) **or when the cursor is
       ahead of the server's head**. The second needs no warm-up: subscribe with
       `afterSequence: head + 1`. It is also the real case — porch's persisted cursor surviving a

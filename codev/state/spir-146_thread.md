@@ -915,3 +915,29 @@ confirms is the same.
 **For Phase 3:** the live harness must be run under Node 22 (`nvm use 22`). Under
 Node 20 it now fails in one second with the reason instead of three minutes with
 the wrong one.
+
+### Criterion D is discharged in Phase 2 after all
+
+The architect's ruling moved C and D to Phase 3 because both looked to need a real
+event stream. D did not. `ws.ts:1493-1526` takes the snapshot path when the replay
+gap exceeds 1,000 **or when the cursor is ahead of the server's head**, and the
+second costs nothing: `afterSequence: 5_000_000`. The **server** then chooses the
+snapshot; the script manufactures none of it.
+
+Live result: `serverSentSnapshot: true`, `outcomeKind: "gap"`,
+`gapDistinctFromEmpty: true`. Criterion D is marked met in Phase 2 and left in
+Phase 3's exit conditions as a pointer, not as work.
+
+It is also not a contrived trigger. A cursor ahead of the head is what porch sees
+when the server's database is restored from a backup or rolled back while porch's
+persisted cursor survives — a real recovery case, and the one where quietly
+accepting a snapshot as if it were the requested range loses everything in
+between.
+
+The version this replaced passed a hand-made object as `snapshotSeen` and checked
+the classifier said "gap". That tested the classifier against itself.
+
+**C stays deferred**, and for the reason the architect gave rather than the one I
+first gave. It needs a control connection and an `eventId` comparison against a
+thread that is genuinely producing events, because a sparse range carries no
+information about loss.
