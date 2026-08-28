@@ -1,7 +1,7 @@
 id: '146'
 title: codev-client-on-the-t3code-ser
 protocol: spir
-phase: specify
+phase: plan
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -16,7 +16,10 @@ gates:
   verify-approval:
     status: pending
 iteration: 1
-build_complete: true
+build_complete: false
 history: []
 started_at: '2026-08-28T15:56:27.086Z'
-updated_at: '2026-08-28T15:58:53.746Z'
+updated_at: '2026-08-28T15:58:58.493Z'
+context_refreshes:
+  - boundary: enter:plan
+    at: '2026-08-28T15:58:58.492Z'
