@@ -19,7 +19,8 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-28T15:56:27.086Z'
-updated_at: '2026-08-28T15:58:58.493Z'
+updated_at: '2026-08-28T15:59:25.624Z'
 context_refreshes:
   - boundary: enter:plan
     at: '2026-08-28T15:58:58.492Z'
+    acknowledged_at: '2026-08-28T15:59:25.623Z'
