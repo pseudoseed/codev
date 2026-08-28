@@ -1046,3 +1046,51 @@ phase boundary, against its own author.
 
 Re-running the smoke is the fix. Not deleting the assertion, and not touching the
 mtime.
+
+## Phase 2 — what a cold reader needs at Phase 3 entry
+
+### What exists
+
+`packages/t3-client`, seven modules, all built and exported:
+
+| File | What it owns |
+|---|---|
+| `envelope.ts` | the ten `layerJson` wire shapes, encode and decode |
+| `client.ts` | request/response and streaming, acks, loud failure when unreachable |
+| `auth.ts` | `POST /oauth/token` then `/api/auth/websocket-ticket`; refuses non-loopback without TLS |
+| `socket.ts` | reconnect with jittered backoff; reports the drop, resumes nothing |
+| `resume.ts` | classifies what a resubscription returned; `SequenceCursor` |
+| `checked.ts` | shape-checks inbound payloads; `unchecked` is a first-class outcome |
+| `subscription.ts` | performs the resubscription: cursor, ordering, gap reporting |
+
+49 unit tests in `packages/codev/src/__tests__/spec-146-t3-client.test.ts` (there,
+not in `packages/t3-client/`, because the root `test` script is
+`pnpm --filter @cluesmith/codev test` and a suite in the package under test would
+never run). Live scenarios in `packages/t3-client/live/integration.mjs`, evidence
+in `codev/research/146-phase2-live-evidence.json`.
+
+### Standing orders Phase 3 inherits
+
+- **Run the live harness under Node 22.** `nvm use 22`. The t3 server needs
+  `node:sqlite`. Under Node 20 the harness now refuses in one second.
+- **The review rotation is codex + claude only**, treated as a 2-way rather than a
+  reduced 3-way. When both approve contract, security or deletion work, do one
+  adversarial pass yourself first. Today's pass found three defects the lanes
+  never saw, one of them a comment asserting a guarantee the code did not
+  implement.
+- **If porch complains about a missing lane, the config is the fix, never
+  `status.yaml`.**
+- **The `t3` binary is not pinned.** `verify` pins the checkout only. Unchanged
+  from Phase 1, and no phase may assume it away.
+- **`npx` gap and #152 (CI drift)** are still open and still inherited.
+- **Regenerating cold-start evidence needs the redirection**:
+  `node tools/t3-server/smoke.mjs --runs 2 > codev/research/146-harness-coldstart-evidence.json`.
+  Without it the run happens and the file does not change.
+
+### What Phase 3 owes Phase 2
+
+Criterion C only. D was discharged live in Phase 2 once the cursor-ahead-of-head
+trigger turned up. C needs a control connection and an `eventId` comparison
+against a thread genuinely producing events — `proof.mjs:380-440` has the
+connect-and-kill mechanics, and `ResumingSubscription` is now the thing under
+test rather than an ad-hoc script.
