@@ -1146,3 +1146,33 @@ twice: I wrote it, then re-read the file and did not notice.
 So a comment claiming a property is a claim that needs a test, or it is decoration.
 The test that eventually caught it drives three handlers with descending durations
 (30ms, 15ms, 1ms), because equal durations pass against the broken code.
+
+### Phase 3 needs four contract entries that do not exist yet
+
+The vendored contract covers **eight** methods: `orchestration.dispatchCommand`,
+`subscribeThread`, `getTurnDiff`, `searchThreads`, and `vcs.createWorktree`,
+`removeWorktree`, `createRef`, `status`.
+
+**None of the terminal methods are in it.** Phase 3's deliverable — "phase checks
+run as shell in the thread's own `worktreePath`, outside the thread, between
+turns" — needs `terminal.open`, `terminal.write`, `terminal.close` and probably
+`terminal.attach` (`packages/contracts/src/rpc.ts:252-258`). Every one of those
+calls would come back `unchecked` today.
+
+That is the `unchecked` machinery earning its keep rather than a crisis: Phase 3
+will be *told*, on the first terminal call, that nothing validated the payload,
+instead of running unvalidated and looking identical to running validated. But it
+does mean a decision at the start of Phase 3, not a discovery in the middle of it:
+
+- **Extend the contract.** Add four entries to `packages/types/src/t3/pin.json`
+  with `source: "terminal.ts"` and their schema names, and add `terminal.ts` to
+  the codegen closure. The `vcs.*` entries are the template — they already resolve
+  schemas from a vendored file by name and fail loudly when the name is absent
+  (`generate.mjs:347-350`). Adding a file to the closure also puts it under the
+  source-hash drift detector, which is correct once we depend on it.
+- **Or accept unchecked terminal payloads** and record that in the phase commit,
+  the way the spec permits deliberate acceptance but not silent loss.
+
+The first is a morning's work and is almost certainly right, because a phase check
+returning a wrong exit status is the failure mode with the worst blast radius in
+this whole design.
