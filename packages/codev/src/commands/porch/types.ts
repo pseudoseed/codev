@@ -5,6 +5,8 @@
  * porch returns prescriptive instructions.
  */
 
+import type { GateRequest } from '@cluesmith/codev-types';
+
 // ============================================================================
 // Protocol Definition Types (loaded from protocol.json)
 // ============================================================================
@@ -147,12 +149,14 @@ export interface Protocol {
 // ============================================================================
 
 /**
- * Gate status
+ * Gate status. The nested request uses the portable camelCase GateRequest
+ * contract; the pre-existing status timestamps intentionally remain snake_case.
  */
 export interface GateStatus {
   status: 'pending' | 'approved';
   requested_at?: string;
   approved_at?: string;
+  request?: GateRequest;
 }
 
 /**

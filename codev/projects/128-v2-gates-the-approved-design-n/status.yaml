@@ -1,0 +1,108 @@
+id: '128'
+title: v2-gates-the-approved-design-n
+protocol: spir
+phase: implement
+plan_phases:
+  - id: phase_1
+    title: Validated porch gate-request record
+    status: complete
+  - id: phase_2
+    title: Resolver-delivered gate authoring guidance
+    status: complete
+  - id: phase_3
+    title: Exact-gate v2 wire projection
+    status: complete
+  - id: phase_4
+    title: Accessible live gate-detail behavior
+    status: in_progress
+  - id: phase_5
+    title: Design-faithful gate-detail presentation
+    status: pending
+current_plan_phase: phase_4
+gates:
+  spec-approval:
+    status: approved
+    requested_at: '2026-08-25T05:19:30.348Z'
+    approved_at: '2026-08-25T05:23:50.676Z'
+  plan-approval:
+    status: approved
+    requested_at: '2026-08-25T05:50:19.285Z'
+    approved_at: '2026-08-25T08:32:57.721Z'
+  pr:
+    status: pending
+  verify-approval:
+    status: pending
+iteration: 1
+build_complete: false
+history:
+  - iteration: 1
+    plan_phase: phase_1
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-128/codev/projects/128-v2-gates-the-approved-design-n/128-phase_1-iter1-gemini.txt
+        stated: false
+      - model: codex
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-128/codev/projects/128-v2-gates-the-approved-design-n/128-phase_1-iter1-codex.txt
+        stated: true
+      - model: claude
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-128/codev/projects/128-v2-gates-the-approved-design-n/128-phase_1-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-128/codev/projects/128-v2-gates-the-approved-design-n/128-phase_1-iter1-opencode.txt
+        stated: true
+  - iteration: 2
+    plan_phase: phase_1
+    build_output: ''
+    reviews:
+      - model: gemini
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-128/codev/projects/128-v2-gates-the-approved-design-n/128-phase_1-iter2-gemini.txt
+        stated: false
+      - model: codex
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-128/codev/projects/128-v2-gates-the-approved-design-n/128-phase_1-iter2-codex.txt
+        stated: true
+      - model: claude
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-128/codev/projects/128-v2-gates-the-approved-design-n/128-phase_1-iter2-claude.txt
+        stated: true
+      - model: opencode
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-128/codev/projects/128-v2-gates-the-approved-design-n/128-phase_1-iter2-opencode.txt
+        stated: true
+started_at: '2026-08-25T00:02:43.765Z'
+updated_at: '2026-08-28T15:37:10.932Z'
+context_refreshes:
+  - boundary: enter:plan
+    at: '2026-08-25T05:23:52.849Z'
+    acknowledged_at: '2026-08-25T05:24:44.608Z'
+  - boundary: enter:implement
+    at: '2026-08-25T08:32:59.632Z'
+    acknowledged_at: '2026-08-25T08:33:44.669Z'
+  - boundary: plan-phase:phase_2
+    at: '2026-08-25T09:27:30.904Z'
+    acknowledged_at: '2026-08-25T09:28:46.667Z'
+  - boundary: plan-phase:phase_3
+    at: '2026-08-25T14:27:59.026Z'
+    acknowledged_at: '2026-08-25T14:29:30.474Z'
+  - boundary: plan-phase:phase_4
+    at: '2026-08-26T06:19:27.326Z'
+    acknowledged_at: '2026-08-26T06:20:40.822Z'
+pr_history:
+  - phase: implement
+    pr_number: 148
+    branch: builder/spir-128
+    created_at: '2026-08-28T15:37:10.931Z'

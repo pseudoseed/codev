@@ -30,6 +30,8 @@ Write the spec to `codev/specs/{{artifact_name}}.md` using the template below as
 
 Keep the three artifact filenames in sync: spec `codev/specs/{{artifact_name}}.md`, plan `codev/plans/{{artifact_name}}.md`, review `codev/reviews/{{artifact_name}}.md`.
 
+{{> protocols/shared/gate-request.md}}
+
 ## Signals
 
 - Waiting on clarifying-question answers — **put the questions inside the signal**, which is displayed prominently to the user:

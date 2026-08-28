@@ -294,7 +294,11 @@ export async function next(workspaceRoot: string, projectId: string): Promise<Po
         // Auto-approve gate and advance
         const gateName = getPhaseGate(protocol, state.phase);
         if (gateName) {
-          state.gates[gateName] = { status: 'approved', approved_at: new Date().toISOString() };
+          state.gates[gateName] = {
+            ...state.gates[gateName],
+            status: 'approved',
+            approved_at: new Date().toISOString(),
+          };
         }
         // Advance to next phase
         const nextPhase = getNextPhase(protocol, state.phase);
@@ -354,7 +358,11 @@ export async function next(workspaceRoot: string, projectId: string): Promise<Po
         tasks: [{
           subject: `Request human approval: ${gateName}`,
           activeForm: `Requesting ${gateName} approval`,
-          description: `Gate ${gateName} is pending. The architect has already been notified.\n\nSTOP and wait for human approval before proceeding.`,
+          description:
+            `Gate ${gateName} is pending. The architect has already been notified.\n\n`
+            + 'Optional: attach or replace structured decision content for this same gate cycle '
+            + `with \`porch gate ${state.id} --request-file <path>\`. A content-free gate remains valid.\n\n`
+            + 'STOP and wait for human approval before proceeding.',
         }],
       };
     }

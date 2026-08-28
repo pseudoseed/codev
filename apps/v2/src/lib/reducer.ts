@@ -42,6 +42,12 @@ function cloneNode(n: ClientNode): ClientNode {
   return {
     ...n,
     flags: { ...n.flags },
+    blockedGateRequest: n.blockedGateRequest
+      ? {
+          ...n.blockedGateRequest,
+          choices: n.blockedGateRequest.choices.map((choice) => ({ ...choice })),
+        }
+      : null,
     buckets: n.buckets ? [...n.buckets] : undefined,
   };
 }

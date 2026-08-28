@@ -11,13 +11,13 @@ import { TRACE_LEN, type ClientNode } from '../src/lib/validate.js';
 const COUNTS = { workspaces: 22, builders: { total: 58, byStatus: { running: 10 } }, gateWaiting: 3 };
 
 function ws(id: string, name = id): ClientNode {
-  return { id, kind: 'workspace', parentId: null, name, status: 'running', flags: { heldMail: false }, lastDataAt: null };
+  return { id, kind: 'workspace', parentId: null, name, status: 'running', flags: { heldMail: false }, lastDataAt: null, blockedGate: null, blockedGateRequest: null };
 }
 function arch(id: string, parentId: string): ClientNode {
-  return { id, kind: 'architect', parentId, name: id, status: 'running', flags: { heldMail: false }, lastDataAt: null };
+  return { id, kind: 'architect', parentId, name: id, status: 'running', flags: { heldMail: false }, lastDataAt: null, blockedGate: null, blockedGateRequest: null };
 }
 function bld(id: string, parentId: string, extra: Partial<ClientNode> = {}): ClientNode {
-  return { id, kind: 'builder', parentId, name: id, status: 'running', flags: { heldMail: false }, lastDataAt: null, ...extra };
+  return { id, kind: 'builder', parentId, name: id, status: 'running', flags: { heldMail: false }, lastDataAt: null, blockedGate: null, blockedGateRequest: null, ...extra };
 }
 
 function snap(over: Record<string, unknown> = {}) {
@@ -115,9 +115,46 @@ describe('node upsert buckets (scenarios 3, 39)', () => {
   it('new builder with absent buckets gets 20 zeros', () => {
     const s = run([snap(), JSON.stringify({
       seq: 1, type: 'node',
-      node: { id: 'builder:/a#new', kind: 'builder', parentId: 'workspace:/a', name: 'new', status: 'running', flags: { heldMail: false }, lastDataAt: null },
+      node: { id: 'builder:/a#new', kind: 'builder', parentId: 'workspace:/a', name: 'new', status: 'running', flags: { heldMail: false }, lastDataAt: null, blockedGate: null, blockedGateRequest: null },
     })]);
     expect(s.nodes.get('builder:/a#new')?.buckets).toEqual(Array(TRACE_LEN).fill(0));
+  });
+});
+
+describe('gate request node deltas (Spec 128)', () => {
+  it('retains a request-only change through validation and reduction', () => {
+    const request = {
+      question: 'Which path?',
+      choices: [{ label: 'A', consequence: 'Implement A', recommended: true }],
+      terminalExcerpt: 'warning: choose carefully',
+    };
+    const state = run([snap(), JSON.stringify({
+      seq: 1,
+      type: 'node',
+      node: bld('builder:/a#one', 'workspace:/a', {
+        status: 'gate-waiting',
+        blockedGate: 'plan-approval',
+        blockedGateRequest: request,
+      }),
+    })]);
+    expect(state.mismatch).toBeNull();
+    expect(state.nodes.get('builder:/a#one')).toMatchObject({
+      blockedGate: 'plan-approval',
+      blockedGateRequest: request,
+    });
+  });
+
+  it('enters visible mismatch for malformed content rather than storing null', () => {
+    const result = applyFrame(run([snap()]), JSON.stringify({
+      seq: 1,
+      type: 'node',
+      node: bld('builder:/a#one', 'workspace:/a', {
+        blockedGate: 'plan-approval',
+        blockedGateRequest: { question: 'Q?', choices: [] } as never,
+      }),
+    }));
+    expect(result.effect).toBe('recover-fresh');
+    expect(result.state.mismatch?.field).toBe('node.blockedGateRequest');
   });
 });
 

@@ -104,6 +104,8 @@ Output something like:
 
 Then **stay in the interactive session**. Do not exit. Wait for the user's next message.
 
+{{> protocols/shared/gate-request.md}}
+
 ## Signals
 
 ```

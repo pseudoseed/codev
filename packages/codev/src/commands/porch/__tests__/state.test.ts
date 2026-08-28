@@ -138,6 +138,64 @@ updated_at: "${state.updated_at}"
       expect(read.protocol).toBe('spir');
       expect(read.phase).toBe('specify');
     });
+
+    it('loads a pre-gate-request state without rewriting or warning', () => {
+      const statusFile = path.join(projectsDir, '0074-legacy', 'status.yaml');
+      fs.mkdirSync(path.dirname(statusFile), { recursive: true });
+      const legacy = [
+        'id: "0074"',
+        'title: legacy',
+        'protocol: spir',
+        'phase: specify',
+        'plan_phases: []',
+        'current_plan_phase: null',
+        'gates:',
+        '  spec_approval:',
+        '    status: pending',
+        "    requested_at: '2026-01-21T10:00:00.000Z'",
+        "started_at: '2026-01-21T10:00:00.000Z'",
+        "updated_at: '2026-01-21T10:00:00.000Z'",
+        '',
+      ].join('\n');
+      fs.writeFileSync(statusFile, legacy);
+      const before = fs.readFileSync(statusFile);
+
+      const state = readState(statusFile);
+
+      expect(state.gates.spec_approval.request).toBeUndefined();
+      expect(fs.readFileSync(statusFile)).toEqual(before);
+    });
+
+    it('round-trips camelCase request content under snake_case gate timestamps', () => {
+      const state = createSampleState({
+        gates: {
+          spec_approval: {
+            status: 'pending',
+            requested_at: '2026-01-21T10:00:00.000Z',
+            request: {
+              question: 'Choose?',
+              choices: [{
+                label: 'Proceed',
+                consequence: 'Run the migration.',
+                recommended: true,
+              }],
+              terminalExcerpt: 'warning\nfailed',
+            },
+          },
+        },
+      });
+      const statusFile = path.join(projectsDir, '0074-enriched', 'status.yaml');
+
+      writeState(statusFile, state);
+
+      const yaml = fs.readFileSync(statusFile, 'utf8');
+      expect(yaml).toContain('requested_at:');
+      expect(yaml).toContain('terminalExcerpt:');
+      expect(yaml).not.toContain('terminal_excerpt:');
+      expect(readState(statusFile).gates.spec_approval.request).toEqual(
+        state.gates.spec_approval.request,
+      );
+    });
   });
 
   describe('writeState', () => {

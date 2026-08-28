@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import Database from 'better-sqlite3';
+import * as yaml from 'js-yaml';
 import {
   OverviewCache,
   parseStatusYaml,
@@ -20,6 +21,8 @@ import {
   calculateProgress,
   calculateEvenProgress,
   detectBlocked,
+  detectBlockedGate,
+  detectBlockedSelection,
   detectBlockedSince,
   computeIdleMs,
   derivePrReady,
@@ -760,6 +763,95 @@ describe('overview', () => {
     });
   });
 
+  describe('exact blocked gate request selection (Spec 128)', () => {
+    const request = {
+      question: 'Delete `legacy`, or keep it for audit?',
+      choices: [
+        { label: 'Delete', consequence: 'Run checkout tests, then open PR', recommended: true },
+        { label: 'Keep', consequence: 'Document retention: yes' },
+      ],
+      terminalExcerpt: 'warning: déjà vu\nlooks: like YAML\n⚠ keep literal',
+    };
+
+    function status(gates: Record<string, unknown>) {
+      return parseStatusYaml(yaml.dump({
+        id: '0128',
+        title: 'gate-content',
+        protocol: 'spir',
+        phase: 'review',
+        gates,
+      }, { indent: 2, lineWidth: 120, noRefs: true }));
+    }
+
+    it('decodes porch-style block scalars, Unicode, and YAML-looking literal text', () => {
+      const parsed = status({
+        pr: { status: 'pending', requested_at: '2026-08-25T00:00:00.000Z', request },
+      });
+      expect(parsed.gateRequests.pr).toEqual(request);
+      expect(detectBlockedSelection(parsed)).toEqual({
+        gate: 'pr',
+        label: 'PR review',
+        since: '2026-08-25T00:00:00.000Z',
+        request,
+      });
+      expect(detectBlockedGate(parsed)).toBe('pr');
+    });
+
+    it('publishes null for a legacy content-free gate', () => {
+      const selected = detectBlockedSelection(status({
+        pr: { status: 'pending', requested_at: '2026-08-25T00:00:00.000Z' },
+      }));
+      expect(selected?.request).toBeNull();
+    });
+
+    it('preserves a malformed present request for downstream contract rejection', () => {
+      const malformed = { question: 42, choices: 'not-an-array' };
+      const selected = detectBlockedSelection(status({
+        pr: { status: 'pending', requested_at: '2026-08-25T00:00:00.000Z', request: malformed },
+      }));
+      expect(selected?.request).toEqual(malformed);
+    });
+
+    it('never leaks historical, unrequested, or later-gate content onto the canonical gate', () => {
+      const parsed = status({
+        'spec-approval': {
+          status: 'approved',
+          requested_at: '2026-08-20T00:00:00.000Z',
+          request: { ...request, question: 'Historical?' },
+        },
+        'plan-approval': {
+          status: 'pending',
+          request: { ...request, question: 'Not requested?' },
+        },
+        pr: { status: 'pending', requested_at: '2026-08-25T00:00:00.000Z' },
+        'verify-approval': {
+          status: 'pending',
+          requested_at: '2026-08-26T00:00:00.000Z',
+          request: { ...request, question: 'Later?' },
+        },
+      });
+      expect(detectBlockedSelection(parsed)).toMatchObject({ gate: 'pr', request: null });
+    });
+
+    it('pairs content with the first canonical requested pending gate when several are pending', () => {
+      const first = { ...request, question: 'Plan question?' };
+      const later = { ...request, question: 'PR question?' };
+      const selected = detectBlockedSelection(status({
+        'plan-approval': {
+          status: 'pending',
+          requested_at: '2026-08-25T00:00:00.000Z',
+          request: first,
+        },
+        pr: {
+          status: 'pending',
+          requested_at: '2026-08-24T00:00:00.000Z',
+          request: later,
+        },
+      }));
+      expect(selected).toMatchObject({ gate: 'plan-approval', request: first });
+    });
+  });
+
   // ==========================================================================
   // detectBlockedSince (Bugfix #409)
   // ==========================================================================
@@ -1224,6 +1316,38 @@ describe('overview', () => {
       ]);
       expect(builders[0].progress).toBe(45);
       expect(builders[0].blocked).toBe('plan review');
+      expect(builders[0].blockedGateRequest).toBeNull();
+    });
+
+    it('discovers the raw request paired with the exact active gate', () => {
+      const activeRequest = {
+        question: 'Delete the legacy table?',
+        choices: [{ label: 'Delete', consequence: 'Run tests and open PR' }],
+        terminalExcerpt: 'warning: old references remain',
+      };
+      createBuilderWorktree(tmpDir, 'spir-128-gate-content', yaml.dump({
+        id: '0128',
+        title: 'gate-content',
+        protocol: 'spir',
+        phase: 'review',
+        gates: {
+          'plan-approval': {
+            status: 'approved',
+            requested_at: '2026-08-20T00:00:00.000Z',
+            request: { ...activeRequest, question: 'Historical?' },
+          },
+          pr: {
+            status: 'pending',
+            requested_at: '2026-08-25T00:00:00.000Z',
+            request: activeRequest,
+          },
+        },
+      }, { indent: 2, lineWidth: 120, noRefs: true }), '0128-gate-content');
+
+      expect(discoverBuilders(tmpDir)[0]).toMatchObject({
+        blockedGate: 'pr',
+        blockedGateRequest: activeRequest,
+      });
     });
 
     it('discovers multiple builders with correct matching', () => {

@@ -105,7 +105,9 @@ function loadBuilderPromptTemplate(config: Config, protocolName: string): string
   if (!templatePath) {
     return null;
   }
-  return readFileSync(templatePath, 'utf-8');
+  // Builder prompts are also a delivery root: promptless handoffs such as
+  // verify-approval need resolver-owned shared guidance at spawn time.
+  return resolveCodevIncludes(readFileSync(templatePath, 'utf-8'), config.workspaceRoot);
 }
 
 /**

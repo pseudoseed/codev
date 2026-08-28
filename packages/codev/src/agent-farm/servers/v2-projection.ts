@@ -12,6 +12,8 @@ export interface V2DiscoveredBuilder {
   worktreePath: string;
   roleId: string | null;
   blockedGate: string | null;
+  /** Raw YAML trust-boundary value; validation deliberately happens in v2. */
+  blockedGateRequest: unknown | null;
 }
 
 export interface V2BuilderRow {
@@ -62,6 +64,8 @@ export function projectHierarchy(now: number, deps: V2Deps): V2Projection {
       status: statusForWorkspace(deps.terminalsForWorkspace(ws)),
       flags: { heldMail: false },
       lastDataAt: null,
+      blockedGate: null,
+      blockedGateRequest: null,
     });
 
     const architects = deps.getArchitects(ws);
@@ -76,6 +80,8 @@ export function projectHierarchy(now: number, deps: V2Deps): V2Projection {
         status: statusForArchitect(live),
         flags: { heldMail: deps.heldByAgent(ws, architect.name, now) },
         lastDataAt: null,
+        blockedGate: null,
+        blockedGateRequest: null,
       });
     }
 
@@ -96,6 +102,9 @@ export function projectHierarchy(now: number, deps: V2Deps): V2Projection {
       const parentId =
         spawned && architectNames.has(spawned) ? architectId(ws, spawned) : wsId;
       const agent = discovered.roleId;
+      // Deliberate unchecked serialization seam: overview preserves malformed
+      // YAML request values so the v2 client can fail the enclosing frame loudly.
+      const blockedGateRequest = discovered.blockedGateRequest as V2Node['blockedGateRequest'];
       nodes.push({
         id: builderId(ws, dirName),
         kind: 'builder',
@@ -104,6 +113,8 @@ export function projectHierarchy(now: number, deps: V2Deps): V2Projection {
         status,
         flags: { heldMail: agent !== null && deps.heldByAgent(ws, agent, now) },
         lastDataAt: lastMs === null ? null : new Date(lastMs).toISOString(),
+        blockedGate: discovered.blockedGate,
+        blockedGateRequest,
       });
       builderTotal += 1;
       byStatus[status] += 1;

@@ -232,6 +232,8 @@ afx send architect "PR #<M> merged for PIR #{{issue.number}}. Ready for cleanup.
 
 Together with the `--pr` record from step 4a and the `--merged` record from step 9, porch's `status.yaml` carries the complete PR lifecycle (created → merged → done) for analytics, status displays, and audit trails.
 
+{{> protocols/shared/gate-request.md}}
+
 ## Signals
 
 ```

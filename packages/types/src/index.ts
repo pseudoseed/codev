@@ -32,6 +32,12 @@ export {
   type V2Frame,
 } from './v2-events.js';
 
+export {
+  GATE_REQUEST_LIMITS,
+  type GateRequest,
+  type GateRequestChoice,
+} from './gate-request.js';
+
 export { VSCODE_USER_SENDER } from './messaging.js';
 
 export {

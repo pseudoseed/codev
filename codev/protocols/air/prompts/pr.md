@@ -71,6 +71,8 @@ afx send architect "PR #<number> ready for review (implements issue #{{issue.num
 
 If you ran CMAP, include the verdicts: `CMAP: gemini=<verdict>, codex=<verdict>, claude=<verdict>`.
 
+{{> protocols/shared/gate-request.md}}
+
 ## Signals
 
 - PR created and ready for review:

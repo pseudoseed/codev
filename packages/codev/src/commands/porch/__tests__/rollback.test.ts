@@ -140,7 +140,15 @@ describe('porch rollback (bugfix #401)', () => {
       phase: 'implement',
       gates: {
         'spec-approval': { status: 'approved', approved_at: '2026-01-20T10:00:00Z' },
-        'plan-approval': { status: 'approved', approved_at: '2026-01-20T11:00:00Z' },
+        'plan-approval': {
+          status: 'approved',
+          requested_at: '2026-01-20T10:30:00Z',
+          approved_at: '2026-01-20T11:00:00Z',
+          request: {
+            question: 'Proceed?',
+            choices: [{ label: 'Yes', consequence: 'Implement the plan.' }],
+          },
+        },
       },
     });
     const statusPath = getStatusPath(testDir, '0042', 'test-feature');
@@ -154,6 +162,8 @@ describe('porch rollback (bugfix #401)', () => {
     expect(updated.gates['spec-approval'].approved_at).toBeUndefined();
     expect(updated.gates['plan-approval'].status).toBe('pending');
     expect(updated.gates['plan-approval'].approved_at).toBeUndefined();
+    expect(updated.gates['plan-approval'].requested_at).toBeUndefined();
+    expect(updated.gates['plan-approval'].request).toBeUndefined();
   });
 
   it('resets iteration, build_complete, and plan phases', async () => {

@@ -1,3 +1,9 @@
+import {
+  GATE_REQUEST_LIMITS,
+  type GateRequest,
+  type GateRequestChoice,
+} from '@cluesmith/codev-types';
+
 export const TRACE_LEN = 20;
 export const NODE_KINDS = ['workspace', 'architect', 'builder'] as const;
 export const FRAME_TYPES = ['snapshot', 'node', 'gone', 'counts', 'tick', 'dark', 'resumed'] as const;
@@ -13,6 +19,8 @@ export type ClientNode = {
   status: string;
   flags: { heldMail: boolean };
   lastDataAt: string | null;
+  blockedGate: string | null;
+  blockedGateRequest: GateRequest | null;
   buckets?: number[];
 };
 
@@ -72,6 +80,77 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+const REQUEST_FIELDS = new Set(['question', 'choices', 'terminalExcerpt']);
+const CHOICE_FIELDS = new Set(['label', 'consequence', 'recommended']);
+const DECISION_CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
+const TERMINAL_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u;
+const BIDI_OVERRIDE_OR_ISOLATE = /[\u202a-\u202e\u2066-\u2069]/u;
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+function isCanonicalDecision(value: unknown, maximum: number): value is string {
+  return typeof value === 'string'
+    && value.length > 0
+    && value === value.trim()
+    && !DECISION_CONTROL.test(value)
+    && !BIDI_OVERRIDE_OR_ISOLATE.test(value)
+    && utf8Bytes(value) <= maximum;
+}
+
+function validateGateChoice(raw: unknown): GateRequestChoice | null {
+  if (!isPlainObject(raw) || !hasOnlyKeys(raw, CHOICE_FIELDS)) return null;
+  if (!isCanonicalDecision(raw.label, GATE_REQUEST_LIMITS.labelBytes)) return null;
+  if (!isCanonicalDecision(raw.consequence, GATE_REQUEST_LIMITS.consequenceBytes)) return null;
+  if (Object.hasOwn(raw, 'recommended') && typeof raw.recommended !== 'boolean') return null;
+  return {
+    label: raw.label,
+    consequence: raw.consequence,
+    ...(Object.hasOwn(raw, 'recommended') ? { recommended: raw.recommended as boolean } : {}),
+  };
+}
+
+function validateGateRequest(raw: unknown): GateRequest | null {
+  if (!isPlainObject(raw) || !hasOnlyKeys(raw, REQUEST_FIELDS)) return null;
+  if (!isCanonicalDecision(raw.question, GATE_REQUEST_LIMITS.questionBytes)) return null;
+  if (
+    !Array.isArray(raw.choices)
+    || raw.choices.length < GATE_REQUEST_LIMITS.minChoices
+    || raw.choices.length > GATE_REQUEST_LIMITS.maxChoices
+  ) return null;
+
+  const choices: GateRequestChoice[] = [];
+  for (const rawChoice of raw.choices) {
+    const choice = validateGateChoice(rawChoice);
+    if (choice === null) return null;
+    choices.push(choice);
+  }
+  if (choices.filter((choice) => choice.recommended === true).length > 1) return null;
+
+  let terminalExcerpt: string | undefined;
+  if (Object.hasOwn(raw, 'terminalExcerpt')) {
+    if (
+      typeof raw.terminalExcerpt !== 'string'
+      || TERMINAL_CONTROL.test(raw.terminalExcerpt)
+      || BIDI_OVERRIDE_OR_ISOLATE.test(raw.terminalExcerpt)
+      || utf8Bytes(raw.terminalExcerpt) > GATE_REQUEST_LIMITS.terminalExcerptBytes
+    ) return null;
+    terminalExcerpt = raw.terminalExcerpt;
+  }
+
+  const request: GateRequest = {
+    question: raw.question,
+    choices,
+    ...(terminalExcerpt === undefined ? {} : { terminalExcerpt }),
+  };
+  return utf8Bytes(JSON.stringify(request)) <= GATE_REQUEST_LIMITS.requestBytes ? request : null;
+}
+
 function fail(afterSeq: number, field: string, obj: Record<string, unknown>): ValidateErr {
   return {
     ok: false,
@@ -126,6 +205,21 @@ function validateNode(raw: unknown): ClientNode | string {
   if (typeof raw.status !== 'string') return 'status';
   if (!isPlainObject(raw.flags) || typeof raw.flags.heldMail !== 'boolean') return 'flags.heldMail';
   if (!(typeof raw.lastDataAt === 'string' || raw.lastDataAt === null)) return 'lastDataAt';
+  if (!(raw.blockedGate === null || (typeof raw.blockedGate === 'string' && raw.blockedGate.length > 0))) {
+    return 'blockedGate';
+  }
+  let blockedGateRequest: GateRequest | null;
+  if (raw.blockedGateRequest === null) {
+    blockedGateRequest = null;
+  } else {
+    const validated = validateGateRequest(raw.blockedGateRequest);
+    if (validated === null) return 'blockedGateRequest';
+    blockedGateRequest = validated;
+  }
+  if (raw.blockedGate === null && blockedGateRequest !== null) return 'blockedGateRequest';
+  if (raw.kind !== 'builder' && (raw.blockedGate !== null || blockedGateRequest !== null)) {
+    return 'blockedGate';
+  }
   if (raw.buckets !== undefined) {
     if (!Array.isArray(raw.buckets) || raw.buckets.some((n) => typeof n !== 'number' || !Number.isFinite(n))) {
       return 'buckets';
@@ -139,6 +233,8 @@ function validateNode(raw: unknown): ClientNode | string {
     status: raw.status,
     flags: { heldMail: raw.flags.heldMail },
     lastDataAt: raw.lastDataAt,
+    blockedGate: raw.blockedGate,
+    blockedGateRequest,
     buckets: raw.buckets as number[] | undefined,
   };
 }

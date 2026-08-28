@@ -19,6 +19,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { renderTemplate, type TemplateContext } from '../commands/spawn-roles.js';
+import { resolveCodevIncludes } from '../../lib/skeleton.js';
 
 // ============================================================================
 // Helpers
@@ -849,7 +850,9 @@ describe('Spec 746 end-to-end smoke: builder-prompt rendering with baked-decisio
       const templatePath = path.resolve(repoRoot, `codev/protocols/${protocol}/builder-prompt.md`);
       const template = fs.readFileSync(templatePath, 'utf-8');
       const ctx = makeContext(protocol);
-      const rendered = renderTemplate(template, ctx);
+      // Production resolves shared framework includes before rendering the
+      // builder-prompt template (Spec 128 verify-gate guidance).
+      const rendered = renderTemplate(resolveCodevIncludes(template, repoRoot), ctx);
 
       it('rendered prompt contains the Phase 1 instruction paragraph', () => {
         expect(rendered).toContain('## Baked Decisions');

@@ -129,6 +129,8 @@ Then **stay in the interactive session**. Do not exit. Wait for the user's next 
 
 (Optional: if your team prefers an issue-thread record, you can also post a one-line comment on the GitHub issue pointing reviewers at the worktree branch. The summary itself stays in the pane — don't duplicate it as a committed file. That's the next phase's job, and that file will be a proper retrospective with arch + lessons updates, not a transient dev-approval note.)
 
+{{> protocols/shared/gate-request.md}}
+
 ## Signals
 
 ```

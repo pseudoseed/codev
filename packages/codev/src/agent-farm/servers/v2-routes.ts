@@ -141,6 +141,7 @@ function createProductionV2Deps(): V2Deps {
         worktreePath: b.worktreePath,
         roleId: b.roleId,
         blockedGate: b.blockedGate,
+        blockedGateRequest: b.blockedGateRequest,
       })),
     getBuilders: (ws) =>
       getBuilders(ws).map((b) => ({

@@ -65,6 +65,7 @@ function discovered(
     worktreePath: `${ws}/.builders/${dir}`,
     roleId: `builder-${dir.toLowerCase()}`,
     blockedGate: null,
+    blockedGateRequest: null,
     ...extra,
   };
 }
@@ -127,6 +128,49 @@ describe('v2-ids', () => {
 });
 
 describe('projectHierarchy', () => {
+  it('projects the canonical gate/request on builders and required nulls elsewhere', () => {
+    const request = {
+      question: 'Ship this?',
+      choices: [{ label: 'Ship', consequence: 'Open the PR', recommended: true }],
+      terminalExcerpt: 'all checks passed',
+    };
+    const { nodes } = projectHierarchy(NOW, fakeDeps({
+      architects: { [WS_A]: [{ name: 'main', terminalId: null }] },
+      builders: {
+        [WS_A]: [discovered('spir-128', {
+          blockedGate: 'plan-approval',
+          blockedGateRequest: request,
+        })],
+      },
+    }));
+    const map = byId(nodes);
+    expect(map.get(builderId(WS_A, 'spir-128'))).toMatchObject({
+      blockedGate: 'plan-approval',
+      blockedGateRequest: request,
+    });
+    expect(map.get(workspaceId(WS_A))).toMatchObject({
+      blockedGate: null,
+      blockedGateRequest: null,
+    });
+    expect(map.get(architectId(WS_A, 'main'))).toMatchObject({
+      blockedGate: null,
+      blockedGateRequest: null,
+    });
+  });
+
+  it('passes malformed request values through the documented unchecked serialization seam', () => {
+    const malformed = { question: 42, choices: 'wrong' };
+    const { nodes } = projectHierarchy(NOW, fakeDeps({
+      builders: {
+        [WS_A]: [discovered('spir-128', {
+          blockedGate: 'pr',
+          blockedGateRequest: malformed,
+        })],
+      },
+    }));
+    expect(byId(nodes).get(builderId(WS_A, 'spir-128'))?.blockedGateRequest).toEqual(malformed);
+  });
+
   it('scenario 7b: same local builder dir in two workspaces is two nodes', () => {
     const { nodes } = projectHierarchy(NOW, fakeDeps({
       workspaces: [WS_A, WS_B],
@@ -150,6 +194,8 @@ describe('projectHierarchy', () => {
     expect(node).toBeDefined();
     expect(node!.status).toBe('offline');
     expect(node!.lastDataAt).toBeNull();
+    expect(node!.blockedGate).toBeNull();
+    expect(node!.blockedGateRequest).toBeNull();
     expect(counts.builders.total).toBe(1);
     expect(counts.builders.byStatus.offline).toBe(1);
   });

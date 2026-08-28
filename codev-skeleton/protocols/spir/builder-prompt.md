@@ -84,6 +84,8 @@ After the final PR merges the project enters **verify**, and you stay alive thro
 
 If verification is not needed: `porch verify {{project_id}} --skip "reason"`
 
+{{> protocols/shared/gate-request.md}}
+
 ## Notifications
 
 The architect is not watching. `afx send architect "..."` at each of: gate reached, PR ready, PR

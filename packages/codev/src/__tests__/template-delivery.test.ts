@@ -25,7 +25,7 @@ import {
   cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolveCodevIncludes } from '../lib/skeleton.js';
+import { getSkeletonDir, resolveCodevFile, resolveCodevIncludes } from '../lib/skeleton.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // src/__tests__ → repo root is four levels up.
@@ -73,19 +73,20 @@ function listTemplates(treeRoot: string): string[] {
 }
 
 /**
- * The only two files whose `{{> }}` includes are actually resolved, and therefore
- * the only two kinds of file that can *deliver* a template:
+ * The files whose `{{> }}` includes are resolved, and therefore can deliver a
+ * framework fragment:
  *
  *   - `protocols/<p>/prompts/*.md` — porch's `loadPromptFile` runs
  *     `resolveCodevIncludes` on phase prompts.
  *   - `protocols/<p>/protocol.md`  — `resolveProtocolReference` runs it at spawn.
+ *   - `protocols/<p>/builder-prompt.md` — `loadBuilderPromptTemplate` runs it at spawn.
  *
  * Nothing else does. `consult-types/*.md` in particular are read via plain
  * `readCodevFile` (`commands/consult/index.ts`), so an include written there is
  * never expanded — it would reach the model as literal `{{> ... }}` text and
  * would NOT make the template it names reachable by any builder.
  */
-const DELIVERY_ROOT_RE = /^protocols\/[^/]+\/(?:prompts\/[^/]+\.md|protocol\.md)$/;
+const DELIVERY_ROOT_RE = /^protocols\/[^/]+\/(?:prompts\/[^/]+\.md|protocol\.md|builder-prompt\.md)$/;
 
 /** Read a tree-relative path, falling back to the sibling tree (mirrors the four-tier resolver). */
 function readAcrossTrees(treeRoot: string, rel: string): string | null {
@@ -192,7 +193,7 @@ describe('#1279 — every protocol template has an owning consumer', () => {
   });
 
   it.each(TREES)('%s: no include sits in a file whose includes are never resolved', (tree) => {
-    // Only prompts/*.md and protocol.md get resolveCodevIncludes run over them.
+    // Only prompts/*.md, protocol.md, and builder-prompt.md get include resolution.
     // An include anywhere else (a consult-type, say) is served as literal text.
     expect(findUnresolvedIncludeSites(join(REPO_ROOT, tree))).toEqual([]);
   });
@@ -272,6 +273,24 @@ describe('#1279 — the specific wirings this fix added', () => {
     expect(resolved).toContain('## Audit Findings');
     // Content that lived only in the template must now reach the builder.
     expect(resolved).toContain('### Dependencies Cleaned');
+  });
+
+  it('a fresh workspace with no local protocol shadow receives Spec 128 gate guidance from the package skeleton', () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'gate-prompt-fresh-install-'));
+    try {
+      // A fresh install materializes governance state but does not copy protocols/.
+      mkdirSync(join(workspace, 'codev'), { recursive: true });
+      const promptPath = resolveCodevFile('protocols/spir/prompts/specify.md', workspace);
+      expect(promptPath).not.toBeNull();
+      expect(promptPath!.startsWith(getSkeletonDir())).toBe(true);
+
+      const delivered = resolveCodevIncludes(readFileSync(promptPath!, 'utf8'), workspace);
+      expect(delivered).not.toContain('{{> protocols/shared/gate-request.md}}');
+      expect(delivered).toContain('porch gate {{project_id}} --request-file gate-request.json');
+      expect(delivered).toContain('must still send the existing architect notification');
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });
 

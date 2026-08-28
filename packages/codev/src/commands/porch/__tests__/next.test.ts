@@ -7,7 +7,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { next } from '../next.js';
-import { writeState, getProjectDir, getStatusPath, PROJECTS_DIR } from '../state.js';
+import { writeState, readState, getProjectDir, getStatusPath, PROJECTS_DIR } from '../state.js';
 import type { ProjectState, Protocol, PorchNextResponse } from '../types.js';
 
 // Mock loadConfig to return defaults, preventing workspace/global config from leaking in.
@@ -222,7 +222,20 @@ describe('porch next', () => {
   // --------------------------------------------------------------------------
 
   it('requests gate when all reviewers approve', async () => {
-    const state = makeState({ build_complete: true });
+    const state = makeState({
+      build_complete: true,
+      gates: {
+        'spec-approval': {
+          status: 'pending',
+          request: {
+            question: 'Stale question?',
+            choices: [{ label: 'Old', consequence: 'Old consequence' }],
+          },
+        },
+        'plan-approval': { status: 'pending' },
+        pr: { status: 'pending' },
+      },
+    });
     setupState(testDir, state);
 
     // Create review files with APPROVE verdicts
@@ -242,6 +255,9 @@ describe('porch next', () => {
     expect(result.gate).toBe('spec-approval');
     expect(result.tasks).toBeDefined();
     expect(result.tasks![0].description).toContain('STOP and wait for human approval');
+    const persisted = readState(getStatusPath(testDir, '0001', 'test-feature'));
+    expect(persisted.gates['spec-approval'].request).toBeUndefined();
+    expect(persisted.gates['spec-approval'].requested_at).toEqual(expect.any(String));
   });
 
   // --------------------------------------------------------------------------
@@ -291,7 +307,10 @@ describe('porch next', () => {
     expect(result.status).toBe('gate_pending');
     expect(result.gate).toBe('spec-approval');
     expect(result.tasks).toBeDefined();
-    expect(result.tasks![0].description).toContain('STOP and wait for human approval');
+    const description = result.tasks![0].description;
+    expect(description).toContain('porch gate 0001 --request-file <path>');
+    expect(description).toContain('content-free gate remains valid');
+    expect(description.indexOf('--request-file')).toBeLessThan(description.indexOf('STOP'));
   });
 
   // --------------------------------------------------------------------------
@@ -321,7 +340,21 @@ describe('porch next', () => {
   // --------------------------------------------------------------------------
 
   it('skips phase when artifact has approved frontmatter', async () => {
-    setupState(testDir, makeState());
+    const request = {
+      question: 'Recorded question?',
+      choices: [{ label: 'Proceed', consequence: 'Advance to planning.' }],
+    };
+    setupState(testDir, makeState({
+      gates: {
+        'spec-approval': {
+          status: 'pending',
+          requested_at: '2026-08-25T00:00:00.000Z',
+          request,
+        },
+        'plan-approval': { status: 'pending' },
+        pr: { status: 'pending' },
+      },
+    }));
 
     // Create spec with approved frontmatter
     const specsDir = path.join(testDir, 'codev', 'specs');
@@ -336,6 +369,13 @@ describe('porch next', () => {
     // Should skip specify and go to plan
     expect(result.phase).toBe('plan');
     expect(result.status).toBe('tasks');
+    const persisted = readState(getStatusPath(testDir, '0001', 'test-feature'));
+    expect(persisted.gates['spec-approval']).toMatchObject({
+      status: 'approved',
+      requested_at: '2026-08-25T00:00:00.000Z',
+      approved_at: expect.any(String),
+      request,
+    });
   });
 
   // --------------------------------------------------------------------------

@@ -1,3 +1,5 @@
+import type { GateRequest } from './gate-request.js';
+
 export type V2Status = 'gate-waiting' | 'stalled' | 'running' | 'offline';
 
 export type V2NodeKind = 'workspace' | 'architect' | 'builder';
@@ -10,6 +12,10 @@ export interface V2Node {
   status: V2Status;
   flags: { heldMail: boolean };
   lastDataAt: string | null;
+  /** Canonical porch gate currently awaiting a human, or null for no active gate. */
+  blockedGate: string | null;
+  /** Structured request attached to exactly `blockedGate`, or null for legacy/absent content. */
+  blockedGateRequest: GateRequest | null;
   buckets?: number[];
 }
 

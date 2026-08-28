@@ -41,6 +41,9 @@ const repoRoot = path.resolve(__dirname, '../../../../../');
  * condition worth catching.
  */
 const CODEV_ONLY = new Set(['release']);
+// Resolver-delivered fragments may live under protocols/ without being a
+// protocol state machine. They require tree parity, not protocol.json.
+const NON_PROTOCOL_DIRS = new Set(['shared']);
 const read = (rel: string) => fs.readFileSync(path.join(repoRoot, rel), 'utf-8');
 const exists = (rel: string) => fs.existsSync(path.join(repoRoot, rel));
 
@@ -101,13 +104,13 @@ describe('protocol.json $schema references', () => {
    * Enumerated WITHOUT filtering on existence. Skipping absent files would make
    * a deleted `protocol.json` shrink this suite instead of failing it — the
    * quiet failure mode where coverage evaporates and the run still goes green.
-   * `release` is excluded by name (it is `.md`-only), so every remaining
-   * directory is required to carry one.
+   * `release` and resolver-only shared fragments are excluded by name, so every
+   * remaining directory is required to carry one.
    */
   const cases = ['codev', 'codev-skeleton'].flatMap(tree =>
     fs
       .readdirSync(path.join(repoRoot, tree, 'protocols'), { withFileTypes: true })
-      .filter(e => e.isDirectory() && !CODEV_ONLY.has(e.name))
+      .filter(e => e.isDirectory() && !CODEV_ONLY.has(e.name) && !NON_PROTOCOL_DIRS.has(e.name))
       .map(e => `${tree}/protocols/${e.name}/protocol.json`),
   );
 

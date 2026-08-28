@@ -30,6 +30,8 @@ function builderNode(ws: string, dir: string): V2Node {
     status: 'running',
     flags: { heldMail: false },
     lastDataAt: null,
+    blockedGate: null,
+    blockedGateRequest: null,
   };
 }
 
@@ -147,6 +149,35 @@ describe('handleV2Route', () => {
     expect(nodes[0].id).toBe(builderId(WS_A, 'spir-52'));
     expect(nodes[0].buckets).toHaveLength(BUCKET_SLOTS);
     expect(nodes[0].buckets?.every((n) => n === 0)).toBe(true);
+    expect(nodes[0].blockedGate).toBeNull();
+    expect(nodes[0].blockedGateRequest).toBeNull();
+  });
+
+  it('serializes a full gate request in snapshots without rewriting it', async () => {
+    const request = {
+      question: 'Delete the legacy table?',
+      choices: [{ label: 'Delete', consequence: 'Run tests and open PR', recommended: true }],
+      terminalExcerpt: 'warning: old references remain',
+    };
+    setV2RouteDeps({
+      listWorkspaces: () => [WS_A],
+      project: () => ({
+        nodes: [{
+          ...builderNode(WS_A, 'spir-128'),
+          status: 'gate-waiting',
+          blockedGate: 'pr',
+          blockedGateRequest: request,
+        }],
+        counts: { workspaces: 1, builders: { total: 1, byStatus: { 'gate-waiting': 1 } }, gateWaiting: 1 },
+      }),
+      now: () => 1_000,
+      isReadable: () => true,
+    });
+    const q = `/v2/events?scope=${encodeURIComponent(WS_A)}`;
+    const { res, body } = makeRes();
+    await handleV2Route(makeReq('GET', q), res, urlFor(q));
+    const node = (frames(body())[0].nodes as V2Node[])[0];
+    expect(node).toMatchObject({ blockedGate: 'pr', blockedGateRequest: request });
   });
 
   it('scenario 7: dark names the unknown path; the other path still snapshots', async () => {
@@ -291,6 +322,7 @@ describe('handleV2Route', () => {
         worktreePath: `${WS_A}/.builders/spir-52`,
         roleId: 'builder-spir-52',
         blockedGate: null,
+        blockedGateRequest: null,
       }],
       getBuilders: () => [],
       getArchitects: () => [],

@@ -22,6 +22,8 @@ function node(over) {
     status: 'running',
     flags: { heldMail: false },
     lastDataAt: null,
+    blockedGate: null,
+    blockedGateRequest: null,
     buckets: zeros(),
     ...over,
   };
