@@ -429,9 +429,9 @@ The mailbox is replaced only if these hold, otherwise it stays:
 - [ ] 10c. One architect and six builders run concurrently in one workspace without either
   starving the other.
 - [ ] 11. A 24-hour gate resumes with context. **Gates the deletion phase.**
-- [ ] 12. The 89 commits to `orchestration.ts` are classified as breaking or non-breaking against
-  the vendored types, with the breaking count recorded. Counting commits is not the criterion.
-  **Gates the deletion phase.**
+- [ ] 12. The 184 commits across the 9-file vendored closure are classified as breaking or
+  non-breaking against the vendored types, with the breaking count recorded. Counting commits is
+  not the criterion. **Gates the deletion phase.**
 - [ ] 12b. The five delivery semantics under "Message delivery semantics" are demonstrated:
   ordering, queue-while-active, durable acknowledgement, idempotency keys, loud failure when the
   server is unreachable. **Criterion 13 depends on this one.** If it fails, the mailbox stays and
