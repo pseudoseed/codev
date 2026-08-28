@@ -16,6 +16,22 @@
  * is why the result type is `ShapeCheckResult` with a `matches` field rather than
  * a boolean named `valid`.
  *
+ * IT DIVERGES IN BOTH DIRECTIONS, NOT ONE.
+ *
+ * The docs above and in `index.ts` used to say only "lower bound", which was half
+ * the truth and the more comfortable half. The emitted schema carries
+ * `additionalProperties: false` on 239 nodes, while t3code decodes with Effect's
+ * default `onExcessProperty: "ignore"` (`SchemaAST.ts:446`) — the server *strips*
+ * unknown keys rather than rejecting them. So on excess properties this check is
+ * STRICTER than the server, not weaker.
+ *
+ * That matters concretely: an additive upstream field — the change class the churn
+ * classifier calls non-breaking — would make a naive strict check reject a payload
+ * the server legitimately sent. So excess properties are **ignored by default**,
+ * mirroring the decoder. Pass `{ excess: 'error' }` to opt into strictness, which
+ * is reasonable for outbound payloads Codev itself constructs and never for
+ * inbound ones.
+ *
  * Zero imports, by design: this file ships inside `@cluesmith/codev-types`, which
  * has no runtime dependencies and must keep none (#1189).
  */
@@ -125,6 +141,7 @@ function check(
   out: ShapeMismatch[],
   defs: Defs,
   seen: ReadonlySet<string>,
+  excess: 'ignore' | 'error',
 ): void {
   assertKnownKeywords(schema, path);
 
@@ -136,7 +153,7 @@ function check(
     if (!target) throw new UnresolvedRefError(schema.$ref, path);
     // A self-referential schema is legal; re-entering it on the same value is not.
     if (!seen.has(key as string)) {
-      check(value, target, path, out, defs, new Set([...seen, key as string]));
+      check(value, target, path, out, defs, new Set([...seen, key as string]), excess);
     }
     return;
   }
@@ -145,7 +162,7 @@ function check(
   if (branches) {
     const anyMatched = branches.some((branch) => {
       const scratch: ShapeMismatch[] = [];
-      check(value, branch, path, scratch, defs, seen);
+      check(value, branch, path, scratch, defs, seen, excess);
       return scratch.length === 0;
     });
     if (!anyMatched) {
@@ -155,7 +172,7 @@ function check(
   }
 
   if (Array.isArray(schema.allOf)) {
-    for (const sub of schema.allOf as JsonSchema[]) check(value, sub, path, out, defs, seen);
+    for (const sub of schema.allOf as JsonSchema[]) check(value, sub, path, out, defs, seen, excess);
   }
 
   if (Array.isArray(schema.enum)) {
@@ -198,7 +215,7 @@ function check(
   }
 
   if (Array.isArray(value) && schema.items) {
-    value.forEach((item, index) => check(item, schema.items as JsonSchema, `${path}/${index}`, out, defs, seen));
+    value.forEach((item, index) => check(item, schema.items as JsonSchema, `${path}/${index}`, out, defs, seen, excess));
   }
 
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
@@ -212,10 +229,12 @@ function check(
     }
 
     for (const [key, sub] of Object.entries(properties)) {
-      if (key in record) check(record[key], sub, `${path}/${key}`, out, defs, seen);
+      if (key in record) check(record[key], sub, `${path}/${key}`, out, defs, seen, excess);
     }
 
-    if (schema.additionalProperties === false) {
+    // Default 'ignore' mirrors the server's decoder. Enforcing this by default
+    // would reject payloads t3code accepts — the inverse of the stated invariant.
+    if (excess === 'error' && schema.additionalProperties === false) {
       for (const key of Object.keys(record)) {
         if (!(key in properties)) {
           out.push({ path: `${path}/${key}`, expected: 'no additional properties', actual: 'present' });
@@ -235,9 +254,25 @@ function check(
  * @param defs the generated `$defs` pool. Required whenever the schema contains
  *   a `$ref`, which most of the generated payload schemas do.
  */
-export function shapeCheck(value: unknown, schema: JsonSchema, defs: Defs = {}): ShapeCheckResult {
+export interface ShapeCheckOptions {
+  /**
+   * How to treat properties the schema does not name.
+   *
+   * `'ignore'` (default) mirrors t3code's decoder, which uses Effect's default
+   * `onExcessProperty: "ignore"`. `'error'` enforces `additionalProperties: false`
+   * and is appropriate only for payloads Codev constructs itself.
+   */
+  readonly excess?: 'ignore' | 'error';
+}
+
+export function shapeCheck(
+  value: unknown,
+  schema: JsonSchema,
+  defs: Defs = {},
+  options: ShapeCheckOptions = {},
+): ShapeCheckResult {
   const mismatches: ShapeMismatch[] = [];
-  check(value, schema, '', mismatches, defs, new Set());
+  check(value, schema, '', mismatches, defs, new Set(), options.excess ?? 'ignore');
   return { matches: mismatches.length === 0, mismatches };
 }
 

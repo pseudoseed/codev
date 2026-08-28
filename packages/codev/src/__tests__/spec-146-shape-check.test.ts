@@ -20,10 +20,16 @@ import {
   UnsupportedKeywordError,
   UnresolvedRefError,
 } from '../../../types/src/t3/shape-check.js';
-// Imported through the PACKAGE ENTRY POINT, not the file, so this exercises the
-// `./t3` export map and the re-export list. Nothing did before, which is how
-// `t3Defs` and `UnresolvedRefError` came to be missing from it — the tests
-// reached past the surface that consumers actually use.
+// The package's INDEX MODULE — its re-export list — not the individual files.
+// That is what catches a symbol missing from the public surface, and it is how
+// `t3Defs` and `UnresolvedRefError` were found missing.
+//
+// It does NOT go through the `./t3` export map: this is a relative path, and an
+// earlier comment here claimed otherwise. Resolving the map from inside the
+// monorepo would need the package built and linked, which this unit suite does
+// not do. The map itself is asserted separately as a package.json key. Saying
+// "exercises the export map" when it exercises the index file is the same
+// overclaim this phase keeps finding, in a comment instead of a check.
 import * as t3Entry from '../../../types/src/t3/index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -104,10 +110,26 @@ describe('shapeCheck: primitives and structure', () => {
     expect(result.mismatches).toContainEqual({ path: '/b', expected: 'present (required)', actual: 'missing' });
   });
 
-  it('rejects additional properties when the schema forbids them', () => {
+  /**
+   * The emitted schema carries `additionalProperties: false` on 239 nodes, but
+   * t3code decodes with Effect's default `onExcessProperty: "ignore"` — the
+   * server STRIPS unknown keys rather than rejecting them. Enforcing the schema
+   * literally would reject payloads the server sent, which is the inverse of the
+   * documented invariant and would break Phase 2 on the first additive upstream
+   * field. So the default mirrors the decoder.
+   */
+  it('ignores excess properties by default, because the server does', () => {
     const schema = { type: 'object', additionalProperties: false, properties: { a: { type: 'integer' } } };
     expect(shapeCheck({ a: 1 }, schema).matches).toBe(true);
-    expect(shapeCheck({ a: 1, b: 2 }, schema).matches).toBe(false);
+    expect(
+      shapeCheck({ a: 1, b: 2 }, schema).matches,
+      'an additive upstream field must not be rejected — the server would have accepted it',
+    ).toBe(true);
+  });
+
+  it('enforces them only when the caller opts in, for payloads it constructs itself', () => {
+    const schema = { type: 'object', additionalProperties: false, properties: { a: { type: 'integer' } } };
+    expect(shapeCheck({ a: 1, b: 2 }, schema, {}, { excess: 'error' }).matches).toBe(false);
   });
 
   it('checks every element of an array, not just the first', () => {

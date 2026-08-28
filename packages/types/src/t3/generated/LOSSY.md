@@ -3,6 +3,13 @@
 Generated. Every schema listed here has a JSON Schema **weaker** than the Effect schema it
 came from, so `shape-check.ts` accepts input that t3code's server rejects.
 
+**The divergence runs the other way too, and this file used to imply it did not.** The emitted
+schema carries `additionalProperties: false` on many nodes, while t3code decodes with Effect's
+default `onExcessProperty: "ignore"` — the server *strips* unknown keys. Read literally, the
+schema is *stricter* there. `shapeCheck` ignores excess by default to mirror the decoder;
+enforcing it would reject payloads the server sent, on exactly the additive changes the churn
+classifier calls non-breaking.
+
 This is not a bug to fix; it is a property of `toJsonSchemaDocument`, which drops checks
 applied on the decoded side of a `decodeTo` transform. `TrimmedNonEmptyString` is exactly
 that shape and it is the base of every branded id in t3code, so every id degrades to an

@@ -85,7 +85,7 @@ referent. 184 counts commits to files that were not yet the closure.
 reported as `unclassifiable` rather than folded into either count.
 
 **3. `source-only` is not "safe".** This is the important one. The emitter drops checks applied on
-the decoded side of a `decodeTo` transform, so all 20 schemas in
+the decoded side of a `decodeTo` transform, so every schema listed in
 `packages/types/src/t3/generated/LOSSY.md` — every branded id in the contract — emit as
 unconstrained strings. **A commit that relaxed a branded id would land in `source-only` with a
 zero-byte schema diff.** So 32 `source-only` commits means "32 commits whose effect on the shapes
