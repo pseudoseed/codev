@@ -776,3 +776,13 @@ only settle signal. The completed-versus-interrupted distinction lives on the
 Worth noting because the enum contains a value that reads like the answer and is
 never assigned on this path. Checking the enum instead of the assignment would
 have produced a settle detector that waits for a status that never arrives.
+
+**`vcs.createWorktree` is a plain RPC, not a dispatched command.** Its input
+(`packages/contracts/src/git.ts:137-143`) is `cwd`, `refName`, `newRefName`,
+`baseRefName`, `path` — **no `commandId`**. So it is outside the receipt dedup
+described above: a crash after the worktree is created and before porch records
+it leaks a worktree, and a retry creates a second one. `thread.create` carries a
+`commandId` and is protected; the worktree it names is not. Phase 3's
+`worktree-setup.ts` has to reconcile that itself — probably by making the branch
+name deterministic from the project and phase, so a retry collides visibly
+instead of succeeding twice.
