@@ -692,3 +692,39 @@ accepting it.** Phases 5, 6, 7, 14 and 15 all qualify.
 
 If porch complains about a missing lane, **the config is the fix, never
 `status.yaml`.**
+
+## Phase 3 groundwork — evidence gathered before the phase opened
+
+Read while Phase 2's criteria checks were running. All of it is from the pinned
+t3code checkout or from this repo, not from reasoning.
+
+**`driverKind` is a slug, and Codev's harness names are not it.** From
+`packages/contracts/src/model.ts:130-134`, the five kinds are `codex`,
+`claudeAgent`, `cursor`, `grok`, `opencode`. Codev's `--harness claude` maps to
+**`claudeAgent`**, not `claude`. Two of five match by accident (`codex`,
+`opencode`), which is exactly the shape that makes a mapping table look
+unnecessary until it silently fails on the third.
+
+**t3code validates models dynamically; Codev validates them statically.** t3code
+normalises through `MODEL_SLUG_ALIASES_BY_PROVIDER` and takes the real list from
+the provider's live `model/list` response (`apps/web/src/providerInstances.ts:182`).
+Codev's `assertHarnessAcceptsModel` is a static table
+(`packages/codev/src/agent-farm/utils/harness.ts:577`). The plan's deliverable says
+an unsupported pair must "fail at spawn, matching today's behaviour" — matching it
+means keeping the static check, because the dynamic one cannot answer before the
+provider snapshot exists. A pair that passes Codev's check and is then rejected by
+t3code is a second, later failure, and it must not be spelled like the first.
+
+**The spike already has the connect-and-kill mechanics** for Phase 2's C and D,
+in `codev/experiments/146-t3code-porch-proof/proof.mjs:380-440`: an aux connection
+subscribes, its scope closes (dropping the socket), `lastBeforeDisconnect` is the
+last observed `item.event.sequence`, the turn settles while disconnected, then a
+replay connection resubscribes with `afterSequence: lastBeforeDisconnect` and the
+returned `eventId`s are compared against a control connection's record. The
+control connection is the part worth copying: without it, "the replay looked
+right" is a judgement about a list nobody checked against anything.
+
+`resume-check.mjs` carries the settle-detection shape Phase 3's `turn.ts` needs —
+`thread.session-set` with `activeTurnId != null`, then `null` — and confirms the
+plan's insistence that status alone cannot distinguish an interrupted turn from a
+finished one.
