@@ -201,6 +201,25 @@ export interface GateProfile {
     minContentRows: number;
     /** Upward-scan bound; an unterminated scan holds. Defaults to {@link DEFAULT_MAX_LOOKBACK}. */
     maxLookback?: number;
+    /**
+     * Set when the app is MEASURED to leave its final viewport row blank in every state.
+     * Enables the rows-direction geometry check (Issue #197).
+     *
+     * A bottom-anchored composer occupies the frame's LAST rows, so a mirror shorter than
+     * the height the app paints at clips the whole box away. The emulator clamps every
+     * write addressed past the viewport onto the final row, so that row — blank in every
+     * healthy frame — fills with overlapping garbage. That is the signal: it is a
+     * structural consequence of clamping, not a text match on the app's content.
+     *
+     * This is MEASURED BEHAVIOUR, NOT A GUARANTEE. opencode 1.18.18 leaves row N-1 blank
+     * across every captured state (idle, draft, mid-turn, dialog, boot, both pickers), but
+     * nothing stops a future release from painting there. That is why it is declared
+     * per-profile rather than assumed for all bottom-anchored apps, and why the fixture
+     * suite classifies the committed captures: if opencode ever fills its last row, the
+     * idle fixture flips clean → busy and CI says so, instead of every send silently
+     * holding in production.
+     */
+    finalRowAlwaysBlank?: boolean;
   };
   /**
    * Whether SGR-dim marks placeholder/hint chrome for this app (default `true` — the
@@ -514,6 +533,27 @@ export function classifyBuffer(
 ): GateVerdict {
   const buf = term.buffer.active;
   const lines = screenLines(term, rows);
+
+  // ROWS-direction geometry check (Issue #197), before every other signal.
+  //
+  // The cols-direction check further down catches a mirror NARROWER than the app. This
+  // catches a mirror SHORTER than it, which for a bottom-anchored composer is the more
+  // destructive of the two: the box lives in the frame's last rows, so a short viewport
+  // clips it away completely. `rulePattern` then matches nothing and the gate reports
+  // `no-composer-marker` — which reads as "this app has no composer", i.e. profile drift,
+  // and is how Issue #197 came to be filed as a glyph-drift bug. It was a geometry bug.
+  //
+  // Ordered FIRST deliberately. When the mirror's height disagrees with the app's, every
+  // row boundary on the screen is untrustworthy, so no other signal read off this frame
+  // deserves to name the verdict — same reasoning the cols check already documents. The
+  // outcome is a hold either way; what changes is that the reason points at the mirror
+  // instead of at the profile.
+  //
+  // See `finalRowAlwaysBlank` for why a non-blank final row is the signal, and for the
+  // measured-not-guaranteed caveat. `screenLines` already trimEnd()s, so `=== ''` is exact.
+  if (profile.bottomAnchor?.finalRowAlwaysBlank && rows > 0 && lines[rows - 1] !== '') {
+    return { clean: false, reason: 'busy', detail: 'geometry-mismatch' };
+  }
 
   // A profile-declared mid-turn signal settles the verdict before any composer logic:
   // an app whose composer looks the same idle and mid-turn (opencode) would otherwise

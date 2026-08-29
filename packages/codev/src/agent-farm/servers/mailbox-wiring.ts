@@ -187,6 +187,40 @@ export async function classifyAgentScreen(session: DeliverySession, profile: Gat
   const screen = (session as PtySession).gateScreen;
   if (!screen) return { clean: false, reason: 'busy', detail: 'no-composer-marker' };
   const { term, cols, rows } = await screen.read();
+
+  // Geometry check by FACT, before any pixels are read (Issue #197).
+  //
+  // The mirror and the agent's PTY are two grids that must agree, and when they don't every
+  // row boundary the classifier reads is meaningless. `classifyBuffer` can only infer that
+  // disagreement from the frame — the cols direction via `isWrapped`, the rows direction via
+  // the profile's `finalRowAlwaysBlank` — and inference has a measured blind spot: when the
+  // mirror is BOTH narrower and shorter, the frame re-wraps enough that no structural
+  // signal survives and a clipped opencode composer still reads `no-composer-marker`. That
+  // blind spot is not an edge case; 80x24 against a 110x32 agent is exactly the shape a
+  // reborn session had in the field.
+  //
+  // Here the two geometries are simply KNOWN, so compare them. No heuristic, no per-app
+  // assumption, both directions, every harness. After attach-time adoption they normally
+  // agree; they diverge when `PtySession.resize` shrinks the mirror and then DROPS the
+  // app-side resize (the `status !== 'running'` branches) — the residual path adoption
+  // cannot close, and the one this catches. `ShellperClient.resize` records the new size
+  // only on the success path, which is what makes a dropped resize show up as a
+  // disagreement instead of being papered over.
+  // SCOPED to bottom-anchored profiles (opencode) on purpose, though the disagreement is
+  // just as real for claude/codex/agy. Their composers sit at the cursor and stay in view,
+  // so a short mirror has never taken them off the air — they survive it by luck, not by
+  // design, and a mismatched mirror could in principle hand them a false CLEAN, which is the
+  // dangerous direction. Widening this check to every harness is the right end state and is
+  // recommended as a follow-up; it is deliberately NOT done here, because it would turn
+  // deliveries that succeed today into holds for harnesses this issue is not about, and that
+  // is a change to weigh on its own rather than smuggle in behind an opencode fix.
+  if (profile.bottomAnchor) {
+    const ptyGeometry = (session as PtySession).shellperPtyGeometry;
+    if (ptyGeometry && (ptyGeometry.cols !== cols || ptyGeometry.rows !== rows)) {
+      return { clean: false, reason: 'busy', detail: 'geometry-mismatch' };
+    }
+  }
+
   return classifyBuffer(term, cols, rows, profile);
 }
 

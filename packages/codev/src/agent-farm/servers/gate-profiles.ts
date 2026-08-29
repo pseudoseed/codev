@@ -127,6 +127,12 @@ export const AGY_PROFILE: GateProfile = {
  * and a freshly-booted TUI that has not yet run a turn → busy, because the usage readout
  * only appears after the first turn (`no-idle-indicator`).
  *
+ * Issue #197 re-measured all four `bottomAnchor` patterns against fresh live captures from
+ * the same binary and found ZERO drift — the glyphs below are still exactly what opencode
+ * paints. The holds that prompted that re-measurement were caused by the gate mirror being
+ * SHORTER than the height opencode paints at, which clips this bottom-anchored box out of
+ * the viewport entirely and makes `rulePattern` match nothing. See `finalRowAlwaysBlank`.
+ *
  * Known wart, not a bug: `busyIndicatorPattern` is matched against the WHOLE screen, while
  * `idleIndicatorPattern` is scoped to the footer. That asymmetry is deliberate — a stray
  * busy match only ever HOLDS — but it means an opencode builder viewing this very file (or
@@ -147,6 +153,12 @@ export const OPENCODE_PROFILE: GateProfile = {
     // status row — 3 rows, in the idle and boot captures alike. A draft only grows it.
     minContentRows: 3,
     maxLookback: 20,
+    // Measured across every captured state (idle, draft, mid-turn, dialog, boot, both
+    // pickers, and the Issue #197 live re-captures): opencode never paints its final
+    // viewport row. That makes a non-blank final row proof the app painted TALLER than the
+    // mirror — see `finalRowAlwaysBlank`. Behaviour, not a guarantee; the fixture suite is
+    // what makes a change to it loud.
+    finalRowAlwaysBlank: true,
   },
   // Measured: opencode uses SGR-dim NOWHERE — zero dim cells across all seven captured
   // states (idle, draft, mid-turn, dialog, boot, and the `/` and `@` pickers), whole
