@@ -2172,3 +2172,62 @@ instead of a second incident.
 **The lanes are not re-run on work they have already judged.** The reset is a
 bookkeeping fact, not a change to the code under review, and iteration 1's context
 file now says so at the top rather than leaving a future reader to infer it.
+
+## Phase 4 closed by force-advance at iteration 3
+
+Three review rounds, six lane verdicts: REQUEST_CHANGES, REQUEST_CHANGES /
+REQUEST_CHANGES, APPROVE / REQUEST_CHANGES, REQUEST_CHANGES. Porch's ceiling tripped
+and phase 4 advanced with iteration 3's fixes unreviewed.
+
+**The iteration-3 diff was never seen by any lane. It must be disclosed in phase 5's
+context file**, the same obligation phase 3's `db6f3d384` carried into phase 4. What
+it changed: `#pendingTurn` and the bounded turn wait in `queue.ts`, the duplicate-key
+early return, `ftruncateSync` in `scheduled.ts`, `onDrainError`, the harness revert,
+and `treeDirty()` widening.
+
+## The lesson this phase kept teaching, in four costumes
+
+Every defect hid behind **a test double faithful to the SHAPE of the real thing and
+not to its BEHAVIOUR**:
+
+1. A dispatcher that accepts any payload cannot fail a contract — so
+   `thread.message.send`, a command t3code does not have, sat green under 21 tests.
+2. A dispatcher that never starts a turn cannot stall a queue — so the backlog
+   stopping at one message showed up only against a real server.
+3. A *type* can be a double too. `as never` let a `queued-by-porch` receipt wear a
+   type claiming the server had answered. **A cast is the type system reporting a
+   mismatch, not a way to spell it away.**
+4. **A fake expectation always resolves.** So thirty green tests said nothing about a
+   `settled` promise that, live, never resolved at all — and the fix that closed a
+   sub-second race turned it into a 300-second stall.
+
+Number four is the one to keep. The double was faithful to the shape of a signal and
+not to **the possibility of its absence**, which is the hardest case to fake because
+nothing in the interface describes it.
+
+## What I got wrong, in order
+
+- Applied a fix where the bug was reported rather than where the reason held. Three
+  times this phase, twice in `queue.ts` alone. It is now the rule I check first.
+- Wrote a regression test that passed against **both** implementations. It watched a
+  file on a timer for a window that never yields to the event loop. Caught only
+  because I mutate the source and require the test to fail; the draft is described in
+  the test rather than deleted, because a test that cannot fail is worse than no test
+  — it reports coverage that does not exist.
+- Fixed codex's race in the wrong place first: at the end of the drain's loop body,
+  which guards one pass, when each `send` schedules its own pass and the race is
+  between them.
+
+## What is NOT known, and is written down as not known
+
+`TurnTracker.expectTurn(...).settled` never resolved for message-started turns
+against the live server. Two hypotheses failed against a six-minute feedback loop.
+Rather than keep guessing I reverted the harness to the demonstrated settle poll and
+recorded the gap in the evidence document: **the projection race is closed in the
+unit-tested path and not demonstrated live.** Scenario 2 has never observed an
+interleave, but it does not force the projection lag, so it is not evidence the race
+cannot happen. Phase 14 owns this.
+
+Criterion 12b holds — five of five demonstrated at `3564a8c4a` from a clean tree —
+so criterion 13 is not blocked. 31 tests, every one of them seen to fail before being
+trusted.
