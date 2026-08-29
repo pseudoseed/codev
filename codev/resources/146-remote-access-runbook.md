@@ -61,26 +61,47 @@ is different in kind from the others:
 The service never logs it. If you write tooling around this flow, use
 `redactPairingToken` from `lib/pairing.ts` on any line you log.
 
-## Expose the service to a tailnet
+## Reach the service from a tailnet
 
-Loopback is the default and needs no configuration. Exposing an interface is an
-explicit act with two parts, and **both are required** — the service refuses to
-start if you do only one.
+**Do not set `BRIDGE_TOWER_HOST`. Tower stays on loopback.**
 
-1. Put a TLS terminator in front. With Tailscale:
+That is the whole recipe, and it is worth being blunt about why: Tailscale Serve
+runs *on the host* and proxies to `127.0.0.1`, so it already reaches a
+loopback-bound Tower. Binding `0.0.0.0` as well opens every interface on the
+machine — the LAN, any other network it is attached to — and buys nothing the
+proxy was not already doing. It is the exposure this phase exists to prevent, and
+an earlier draft of this runbook told you to do it.
 
-   ```bash
-   npx t3 pair --tailscale
-   tailscale serve --https=443 http://127.0.0.1:4100
-   ```
+```bash
+npx t3 pair --tailscale
+tailscale serve --https=443 http://127.0.0.1:4100
+```
 
-2. Declare it, and set the bind:
+Then add the public origin to the allowlist, so the browser boundary matches the
+deployment:
 
-   ```bash
-   export BRIDGE_MODE=1
-   export BRIDGE_TOWER_HOST=0.0.0.0
-   export CODEV_BRIDGE_TLS=terminated
-   ```
+```bash
+export CODEV_TOWER_ALLOWED_ORIGINS=https://<host>.<tailnet>.ts.net
+```
+
+Tower needs no `BRIDGE_MODE` for this. Confirm the boot log says
+`BIND_LOOPBACK_ONLY`.
+
+### When you actually do need a non-loopback bind
+
+Only when the TLS terminator runs on a **different host** from Tower, so it
+cannot reach `127.0.0.1`. Then exposing an interface is an explicit act with two
+parts, and **both are required** — the service refuses to start if you do only
+one.
+
+```bash
+export BRIDGE_MODE=1
+export BRIDGE_TOWER_HOST=0.0.0.0     # or the single interface the proxy uses
+export CODEV_BRIDGE_TLS=terminated
+```
+
+Prefer the specific interface address over `0.0.0.0`; `0.0.0.0` is every
+interface, which is almost never what a single proxy needs.
 
 If `CODEV_BRIDGE_TLS` is absent or is anything other than `terminated`, Tower
 logs `INSECURE_NON_LOOPBACK_BIND_REFUSED` and **exits**. This is a deliberate
@@ -90,13 +111,6 @@ change from the previous behaviour, which warned and started anyway.
 so it is not verifying that traffic is encrypted — it is recording that you said
 so. What the refusal buys is that an accidental plaintext exposure is impossible
 to do silently.
-
-Add the public origin to the allowlist so the browser boundary matches the
-deployment:
-
-```bash
-export CODEV_TOWER_ALLOWED_ORIGINS=https://<host>.<tailnet>.ts.net
-```
 
 ## Tear down
 
@@ -109,13 +123,18 @@ tailscale serve --https=443 off
 tailscale serve status          # expect no mapping for this host
 ```
 
-Then drop the exposure from the service:
+Then drop any exposure from the service:
 
 ```bash
 unset BRIDGE_MODE BRIDGE_TOWER_HOST CODEV_BRIDGE_TLS CODEV_TOWER_ALLOWED_ORIGINS
 ```
 
-Restart Tower and confirm the log line reads `BIND_LOOPBACK_ONLY`.
+Restart Tower and confirm the log line reads `BIND_LOOPBACK_ONLY`. Check what it
+is really listening on, rather than trusting the variables:
+
+```bash
+lsof -nP -iTCP:4100 -sTCP:LISTEN   # want 127.0.0.1:4100, not *:4100
+```
 
 ## Revoke one device
 
@@ -133,6 +152,17 @@ Afterwards every request from that machine is refused with
 approval credential, not a machine). The revocation is a tombstone in that
 machine's own file; other machines' files are not read or written.
 
+**This call revokes two things**, because they are two stores keyed by the same
+machine name and an operator would reasonably assume they are one:
+
+- the machine credential, so that device cannot reach any route; and
+- that machine's approval capabilities, so it cannot present a live capability to
+  `porch approve` afterwards.
+
+The response reports each separately — `revoked` for the credential,
+`approvalCapabilitiesRevoked` for the count of capabilities. Padding in the name
+is trimmed, so `"ipad "` and `"ipad"` revoke the same device.
+
 Revoking the device you are calling from works and locks you out; use another
 paired machine, or re-pair at the host.
 
@@ -144,6 +174,27 @@ Everything above is per-machine and file-backed under `~/.agent-farm`:
   Deleting one file un-pairs that machine.
 - `pairing/tokens.json` — outstanding and spent pairing tokens.
 - `approval/` — approval capabilities and nonces (Phase 6).
+
+**One corrupt file under `machines/` locks out every machine.** Verification scans
+the directory to find a credential by id, and a file that exists but will not
+parse raises `MACHINE_STORE_UNREADABLE` rather than being skipped — so every
+request, from every device, answers HTTP **503**. That is the right failure
+direction (skipping the file would tell a device "you were never paired", which
+is a definite answer this host cannot honestly give), but the blast radius is the
+whole service, not one device.
+
+Find the bad file:
+
+```bash
+for f in ~/.agent-farm/machines/*.json; do
+  python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f" >/dev/null 2>&1 \
+    || echo "unparseable: $f"
+done
+```
+
+Move it aside — do not delete it until you know which machine it was; the name is
+a hash, so the file is the only record of it. Removing it un-pairs that one
+device and restores service for the rest.
 
 Shell access on the host is above all of this, by design. There is no recovery
 path that a local process could use and an attacker with the same user could not.

@@ -589,6 +589,48 @@ describe('per-machine credentials', () => {
     expect(JSON.parse(second.body)).toMatchObject({ signal: 'MACHINE_CREDENTIAL_NOT_LIVE', revoked: false });
   });
 
+  // A padded name used to hash to a different file, so revoke() found nothing and
+  // answered revoked:false — a security control reporting a success-shaped
+  // failure. Normalisation now happens in one place.
+  it('revokes a machine whose name arrives with padding', () => {
+    const store = new MachineCredentialStore({ root: tmp() });
+    const issued = store.issue({ machine: 'ipad' });
+    expect(store.revoke('  ipad  ')).toBe(true);
+    expect(store.verify(issued.presentation).code).toBe(MACHINE_SIGNAL.MACHINE_CREDENTIAL_REVOKED);
+    // And the reverse direction: a padded name at issue time is the same machine.
+    const padded = new MachineCredentialStore({ root: tmp() });
+    const first = padded.issue({ machine: ' laptop ' });
+    expect(padded.describe('laptop')?.machine).toBe('laptop');
+    expect(padded.revoke('laptop')).toBe(true);
+    expect(padded.verify(first.presentation).code).toBe(MACHINE_SIGNAL.MACHINE_CREDENTIAL_REVOKED);
+  });
+
+  // Two stores keyed by the same name. Revoking only the credential would leave a
+  // revoked device holding a live approval capability, and an operator asked to
+  // remember two calls will eventually make one.
+  it('revoking a machine also revokes that machine\'s approval capabilities', async () => {
+    const h = harness();
+    h.machines.issue({ machine: 'ipad' });
+    const operator = h.machines.issue({ machine: 'laptop' });
+    const session = h.sessions.completePairing({ pairingId: 'p', principalKind: 'human-client' });
+    const capability = h.approvals.issue({ sessionId: session.sessionId, machine: 'ipad' });
+    expect(h.approvals.verify(capability.presentation, { machine: 'ipad' }).authorized).toBe(true);
+
+    const out = fakeRes();
+    handleAgentRoute(
+      fakeReq('DELETE', {
+        [MACHINE_CREDENTIAL_HEADER]: operator.presentation,
+        [HUMAN_SESSION_HEADER]: `${session.sessionId}.${session.credential}`,
+      }, ''),
+      out.res,
+      url(`${AGENT_ROUTE_PREFIX}/machines/ipad`),
+    );
+    await flush();
+    expect(JSON.parse(out.body)).toMatchObject({ revoked: true, approvalCapabilitiesRevoked: 1 });
+    // The capability is actually dead, not merely reported as revoked.
+    expect(h.approvals.verify(capability.presentation, { machine: 'ipad' }).authorized).toBe(false);
+  });
+
   it('an agent holding only a machine credential cannot reach an approval route', async () => {
     const h = harness();
     const credential = h.machines.issue({ machine: 'builder-host' });
@@ -756,5 +798,31 @@ describe('remote-access runbook', () => {
 
   it('names the revocation path, which is what an operator needs under pressure', () => {
     expect(runbook()).toContain(`${AGENT_ROUTE_PREFIX}/machines/`);
+  });
+
+  // THE RUNBOOK IS THE SECURITY-RELEVANT ARTIFACT: it is followed without being
+  // re-derived. An earlier draft proxied Tailscale Serve to 127.0.0.1:4100 and
+  // THEN told the operator to bind 0.0.0.0 as well — the proxy already reaches
+  // loopback, so that opened every interface for nothing. Asserted here so the
+  // instruction cannot come back.
+  it('does not instruct an unnecessary non-loopback bind for the tailnet path', () => {
+    const text = runbook();
+    const tailnet = text.slice(
+      text.indexOf('## Reach the service from a tailnet'),
+      text.indexOf('### When you actually do need a non-loopback bind'),
+    );
+    expect(tailnet.length).toBeGreaterThan(100);
+    expect(tailnet).toContain('Do not set `BRIDGE_TOWER_HOST`');
+    expect(tailnet).not.toContain('BRIDGE_TOWER_HOST=0.0.0.0');
+    expect(tailnet).toContain('tailscale serve --https=443 http://127.0.0.1:4100');
+  });
+
+  it('states the blast radius of one unparseable credential file', () => {
+    const text = runbook();
+    // One bad file fails EVERY machine closed with 503. Leaving that undocumented
+    // makes a service-wide outage look like a per-device pairing problem.
+    expect(text).toContain('locks out every machine');
+    expect(text).toContain('MACHINE_STORE_UNREADABLE');
+    expect(text).toContain('unparseable');
   });
 });

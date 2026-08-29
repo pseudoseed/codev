@@ -463,12 +463,19 @@ function handlePairingRedeem(
 }
 
 /**
- * Revoke one machine's credential.
+ * Revoke one machine — its credential AND its approval capabilities.
  *
- * Success criterion 15 in one call: after this, that machine's every request
- * fails closed with MACHINE_CREDENTIAL_REVOKED, and no other machine's file is
- * touched. `revoked: false` means there was nothing live to revoke — which is not
- * an error, and is reported as its own answer rather than as a failure.
+ * TWO STORES, ONE OPERATOR ACTION. The machine credential and the approval
+ * capability are separate stores keyed by the same machine name, and revoking
+ * only the first would leave a revoked device still able to present a live
+ * approval capability to `porch approve`. An operator asked to remember two calls
+ * will eventually make one, so the route makes both and reports each count
+ * separately rather than collapsing them into one boolean.
+ *
+ * Success criterion 15: after this, that machine's every request fails closed
+ * with MACHINE_CREDENTIAL_REVOKED, and no other machine's file is touched.
+ * `revoked: false` means there was nothing live to revoke — not an error, and
+ * reported as its own answer rather than as a failure.
  */
 function handleMachineRevoke(
   res: http.ServerResponse,
@@ -478,10 +485,12 @@ function handleMachineRevoke(
   const match = url.pathname.match(/^\/api\/agent\/v1\/machines\/([^/]+)$/);
   const machine = decodeURIComponent(match ? match[1] : '');
   const revoked = context.machineCredentials.revoke(machine);
+  const approvalCapabilitiesRevoked = context.approvalCapabilities.revokeMachine(machine);
   writeJson(res, 200, {
     signal: revoked ? MACHINE_SIGNAL.MACHINE_CREDENTIAL_REVOKED : 'MACHINE_CREDENTIAL_NOT_LIVE',
     machine,
     revoked,
+    approvalCapabilitiesRevoked,
   });
 }
 

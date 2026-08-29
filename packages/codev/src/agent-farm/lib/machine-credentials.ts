@@ -159,9 +159,21 @@ export class MachineCredentialStore {
     return this.#root;
   }
 
+  /**
+   * Normalise a machine name. THE ONLY PLACE THIS HAPPENS.
+   *
+   * `issue()` used to trim and `revoke()` did not, so revoking `"ipad "` hashed
+   * to a different file, found nothing, and answered `revoked: false` — a
+   * security control reporting a success-shaped failure. Every entry point now
+   * goes through here, so the two cannot drift apart again.
+   */
+  static normalizeMachine(machine: string): string {
+    return machine.trim();
+  }
+
   /** The file holding this machine's record. One machine, one file. */
   pathFor(machine: string): string {
-    return join(this.#root, `${sha256Hex(machine)}.json`);
+    return join(this.#root, `${sha256Hex(MachineCredentialStore.normalizeMachine(machine))}.json`);
   }
 
   #read(machine: string): StoredMachineCredential | null {
@@ -181,7 +193,7 @@ export class MachineCredentialStore {
    * INVALID against the new record rather than continuing to work.
    */
   issue(options: { machine: string; lifetimeMs?: number }): IssuedMachineCredential {
-    const machine = options.machine.trim();
+    const machine = MachineCredentialStore.normalizeMachine(options.machine);
     if (machine.length === 0) throw new Error('MACHINE_NAME_REQUIRED');
     const requested = options.lifetimeMs ?? DEFAULT_CREDENTIAL_LIFETIME_MS;
     if (!Number.isFinite(requested) || requested <= 0) throw new Error('MACHINE_LIFETIME_INVALID');
@@ -294,6 +306,7 @@ export class MachineCredentialStore {
    * passed, at which point EXPIRED and UNKNOWN are the same answer anyway.
    */
   revoke(machine: string): boolean {
+    // `pathFor` normalises, so a padded name reaches the same file `issue` wrote.
     const path = this.pathFor(machine);
     return withStoreLock(path, MACHINE_SIGNAL.MACHINE_STORE_LOCKED, () => {
       const record = this.#read(machine);
