@@ -47,7 +47,7 @@ export interface IssuedHumanSession {
 export interface HumanSessionRecognition {
   readonly paired: boolean;
   readonly sessionId?: string;
-  readonly reason?: 'MISSING' | 'MALFORMED' | 'UNKNOWN' | 'EXPIRED' | 'IDLE' | 'INVALID';
+  readonly reason?: 'MISSING' | 'MALFORMED' | 'UNKNOWN' | 'EXPIRED' | 'IDLE' | 'INVALID' | 'REVOKED';
 }
 
 function verifier(credential: string): Buffer {
@@ -64,6 +64,7 @@ function verifier(credential: string): Buffer {
  */
 export class HumanPairedSessionRegistry {
   readonly #sessions = new Map<string, StoredHumanSession>();
+  readonly #revoked = new Set<string>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -97,6 +98,7 @@ export class HumanPairedSessionRegistry {
     if (separator <= 0 || separator === presentation.length - 1) return { paired: false, reason: 'MALFORMED' };
     const sessionId = presentation.slice(0, separator);
     const credential = presentation.slice(separator + 1);
+    if (this.#revoked.has(sessionId)) return { paired: false, reason: 'REVOKED' };
     const stored = this.#sessions.get(sessionId);
     if (!stored) return { paired: false, reason: 'UNKNOWN' };
     const now = this.now();
@@ -115,7 +117,9 @@ export class HumanPairedSessionRegistry {
   }
 
   revoke(sessionId: string): boolean {
-    return this.#sessions.delete(sessionId);
+    const existed = this.#sessions.delete(sessionId);
+    if (existed) this.#revoked.add(sessionId);
+    return existed;
   }
 }
 
@@ -253,7 +257,11 @@ export function handleAgentRoute(
     const presentation = Array.isArray(header) ? header[0] : header;
     const recognition = context.humanSessions.recognize(presentation);
     writeJson(res, recognition.paired ? 200 : 401, {
-      signal: recognition.paired ? 'HUMAN_SESSION_RECOGNISED' : 'HUMAN_SESSION_REQUIRED',
+      signal: recognition.paired
+        ? 'HUMAN_SESSION_RECOGNISED'
+        : recognition.reason === 'REVOKED'
+          ? 'HUMAN_SESSION_REVOKED'
+          : 'HUMAN_SESSION_REQUIRED',
       ...recognition,
     });
     return true;
