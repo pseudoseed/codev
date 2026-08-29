@@ -1909,24 +1909,47 @@ async function handleSend(
     if (result.code === 'NOT_FOUND' && !escape && !interrupt) {
       const reg = resolveAgentInRegistry(to, workspace, from);
       if (!isResolveError(reg)) {
-        holdAndRespond(
-          res,
-          ctx,
-          {
-            workspacePath: reg.workspacePath,
-            toAgent: reg.agent,
-            body: message,
-            formattedMessage: formatMessageForTarget(reg.kind === 'architect', from, message, raw),
-            fromAgent: from ?? null,
-            // #47: identity, not just kind; and the target as TYPED, not as resolved.
-            fromAgentName: fromName ?? null,
-            requestedTo: to,
-            fromWorkspace: senderWorkspace,
-            noEnter,
-            terminalId: null,
-          },
-          'no-live-pty',
-        );
+        const formattedMessage = formatMessageForTarget(reg.kind === 'architect', from, message, raw);
+        const row = enqueueMailbox(db, {
+          workspacePath: reg.workspacePath,
+          toAgent: reg.agent,
+          body: message,
+          formattedMessage,
+          fromAgent: from ?? null,
+          fromAgentName: fromName ?? null,
+          requestedTo: to,
+          fromWorkspace: senderWorkspace,
+          noEnter,
+          terminalId: null,
+        });
+        const ports = makeDeliveryPorts(ctx.log);
+        try {
+          await deliverAgentMailSerialized(ports, db, reg.workspacePath, reg.agent);
+        } catch (err) {
+          ctx.log('ERROR', `Delivery attempt errored for ${reg.agent} (row ${row.id.slice(0, 8)}... stays held): ${(err as Error).message}`);
+        }
+        const stored = getMailboxById(db, row.id);
+        if (stored?.status === 'delivered') {
+          sendJson(res, 200, {
+            ok: true,
+            resolvedTo: reg.agent,
+            deferred: false,
+            delivered: true,
+            held: false,
+            mailboxId: row.id,
+            reason: null,
+          });
+          return;
+        }
+        sendJson(res, 200, {
+          ok: true,
+          resolvedTo: reg.agent,
+          deferred: true,
+          delivered: false,
+          held: true,
+          reason: stored?.reason ?? 'no-live-pty',
+          mailboxId: row.id,
+        });
         return;
       }
       if (reg.code === 'AMBIGUOUS') {

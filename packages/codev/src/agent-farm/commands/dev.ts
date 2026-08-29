@@ -19,6 +19,7 @@ import { getConfig, getWorktreeConfig } from '../utils/index.js';
 import { getTowerClient } from '../lib/tower-client.js';
 import { createPtySession } from './spawn-worktree.js';
 import { findBuilderById } from '../lib/builder-lookup.js';
+import { isThreadBacked, worktreeForThreadBuilder } from '../thread-runtime.js';
 
 export interface DevOptions {
   builderId?: string;
@@ -57,11 +58,14 @@ export async function dev(options: DevOptions): Promise<void> {
   // a builder worktree. Resolved locally — deliberately NOT via
   // findBuilderById — so `main` never leaks into afx send/cleanup/status.
   const isMain = options.builderId.toLowerCase() === 'main';
-  const builder: { id: string; worktree?: string } | null = isMain
+  const builder: { id: string; worktree?: string; threadId?: string } | null = isMain
     ? { id: 'main', worktree: config.workspaceRoot }
     : findBuilderById(options.builderId);
   if (!builder) {
     throw new Error(`No builder found matching "${options.builderId}". Try \`afx status\`.`);
+  }
+  if (isThreadBacked(builder)) {
+    builder.worktree = worktreeForThreadBuilder(builder);
   }
   if (!builder.worktree) {
     throw new Error(`Builder ${builder.id} has no worktree path on record — cannot start dev.`);

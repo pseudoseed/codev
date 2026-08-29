@@ -14,6 +14,7 @@ import type { Builder } from '../types.js';
 import type { OverviewData } from '@cluesmith/codev-types';
 import { overlayBuilderFromPorch } from '../lib/porch-overlay.js';
 import { countPtyDrainFromBuilders } from '../db/thread-identity.js';
+import { isAgentRunning } from '../thread-runtime.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from '../../lib/config.js';
@@ -79,9 +80,9 @@ function sortByOwner(builders: Builder[]): Builder[] {
   });
 }
 
-/** A builder is considered "running" when it has a live terminal session. */
-function isBuilderRunning(builder: Builder): boolean {
-  return !!builder.terminalId;
+/** A builder is running when it has a live terminal or a thread. */
+export function isBuilderRunning(builder: Builder): boolean {
+  return isAgentRunning(builder);
 }
 
 export function collectOrphanStatus(

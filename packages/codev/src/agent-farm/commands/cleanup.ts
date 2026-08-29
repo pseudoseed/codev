@@ -18,6 +18,10 @@ import { dismissHeldForAgent } from '../db/mailbox.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 import { executeForgeCommand } from '../../lib/forge.js';
 import { resolveDefaultBranch } from '../../lib/default-branch.js';
+import {
+  getThreadEngine,
+  isThreadBacked,
+} from '../thread-runtime.js';
 
 /**
  * Clean porch review artifacts for a project from codev/projects/,
@@ -535,7 +539,31 @@ async function cleanupOrphan(dirName: string, worktreePath: string, force?: bool
   logger.success(`Orphan worktree ${dirName} cleaned up!`);
 }
 
+export async function cleanupThreadBackedBuilder(
+  builder: Builder,
+  force?: boolean,
+): Promise<'removed' | 'refused-unmerged'> {
+  if (!builder.threadId) throw new Error('cleanupThreadBackedBuilder requires threadId');
+  const config = getConfig();
+  const merged = builder.worktree ? await isWorktreeMerged(config.workspaceRoot, builder.worktree) : false;
+  if (!merged && !force) return 'refused-unmerged';
+  const result = await getThreadEngine().removeWorktree(builder.threadId, { force: !!force });
+  if (result === 'refused-unmerged') return result;
+  removeBuilder(builder.id, config.workspaceRoot);
+  return 'removed';
+}
+
 async function cleanupBuilder(builder: Builder, force?: boolean, issueNumber?: number): Promise<void> {
+  if (isThreadBacked(builder)) {
+    const result = await cleanupThreadBackedBuilder(builder, force);
+    if (result === 'refused-unmerged') {
+      logger.info(`Worktree preserved (unmerged) at: ${builder.worktree}`);
+      fatal('Refusing to remove a thread-backed builder with unmerged work');
+    }
+    logger.success(`Thread-backed builder ${builder.id} cleaned up`);
+    return;
+  }
+
   const config = getConfig();
   const isShellMode = builder.type === 'shell';
   const isBugfixMode = builder.type === 'bugfix';

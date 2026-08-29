@@ -35,6 +35,7 @@ import {
   allocateSpawnThread,
   chooseSpawnPath,
 } from '../db/thread-identity.js';
+
 import { findStatusPath, getStatusPath, recordThreadId } from '../../commands/porch/state.js';
 import { DEFAULT_ARCHITECT_NAME } from '../utils/architect-name.js';
 
@@ -137,6 +138,8 @@ export async function launchSpawnedBuilder(opts: {
   branch: string;
   harnessName?: string;
   model?: string;
+  prompt?: string;
+  launchScript?: string;
   startPty: () => Promise<{ terminalId: string }>;
 }): Promise<{ terminalId?: string; threadId?: string }> {
   const pathKind = chooseSpawnPath(opts.existing ?? undefined);
@@ -147,6 +150,8 @@ export async function launchSpawnedBuilder(opts: {
       branch: opts.branch,
       harnessName: opts.harnessName,
       model: opts.model,
+      prompt: opts.prompt,
+      launchScript: opts.launchScript,
     });
     return { threadId };
   }
@@ -826,6 +831,7 @@ async function spawnWorktree(options: SpawnOptions, config: Config, selection: A
     existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
     builderId, worktreePath, branch: branchName,
     harnessName: effective.harnessName, model: effective.modelId,
+    launchScript: scriptPath,
     startPty: async () => {
       logger.info('Creating PTY terminal session for worktree...');
       const session = await createPtySession(

@@ -28,11 +28,64 @@ const MAX_FILE_SIZE = 48 * 1024; // 48KB limit per spec
  * Note: checks for .codev/config.json (not just .codev/) to avoid false
  * positives from ~/.codev/ which exists for global config.
  */
+function lookupBuilderIdByThreadId(threadId: string): string {
+  const dbPath = getGlobalDbPath();
+  if (!existsSync(dbPath)) {
+    throw new BuilderIdResolutionError(
+      `Cannot resolve builder identity for thread '${threadId}': global.db not found at ${dbPath}.`,
+    );
+  }
+  let gdb: Database.Database;
+  try {
+    gdb = new Database(dbPath, { readonly: true });
+  } catch (err) {
+    throw new BuilderIdResolutionError(
+      describeStateDbOpenFailure(dbPath, threadId, err),
+    );
+  }
+  try {
+    const row = gdb.prepare('SELECT id, worktree FROM builders WHERE thread_id = ?').get(threadId) as
+      | { id: string; worktree: string }
+      | undefined;
+    if (!row) {
+      throw new BuilderIdResolutionError(
+        `Cannot resolve builder identity for thread '${threadId}': no matching builder row in ${dbPath}.`,
+      );
+    }
+    return row.id;
+  } finally {
+    gdb.close();
+  }
+}
+
 export function detectWorkspaceRoot(): string | null {
   // Issue #47: builder identity belongs to the terminal session, not its
   // current directory. Prefer the launch-time worktree root while that stable
   // identity is present, so `cd` into the workspace (or elsewhere) cannot
   // silently change the sender into an architect.
+  const sessionThreadId = process.env.CODEV_THREAD_ID?.trim();
+  if (sessionThreadId) {
+    const dbPath = getGlobalDbPath();
+    if (existsSync(dbPath)) {
+      try {
+        const gdb = new Database(dbPath, { readonly: true });
+        try {
+          const row = gdb.prepare('SELECT worktree FROM builders WHERE thread_id = ?').get(sessionThreadId) as
+            | { worktree: string }
+            | undefined;
+          if (row?.worktree) {
+            const sessionMatch = row.worktree.replace(/\/+$/, '').match(/^(.+)\/\.builders\/[^/]+$/);
+            if (sessionMatch) return sessionMatch[1];
+          }
+        } finally {
+          gdb.close();
+        }
+      } catch {
+        // Fall through to cwd detection; detectCurrentBuilderId throws if identity cannot be verified.
+      }
+    }
+  }
+
   const sessionBuilderId = process.env.CODEV_BUILDER_ID?.trim();
   const sessionWorktree = process.env.CODEV_WORKTREE_ROOT?.trim().replace(/\/+$/, '');
   if (sessionBuilderId && sessionWorktree) {
@@ -123,6 +176,11 @@ export function describeStateDbOpenFailure(dbPath: string, worktreeDirName: stri
  *     returning a bare, unverified id silently misroutes to `main` (#1094).
  */
 export function detectCurrentBuilderId(): string | null {
+  const sessionThreadId = process.env.CODEV_THREAD_ID?.trim();
+  if (sessionThreadId) {
+    return lookupBuilderIdByThreadId(sessionThreadId);
+  }
+
   const sessionBuilderId = process.env.CODEV_BUILDER_ID?.trim();
   const rawSessionWorktree = process.env.CODEV_WORKTREE_ROOT?.trim();
   if ((sessionBuilderId && !rawSessionWorktree) || (!sessionBuilderId && rawSessionWorktree)) {
