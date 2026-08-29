@@ -11,7 +11,7 @@
  *
  * TWO deliberate exceptions write a body OUTSIDE this path, both explicit human
  * gate-bypasses documented at their `tower-routes.ts` call sites: immediate `--interrupt`
- * (Ctrl+C then the message) and `--escape` (a bare ESC). They are the operator's "I am at
+ * (the target's prompt-ready keystrokes, then the message — #196) and `--escape` (a bare ESC). They are the operator's "I am at
  * this terminal now" actions and take the separate per-terminal submission lock
  * (`session-submit.ts`), not the per-agent serializer here — every autonomous/scheduled/
  * held send, by contrast, delivers through this gate.

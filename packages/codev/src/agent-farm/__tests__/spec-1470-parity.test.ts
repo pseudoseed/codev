@@ -199,7 +199,15 @@ describe('--delay persistence documentation', () => {
     // fails FIRST — so the docs are never "corrected" into a new lie.
     const src = read('packages/codev/src/agent-farm/servers/delayed-send.ts');
     expect(src).toContain('survives a Tower restart by construction');
-    expect(src).toContain('Only the in-memory ^C');
+    // Issue #196 widened the nudge beyond Ctrl+C (ESC then Ctrl+U on opencode), so the
+    // literal '^C' became FALSE here exactly as it did in types.ts. Same contract, not
+    // relaxed: the exception must still be scoped to what is IN-MEMORY and must still
+    // name a concrete keystroke, so genericising it to "the in-memory nudge" fails.
+    const nudgeLine = src.split('\n').find(l => l.includes('Only the in-memory'));
+    expect(nudgeLine, 'delayed-send.ts no longer scopes the restart exception to the in-memory nudge')
+      .toBeDefined();
+    expect(nudgeLine, 'the in-memory exception is named but no longer says WHICH keystroke')
+      .toContain('Ctrl+C');
   });
 
   /**

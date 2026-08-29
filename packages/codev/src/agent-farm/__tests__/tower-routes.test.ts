@@ -22,6 +22,7 @@ import { SessionScreen } from '../../terminal/session-screen.js';
 // shutdown-during-lock-wait window deterministically.
 import { shutdownDelayedSends } from '../servers/delayed-send.js';
 import { submitToSession, resetSubmissionChains } from '../servers/session-submit.js';
+import { ESCAPE_ENTER_DELAY_MS } from '../servers/message-write.js';
 
 // ============================================================================
 // Mocks
@@ -2057,9 +2058,16 @@ describe('tower-routes', () => {
         await vi.advanceTimersByTimeAsync(5000);
         for (let i = 0; i < 20; i++) await Promise.resolve();
 
+        // ESC is on the wire at once; Ctrl+U is DEFERRED by the settle, so it is not here
+        // yet. That gap is the fix — an unspaced pair is read as Alt+u and clears nothing
+        // (verified live: codev/research/196-esc-alt-encoding-probe.mjs).
+        expect(written).toEqual([ESC]);
+
+        await vi.advanceTimersByTimeAsync(ESCAPE_ENTER_DELAY_MS);
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+
+        expect(written).toEqual([ESC, CTRL_U]);
         expect(written).not.toContain(CTRL_C);
-        expect(written).toContain(ESC);
-        expect(written).toContain(CTRL_U);
       });
     });
   });

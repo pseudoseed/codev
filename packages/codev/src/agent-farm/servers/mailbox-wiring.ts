@@ -350,8 +350,23 @@ function formatOwnerNoticeBody(info: HeldOwnerNoticeInfo): string {
     `Mailbox delivery is STUCK for builder '${info.toAgent}' @ ${path.basename(info.workspacePath)}. ` +
     `${info.heldCount} ${plural} held ~${mins}m (reason: ${info.reason ?? 'held'}) — its composer never classifies as a ready prompt, ` +
     `so nothing is being delivered (cron nudges included). ` +
-    heldRemedy(info.toAgent, info.detail ?? null)
+    heldRemedy(info.toAgent, info.detail ?? null, canAutoClearFor(info.workspacePath, info.toAgent))
   );
+}
+
+/**
+ * Whether Tower has a clearing keystroke recorded for this agent, i.e. whether the #92
+ * auto-recovery can actually repair a `user-text` hold on it (Issue #196 / #190).
+ *
+ * Answers "will the automatic repair happen?" so {@link heldRemedy} can stop promising
+ * one that will not. A session that cannot be resolved, or is gone, answers `false`:
+ * on an unknown target `writeHeldRecovery` writes nothing and the hold is reported
+ * unrecoverable, and telling an operator to wait for that is #190's exact shape.
+ */
+function canAutoClearFor(workspacePath: string, toAgent: string): boolean {
+  const session = resolveLiveSessionForAgent(workspacePath, toAgent);
+  if (!session || isThreadDeliverySession(session)) return false;
+  return heldRecoveryKeystroke('cancel-draft', clearDraftKeyForSession(session)) !== null;
 }
 
 /**
@@ -359,24 +374,38 @@ function formatOwnerNoticeBody(info: HeldOwnerNoticeInfo): string {
  *
  * The old text named `afx interrupt`, which sends ESC. ESC does not clear typed
  * text in a composer, so running it changed nothing and the alert fired again
- * three minutes later. What works is `afx send <id> --interrupt`, which sends
- * Ctrl+C first and clears the line — documented as a way to send a message, not
- * as the remedy for this state, so nobody found it. Hit five times on
- * 2026-08-21, each needing manual intervention.
+ * three minutes later. What works is `afx send <id> --interrupt`, which readies the
+ * prompt with the keystrokes recorded as safe for that agent — Ctrl+C on claude/codex
+ * and shells, ESC then Ctrl+U on opencode (#196) — and clears the line. It was
+ * documented as a way to send a message, not as the remedy for this state, so nobody
+ * found it. Hit five times on 2026-08-21, each needing manual intervention.
+ *
+ * `canAutoClear` (#190, again): the automatic recovery only fires when a clearing
+ * keystroke is RECORDED for the target's agent. On an unidentified or custom one
+ * nothing is written and the hold reports `unrecoverable`, so promising a repair that
+ * will never arrive is the same defect this function was written to remove — a remedy
+ * naming something that does not happen.
  *
  * `user-text` gets the clearing command. `busy-indicator` is an agent mid-turn:
  * clearing there would corrupt a live turn, and the answer is to wait. Anything
  * else is a screen the gate could not read at all, which is a different problem
  * and says so rather than offering a remedy for the wrong one.
  */
-export function heldRemedy(toAgent: string, detail: string | null): string {
+export function heldRemedy(toAgent: string, detail: string | null, canAutoClear = true): string {
   const inspect = `Inspect with 'afx inbox'.`;
 
   if (detail === 'user-text') {
+    // #190's shape, and worth stating plainly because this function exists to avoid it:
+    // only claim the automatic repair when one can actually be sent.
+    const automatic = canAutoClear
+      ? `Tower sends one automatic clearing keystroke after the starvation window. If it remains held, `
+      : `Tower has NO clearing keystroke recorded for this agent, so no automatic repair will be attempted — `
+        + `this hold needs a human. Clear it with: `;
+    const lead = canAutoClear ? `clear it with: ` : ``;
     return (
       `${inspect} Its composer is holding TEXT the agent left behind and will not clear on its own. ` +
-      `Tower sends one automatic clearing keystroke after the starvation window. If it remains held, ` +
-      `clear it with: afx send ${toAgent} --interrupt "<your message>"   ` +
+      automatic + lead +
+      `afx send ${toAgent} --interrupt "<your message>"   ` +
       `(readies the prompt using the keystrokes recorded as safe for this agent — Ctrl+C on claude/codex, ` +
       `ESC then Ctrl+U on opencode, which quits on Ctrl+C — then delivers. By contrast ` +
       `'afx interrupt' sends ESC, which does not clear typed text on any harness.)`

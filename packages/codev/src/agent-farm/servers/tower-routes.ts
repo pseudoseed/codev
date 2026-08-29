@@ -53,7 +53,7 @@ import { handleAgentRoute } from './agent-routes.js';
 import { handleCanvasRoute, CANVAS_ROUTE_PREFIX } from './canvas-relay.js';
 import { formatArchitectMessage, formatBuilderMessage, formatUserViaVsCodeMessage } from '../utils/message-format.js';
 import type { PtySession } from '../../terminal/pty-session.js';
-import { writeMessageToSession, writeEscapeToSession } from './message-write.js';
+import { writeMessageToSession, writeEscapeToSession, writeControlSequence } from './message-write.js';
 import {
   makeDeliveryPorts,
   getMailboxDrainer,
@@ -1793,9 +1793,11 @@ function handleDelayedSend(
           // there the two halves are ESC and Ctrl+U. Resolved from the session's own agent
           // and deduplicated, so claude/codex still get exactly one `\x03`.
           sent = promptReadySequence(live);
-          for (const byte of sent) live.write(byte); // no body here; it follows via the gate
+          // Settled, not back-to-back: ESC followed immediately by a character is the
+          // terminal encoding for Alt+character, so an unspaced `\x1b\x15` can be read as
+          // one alt-keypress instead of two keystrokes. Hold the lock until the last byte.
           fired = true;
-          return 0; // no body, no Enter on this path
+          return writeControlSequence(live, sent);
         })
           .then(() =>
             ctx.log('INFO', fired
@@ -2131,8 +2133,12 @@ async function handleSend(
     //   looking at the terminal, which is the trade `--interrupt` has always made.
     const interruptBytes = promptReadySequence(session);
     await submitToSession(result.terminalId, () => {
-      for (const byte of interruptBytes) session.write(byte);
-      return writeMessageToSession(session, formattedMessage, noEnter, 100);
+      // Settled between bytes (see writeControlSequence): an unspaced ESC+Ctrl+U is the
+      // Alt+u encoding, not two keystrokes. The body is then offset past the LAST byte
+      // rather than a fixed 100 ms from the first, so the 100 ms settle the message has
+      // always had is preserved on a multi-byte harness instead of being eaten by it.
+      const controlsDone = writeControlSequence(session, interruptBytes);
+      return writeMessageToSession(session, formattedMessage, noEnter, controlsDone + 100);
     });
     broadcastMessage({
       type: 'message',

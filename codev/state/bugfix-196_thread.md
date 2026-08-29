@@ -317,3 +317,73 @@ One refinement on the ask: the request was "exactly one `\x03`, nothing before o
 the test timing-dependent. It asserts `written[0] === '\x03'` and then filters the *whole*
 exchange to control bytes and expects the set to be exactly `['\x03']` — the same guarantee
 without the flake.
+
+## CMAP round 2 — the finding a test could not have found
+
+One usable lane (codex + agy quota-dead, opencode failed twice on a worktree permission
+dead-end → #207). Five findings, two blocking.
+
+### Blocking 1: the ESC → Ctrl+U pair was written back-to-back, and was a silent no-op
+
+**ESC immediately followed by a character is the standard terminal encoding for
+Alt+character.** So `\x1b\x15` in one write can reach a TUI as *one alt-modified keypress*
+rather than two keystrokes.
+
+Verified live against real opencode 1.18.18 in a node-pty
+(`codev/research/196-esc-alt-encoding-probe.mjs`):
+
+| arm | process survived | composer cleared |
+|---|---|---|
+| **[A]** unspaced `ESC+Ctrl+U`, one write | true | **FALSE** |
+| **[B]** settled `ESC`, 50 ms, `Ctrl+U` | true | **TRUE** |
+| **[C]** control — `Ctrl+U` alone | true | **TRUE** |
+
+**[A] is the code that was under review.** It did not quit opencode, so nothing looked
+wrong — and it did not clear the draft either. `--interrupt` would have reported success
+having done nothing. The fix for "we send bytes that do the wrong thing on a harness" would
+have shipped with its opencode path inert.
+
+**[C] is what makes [A] evidence rather than an anecdote.** Without it, [A]'s failure is
+ambiguous between "the pair is swallowed" and "Ctrl+U does not clear on opencode" — and
+those have opposite fixes.
+
+**Detection method matters here.** Marker-absent is the obvious signal and the weak one: a
+redraw that simply does not repaint the marker looks identical to a clear. opencode draws
+its `Ask anything...` placeholder *only* when the composer is empty, so the placeholder's
+**return** is a positive signal for a positive claim.
+
+Fix: `writeControlSequence()` in `message-write.ts`, reusing `ESCAPE_ENTER_DELAY_MS` (50 ms)
+— that constant exists for exactly this reason and says so. A single byte writes immediately
+and returns offset 0, so claude and codex are unchanged in **timing** as well as in bytes.
+A second bug was hiding behind the first: the immediate path offset the message body a flat
+100 ms from the *first* byte, so on a two-byte harness the body would have landed 50 ms after
+Ctrl+U instead of 100. It is now `controlsDone + 100`.
+
+**Two false starts, recorded because they cost time and will cost someone else more:** the
+probe was piped through `tail`, which buffers until EOF, so a *finished* run looked hung; and
+the PTY handles kept node alive after the final log, so EOF never came. Write incrementally to
+a file and exit explicitly.
+
+### Blocking 2: `heldRemedy` promised a repair that would not arrive — #190's exact shape
+
+It stated unconditionally that Tower sends an automatic clearing keystroke. On an
+unidentified or custom target nothing is written and the hold reports `unrecoverable`. Now
+takes `canAutoClear`, computed from the live session by `canAutoClearFor()`; when there is no
+recorded keystroke it says so and says the hold needs a human. Written this afternoon, while
+fixing #190's family.
+
+### The pinning coupling, checked *before* editing this time
+
+`delayed-send.ts`'s stale `^C` wording is pinned by `spec-1470-parity.test.ts:202`
+(`'Only the in-memory ^C'`). Both changed together, guard's contract preserved — the exception
+must still be scoped to the in-memory nudge **and** name a concrete keystroke. Mutation-checked:
+genericised FAILS, sentence-deleted FAILS, fixed PASSES.
+
+That is the second spec-1470 assertion this PR updated. Both for the same reason: the fact
+being pinned became **false** through a deliberate contract change, not merely stale.
+
+### Round summary
+
+Three review rounds, three real blocking findings, **every one found by looking rather than by
+testing**: the shell target, the inert config fields, and the Alt-encoding. The test suite was
+green for all three.

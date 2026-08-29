@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { writeControlSequence, ESCAPE_ENTER_DELAY_MS } from '../servers/message-write.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { GLOBAL_SCHEMA } from '../db/schema.js';
@@ -746,5 +747,61 @@ describe('a wrapped builder is NEVER mistaken for a shell', () => {
       launchArgs: [], cwd: worktree, writable: true, write: () => true,
     };
     expect(promptReadySequence(bare)).toEqual([CTRL_C]);
+  });
+});
+
+// ============================================================================
+// The bytes must be SETTLED, not written back-to-back (CMAP round 2, blocking 1).
+//
+// ESC immediately followed by a character is the terminal encoding for Alt+character,
+// so an unspaced `\x1b\x15` can reach a TUI as ONE alt-keypress instead of two
+// keystrokes. VERIFIED LIVE against opencode 1.18.18 — see
+// codev/research/196-esc-alt-encoding-probe.mjs:
+//   unspaced -> composer NOT cleared;  settled -> cleared;  Ctrl+U alone -> cleared.
+// The unspaced form did not quit opencode, so it failed SILENTLY, which is why a unit
+// test could never have found it. These tests pin the sequencing the live run validated.
+// ============================================================================
+
+describe('writeControlSequence', () => {
+  function recorder() {
+    const writes: Array<{ byte: string; atMs: number }> = [];
+    const t0 = Date.now();
+    return {
+      writes,
+      session: { write: (d: string) => { writes.push({ byte: d, atMs: Date.now() - t0 }); return true; } },
+    };
+  }
+
+  it('writes a single byte immediately and claims no settle time', () => {
+    // claude and codex dedup to one byte, so they must be unchanged in timing as well
+    // as in bytes — a settle they do not need would be a behaviour change for harnesses
+    // that were never broken.
+    const { writes, session } = recorder();
+    expect(writeControlSequence(session, [CTRL_C])).toBe(0);
+    expect(writes.map(w => w.byte)).toEqual([CTRL_C]);
+  });
+
+  it('separates two bytes by the settle the TUI needs, and reports the offset', () => {
+    const { writes, session } = recorder();
+    const done = writeControlSequence(session, [ESC, CTRL_U]);
+    expect(done).toBe(ESCAPE_ENTER_DELAY_MS);
+    // The first byte is on the wire immediately; the second is deferred, NOT concatenated.
+    expect(writes.map(w => w.byte)).toEqual([ESC]);
+  });
+
+  it('never concatenates ESC with the byte after it', () => {
+    // The actual defect: `session.write(ESC + CTRL_U)` in one call is the Alt+u encoding.
+    const { writes, session } = recorder();
+    writeControlSequence(session, [ESC, CTRL_U]);
+    for (const w of writes) {
+      expect(w.byte.length).toBe(1);
+      expect(w.byte).not.toBe(ESC + CTRL_U);
+    }
+  });
+
+  it('writes nothing and claims no time for an empty sequence', () => {
+    const { writes, session } = recorder();
+    expect(writeControlSequence(session, [])).toBe(0);
+    expect(writes).toEqual([]);
   });
 });

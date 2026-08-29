@@ -35,6 +35,38 @@ export const ESC = '\x1b';
 export const ESCAPE_ENTER_DELAY_MS = SIMPLE_ENTER_DELAY_MS;
 
 /**
+ * Write a sequence of control bytes to a PTY, SETTLING between them (Issue #196).
+ *
+ * The settle is not politeness, it is correctness. **ESC immediately followed by a
+ * character is the standard terminal encoding for Alt+character** (`ESC` + `u` is how a
+ * TUI receives Alt+u), so writing `\x1b\x15` back-to-back can legitimately be parsed as
+ * ONE alt-modified keypress rather than two keystrokes — in which case an `--interrupt`
+ * on opencode would neither end the turn nor clear the composer, and would report success.
+ * That is the same class of defect this issue exists to fix, one layer down.
+ *
+ * Reuses {@link ESCAPE_ENTER_DELAY_MS} rather than inventing a number: it exists for
+ * exactly this reason ("ESC has to be processed by the TUI before Enter is meaningful"),
+ * and a second constant would be a second thing to keep in sync.
+ *
+ * A single byte writes immediately and returns 0, so claude and codex — where
+ * `promptReadySequence` dedups to one `\x03` — are byte-for-byte and timing-for-timing
+ * unchanged.
+ *
+ * @returns ms offset (from call time) when the last byte is written
+ */
+export function writeControlSequence(session: WritableSession, bytes: readonly string[]): number {
+  if (bytes.length === 0) return 0;
+  session.write(bytes[0]);
+  let offset = 0;
+  for (let i = 1; i < bytes.length; i++) {
+    offset += ESCAPE_ENTER_DELAY_MS;
+    const byte = bytes[i];
+    setTimeout(() => session.write(byte), offset);
+  }
+  return offset;
+}
+
+/**
  * Write a bare ESC keystroke to a PTY session (Spec 1273).
  *
  * This is the verified mid-turn recovery for a wedged agent: ESC interrupts the
