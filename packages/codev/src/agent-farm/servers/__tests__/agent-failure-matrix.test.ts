@@ -380,7 +380,7 @@ describe('acceptance extras', () => {
     writeStatus(root, '7', porchYaml('7'));
     let resolveReview: (() => void) | undefined;
     const sawReview = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('no review snapshot')), 2000);
+      const timer = setTimeout(() => reject(new Error('no review snapshot')), 30_000);
       resolveReview = () => {
         clearTimeout(timer);
         resolve();
@@ -414,5 +414,5 @@ describe('acceptance extras', () => {
     } finally {
       subscription.close();
     }
-  });
+  }, 35_000);
 });

@@ -39,3 +39,7 @@ Merged `origin/builder/spir-146` (phase 4 review fixes present: ed5bd25e7,
 1e2a215a6, 759b4f507, 3564a8c4a, cf4dd980d). Revoked tombstones now expire
 with the original session lifetime. Unreadable-status test skips as root.
 `.gitignore` covers `opencode.json` and the `.builder-*` harness files.
+
+Watcher test still keys off the snapshot event. Safety deadline 2s → 30s
+(vitest 35s) so a loaded event loop cannot starve fs.watch. Full agent-farm
+suite: 3497 passed, 34 skipped, 0 failed (176 files).
