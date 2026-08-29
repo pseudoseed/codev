@@ -64,6 +64,7 @@ import { getGlobalDb } from '../db/index.js';
 import { runBootConsolidation } from '../db/consolidate.js';
 import { DEFAULT_TOWER_PORT, AGENT_FARM_DIR } from '../lib/tower-client.js';
 import { validateHost, getExpectedKey, selectWsSubprotocol } from '../utils/server-utils.js';
+import { decideBindPolicy } from './agent-auth.js';
 import { version } from '../../version.js';
 import {
   HumanPairedSessionRegistry,
@@ -71,6 +72,8 @@ import {
   shutdownAgentRoutes,
 } from './agent-routes.js';
 import { ApprovalCapabilityStore, ApprovalNonceStore } from '../lib/approval-capability.js';
+import { MachineCredentialStore } from '../lib/machine-credentials.js';
+import { PairingStore } from '../lib/pairing.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -121,6 +124,15 @@ const bridgeMode = process.env.BRIDGE_MODE === '1';
 const bindHost = bridgeMode
   ? validateHost(process.env.BRIDGE_TOWER_HOST || '127.0.0.1')
   : '127.0.0.1';
+
+// Spec 146 Phase 7: loopback-only is the default and exposing an interface is an
+// explicit act. The decision is a pure function in agent-auth.ts so it is testable
+// without spawning a server; this module only applies it. Evaluated at module load
+// so an exposed bind is refused BEFORE listen(), not after the port is open.
+const bindDecision = decideBindPolicy({
+  host: bindHost,
+  tlsDeclaration: process.env.CODEV_BRIDGE_TLS,
+});
 
 // Request authentication (advisory GHSA-xvjp-7748-v88v): ensure the shared local
 // key exists at boot so HTTP/WS enforcement has an expected value to compare
@@ -471,14 +483,26 @@ const server = http.createServer(async (req, res) => {
 
 // SECURITY: Bind to configured host (default 127.0.0.1 for localhost-only).
 // Bridge mode enables non-localhost binding when BRIDGE_MODE=1 is set.
+// Spec 146 Phase 7: REFUSED, not warned about. The previous code logged a warning
+// about the key travelling in cleartext and started anyway. Reaching this service
+// is equivalent to shell access in every worktree it serves, so an exposure the
+// operator did not declare is a startup failure. See the remote-access runbook.
+if (!bindDecision.allowed) {
+  log('ERROR', `${bindDecision.code}: ${bindDecision.message}`);
+  process.exit(1);
+}
+
 server.listen(port, bindHost, () => {
   if (bridgeMode) {
     if (!expectedKeyAtBoot) {
       log('ERROR', 'BRIDGE_MODE requires the shared local key at ~/.agent-farm/local-key, which could not be created. Refusing to start a network-reachable Tower without request authentication.');
       process.exit(1);
     }
-    log('WARN', `Bridge mode is ENABLED — Tower is listening on ${bindHost} network interfaces. Request authentication is enforced, but the shared key travels in cleartext over plain HTTP — terminate TLS at the tunnel/proxy so the key is not exposed on the wire.`);
-  } else if (!expectedKeyAtBoot) {
+  }
+  if (bindDecision.exposed) {
+    log('WARN', `${bindDecision.code}: ${bindDecision.message}`);
+  }
+  if (!bridgeMode && !expectedKeyAtBoot) {
     log('WARN', 'Shared local key could not be created at ~/.agent-farm/local-key; Tower will reject authenticated requests (fail closed).');
   }
   // Display localhost in URLs for local UX even when bound to all interfaces.
@@ -711,6 +735,10 @@ async function bootSequence(): Promise<void> {
     humanSessions,
     approvalCapabilities: new ApprovalCapabilityStore(),
     approvalNonces: new ApprovalNonceStore(),
+    // Spec 146 Phase 7: per-machine credentials, one file per machine, so
+    // revoking one machine cannot disturb another's bytes.
+    machineCredentials: new MachineCredentialStore(),
+    pairings: new PairingStore(),
     isKnownWorkspace: (workspacePath) => {
       const wanted = normalizeWorkspacePath(workspacePath);
       return getKnownWorkspacePaths().some((known) => normalizeWorkspacePath(known) === wanted);

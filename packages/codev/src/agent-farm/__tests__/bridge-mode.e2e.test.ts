@@ -21,6 +21,7 @@ const PORT_DEFAULT = 14900;
 const PORT_BRIDGE_ALL = 14901;
 const PORT_BRIDGE_NO_HOST = 14902;
 const PORT_INVALID = 14903;
+const PORT_INSECURE = 14904;
 
 let towerDefault: Awaited<ReturnType<typeof startTower>> | null = null;
 let towerBridgeAll: Awaited<ReturnType<typeof startTower>> | null = null;
@@ -46,9 +47,14 @@ describe("Bridge Mode", () => {
   beforeAll(async () => {
     towerDefault = await startTower(PORT_DEFAULT, {});
 
+    // Spec 146 Phase 7 changed this case's premise. A plaintext non-loopback bind
+    // is now REFUSED at startup rather than warned about, so an exposed bind must
+    // declare that a TLS terminator fronts it. Without CODEV_BRIDGE_TLS this
+    // startup fails — which is the point, and is asserted separately below.
     towerBridgeAll = await startTower(PORT_BRIDGE_ALL, {
       BRIDGE_MODE: "1",
       BRIDGE_TOWER_HOST: "0.0.0.0",
+      CODEV_BRIDGE_TLS: "terminated",
     });
 
     // Bridge mode enabled but no BRIDGE_TOWER_HOST — should fall back to 127.0.0.1
@@ -76,6 +82,7 @@ describe("Bridge Mode", () => {
         AF_TEST_DB: `test-${PORT_INVALID}.db`,
         SHELLPER_SOCKET_DIR: socketDir,
         CODEV_AGENT_FARM_DIR: invalidAgentFarmDir,
+        CODEV_BRIDGE_TLS: "",
         BRIDGE_MODE: "1",
         BRIDGE_TOWER_HOST: "not-a-valid-host",
       },
@@ -141,5 +148,54 @@ describe("Bridge Mode", () => {
     it("causes tower to exit with non-zero code", () => {
       expect(invalidProcess?.exitCode).not.toBe(0);
     });
+  });
+
+  // Spec 146 Phase 7: the refusal itself, end to end. `decideBindPolicy` is unit
+  // tested in agent-auth.test.ts; this asserts the wiring — that a real Tower
+  // process told to expose an interface with no TLS declaration exits instead of
+  // serving, and says which variable to set.
+  describe("BRIDGE_MODE=1 exposing an interface with no TLS declaration", () => {
+    it("refuses to start, naming CODEV_BRIDGE_TLS", async () => {
+      const { resolve } = await import("node:path");
+      const towerServerPath = resolve(
+        import.meta.dirname,
+        "../../../dist/agent-farm/servers/tower-server.js",
+      );
+      const socketDir = mkdtempSync("/tmp/codev-bridge-tls-");
+      const agentFarmDir = createIsolatedAgentFarmDir(PORT_INSECURE);
+      const child = spawn("node", [towerServerPath, String(PORT_INSECURE)], {
+        env: {
+          ...process.env,
+          AF_TEST_DB: `test-${PORT_INSECURE}.db`,
+          SHELLPER_SOCKET_DIR: socketDir,
+          CODEV_AGENT_FARM_DIR: agentFarmDir,
+          // Explicitly empty: the whole point of this case is that an exposed
+          // bind with NO declaration is refused, so an ambient one would make it
+          // pass for the wrong reason.
+          CODEV_BRIDGE_TLS: "",
+          BRIDGE_MODE: "1",
+          BRIDGE_TOWER_HOST: "0.0.0.0",
+        },
+      });
+      let stderr = "";
+      let stdout = "";
+      child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+      child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+      const exitCode = await new Promise<number | null>((resolveExit) => {
+        child.on("exit", (code) => resolveExit(code));
+        setTimeout(() => { child.kill("SIGKILL"); resolveExit(null); }, 10000);
+      });
+      rmSync(socketDir, { recursive: true, force: true });
+      removeIsolatedAgentFarmDir(agentFarmDir);
+      cleanupTestDb(PORT_INSECURE);
+
+      expect(exitCode).toBe(1);
+      const output = `${stdout}${stderr}`;
+      expect(output).toContain("INSECURE_NON_LOOPBACK_BIND_REFUSED");
+      // The refusal has to say how to proceed, or the operator deletes the check.
+      expect(output).toContain("CODEV_BRIDGE_TLS=terminated");
+      // And nothing is listening on that port.
+      expect(await isRespondingOnLocalhost(PORT_INSECURE)).toBe(false);
+    }, 20000);
   });
 });

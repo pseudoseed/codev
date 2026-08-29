@@ -11,6 +11,17 @@ import {
   issueApprovalCapability,
 } from '../lib/approval-capability.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
+import {
+  AGENT_ROUTE_PREFIX,
+  HUMAN_SESSION_HEADER,
+  MACHINE_CREDENTIAL_HEADER,
+  PAIRING_TOKEN_HEADER,
+  authenticateAgentRequest,
+  matchAgentRoute,
+  type AgentAuthOutcome,
+} from './agent-auth.js';
+import { MACHINE_SIGNAL, type MachineCredentialStore } from '../lib/machine-credentials.js';
+import { PAIRING_SIGNAL, type PairingStore } from '../lib/pairing.js';
 import { openAgentStateSse, type AgentStreamSnapshot } from './agent-state-stream.js';
 import { readWorkspaceStatuses } from './status-reader.js';
 import {
@@ -19,8 +30,9 @@ import {
   type ThreadRegistrySnapshot,
 } from './thread-registry.js';
 
-export const AGENT_ROUTE_PREFIX = '/api/agent/v1';
-export const HUMAN_SESSION_HEADER = 'x-codev-human-session';
+// Both constants moved to `agent-auth.ts` in Phase 7, where the route table that
+// uses them lives. Re-exported so existing importers keep their import site.
+export { AGENT_ROUTE_PREFIX, HUMAN_SESSION_HEADER, MACHINE_CREDENTIAL_HEADER, PAIRING_TOKEN_HEADER };
 
 const MAX_SESSION_LIFETIME_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_SESSION_LIFETIME_MS = 60 * 60 * 1000;
@@ -161,6 +173,10 @@ export interface AgentRouteContext {
   /** Spec 146 Phase 6: issuance is the only way a capability comes into being. */
   readonly approvalCapabilities: ApprovalCapabilityStore;
   readonly approvalNonces: ApprovalNonceStore;
+  /** Spec 146 Phase 7: which client machine is talking, and its revocation. */
+  readonly machineCredentials: MachineCredentialStore;
+  /** Spec 146 Phase 7: how a machine holding nothing obtains a credential. */
+  readonly pairings: PairingStore;
   /** Optional only because the browser normally joins t3code itself. */
   readonly t3codeSnapshot?: (workspacePath: string) => T3codeThreadSnapshot;
 }
@@ -291,17 +307,17 @@ function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown
   });
 }
 
-function recognizeCaller(req: http.IncomingMessage, context: AgentRouteContext) {
-  const header = req.headers[HUMAN_SESSION_HEADER];
-  return context.humanSessions.recognize(Array.isArray(header) ? header[0] : header);
-}
-
 /**
  * Approval capability issuance, nonce minting and revocation.
  *
+ * Authentication happened before this ran, in `agent-auth.ts`: these routes carry
+ * `human-session`, which means a live machine credential AND a human-paired
+ * session. `humanSessionId` is that session, already recognised.
+ *
  * CSRF: the session travels in a custom request header, never a cookie, so a
  * cross-origin form post cannot carry it and a cross-origin fetch that tries is
- * stopped by preflight. There is no ambient credential on this surface to ride.
+ * stopped by preflight. Phase 7 added the explicit `Origin` refusal in front of
+ * that, so the browser boundary no longer rests on preflight alone.
  *
  * The declared-principal refusal below is DEFENCE IN DEPTH, not identification.
  * Over loopback TCP the peer process is not attributable: `remoteAddress` is
@@ -315,18 +331,8 @@ function handleApprovalRoute(
   res: http.ServerResponse,
   url: URL,
   context: AgentRouteContext,
+  humanSessionId: string,
 ): void {
-  const recognition = recognizeCaller(req, context);
-  if (!recognition.paired) {
-    writeJson(res, 401, {
-      signal: recognition.reason === 'REVOKED'
-        ? 'HUMAN_SESSION_REVOKED'
-        : 'HUMAN_SESSION_REQUIRED',
-      reason: recognition.reason,
-    });
-    return;
-  }
-
   if (req.method === 'POST' && url.pathname === `${AGENT_ROUTE_PREFIX}/approval-capabilities`) {
     void readJsonBody(req).then((body) => {
       if (!body) {
@@ -334,7 +340,7 @@ function handleApprovalRoute(
         return;
       }
       const outcome = issueApprovalCapability(context.approvalCapabilities, {
-        humanSession: recognition,
+        humanSession: { paired: true, sessionId: humanSessionId },
         declaredPrincipal: typeof body.principalKind === 'string' ? body.principalKind : undefined,
         machine: typeof body.machine === 'string' ? body.machine : undefined,
         lifetimeMs: typeof body.lifetimeMs === 'number' ? body.lifetimeMs : undefined,
@@ -376,7 +382,7 @@ function handleApprovalRoute(
         });
         return;
       }
-      if (capability.sessionId !== recognition.sessionId) {
+      if (capability.sessionId !== humanSessionId) {
         writeJson(res, 403, {
           signal: APPROVAL_SIGNAL.APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION,
           message: 'that capability was issued to a different human session',
@@ -401,9 +407,106 @@ function handleApprovalRoute(
 }
 
 /**
- * Return true when the request belongs to codev-agent.  Called only after
- * Tower's existing request-authentication choke point, so terminal routes keep
- * their byte-for-byte behaviour and auth policy during the additive window.
+ * Redeem a pairing token for this machine's credential.
+ *
+ * The only route reachable without a machine credential, and the reason the auth
+ * table has a mode for it. Redemption is where the token is actually spent: the
+ * auth layer checked only that one was presented, because consuming it there
+ * would spend it before the machine name from the body was known.
+ *
+ * The issued presentation is returned once, in the response body. It is never
+ * logged — neither the token nor the credential appears in any `log()` call on
+ * this path, and a test asserts that over the whole captured log stream.
+ */
+function handlePairingRedeem(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  context: AgentRouteContext,
+): void {
+  const raw = req.headers[PAIRING_TOKEN_HEADER];
+  const token = Array.isArray(raw) ? raw[0] : raw;
+  void readJsonBody(req).then((body) => {
+    const machine = body && typeof body.machine === 'string' ? body.machine.trim() : '';
+    if (!machine) {
+      writeJson(res, 400, {
+        signal: 'PAIRING_REQUEST_MALFORMED',
+        message: 'redemption requires the machine name this credential is for',
+      });
+      return;
+    }
+    let redemption;
+    try {
+      redemption = context.pairings.redeem(token, { machine });
+    } catch (error) {
+      // An unparseable store is "I could not tell", not "no such token".
+      context.log('ERROR', `pairing store unreadable: ${(error as Error).message}`);
+      writeJson(res, 503, {
+        signal: PAIRING_SIGNAL.PAIRING_STORE_UNREADABLE,
+        message: 'the pairing store could not be read',
+      });
+      return;
+    }
+    if (!redemption.redeemed) {
+      writeJson(res, 401, { signal: redemption.code, message: redemption.message });
+      return;
+    }
+    const credential = context.machineCredentials.issue({ machine });
+    context.log('INFO', `paired machine ${machine} via pairing ${redemption.pairingId ?? 'unknown'}`);
+    writeJson(res, 201, {
+      signal: PAIRING_SIGNAL.PAIRING_TOKEN_ACCEPTED,
+      machine: credential.machine,
+      credentialId: credential.credentialId,
+      credential: credential.presentation,
+      expiresAt: credential.expiresAt,
+    });
+  });
+}
+
+/**
+ * Revoke one machine's credential.
+ *
+ * Success criterion 15 in one call: after this, that machine's every request
+ * fails closed with MACHINE_CREDENTIAL_REVOKED, and no other machine's file is
+ * touched. `revoked: false` means there was nothing live to revoke — which is not
+ * an error, and is reported as its own answer rather than as a failure.
+ */
+function handleMachineRevoke(
+  res: http.ServerResponse,
+  url: URL,
+  context: AgentRouteContext,
+): void {
+  const match = url.pathname.match(/^\/api\/agent\/v1\/machines\/([^/]+)$/);
+  const machine = decodeURIComponent(match ? match[1] : '');
+  const revoked = context.machineCredentials.revoke(machine);
+  writeJson(res, 200, {
+    signal: revoked ? MACHINE_SIGNAL.MACHINE_CREDENTIAL_REVOKED : 'MACHINE_CREDENTIAL_NOT_LIVE',
+    machine,
+    revoked,
+  });
+}
+
+/** Report a refused request. The signal is the auth layer's, verbatim. */
+function writeRefusal(res: http.ServerResponse, outcome: AgentAuthOutcome): void {
+  if (outcome.allowed) throw new Error('writeRefusal called on an allowed outcome');
+  writeJson(res, outcome.status, {
+    signal: outcome.signal,
+    message: outcome.message,
+    ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+  });
+}
+
+/**
+ * Return true when the request belongs to codev-agent.
+ *
+ * THE ROUTE TABLE IS THE ROUTER. Every request resolves through
+ * `matchAgentRoute`, so a path the table does not name cannot be served, and a
+ * route added to the table without an authentication mode does not compile. This
+ * is what makes the enumerating test in `agent-auth.test.ts` a fact about the
+ * dispatcher rather than a list somebody remembered to update.
+ *
+ * Called after Tower's own request-authentication choke point, which is a
+ * different boundary and is not a substitute: Tower's shared local key is ONE key
+ * for every client, so it cannot express "this machine and not that one".
  */
 export function handleAgentRoute(
   req: http.IncomingMessage,
@@ -417,50 +520,90 @@ export function handleAgentRoute(
     return true;
   }
 
-  if (req.method === 'GET' && url.pathname === `${AGENT_ROUTE_PREFIX}/session`) {
-    const header = req.headers[HUMAN_SESSION_HEADER];
-    const presentation = Array.isArray(header) ? header[0] : header;
-    const recognition = context.humanSessions.recognize(presentation);
-    writeJson(res, recognition.paired ? 200 : 401, {
-      signal: recognition.paired
-        ? 'HUMAN_SESSION_RECOGNISED'
-        : recognition.reason === 'REVOKED'
-          ? 'HUMAN_SESSION_REVOKED'
-          : 'HUMAN_SESSION_REQUIRED',
-      ...recognition,
-    });
-    return true;
-  }
-
-  if (url.pathname.startsWith(`${AGENT_ROUTE_PREFIX}/approval-`)) {
-    handleApprovalRoute(req, res, url, context);
-    return true;
-  }
-
-  const match = url.pathname.match(/^\/api\/agent\/v1\/workspaces\/([^/]+)\/(state|stream)$/);
-  if (!match || req.method !== 'GET') {
+  const route = matchAgentRoute(req.method, url.pathname);
+  if (!route) {
     writeJson(res, 404, { signal: 'AGENT_ROUTE_NOT_FOUND' });
     return true;
   }
-  const workspace = decodeWorkspace(match[1]);
-  if (!workspace) {
-    writeJson(res, 400, { signal: 'WORKSPACE_PATH_INVALID' });
+
+  let outcome: AgentAuthOutcome;
+  try {
+    outcome = authenticateAgentRequest(req, route, context);
+  } catch (error) {
+    // A credential store that exists but will not parse must not answer
+    // "unknown machine" — that reads as a definite "you were never paired".
+    context.log('ERROR', `machine credential store unreadable: ${(error as Error).message}`);
+    writeJson(res, 503, {
+      signal: MACHINE_SIGNAL.MACHINE_STORE_UNREADABLE,
+      message: 'the machine credential store could not be read',
+    });
     return true;
   }
-  if (!context.isKnownWorkspace(workspace)) {
-    // This is also the filesystem scope check: callers cannot use the service
-    // as a general status.yaml reader by base64-encoding an arbitrary path.
-    writeJson(res, 404, { signal: 'WORKSPACE_NOT_REGISTERED' });
+  if (!outcome.allowed) {
+    writeRefusal(res, outcome);
     return true;
   }
 
-  if (match[2] === 'state') {
-    writeJson(res, 200, buildAgentProtocolSnapshot(context, workspace).payload);
-  } else {
-    openAgentStateSse(req, res, {
-      workspacePath: workspace,
-      snapshot: () => buildAgentProtocolSnapshot(context, workspace),
-    });
+  switch (route.id) {
+    case 'pairing-redeem':
+      handlePairingRedeem(req, res, context);
+      return true;
+
+    case 'session-probe': {
+      // The machine is authenticated; this reports whether a HUMAN session is
+      // also live, which is what a client asks before it tries to approve.
+      const header = req.headers[HUMAN_SESSION_HEADER];
+      const recognition = context.humanSessions.recognize(Array.isArray(header) ? header[0] : header);
+      writeJson(res, recognition.paired ? 200 : 401, {
+        signal: recognition.paired
+          ? 'HUMAN_SESSION_RECOGNISED'
+          : recognition.reason === 'REVOKED'
+            ? 'HUMAN_SESSION_REVOKED'
+            : 'HUMAN_SESSION_REQUIRED',
+        ...recognition,
+      });
+      return true;
+    }
+
+    case 'machine-credential-revoke':
+      handleMachineRevoke(res, url, context);
+      return true;
+
+    case 'approval-capability-issue':
+    case 'approval-nonce-mint':
+    case 'approval-capability-revoke-machine':
+      handleApprovalRoute(req, res, url, context, outcome.humanSessionId as string);
+      return true;
+
+    case 'workspace-state':
+    case 'workspace-stream': {
+      const match = url.pathname.match(/^\/api\/agent\/v1\/workspaces\/([^/]+)\/(state|stream)$/);
+      const workspace = match ? decodeWorkspace(match[1]) : null;
+      if (!workspace) {
+        writeJson(res, 400, { signal: 'WORKSPACE_PATH_INVALID' });
+        return true;
+      }
+      if (!context.isKnownWorkspace(workspace)) {
+        // This is also the filesystem scope check: callers cannot use the service
+        // as a general status.yaml reader by base64-encoding an arbitrary path.
+        writeJson(res, 404, { signal: 'WORKSPACE_NOT_REGISTERED' });
+        return true;
+      }
+      if (route.id === 'workspace-state') {
+        writeJson(res, 200, buildAgentProtocolSnapshot(context, workspace).payload);
+      } else {
+        openAgentStateSse(req, res, {
+          workspacePath: workspace,
+          snapshot: () => buildAgentProtocolSnapshot(context, workspace),
+        });
+      }
+      return true;
+    }
+
+    default:
+      // Unreachable while every table entry has a case. If a route is added to
+      // the table and not here, this says so rather than serving it unhandled.
+      writeJson(res, 501, { signal: 'AGENT_ROUTE_UNIMPLEMENTED', route: route.id });
+      return true;
   }
-  return true;
 }

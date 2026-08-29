@@ -24,6 +24,12 @@ export const FAILURE_MATRIX_SIGNAL = {
   // reissue while "expired" sends them to check the clock. The constant is
   // re-exported from lib/approval-capability.ts, which is where it is emitted.
   CAPABILITY_REVOKED: 'CAPABILITY_REVOKED',
+  // Spec 146 Phase 7. Operator-facing and deliberately NOT CAPABILITY_REVOKED or
+  // HUMAN_SESSION_REVOKED: those three answer different questions — this machine's
+  // access was withdrawn, this approval credential was withdrawn, this browser
+  // session was withdrawn — and send an operator to three different places. The
+  // constant is emitted from lib/machine-credentials.ts.
+  MACHINE_CREDENTIAL_REVOKED: 'MACHINE_CREDENTIAL_REVOKED',
   // A watcher could not be established on a directory. Operator-facing: that root's
   // changes now reach the client only via the reconciliation backstop, so the stream
   // is degraded rather than broken — and saying nothing would spell that as healthy.

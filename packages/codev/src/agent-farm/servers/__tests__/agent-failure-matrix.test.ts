@@ -14,12 +14,15 @@ import { GLOBAL_SCHEMA } from '../../db/schema.js';
 import { normalizeWorkspacePath } from '../../utils/workspace-path.js';
 import { classifyDualServiceFailure, FAILURE_MATRIX_SIGNAL } from '../agent-failure.js';
 import { APPROVAL_SIGNAL, ApprovalCapabilityStore, ApprovalNonceStore } from '../../lib/approval-capability.js';
+import { MachineCredentialStore } from '../../lib/machine-credentials.js';
+import { PairingStore } from '../../lib/pairing.js';
 import {
   handleAgentRoute,
   HumanPairedSessionRegistry,
   initAgentRoutes,
   shutdownAgentRoutes,
   HUMAN_SESSION_HEADER,
+  MACHINE_CREDENTIAL_HEADER,
 } from '../agent-routes.js';
 import { readScopedStatus, readStatusesFromArtifactRoot, readWorkspaceStatuses } from '../status-reader.js';
 import { readThreadRegistry } from '../thread-registry.js';
@@ -248,6 +251,45 @@ describe('failure matrix signals are distinct', () => {
       CODEV_APPROVAL_NONCE: 'environment variable name carrying the nonce',
       CODEV_WORKTREE_ROOT: 'environment variable name read for caller attribution',
       CODEV_BUILDER_ID: 'environment variable name read for caller attribution',
+      // Spec 146 Phase 7 machine credentials. Every one is a per-request answer
+      // to a caller: "this presentation is not one I can accept". They are not
+      // service failures an operator diagnoses. MACHINE_CREDENTIAL_REVOKED is the
+      // exception and IS a matrix row, for the same reason CAPABILITY_REVOKED is:
+      // it is the one where something that used to work stops.
+      MACHINE_CREDENTIAL_AUTHORIZED: 'the SUCCESS case, not a failure at all',
+      MACHINE_CREDENTIAL_REQUIRED: 'nothing presented; distinct from an invalid presentation',
+      MACHINE_CREDENTIAL_MALFORMED: 'presentation is not <id>.<secret>; a client bug',
+      MACHINE_CREDENTIAL_UNKNOWN: 'no such credential on this host; distinct from a wrong secret',
+      MACHINE_CREDENTIAL_INVALID: 'wrong secret for a real credential id',
+      MACHINE_CREDENTIAL_EXPIRED: 'past its expiry; sends an operator to re-pair, not to un-revoke',
+      MACHINE_CREDENTIAL_NOT_LIVE: 'revoking a machine that had nothing live; an answer, not a failure',
+      MACHINE_NAME_REQUIRED: 'argument validation thrown by issue()',
+      MACHINE_LIFETIME_INVALID: 'argument validation thrown by issue()',
+      MACHINE_STORE_LOCKED: 'the store lock could not be taken; a retry succeeds, like APPROVAL_STORE_LOCKED',
+      MACHINE_STORE_UNREADABLE: 'the store exists but will not parse; distinct from "never paired"',
+      // Phase 7 pairing tokens. Same reasoning: per-request refusals.
+      PAIRING_TOKEN_ACCEPTED: 'the SUCCESS case, not a failure at all',
+      PAIRING_TOKEN_REQUIRED: 'no token presented; distinct from one that is unknown',
+      PAIRING_TOKEN_MALFORMED: 'token is not <pairingId>.<secret>; a client bug',
+      PAIRING_TOKEN_UNKNOWN: 'never minted here, or a wrong secret; deliberately the same answer',
+      PAIRING_TOKEN_REDEEMED: 'a spent token presented again; the tombstone makes it distinct',
+      PAIRING_TOKEN_EXPIRED: 'minted here but past its TTL',
+      PAIRING_TTL_INVALID: 'argument validation thrown by issue()',
+      PAIRING_REQUEST_MALFORMED: '400 for a redemption body with no machine name',
+      PAIRING_STORE_LOCKED: 'the store lock could not be taken; a retry succeeds',
+      PAIRING_STORE_UNREADABLE: 'the store exists but will not parse; distinct from "no such token"',
+      // Phase 7 transport posture. Two are startup outcomes an operator reads in
+      // the boot log, not failures reported to a caller; one is a per-request
+      // refusal of a browser origin.
+      ORIGIN_NOT_ALLOWED: '403 for a disallowed browser Origin; a per-request refusal',
+      BIND_LOOPBACK_ONLY: 'the DEFAULT startup outcome, not a failure at all',
+      BIND_EXPOSED_TLS_DECLARED: 'a startup outcome under an operator declaration',
+      INSECURE_NON_LOOPBACK_BIND_REFUSED: 'a startup refusal; the process exits, so nothing is serving to diagnose',
+      // Header names and env var names read by the Phase 7 auth path, not signals.
+      AGENT_ROUTE_UNIMPLEMENTED: '501 for a table entry with no dispatcher case; a build-time slip, caught by a test',
+      CODEV_BRIDGE_TLS: 'environment variable name declaring TLS termination',
+      BRIDGE_MODE: 'environment variable name naming the exposure opt-in, not a signal',
+      CODEV_AGENT_FARM_DIR: 'environment variable name for the test-isolation store root, not a signal',
     };
 
     // FIELD-AGNOSTIC ON PURPOSE, AND THE PREVIOUS VERSION WAS NOT.
@@ -269,13 +311,19 @@ describe('failure matrix signals are distinct', () => {
     // rather than left unscanned, because a code defined where the guard does not
     // look is exactly the hole this guard exists to close. Paths are relative to
     // servers/ so the rename check still fails by name.
+    // Spec 146 Phase 7 added three more emitters — two outside servers/ — for the
+    // same reason phase 6's addition is here: a code defined where the guard does
+    // not look is exactly the hole this guard exists to close.
     const CODEV_AGENT_FILES = [
       'agent-routes.ts',
       'agent-state-stream.ts',
       'agent-failure.ts',
+      'agent-auth.ts',
       'status-reader.ts',
       'thread-registry.ts',
       '../lib/approval-capability.ts',
+      '../lib/machine-credentials.ts',
+      '../lib/pairing.ts',
     ];
     const serversDir = join(dirname(fileURLToPath(import.meta.url)), '..');
     const present = readdirSync(serversDir);
@@ -996,6 +1044,24 @@ describe('failure matrix', () => {
     expect(verdict.code).not.toBe(APPROVAL_SIGNAL.APPROVAL_CAPABILITY_UNKNOWN);
   });
 
+  // MATRIX ROW, Spec 146 Phase 7. Its own row rather than a reuse of
+  // CAPABILITY_REVOKED: that one says an approval credential was withdrawn, this
+  // one says a whole machine's access was, and an operator chasing "why did the
+  // iPad stop working" needs them to be different answers.
+  it('a revoked MACHINE credential reports its own code, not the approval one', () => {
+    const store = new MachineCredentialStore({ root: tmp() });
+    const issued = store.issue({ machine: 'ipad' });
+    expect(store.verify(issued.presentation).authorized).toBe(true);
+
+    expect(store.revoke('ipad')).toBe(true);
+    const verdict = store.verify(issued.presentation);
+    expect(verdict.authorized).toBe(false);
+    expect(verdict.code).toBe(SIGNAL.MACHINE_CREDENTIAL_REVOKED);
+    // The three revocations must stay distinct from one another.
+    expect(verdict.code).not.toBe(SIGNAL.CAPABILITY_REVOKED);
+    expect(verdict.code).not.toBe(SIGNAL.HUMAN_SESSION_REVOKED);
+  });
+
   // THE PLAN'S TEST PLAN ASKS FOR THESE TWO BY NAME.
   //
   // "Integration: ... a human-paired session recognised and an unpaired one refused."
@@ -1021,8 +1087,27 @@ describe('failure matrix', () => {
       .toBeTruthy();
   });
 
+  // SPEC 146 PHASE 7 CHANGED THE PREMISE OF EVERY ROUTE TEST BELOW.
+  //
+  // The codev-agent surface now requires a machine credential on EVERY route, so
+  // a request carrying only a human session is refused before it ever reaches the
+  // session check. These tests are about the SESSION signals, so they now carry a
+  // live machine credential and go on asserting exactly what they asserted
+  // before. The behaviour changed by design; the checks did not stop finding
+  // anything.
+  //
+  // The "no credential at all" case did not disappear. It moved to
+  // `__tests__/agent-auth.test.ts`, which enumerates the router rather than
+  // testing one route by hand.
+  function pairedMachine(): { store: MachineCredentialStore; headers: Record<string, string> } {
+    const store = new MachineCredentialStore({ root: tmp() });
+    const issued = store.issue({ machine: 'matrix-test-machine' });
+    return { store, headers: { [MACHINE_CREDENTIAL_HEADER]: issued.presentation } };
+  }
+
   it('a paired human session is RECOGNISED through the route', () => {
     const sessions = new HumanPairedSessionRegistry();
+    const machine = pairedMachine();
     const database = db();
     initAgentRoutes({
       db: () => database,
@@ -1031,12 +1116,14 @@ describe('failure matrix', () => {
       humanSessions: sessions,
       approvalCapabilities: new ApprovalCapabilityStore({ root: tmp(), machine: 'test-machine' }),
       approvalNonces: new ApprovalNonceStore({ root: tmp() }),
+      machineCredentials: machine.store,
+      pairings: new PairingStore({ root: tmp() }),
     });
     const issued = sessions.completePairing({ pairingId: 'pair-ok', principalKind: 'human-client' });
     const out = fakeRes();
     const req = {
       method: 'GET',
-      headers: { [HUMAN_SESSION_HEADER]: `${issued.sessionId}.${issued.credential}` },
+      headers: { ...machine.headers, [HUMAN_SESSION_HEADER]: `${issued.sessionId}.${issued.credential}` },
     } as unknown as http.IncomingMessage;
     const handled = handleAgentRoute(req, out.res, new URL('http://localhost/api/agent/v1/session'));
     expect(handled).toBe(true);
@@ -1050,6 +1137,7 @@ describe('failure matrix', () => {
 
   it('an unpaired caller is refused as REQUIRED, not as revoked', () => {
     const sessions = new HumanPairedSessionRegistry();
+    const machine = pairedMachine();
     const database = db();
     initAgentRoutes({
       db: () => database,
@@ -1058,10 +1146,14 @@ describe('failure matrix', () => {
       humanSessions: sessions,
       approvalCapabilities: new ApprovalCapabilityStore({ root: tmp(), machine: 'test-machine' }),
       approvalNonces: new ApprovalNonceStore({ root: tmp() }),
+      machineCredentials: machine.store,
+      pairings: new PairingStore({ root: tmp() }),
     });
     const out = fakeRes();
-    // No session header at all — never paired, as distinct from paired-then-revoked.
-    const req = { method: 'GET', headers: {} } as unknown as http.IncomingMessage;
+    // No session header — never paired, as distinct from paired-then-revoked. The
+    // machine credential is present, so the refusal comes from the session check
+    // and not from the machine check in front of it.
+    const req = { method: 'GET', headers: { ...machine.headers } } as unknown as http.IncomingMessage;
     const handled = handleAgentRoute(req, out.res, new URL('http://localhost/api/agent/v1/session'));
     expect(handled).toBe(true);
     expect(out.statusCode).toBe(401);
@@ -1076,6 +1168,7 @@ describe('failure matrix', () => {
 
   it('a revoked human-session credential is rejected as REVOKED, not as never-paired', () => {
     const sessions = new HumanPairedSessionRegistry();
+    const machine = pairedMachine();
     const database = db();
     initAgentRoutes({
       db: () => database,
@@ -1084,6 +1177,8 @@ describe('failure matrix', () => {
       humanSessions: sessions,
       approvalCapabilities: new ApprovalCapabilityStore({ root: tmp(), machine: 'test-machine' }),
       approvalNonces: new ApprovalNonceStore({ root: tmp() }),
+      machineCredentials: machine.store,
+      pairings: new PairingStore({ root: tmp() }),
     });
     const issued = sessions.completePairing({ pairingId: 'pair-1', principalKind: 'human-client' });
     const presentation = `${issued.sessionId}.${issued.credential}`;
@@ -1092,7 +1187,7 @@ describe('failure matrix', () => {
     const out = fakeRes();
     const req = {
       method: 'GET',
-      headers: { [HUMAN_SESSION_HEADER]: presentation },
+      headers: { ...machine.headers, [HUMAN_SESSION_HEADER]: presentation },
     } as unknown as http.IncomingMessage;
     const handled = handleAgentRoute(
       req,
@@ -1114,6 +1209,7 @@ describe('failure matrix', () => {
   // called directly. `fakeReq` is a readable that emits the body once.
   it('refuses capability issuance to a caller with no human-paired session', async () => {
     const sessions = new HumanPairedSessionRegistry();
+    const machine = pairedMachine();
     const database = db();
     initAgentRoutes({
       db: () => database,
@@ -1122,10 +1218,12 @@ describe('failure matrix', () => {
       humanSessions: sessions,
       approvalCapabilities: new ApprovalCapabilityStore({ root: tmp(), machine: 'test-machine' }),
       approvalNonces: new ApprovalNonceStore({ root: tmp() }),
+      machineCredentials: machine.store,
+      pairings: new PairingStore({ root: tmp() }),
     });
     const out = fakeRes();
     const handled = handleAgentRoute(
-      fakeReq('POST', {}, '{}'),
+      fakeReq('POST', { ...machine.headers }, '{}'),
       out.res,
       new URL('http://localhost/api/agent/v1/approval-capabilities'),
     );
@@ -1137,6 +1235,7 @@ describe('failure matrix', () => {
 
   it('issues to a paired session, and refuses a paired caller that declares itself a builder', async () => {
     const sessions = new HumanPairedSessionRegistry();
+    const machine = pairedMachine();
     const database = db();
     const store = new ApprovalCapabilityStore({ root: tmp(), machine: 'test-machine' });
     initAgentRoutes({
@@ -1146,9 +1245,11 @@ describe('failure matrix', () => {
       humanSessions: sessions,
       approvalCapabilities: store,
       approvalNonces: new ApprovalNonceStore({ root: tmp() }),
+      machineCredentials: machine.store,
+      pairings: new PairingStore({ root: tmp() }),
     });
     const issued = sessions.completePairing({ pairingId: 'pair-issue', principalKind: 'human-client' });
-    const headers = { [HUMAN_SESSION_HEADER]: `${issued.sessionId}.${issued.credential}` };
+    const headers = { ...machine.headers, [HUMAN_SESSION_HEADER]: `${issued.sessionId}.${issued.credential}` };
     const url = new URL('http://localhost/api/agent/v1/approval-capabilities');
 
     const ok = fakeRes();
@@ -1330,6 +1431,8 @@ describe('acceptance extras', () => {
       },
       isKnownWorkspace: () => true,
       humanSessions: new HumanPairedSessionRegistry(),
+      machineCredentials: new MachineCredentialStore({ root: tmp() }),
+      pairings: new PairingStore({ root: tmp() }),
     });
     expect(warnings.some((line) => line.includes(SIGNAL.THREAD_ID_DISAGREEMENT))).toBe(true);
     expect(readFileSync(statusPath, 'utf8')).toBe(before);

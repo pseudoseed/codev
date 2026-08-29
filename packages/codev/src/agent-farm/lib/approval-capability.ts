@@ -29,19 +29,10 @@
  */
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { hostname, homedir } from 'node:os';
-import { dirname, join, resolve, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
+import { readJsonOrThrow, withStoreLock, writeJsonAtomic } from './atomic-store.js';
 
 /**
  * Outcome codes. These live here rather than in `servers/agent-failure.ts` so the
@@ -134,8 +125,17 @@ function digestsMatch(presented: string, stored: string): boolean {
   return timingSafeEqual(a, b);
 }
 
+/**
+ * Root of the approval store.
+ *
+ * Phase 7 added the `CODEV_AGENT_FARM_DIR` override here for the same reason it
+ * is on the machine and pairing stores (#1515): a spawned test Tower must not
+ * write approval state into the developer's real `~/.agent-farm`. Read per call,
+ * because a test sets the variable around a spawn.
+ */
 export function defaultApprovalRoot(): string {
-  return join(homedir(), '.agent-farm', 'approval');
+  const override = process.env.CODEV_AGENT_FARM_DIR;
+  return join(override ? resolve(override) : join(homedir(), '.agent-farm'), 'approval');
 }
 
 /**
@@ -154,74 +154,22 @@ export class ApprovalStoreUnreadable extends Error {
   }
 }
 
-/** A missing store is absence and returns the fallback; an unparseable one is not. */
+/**
+ * Store primitives moved to `atomic-store.ts` in Phase 7, where the machine
+ * credential and pairing stores call the same three. Behaviour is unchanged; the
+ * `APPROVAL_STORE_LOCKED` literal stays in THIS file because the failure-matrix
+ * collector scans the module that emits a code.
+ */
 function readJsonFile<T>(path: string, fallback: T): T {
-  if (!existsSync(path)) return fallback;
-  try {
-    return JSON.parse(readFileSync(path, 'utf8')) as T;
-  } catch (error) {
-    throw new ApprovalStoreUnreadable(path, error);
-  }
+  return readJsonOrThrow(path, fallback, (storePath, cause) => new ApprovalStoreUnreadable(storePath, cause));
 }
 
 function writeJsonFile(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  // The temp name carries the pid and a random suffix. A FIXED `${path}.tmp`
-  // is a collision between two concurrent writers, and the rename would then
-  // publish whichever half-written file won.
-  const tmp = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  renameSync(tmp, path);
+  writeJsonAtomic(path, value);
 }
 
-/** How long to keep trying for the lock before giving up. */
-const LOCK_TIMEOUT_MS = 2_000;
-const LOCK_STALE_MS = 30_000;
-const LOCK_RETRY_MS = 10;
-
-/**
- * Run a read-modify-write under an exclusive lock.
- *
- * Single-use MEANS single-use, and read-modify-write without a lock does not
- * deliver it: two concurrent `porch approve` processes could each read the same
- * unconsumed nonce and both succeed, and a concurrent issue could drop a
- * revocation tombstone. `wx` is the atomic primitive — the create fails if the
- * lock exists — so this does not depend on a check-then-act.
- */
 function withLock<T>(path: string, operation: () => T): T {
-  const lockPath = `${path}.lock`;
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  for (;;) {
-    try {
-      closeSync(openSync(lockPath, 'wx', 0o600));
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      // A lock left behind by a killed process must not wedge approvals
-      // forever. Anything older than the stale window is reclaimed.
-      try {
-        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
-          rmSync(lockPath, { force: true });
-          continue;
-        }
-      } catch { /* the holder released it between the two calls; retry */ }
-      if (Date.now() >= deadline) {
-        throw new Error(`APPROVAL_STORE_LOCKED: could not acquire ${lockPath} within ${LOCK_TIMEOUT_MS}ms`);
-      }
-      // Yield rather than spin. These critical sections are two file operations
-      // long, so a short blocking sleep costs nothing and keeps a contended
-      // approval from burning a core for two seconds. `Atomics.wait` is the only
-      // synchronous sleep available, and this path is synchronous by design (the
-      // lock must span a read-modify-write that callers do not await).
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_RETRY_MS);
-    }
-  }
-  try {
-    return operation();
-  } finally {
-    rmSync(lockPath, { force: true });
-  }
+  return withStoreLock(path, 'APPROVAL_STORE_LOCKED', operation);
 }
 
 /**
