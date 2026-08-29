@@ -17,6 +17,19 @@ import { DispatchJournal } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
 import { createPorchThreadEngine } from './porch-thread-engine.js';
 import { installThreadSpawnFactory, setThreadEngine, tryGetThreadEngine } from './thread-runtime.js';
+import { logger } from './utils/logger.js';
+
+/**
+ * How long a socket may sit connected-but-not-upgraded before it is called a failure.
+ *
+ * Overridable per call rather than by environment. The test needs a small bound so it can drive
+ * a real server that accepts TCP and never upgrades — a bound nobody has watched fire is not a
+ * bound — but an env var would have been a new `CODEV_*` variable on a repo whose test suite now
+ * scrubs every `CODEV_*` except four named opt-ins, making this test's correctness depend on
+ * where the scrub runs relative to where the value is set. That coupling is invisible. A
+ * parameter is not global, not scrubbed, and commits nothing to production configuration.
+ */
+const DEFAULT_SOCKET_UPGRADE_TIMEOUT_MS = 15_000;
 
 export interface ThreadBackendConfig {
   /** Base URL of the t3code server, e.g. `http://127.0.0.1:3799`. */
@@ -123,20 +136,46 @@ export async function webSocketCtor(): Promise<new (url: string) => WebSocket> {
   return (ws.WebSocket ?? ws.default) as unknown as new (url: string) => WebSocket;
 }
 
+/** How far the connection got before it failed. Each value gets its own sentence. */
+type ConnectFailure = 'token-refused' | 'ticket-refused' | 'never-completed' | 'unreachable';
+
+/** Thrown when the socket opens its TCP connection and then never completes the upgrade. */
+class SocketUpgradeTimeout extends Error {
+  constructor(readonly serverUrl: string, readonly timeoutMs: number) {
+    super(`t3code socket to ${serverUrl} did not complete its upgrade within ${timeoutMs}ms`);
+    this.name = 'SocketUpgradeTimeout';
+  }
+}
+
 /**
- * Did the server answer and refuse the credential, rather than being unreachable?
+ * Which of the four ways this connection can fail actually happened.
  *
- * `AuthError` is what `@cluesmith/t3-client/auth` throws when an auth endpoint returns a
- * non-2xx — which means the server was reached, parsed the request, and said no. Matched by
- * `name` rather than by `instanceof` because the class is loaded through a dynamic import and
- * a second module instance would defeat the identity check.
+ * `AuthError` means the server was reached, parsed the request, and said no — but WHICH request
+ * matters, and the first version of this ignored that. It matched any `AuthError` and reported
+ * every one as a refused bootstrap token, so a 4xx from `issueWebSocketTicket` — which happens
+ * AFTER the token has been accepted — was blamed on the token. That is a message naming the
+ * wrong cause, which is the same defect this connect path was rewritten to remove, one step
+ * further along.
+ *
+ * Matched by `name` and `endpoint` rather than by `instanceof` because the class is loaded
+ * through a dynamic import and a second module instance would defeat the identity check.
  */
-function isCredentialRefusal(err: unknown): boolean {
-  return err instanceof Error && err.name === 'AuthError';
+function classifyConnectFailure(err: unknown): ConnectFailure {
+  if (err instanceof Error && err.name === 'SocketUpgradeTimeout') return 'never-completed';
+  if (err instanceof Error && err.name === 'AuthError') {
+    const endpoint = (err as { endpoint?: unknown }).endpoint;
+    return typeof endpoint === 'string' && endpoint.includes('websocket-ticket')
+      ? 'ticket-refused'
+      : 'token-refused';
+  }
+  return 'unreachable';
 }
 
 /** Open an authenticated t3code WebSocket and wrap it as a porch-driver dispatcher. */
-async function connectDispatcher(config: ThreadBackendConfig): Promise<{ call: (m: string, p: unknown) => Promise<unknown> }> {
+async function connectDispatcher(
+  config: ThreadBackendConfig,
+  upgradeTimeoutMs: number,
+): Promise<{ call: (m: string, p: unknown) => Promise<unknown> }> {
   const { T3Client } = await import('@cluesmith/t3-client/client');
   const auth = await import('@cluesmith/t3-client/auth');
   const access = await auth.exchangeBootstrapToken(config.serverUrl, config.bootstrapToken, {
@@ -145,9 +184,25 @@ async function connectDispatcher(config: ThreadBackendConfig): Promise<{ call: (
   const ticket = await auth.issueWebSocketTicket(config.serverUrl, access.access_token);
   const WebSocketCtor = await webSocketCtor();
   const socket = new WebSocketCtor(auth.webSocketUrl(config.serverUrl, ticket.ticket));
+  // Bounded, because neither listener fires when a server accepts the TCP connection and then
+  // never completes the WebSocket upgrade. Unbounded is not "slow": the await never settles, so
+  // a spawn hangs forever having reported nothing — the one failure this whole connect path was
+  // rewritten to make impossible, in the code that rewrote it.
   await new Promise<void>((res, rej) => {
-    socket.addEventListener('open', () => res(), { once: true });
-    socket.addEventListener('error', () => rej(new Error(`t3code socket error connecting to ${config.serverUrl}`)), { once: true });
+    const timer = setTimeout(
+      () => rej(new SocketUpgradeTimeout(config.serverUrl, upgradeTimeoutMs)),
+      upgradeTimeoutMs,
+    );
+    socket.addEventListener('open', () => { clearTimeout(timer); res(); }, { once: true });
+    socket.addEventListener('error', () => {
+      clearTimeout(timer);
+      rej(new Error(`t3code socket error connecting to ${config.serverUrl}`));
+    }, { once: true });
+  });
+  // Both listeners above are `{ once: true }`, so after `open` resolves the socket has no error
+  // listener left and a later failure vanishes. This one is durable and outlives the handshake.
+  socket.addEventListener('error', () => {
+    logger.warn(`t3code socket error after connecting to ${config.serverUrl}`);
   });
   const client = new T3Client({
     send: (d: string) => socket.send(d),
@@ -175,29 +230,42 @@ async function connectDispatcher(config: ThreadBackendConfig): Promise<{ call: (
  */
 export async function ensureThreadBackendReady(
   workspaceRoot: string,
+  options: { readonly upgradeTimeoutMs?: number } = {},
 ): Promise<'not-configured' | 'already-installed' | 'installed'> {
+  const upgradeTimeoutMs = options.upgradeTimeoutMs ?? DEFAULT_SOCKET_UPGRADE_TIMEOUT_MS;
   if (tryGetThreadEngine()) return 'already-installed';
   const config = readThreadBackendConfig(resolve(workspaceRoot));
   if (!config) return 'not-configured';
 
   let dispatcher;
   try {
-    dispatcher = await connectDispatcher(config);
+    dispatcher = await connectDispatcher(config, upgradeTimeoutMs);
   } catch (err) {
-    // A server that answered and REFUSED the credential is not a server that could not be
-    // reached, and the single most likely refusal here has a specific cause worth naming: a
-    // pairing-issued bootstrap token is one-time, and every `afx` process exchanges again.
-    // Reporting that as "could not be reached" would send the reader to check the network.
-    if (isCredentialRefusal(err)) {
-      throw new Error(
-        `Thread-backed spawns are configured for ${config.workspaceRoot} and the t3code server at ${config.serverUrl} answered, but REFUSED the bootstrap token (${err instanceof Error ? err.message : String(err)}). The server is reachable — the credential is not usable. Most likely it is a pairing-issued one-time token that a previous spawn already consumed: every afx invocation is a fresh process and exchanges the token again, so this field needs a credential that survives repeated exchange (a desktop bootstrap seed, issued unbounded).`,
-        { cause: err },
-      );
-    }
-    throw new Error(
-      `Thread-backed spawns are configured for ${config.workspaceRoot} but the t3code server at ${config.serverUrl} could not be reached: ${err instanceof Error ? err.message : String(err)}. Refusing to fall back to the PTY path — an unreachable server is not the same as an unconfigured one.`,
-      { cause: err },
-    );
+    // Four ways this fails, four sentences. They were previously two, and one of those two was
+    // wrong for half the cases it covered. A caller who cannot tell "the network is down" from
+    // "your token is spent" from "the server took the connection and went silent" is being told
+    // something useless in a confident voice.
+    const detail = err instanceof Error ? err.message : String(err);
+    const preamble = `Thread-backed spawns are configured for ${config.workspaceRoot}`;
+    const messages: Record<ConnectFailure, string> = {
+      'token-refused':
+        `${preamble} and the t3code server at ${config.serverUrl} answered, but REFUSED the bootstrap token (${detail}). `
+        + `The server is reachable — the credential is not usable. Most likely it is a pairing-issued one-time token that a `
+        + `previous spawn already consumed: every afx invocation is a fresh process and exchanges the token again, so this `
+        + `field needs a credential that survives repeated exchange (a desktop bootstrap seed, issued unbounded).`,
+      'ticket-refused':
+        `${preamble} and the t3code server at ${config.serverUrl} ACCEPTED the bootstrap token and then refused to issue a `
+        + `WebSocket ticket (${detail}). The credential is fine — this is a failure one step later, at the ticket endpoint, `
+        + `and it is not evidence that the token is spent.`,
+      'never-completed':
+        `${preamble} and the t3code server at ${config.serverUrl} accepted the connection and then never completed the `
+        + `WebSocket upgrade within ${upgradeTimeoutMs}ms (${detail}). It answered at the TCP level, so it is `
+        + `neither unreachable nor refusing — something is listening and not talking.`,
+      unreachable:
+        `${preamble} but the t3code server at ${config.serverUrl} could not be reached: ${detail}. Refusing to fall back to `
+        + `the PTY path — an unreachable server is not the same as an unconfigured one.`,
+    };
+    throw new Error(messages[classifyConnectFailure(err)], { cause: err });
   }
 
   const { createProject } = await import('@cluesmith/porch-driver/thread');

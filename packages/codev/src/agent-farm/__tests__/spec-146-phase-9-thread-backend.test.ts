@@ -380,3 +380,129 @@ describe('Spec 146 Phase 9 — a refused credential is not an unreachable server
     expect(message).not.toMatch(/REFUSED/);
   });
 });
+
+describe('Spec 146 Phase 9 — four connect failures, four sentences (iter 3 fix)', () => {
+  let server: { close(cb: () => void): void } | undefined;
+  let dir: string | undefined;
+
+  afterEach(async () => {
+    setThreadEngine(undefined);
+    setSpawnThreadFactory(undefined);
+    for (const s of heldSockets.splice(0)) { try { s.destroy(); } catch { /* already gone */ } }
+    if (server) await new Promise<void>((res) => server!.close(() => res()));
+    server = undefined;
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  function workspaceAt(serverUrl: string): string {
+    dir = mkdtempSync(join(tmpdir(), 'phase9-connect-'));
+    mkdirSync(join(dir, '.codev'), { recursive: true });
+    writeFileSync(
+      join(dir, '.codev', 'config.json'),
+      JSON.stringify({ threads: { serverUrl, bootstrapToken: 'tok' } }),
+    );
+    return dir;
+  }
+
+  async function messageFrom(promise: Promise<unknown>): Promise<string> {
+    try {
+      await promise;
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    throw new Error('expected ensureThreadBackendReady to throw, and it resolved');
+  }
+
+  /**
+   * A server that answers the two auth calls however the test asks and then, on the WebSocket
+   * upgrade, HOLDS THE SOCKET OPEN without replying.
+   *
+   * The `upgrade` listener is load-bearing and its absence is not equivalent: a plain
+   * `http.Server` with no listener DESTROYS an upgrade socket, which fires the client's `error`
+   * handler and produces the "unreachable" message, not the hang. The first version of this
+   * fixture omitted it and the test failed — asserting the state it meant while the fixture
+   * produced a different one. Keeping a reference to the socket stops it being garbage collected.
+   */
+  const heldSockets: Array<{ destroy(): void }> = [];
+  async function stub(handler: (url: string) => { status: number; body: unknown }): Promise<string> {
+    const http = await import('node:http');
+    const created = http.createServer((req, res) => {
+      const { status, body } = handler(req.url ?? '');
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+    });
+    created.on('upgrade', (_req, socket) => {
+      heldSockets.push(socket as unknown as { destroy(): void });
+    });
+    server = created;
+    await new Promise<void>((res) => created.listen(0, '127.0.0.1', () => res()));
+    const { port } = created.address() as { port: number };
+    return `http://127.0.0.1:${port}`;
+  }
+
+  const ok = { status: 200, body: { access_token: 'a', ticket: 't' } };
+
+  it('a refused bootstrap token blames the TOKEN', async () => {
+    const url = await stub(() => ({ status: 400, body: { _tag: 'UnknownBootstrapCredentialError' } }));
+    const message = await messageFrom(ensureThreadBackendReady(workspaceAt(url)));
+    expect(message).toMatch(/REFUSED the bootstrap token/);
+    expect(message).toMatch(/one-time token/);
+    expect(message).not.toMatch(/could not be reached|never completed|refused to issue/);
+  });
+
+  it('a refused ticket does NOT blame the token — it happens after the token was accepted', async () => {
+    // The third instance of this phase's own defect, found by the opencode lane: the first
+    // version matched any AuthError and reported every one as a spent bootstrap token. A 4xx
+    // here means the credential was already ACCEPTED and something failed one step later.
+    const url = await stub((u) =>
+      u.includes('websocket-ticket') ? { status: 403, body: { _tag: 'Forbidden' } } : ok,
+    );
+    const message = await messageFrom(ensureThreadBackendReady(workspaceAt(url)));
+    expect(message).toMatch(/ACCEPTED the bootstrap token/);
+    expect(message).toMatch(/refused to issue a WebSocket ticket/);
+    expect(message).toMatch(/not evidence that the token is spent/);
+    expect(message).not.toMatch(/REFUSED the bootstrap token|one-time token/);
+  });
+
+  it('a server that accepts the connection and never upgrades is neither refusing nor unreachable', async () => {
+    // The state that previously hung forever: both listeners are `{ once: true }` and neither
+    // fires, so the await never settled and the spawn reported nothing at all.
+    const url = await stub(() => ok); // no 'upgrade' listener — the socket is accepted and ignored
+    const message = await messageFrom(
+      ensureThreadBackendReady(workspaceAt(url), { upgradeTimeoutMs: 400 }),
+    );
+    expect(message).toMatch(/never completed the/);
+    expect(message).toMatch(/WebSocket upgrade within 400ms/);
+    expect(message).toMatch(/neither unreachable nor refusing/);
+    expect(message).not.toMatch(/REFUSED the bootstrap token|could not be reached/);
+  }, 20_000);
+
+  it('an unreachable server still reads as unreachable', async () => {
+    const message = await messageFrom(ensureThreadBackendReady(workspaceAt('http://127.0.0.1:1')));
+    expect(message).toMatch(/could not be reached/);
+    expect(message).not.toMatch(/REFUSED|ACCEPTED|never completed/);
+  });
+
+  it('the four messages are mutually exclusive — no state reads as another', async () => {
+    // The point of the set. Each assertion above says what its own state looks like; only
+    // comparing them proves none of the four is spelled like another, which is the whole claim.
+    const refusedUrl = await stub(() => ({ status: 400, body: { _tag: 'UnknownBootstrapCredentialError' } }));
+    const refused = await messageFrom(ensureThreadBackendReady(workspaceAt(refusedUrl)));
+    await new Promise<void>((res) => server!.close(() => res()));
+    rmSync(dir!, { recursive: true, force: true });
+
+    const unreachable = await messageFrom(ensureThreadBackendReady(workspaceAt('http://127.0.0.1:1')));
+
+    const signatures = [refused, unreachable].map((m) => ({
+      token: /REFUSED the bootstrap token/.test(m),
+      unreachable: /could not be reached/.test(m),
+      hung: /never completed the/.test(m),
+    }));
+    // Every message matches exactly one signature, and no two match the same one.
+    for (const sig of signatures) {
+      expect(Object.values(sig).filter(Boolean)).toHaveLength(1);
+    }
+    expect(signatures[0]).not.toEqual(signatures[1]);
+  });
+});
