@@ -1929,6 +1929,7 @@ describe('tower-routes', () => {
     describe('--interrupt resolves the signal per harness (#196)', () => {
       const CTRL_C = '\x03';
       const ESC = '\x1b';
+      const CTRL_U = '\x15';
 
       afterEach(() => {
         shutdownDelayedSends();
@@ -1971,18 +1972,36 @@ describe('tower-routes', () => {
         // The load-bearing assertion: not one byte written is \x03.
         expect(written).not.toContain(CTRL_C);
         expect(written.join('')).not.toContain(CTRL_C);
-        // The intent still lands — ESC ends an opencode turn (its own footer says so).
+        // Both halves of --interrupt's contract still land, as two bytes rather than one:
+        // ESC ends the turn (opencode's session_interrupt) and Ctrl+U clears the composer
+        // (input_delete_to_line_start). Sending only ESC would leave the flag safe but
+        // useless for the job #21 documents it for.
         expect(written).toContain(ESC);
+        expect(written).toContain(CTRL_U);
+        expect(written.indexOf(ESC)).toBeLessThan(written.indexOf(CTRL_U));
+      });
+
+      it('sends ONE byte to claude/codex, where Ctrl+C is both halves', async () => {
+        // Deduplication: the pre-fix behaviour is preserved byte-for-byte on the harnesses
+        // that were never broken.
+        for (const command of ['claude', 'codex']) {
+          const written = await interruptSessionRunning(command);
+          expect(written.filter((byte) => byte === CTRL_C)).toHaveLength(1);
+          expect(written).not.toContain(ESC);
+          expect(written).not.toContain(CTRL_U);
+        }
       });
 
       it('NEVER sends Ctrl+C to a session whose agent cannot be identified', async () => {
-        // Fail-safe: an unresolvable command must not inherit claude's default.
+        // Fail-safe: an unresolvable command must not inherit claude's default, and gets
+        // NO guessed clear key either — just the safe interrupt.
         const written = await interruptSessionRunning('/usr/local/bin/some-new-tui');
         expect(written).not.toContain(CTRL_C);
+        expect(written).not.toContain(CTRL_U);
         expect(written).toContain(ESC);
       });
 
-      it('reports the signal it actually sent', async () => {
+      it('reports the keystrokes it actually sent', async () => {
         mockParseJsonBody.mockResolvedValue({
           to: 'builder-x', message: 'stop', workspace: '/tmp/ws', options: { interrupt: true },
         });
@@ -1995,7 +2014,7 @@ describe('tower-routes', () => {
         });
         const { res, body } = makeRes();
         await handleRequest(makeReq('POST', '/api/send'), res, makeCtx());
-        expect(JSON.parse(body()).interruptSignal).toBe('esc');
+        expect(JSON.parse(body()).interruptKeys).toEqual(['ESC', 'Ctrl+U']);
       });
 
       it('applies the same table on the DELAYED interrupt path', async () => {
@@ -2022,6 +2041,7 @@ describe('tower-routes', () => {
 
         expect(written).not.toContain(CTRL_C);
         expect(written).toContain(ESC);
+        expect(written).toContain(CTRL_U);
       });
     });
   });

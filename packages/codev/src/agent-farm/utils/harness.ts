@@ -747,6 +747,25 @@ export function interruptSignalForHarness(
  * Callers write THIS instead of a literal `\x03`. A second hardcoded control byte
  * at a call site reintroduces the bug this exists to close.
  */
+/**
+ * The human name of a control byte, for logs and API responses (Issue #196).
+ *
+ * Operators reason in keystrokes, not escapes, and the whole complaint behind this issue
+ * was that nothing told them which byte went out. Unknown bytes are rendered as their hex
+ * escape rather than guessed at.
+ */
+export function keyName(byte: string): string {
+  if (byte === INTERRUPT_BYTES.esc) return 'ESC';
+  if (byte === CLEAR_DRAFT_BYTES['ctrl-c']) return 'Ctrl+C';
+  if (byte === CLEAR_DRAFT_BYTES['ctrl-u']) return 'Ctrl+U';
+  return `\\x${byte.charCodeAt(0).toString(16).padStart(2, '0')}`;
+}
+
+/** Render a byte sequence as a readable keystroke list, e.g. `ESC then Ctrl+U`. */
+export function describeInterruptBytes(bytes: readonly string[]): string {
+  return bytes.length ? bytes.map(keyName).join(' then ') : 'nothing';
+}
+
 export function interruptByteForHarness(
   harnessName: string | undefined | null,
   customHarnesses?: Record<string, CustomHarnessConfig>,

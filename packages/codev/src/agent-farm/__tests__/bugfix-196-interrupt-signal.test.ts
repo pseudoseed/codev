@@ -22,7 +22,9 @@ import {
   buildCustomHarnessProvider,
   getBuiltinHarness,
   clearDraftKeyForHarness,
+  describeInterruptBytes,
   interruptByteForHarness,
+  keyName,
   interruptSignalForHarness,
   validateCustomHarnessConfig,
   type CustomHarnessConfig,
@@ -35,6 +37,7 @@ import {
   writeHeldRecovery,
   interruptSignalForSession,
   clearDraftKeyForSession,
+  promptReadySequence,
 } from '../servers/mailbox-wiring.js';
 import {
   MailboxDrainer,
@@ -529,5 +532,78 @@ describe('recovery phase records WHICH state a stuck screen is in', () => {
     await drainer.tick();
     expect(calls).toHaveLength(2); // a torn-down PTY is transient, not unrecoverable
     drainer.stop();
+  });
+});
+
+// ============================================================================
+// `afx send --interrupt` — what its contract actually is (Issue #196).
+//
+// Established from source, because the whole bug came from one byte serving two
+// intents and guessing again would repeat it:
+//   Spec 0020 introduced --interrupt as "send Ctrl+C first to ensure prompt is ready",
+//     mitigating the "Vim trap" — a RUNNING process to escape.
+//   Spec 1273 gave "end the turn" its own command (afx interrupt, ESC) and recorded
+//     --interrupt as "a different signal", explicitly NOT the mid-turn unwedge.
+//   Issue #21 adopted it as the remedy for an abandoned composer, because Ctrl+C
+//     clears typed text where ESC does not.
+//
+// So it owns BOTH halves. On claude/codex one byte is both; on opencode they are two.
+// Routing it to the interrupt alone would make it safe and useless for the job #21
+// documents — the operator could not clear an opencode composer while Tower's own
+// auto-recovery could, which is backwards.
+// ============================================================================
+
+describe('promptReadySequence', () => {
+  function sessionRunning(command: string): DeliverySession {
+    return {
+      bytesWritten: 0,
+      info: { cols: 80, rows: 24 },
+      command,
+      launchArgs: [],
+      cwd: '/nonexistent-worktree-for-bugfix-196',
+      writable: true,
+      write: () => true,
+    };
+  }
+
+  it('is a single Ctrl+C on claude and codex — unchanged from before the fix', () => {
+    expect(promptReadySequence(sessionRunning('claude'))).toEqual([CTRL_C]);
+    expect(promptReadySequence(sessionRunning('codex'))).toEqual([CTRL_C]);
+  });
+
+  it('is ESC then Ctrl+U on opencode, in that order', () => {
+    // ESC first so any running turn ends, then Ctrl+U to clear what is in the composer —
+    // the same two effects claude gets from one Ctrl+C.
+    expect(promptReadySequence(sessionRunning('opencode'))).toEqual([ESC, CTRL_U]);
+  });
+
+  it('is the interrupt alone when no clear key is recorded', () => {
+    // No guessed byte at an unidentified TUI.
+    expect(promptReadySequence(sessionRunning('some-new-tui'))).toEqual([ESC]);
+    expect(promptReadySequence(sessionRunning(''))).toEqual([ESC]);
+  });
+
+  it('never contains Ctrl+C for a harness that quits on it', () => {
+    for (const command of ['opencode', '/opt/homebrew/bin/opencode', 'some-new-tui', '']) {
+      expect(promptReadySequence(sessionRunning(command))).not.toContain(CTRL_C);
+    }
+  });
+});
+
+describe('keystroke naming', () => {
+  it('names the bytes an operator reasons in', () => {
+    expect(keyName(CTRL_C)).toBe('Ctrl+C');
+    expect(keyName(CTRL_U)).toBe('Ctrl+U');
+    expect(keyName(ESC)).toBe('ESC');
+  });
+
+  it('renders an unknown byte as hex rather than guessing', () => {
+    expect(keyName('\x07')).toBe('\\x07');
+  });
+
+  it('reads as a keystroke list', () => {
+    expect(describeInterruptBytes([ESC, CTRL_U])).toBe('ESC then Ctrl+U');
+    expect(describeInterruptBytes([CTRL_C])).toBe('Ctrl+C');
+    expect(describeInterruptBytes([])).toBe('nothing');
   });
 });

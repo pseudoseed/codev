@@ -25,6 +25,7 @@ import {
   detectHarnessFromCommand,
   interruptSignalForHarness,
   CLEAR_DRAFT_BYTES,
+  INTERRUPT_BYTES,
   type ClearDraftKey,
   type InterruptSignal,
 } from '../utils/harness.js';
@@ -204,13 +205,11 @@ export function resolveHarnessForSession(session: DeliverySession): string | nul
  * The signal that safely interrupts THIS session's agent (Issue #196).
  *
  * Fail-safe by construction: an unidentifiable session resolves to `esc`, never to
- * the byte that quits opencode. This is the only thing an interrupt caller needs —
- * see {@link interruptByteForSession} for the byte itself.
+ * the byte that quits opencode.
  */
 export function interruptSignalForSession(session: DeliverySession): InterruptSignal {
   return interruptSignalForHarness(resolveHarnessForSession(session));
 }
-
 
 /**
  * The keystroke that clears a leftover draft in THIS session's composer, or `'none'`
@@ -218,6 +217,39 @@ export function interruptSignalForSession(session: DeliverySession): InterruptSi
  */
 export function clearDraftKeyForSession(session: DeliverySession): ClearDraftKey {
   return clearDraftKeyForHarness(resolveHarnessForSession(session));
+}
+
+/**
+ * The bytes `afx send --interrupt` must write to make this session's prompt READY to
+ * receive a message (Issue #196), in order.
+ *
+ * `--interrupt`'s contract is neither "end the turn" nor "clear the draft" — it is
+ * *whatever it takes to get a clean prompt*, and the two intents were never separated
+ * because one byte did both on the only harnesses that existed. From source:
+ *
+ * - Spec 0020 introduced it as "Send Ctrl+C first to ensure prompt is ready", mitigating
+ *   the "Vim trap" — a RUNNING process to escape.
+ * - Spec 1273 then gave "end the turn" its own command (`afx interrupt`, ESC) and recorded
+ *   `--interrupt` as "a different signal", explicitly NOT the mid-turn unwedge.
+ * - Issue #21 adopted it as the remedy for an abandoned composer, because Ctrl+C "does"
+ *   clear typed text where ESC does not.
+ *
+ * So it owns BOTH halves, and on opencode they are two different bytes: ESC ends the turn
+ * (`session_interrupt`) and Ctrl+U clears the line (`input_delete_to_line_start`). Sending
+ * only the interrupt would leave `--interrupt` safe but useless for the job #21 documents —
+ * the operator would have no way to clear an opencode composer while the auto-recovery does.
+ *
+ * Deduplicated, so claude and codex — where one `\x03` is both halves — get exactly one
+ * write, byte-identical to the behaviour before this fix. A harness with no known clear key
+ * gets the interrupt alone rather than a guessed byte.
+ */
+export function promptReadySequence(session: DeliverySession): string[] {
+  const harness = resolveHarnessForSession(session);
+  const interrupt = INTERRUPT_BYTES[interruptSignalForHarness(harness)];
+  const clearKey = clearDraftKeyForHarness(harness);
+  if (clearKey === 'none') return [interrupt];
+  const clear = CLEAR_DRAFT_BYTES[clearKey];
+  return clear === interrupt ? [interrupt] : [interrupt, clear];
 }
 
 /**
@@ -329,10 +361,11 @@ export function heldRemedy(toAgent: string, detail: string | null): string {
   if (detail === 'user-text') {
     return (
       `${inspect} Its composer is holding TEXT the agent left behind and will not clear on its own. ` +
-      `Tower sends one automatic turn-ending keystroke after the starvation window. If it remains held, ` +
+      `Tower sends one automatic clearing keystroke after the starvation window. If it remains held, ` +
       `clear it with: afx send ${toAgent} --interrupt "<your message>"   ` +
-      `(ends the turn first, using the byte that is safe for this agent's harness — Ctrl+C clears the ` +
-      `line on claude/codex, while an agent that quits on Ctrl+C gets ESC instead, which may leave the draft).`
+      `(readies the prompt using the keystrokes recorded as safe for this agent — Ctrl+C on claude/codex, ` +
+      `ESC then Ctrl+U on opencode, which quits on Ctrl+C — then delivers. By contrast ` +
+      `'afx interrupt' sends ESC, which does not clear typed text on any harness.)`
     );
   }
 

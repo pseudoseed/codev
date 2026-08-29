@@ -57,9 +57,9 @@ import { writeMessageToSession, writeEscapeToSession } from './message-write.js'
 import {
   makeDeliveryPorts,
   getMailboxDrainer,
-  interruptSignalForSession,
+  promptReadySequence,
 } from './mailbox-wiring.js';
-import { INTERRUPT_BYTES, type InterruptSignal } from '../utils/harness.js';
+import { describeInterruptBytes, keyName } from '../utils/harness.js';
 import { deliverAgentMailSerialized, type DeliveryPorts } from './mailbox-delivery.js';
 import { deliverCronMail, CRON_SENDER, type CronDeliveryResult } from './cron-delivery.js';
 import {
@@ -1779,7 +1779,7 @@ function handleDelayedSend(
       if (!isStillLive()) return; // shutdown before/at due → drop the ^C nudge (body survives)
       if (terminalId) {
         let fired = false;
-        let signal: InterruptSignal = 'esc';
+        let sent: string[] = [];
         void submitToSession(terminalId, () => {
           // Re-check EVERYTHING inside the lock: the queued submission can acquire the lock only
           // AFTER a shutdown or a session teardown/respawn that landed while it waited behind an
@@ -1788,18 +1788,18 @@ function handleDelayedSend(
           if (!isStillLive()) return 0;
           const live = getTerminalManager().getSession(terminalId);
           if (!live || !live.writable) return 0;
-          // Issue #196: the interrupt byte is a PER-HARNESS fact, not a constant. Ctrl+C
-          // ends the turn on claude/codex but QUITS opencode, so it is resolved from the
-          // session's agent here and downgraded to ESC (which ends the turn everywhere)
-          // rather than sending a byte recorded as fatal for that app.
-          signal = interruptSignalForSession(live);
-          live.write(INTERRUPT_BYTES[signal]); // interrupt only; body follows via the gate
+          // Issue #196: the bytes that ready a prompt are PER-HARNESS facts, not constants.
+          // Ctrl+C ends the turn AND clears the line on claude/codex, but QUITS opencode —
+          // there the two halves are ESC and Ctrl+U. Resolved from the session's own agent
+          // and deduplicated, so claude/codex still get exactly one `\x03`.
+          sent = promptReadySequence(live);
+          for (const byte of sent) live.write(byte); // no body here; it follows via the gate
           fired = true;
           return 0; // no body, no Enter on this path
         })
           .then(() =>
             ctx.log('INFO', fired
-              ? `Delayed interrupt (${signal}) fired → ${toAgent} (terminal ${terminalId.slice(0, 8)}...); body delivers via the gate`
+              ? `Delayed interrupt (${describeInterruptBytes(sent)}) fired → ${toAgent} (terminal ${terminalId.slice(0, 8)}...); body delivers via the gate`
               : `Delayed interrupt for ${toAgent}: session not live/writable at write time — body delivers via the gate on the next clean pass`),
           )
           .catch((err) => ctx.log('ERROR', `Delayed interrupt failed for ${toAgent}: ${(err as Error).message}`));
@@ -2118,14 +2118,14 @@ async function handleSend(
     //   disjoint lock); interrupt is the explicit gate-bypassing human action, and closing that
     //   cross-path race would require the mailbox write edge to take this lock too (a separate,
     //   larger change — flagged, not done here).
-    // Issue #196: the interrupt byte is a PER-HARNESS fact. Ctrl+C ends the turn on
-    // claude/codex but QUITS opencode — an unconditional `\x03` killed an opencode
-    // builder's session (and, opencode having no conversation resume, its memory).
-    // Resolved from the session's own agent and downgraded to ESC on a harness recorded
-    // as fatal for Ctrl+C; ESC ends the turn everywhere, so the intent still lands.
-    const interruptSignal = interruptSignalForSession(session);
+    // Issue #196: `--interrupt`'s job is to make the prompt READY for this message, which
+    // is two things — end any running turn, and clear an abandoned composer. Ctrl+C did
+    // both on claude/codex, which is why they were never separated; on opencode Ctrl+C
+    // QUITS, and the two halves are ESC and Ctrl+U. Both are resolved from the session's
+    // own agent and deduplicated, so claude/codex still write exactly one `\x03`.
+    const interruptBytes = promptReadySequence(session);
     await submitToSession(result.terminalId, () => {
-      session.write(INTERRUPT_BYTES[interruptSignal]);
+      for (const byte of interruptBytes) session.write(byte);
       return writeMessageToSession(session, formattedMessage, noEnter, 100);
     });
     broadcastMessage({
@@ -2136,7 +2136,7 @@ async function handleSend(
       metadata: { raw, source: 'api' },
       timestamp: new Date().toISOString(),
     });
-    ctx.log('INFO', `Message delivered (interrupt: ${interruptSignal}): ${from ?? 'unknown'} → ${toAgent} (terminal ${result.terminalId.slice(0, 8)}...)`);
+    ctx.log('INFO', `Message delivered (interrupt: ${describeInterruptBytes(interruptBytes)}): ${from ?? 'unknown'} → ${toAgent} (terminal ${result.terminalId.slice(0, 8)}...)`);
     sendJson(res, 200, {
       ok: true,
       terminalId: result.terminalId,
@@ -2146,9 +2146,9 @@ async function handleSend(
       held: false,
       mailboxId: row.id,
       reason: null,
-      // Issue #196: report which byte actually went out, so the operator is never
-      // guessing whether their `--interrupt` was Ctrl+C or a downgrade to ESC.
-      interruptSignal,
+      // Issue #196: report which bytes actually went out, so the operator is never
+      // guessing what their `--interrupt` did on this harness.
+      interruptKeys: interruptBytes.map(keyName),
     });
     return;
   }
