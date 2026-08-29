@@ -40,6 +40,8 @@ Merged `origin/builder/spir-146` (phase 4 review fixes present: ed5bd25e7,
 with the original session lifetime. Unreadable-status test skips as root.
 `.gitignore` covers `opencode.json` and the `.builder-*` harness files.
 
-Watcher test still keys off the snapshot event. Safety deadline 2s → 30s
-(vitest 35s) so a loaded event loop cannot starve fs.watch. Full agent-farm
-suite: 3497 passed, 34 skipped, 0 failed (176 files).
+Watcher miss is not a slow 2s deadline. Timeout now names one of
+WATCH_FAILED / WATCHER_NEVER_ARMED / WATCHER_NEVER_FIRED / SNAPSHOT_SWALLOWED /
+SNAPSHOT_STALE. Watch paths go through realpathSync so macOS FSEvents is not
+aimed at the /var/folders symlink. Three full agent-farm runs after that:
+3497 passed, 34 skipped, 0 failed each.

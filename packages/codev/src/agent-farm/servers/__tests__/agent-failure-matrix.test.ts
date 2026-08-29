@@ -378,15 +378,8 @@ describe('acceptance extras', () => {
   it('a connected watcher receives a porch state change without polling', async () => {
     const root = tmp();
     writeStatus(root, '7', porchYaml('7'));
-    let resolveReview: (() => void) | undefined;
-    const sawReview = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('no review snapshot')), 30_000);
-      resolveReview = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-    });
     const events: AgentStateStreamEvent<{ phase: string }>[] = [];
+    let resolveReview: (() => void) | undefined;
     const subscription = watchAgentState({
       workspacePath: root,
       debounceMs: 5,
@@ -403,8 +396,38 @@ describe('acceptance extras', () => {
         if (event.snapshot?.phase === 'review') resolveReview?.();
       },
     });
+    const sawReview = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const d = subscription.diagnostics;
+        const phases = events
+          .filter((event) => event.type === 'PROTOCOL_STATE_SNAPSHOT')
+          .map((event) => event.snapshot?.phase);
+        let code = 'UNKNOWN_MISS';
+        if (events.some((event) => event.type === 'STATE_STREAM_WATCH_FAILED') || d.watchErrors > 0) {
+          code = 'WATCH_FAILED';
+        } else if (d.watchStarted === 0) {
+          code = 'WATCHER_NEVER_ARMED';
+        } else if (d.scheduleCalls === scheduledBeforeWrite) {
+          code = 'WATCHER_NEVER_FIRED';
+        } else if (d.snapshotCalls === snapshotsBeforeWrite) {
+          code = 'SNAPSHOT_SWALLOWED';
+        } else if (phases.includes('implement') && !phases.includes('review')) {
+          code = 'SNAPSHOT_STALE';
+        }
+        reject(new Error(`${code} diagnostics=${JSON.stringify(d)} phases=${phases.join(',')}`));
+      }, 30_000);
+      resolveReview = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
+    let scheduledBeforeWrite = 0;
+    let snapshotsBeforeWrite = 0;
     try {
       expect(events[0]?.type).toBe('PROTOCOL_STATE_SNAPSHOT');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      scheduledBeforeWrite = subscription.diagnostics.scheduleCalls;
+      snapshotsBeforeWrite = subscription.diagnostics.snapshotCalls;
       const next = porchYaml('7').replace('phase: implement', 'phase: review');
       const statusPath = join(root, 'codev', 'projects', '7-proj', 'status.yaml');
       writeFileSync(`${statusPath}.tmp`, next);

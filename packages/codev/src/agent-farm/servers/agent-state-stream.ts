@@ -1,6 +1,6 @@
 /** Filesystem-backed porch state stream for codev-agent (Spec 146, Phase 5). */
 
-import { existsSync, readdirSync, watch, type FSWatcher } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, watch, type FSWatcher } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type http from 'node:http';
 import type { AgentStateSignal } from './status-reader.js';
@@ -19,8 +19,16 @@ export interface AgentStateStreamEvent<T> {
   readonly signal?: AgentStateSignal;
 }
 
+export interface WatchDiagnostics {
+  watchStarted: number;
+  watchErrors: number;
+  scheduleCalls: number;
+  snapshotCalls: number;
+}
+
 export interface StateSubscription {
   close(): void;
+  readonly diagnostics: WatchDiagnostics;
 }
 
 export interface StateStreamOptions<T> {
@@ -41,6 +49,12 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
   let timer: ReturnType<typeof setTimeout> | undefined;
   let sequence = 0;
   let closed = false;
+  const diagnostics: WatchDiagnostics = {
+    watchStarted: 0,
+    watchErrors: 0,
+    scheduleCalls: 0,
+    snapshotCalls: 0,
+  };
 
   const closeWatchers = (): void => {
     for (const watcher of watchers.values()) watcher.close();
@@ -48,6 +62,7 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
   };
 
   const emitFailure = (path: string, error: unknown): void => {
+    diagnostics.watchErrors += 1;
     options.onEvent({
       type: 'STATE_STREAM_WATCH_FAILED',
       sequence: ++sequence,
@@ -60,20 +75,37 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
     });
   };
 
+  const canonicalDir = (path: string): string | undefined => {
+    try {
+      return realpathSync(path);
+    } catch (error) {
+      emitFailure(path, error);
+      return undefined;
+    }
+  };
+
   const watchedDirectories = (artifactRoots: readonly string[]): string[] => {
     const directories = new Set<string>();
     const buildersRoot = join(resolve(options.workspacePath), '.builders');
-    if (existsSync(buildersRoot)) directories.add(buildersRoot);
+    if (existsSync(buildersRoot)) {
+      const canonical = canonicalDir(buildersRoot);
+      if (canonical !== undefined) directories.add(canonical);
+    }
     for (const artifactRoot of artifactRoots) {
       const projects = join(resolve(artifactRoot), 'codev', 'projects');
       if (!existsSync(projects)) continue;
-      directories.add(projects);
+      const canonicalProjects = canonicalDir(projects);
+      if (canonicalProjects === undefined) continue;
+      directories.add(canonicalProjects);
       try {
-        for (const entry of readdirSync(projects, { withFileTypes: true })) {
-          if (entry.isDirectory()) directories.add(join(projects, entry.name));
+        for (const entry of readdirSync(canonicalProjects, { withFileTypes: true })) {
+          if (entry.isDirectory()) {
+            const child = canonicalDir(join(canonicalProjects, entry.name));
+            if (child !== undefined) directories.add(child);
+          }
         }
       } catch (error) {
-        emitFailure(projects, error);
+        emitFailure(canonicalProjects, error);
       }
     }
     return [...directories];
@@ -91,6 +123,7 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
       if (watchers.has(path)) continue;
       try {
         const watcher = watch(path, () => schedule());
+        diagnostics.watchStarted += 1;
         watcher.on('error', (error) => emitFailure(path, error));
         watchers.set(path, watcher);
       } catch (error) {
@@ -108,6 +141,7 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
       emitFailure(options.workspacePath, error);
       return;
     }
+    diagnostics.snapshotCalls += 1;
     rebuildWatchers(current.artifactRoots);
     options.onEvent({
       type: 'PROTOCOL_STATE_SNAPSHOT',
@@ -118,6 +152,7 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
   };
 
   function schedule(): void {
+    diagnostics.scheduleCalls += 1;
     if (closed || timer !== undefined) return;
     timer = setTimeout(() => {
       timer = undefined;
@@ -127,6 +162,7 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
 
   emitSnapshot();
   return {
+    diagnostics,
     close(): void {
       if (closed) return;
       closed = true;
