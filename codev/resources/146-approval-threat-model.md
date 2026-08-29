@@ -224,6 +224,13 @@ Stated plainly, because a threat model that only lists wins is a marketing docum
 - **A builder that daemonizes or otherwise sheds its environment** defeats the attribution
   layer. It does not defeat the verifier property, which is the boundary that carries weight.
 
+## For phase 7, stated here so it is not inherited by accident
+
+Phase 7 is the transport and service security posture, and the natural assumption to carry
+into it is "the capability store is the boundary". **It is not.** The capability layer buys
+attribution and replay resistance, and nothing at all against a same-uid adversary that
+writes. Do not build a phase-7 claim on a boundary this phase proved is not there.
+
 ## Where the boundary actually is
 
 The verifier-not-credential property, plus issuance gated on a human-paired session, removes
