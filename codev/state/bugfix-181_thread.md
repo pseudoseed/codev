@@ -45,3 +45,16 @@ Ship the YAML. Skip the pack test honestly when `packages/codev/dist` is absent 
 - `scripts/packed-dist-imports.mjs` + wired from verify-install.mjs on `cluesmith-codev-<version>.tgz`.
 - Pack test skip-honest; fixture tests for empty dist / missing import / ok.
 - Vitest: 3 files, 9 passed, 1 skipped (pack body, dist absent).
+
+## PR
+
+PR #183 https://github.com/pseudoseed/codev/pull/183
+CI green on `67cfbca5c` (Tests + CLI Integration Tests).
+
+CMAP:
+- gemini: APPROVE
+- claude: APPROVE
+- codex: quota exhausted ("try again at 5:40 AM")
+- opencode substitute: APPROVE
+
+No REQUEST_CHANGES. Handing off at the pr gate.
