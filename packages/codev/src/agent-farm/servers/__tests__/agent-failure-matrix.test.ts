@@ -163,23 +163,26 @@ describe('failure matrix', () => {
     expect(viaWorkspace.some((result) => !result.ok && result.signal.code === SIGNAL.ROOT_MISSING)).toBe(true);
   });
 
-  it('status.yaml unreadable emits STATUS_UNREADABLE', () => {
-    const root = tmp();
-    writeStatus(root, '1', porchYaml('1'));
-    const projects = join(root, 'codev', 'projects');
-    chmodSync(projects, 0o000);
-    try {
-      const results = readStatusesFromArtifactRoot(root);
-      expect(results).toHaveLength(1);
-      expect(results[0]?.ok).toBe(false);
-      if (results[0]?.ok) return;
-      expect(results[0].signal.code).toBe(SIGNAL.STATUS_UNREADABLE);
-      expect(results[0].signal.code).not.toBe(SIGNAL.STATUS_MALFORMED);
-      expect(results[0].signal.code).not.toBe('STATUS_NOT_FOUND');
-    } finally {
-      chmodSync(projects, 0o755);
-    }
-  });
+  it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
+    'status.yaml unreadable emits STATUS_UNREADABLE',
+    () => {
+      const root = tmp();
+      writeStatus(root, '1', porchYaml('1'));
+      const projects = join(root, 'codev', 'projects');
+      chmodSync(projects, 0o000);
+      try {
+        const results = readStatusesFromArtifactRoot(root);
+        expect(results).toEqual([
+          expect.objectContaining({
+            ok: false,
+            signal: expect.objectContaining({ code: SIGNAL.STATUS_UNREADABLE }),
+          }),
+        ]);
+      } finally {
+        chmodSync(projects, 0o755);
+      }
+    },
+  );
 
   it('status.yaml malformed emits STATUS_MALFORMED', () => {
     const root = tmp();
@@ -277,6 +280,20 @@ describe('failure matrix', () => {
     expect(body.reason).toBe('REVOKED');
     expect(body.signal).not.toBe('HUMAN_SESSION_REQUIRED');
     expect(body.reason).not.toBe('UNKNOWN');
+  });
+
+  it('a revoked session tombstone expires with the original lifetime', () => {
+    let now = 1_000;
+    const sessions = new HumanPairedSessionRegistry(() => now);
+    const issued = sessions.completePairing({
+      pairingId: 'pair-exp',
+      principalKind: 'human-client',
+      pairedAt: now,
+      lifetimeMs: 1_000,
+    });
+    expect(sessions.revoke(issued.sessionId)).toBe(true);
+    now = 2_001;
+    expect(sessions.recognize(`${issued.sessionId}.${issued.credential}`).reason).toBe('UNKNOWN');
   });
 
   it('status.yaml versus thread disagreement emits THREAD_ID_DISAGREEMENT and does not resolve it', () => {

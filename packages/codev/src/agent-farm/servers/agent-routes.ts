@@ -64,7 +64,8 @@ function verifier(credential: string): Buffer {
  */
 export class HumanPairedSessionRegistry {
   readonly #sessions = new Map<string, StoredHumanSession>();
-  readonly #revoked = new Set<string>();
+  /** sessionId → original expiresAt. Dropped once that time passes. */
+  readonly #revoked = new Map<string, number>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -98,10 +99,14 @@ export class HumanPairedSessionRegistry {
     if (separator <= 0 || separator === presentation.length - 1) return { paired: false, reason: 'MALFORMED' };
     const sessionId = presentation.slice(0, separator);
     const credential = presentation.slice(separator + 1);
-    if (this.#revoked.has(sessionId)) return { paired: false, reason: 'REVOKED' };
+    const now = this.now();
+    const revokedUntil = this.#revoked.get(sessionId);
+    if (revokedUntil !== undefined) {
+      if (now < revokedUntil) return { paired: false, reason: 'REVOKED' };
+      this.#revoked.delete(sessionId);
+    }
     const stored = this.#sessions.get(sessionId);
     if (!stored) return { paired: false, reason: 'UNKNOWN' };
-    const now = this.now();
     if (now >= stored.expiresAt) {
       this.#sessions.delete(sessionId);
       return { paired: false, reason: 'EXPIRED' };
@@ -117,9 +122,15 @@ export class HumanPairedSessionRegistry {
   }
 
   revoke(sessionId: string): boolean {
-    const existed = this.#sessions.delete(sessionId);
-    if (existed) this.#revoked.add(sessionId);
-    return existed;
+    const stored = this.#sessions.get(sessionId);
+    if (!stored) return false;
+    this.#sessions.delete(sessionId);
+    const now = this.now();
+    this.#revoked.set(sessionId, stored.expiresAt);
+    for (const [id, until] of this.#revoked) {
+      if (now >= until) this.#revoked.delete(id);
+    }
+    return true;
   }
 }
 

@@ -29,3 +29,13 @@ Architect: `readStatusesFromArtifactRoot` returned [] on ENOENT for both a live
 root with no projects and a worktree that no longer exists. `statSync` the root
 first; missing root emits `ROOT_MISSING`. [] stays only for a root that exists
 and has no `codev/projects`. Collapse to [] fails the matrix test.
+
+## PR #161 REQUEST_CHANGES
+
+Received the 04:23 ROOT_MISSING instruction and landed it in `3e1d5a031`
+before this review comment. The comment was against a prior head.
+
+Merged `origin/builder/spir-146` (phase 4 review fixes present: ed5bd25e7,
+1e2a215a6, 759b4f507, 3564a8c4a, cf4dd980d). Revoked tombstones now expire
+with the original session lifetime. Unreadable-status test skips as root.
+`.gitignore` covers `opencode.json` and the `.builder-*` harness files.
