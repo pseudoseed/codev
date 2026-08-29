@@ -73,7 +73,7 @@ Replace `X.Y.Z` below with the version the script just wrote (it prints it as `B
 pnpm bump-version            # or: pnpm bump-version minor / major / 3.1.0-rc.1
 
 # Commit and tag (root package.json is the version anchor — Vue/Babel pattern)
-git add package.json packages/codev/package.json packages/core/package.json packages/sdk/package.json packages/types/package.json packages/artifact-canvas/package.json pnpm-lock.yaml
+git add package.json packages/codev/package.json packages/core/package.json packages/sdk/package.json packages/types/package.json packages/artifact-canvas/package.json packages/t3-client/package.json packages/porch-driver/package.json pnpm-lock.yaml
 git commit -m "Release @cluesmith/codev@X.Y.Z (Codename)"
 git tag -a vX.Y.Z -m "vX.Y.Z Codename - Brief description"
 git push && git push origin vX.Y.Z
@@ -233,7 +233,7 @@ Starting with v1.7.0, minor releases use a release candidate workflow for testin
 pnpm bump-version 1.7.0-rc.1
 
 # Commit and tag
-git add package.json packages/codev/package.json packages/core/package.json packages/sdk/package.json packages/types/package.json packages/artifact-canvas/package.json pnpm-lock.yaml
+git add package.json packages/codev/package.json packages/core/package.json packages/sdk/package.json packages/types/package.json packages/artifact-canvas/package.json packages/t3-client/package.json packages/porch-driver/package.json pnpm-lock.yaml
 git commit -m "v1.7.0-rc.1"
 git tag -a v1.7.0-rc.1 -m "v1.7.0-rc.1 - Release candidate"
 git push && git push origin v1.7.0-rc.1

@@ -11,7 +11,7 @@
  * undone by one `private: true`, and nothing else in the suite would notice.
  */
 import { describe, it, expect, afterEach } from 'vitest';
-import { readFileSync, existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chooseSpawnPath, setSpawnThreadFactory } from '../db/thread-identity.js';
@@ -40,30 +40,84 @@ describe('Spec 146 Phase 9 — the engine is reachable in production (#179 item 
       .toBe('workspace:*');
   });
 
-  it('porch-driver and t3-client are version-aligned with @cluesmith/codev', () => {
-    // Dropping `private: true` makes them publishable; it does not make them published.
+  /**
+   * Every place that hand-enumerates @cluesmith/codev's runtime workspace dependencies.
+   *
+   * The dependency set grew by two in this phase, and the first fix taught only
+   * `pnpm publish` about it — the release commit's `git add` and `local-install.sh`
+   * still enumerated the old set, so `pnpm -w run local-install` would E404 on a
+   * package the tarball now requires. Reading the set from the manifest rather than
+   * repeating it here is what makes the NEXT dependency addition fail loudly instead
+   * of repeating this. Extra entries in these lists are fine; missing ones are not.
+   */
+  const workspaceDeps = () => {
+    const deps = pkg('packages/codev/package.json').dependencies as Record<string, string>;
+    return Object.keys(deps)
+      .filter((name) => name.startsWith('@cluesmith/'))
+      .map((name) => {
+        // Resolve name → directory from the manifests themselves; `@cluesmith/codev-types`
+        // lives at `packages/types`, so the name is not the path.
+        const dir = readdirSync(join(repoRoot, 'packages')).find((d) => {
+          const manifest = join(repoRoot, 'packages', d, 'package.json');
+          return existsSync(manifest) && pkg(`packages/${d}/package.json`).name === name;
+        });
+        if (!dir) throw new Error(`No packages/* directory declares ${name}`);
+        return { name, path: `packages/${dir}` };
+      });
+  };
+
+  it('every workspace dependency is version-aligned with @cluesmith/codev', () => {
+    // Dropping `private: true` makes a package publishable; it does not make it published.
     // pnpm rewrites `workspace:*` to the dependency's own version at publish time, so a
     // porch-driver left at 0.0.0 ships as `"@cluesmith/porch-driver": "0.0.0"` — a version
     // that is not on the registry, and `npm install -g @cluesmith/codev` fails with E404.
     const released = pkg('packages/codev/package.json').version;
-    expect(pkg('packages/porch-driver/package.json').version).toBe(released);
-    expect(pkg('packages/t3-client/package.json').version).toBe(released);
+    const deps = workspaceDeps();
+    expect(deps.length).toBeGreaterThan(0);
+    for (const { name, path } of deps) {
+      expect({ name, version: pkg(`${path}/package.json`).version }).toEqual({ name, version: released });
+      expect({ name, private: pkg(`${path}/package.json`).private }).toEqual({ name, private: undefined });
+    }
   });
 
-  it('the release tooling bumps and publishes them', () => {
-    // Version alignment above is a fact about today's tree; these two assertions are what
-    // keeps it true across the next release. Both files are edited by hand at release time.
+  it('the release tooling bumps, stages and publishes every one of them', () => {
+    // Version alignment above is a fact about today's tree; these assertions are what
+    // keeps it true across the next release. Every file here is edited by hand.
     const bump = readFileSync(join(repoRoot, 'scripts/bump-all.sh'), 'utf8');
-    expect(bump).toContain('packages/porch-driver');
-    expect(bump).toContain('packages/t3-client');
-
     const release = readFileSync(join(repoRoot, 'codev/protocols/release/protocol.md'), 'utf8');
     const publishLines = release.split('\n').filter((l) => l.startsWith('pnpm publish --filter'));
-    // Without this the loop below passes vacuously if the protocol is ever restructured.
+    const stagingLines = release.split('\n').filter((l) => l.startsWith('git add package.json'));
+    // Without these the loops below pass vacuously if the protocol is ever restructured.
     expect(publishLines.length).toBeGreaterThan(0);
-    for (const line of publishLines) {
-      expect(line).toContain("--filter '@cluesmith/porch-driver'");
-      expect(line).toContain("--filter '@cluesmith/t3-client'");
+    expect(stagingLines.length).toBeGreaterThan(0);
+
+    for (const { name, path } of workspaceDeps()) {
+      expect({ name, inBump: bump.includes(path) }).toEqual({ name, inBump: true });
+      for (const line of publishLines) {
+        expect({ name, published: line.includes(`--filter '${name}'`) }).toEqual({ name, published: true });
+      }
+      for (const line of stagingLines) {
+        expect({ name, staged: line.includes(`${path}/package.json`) }).toEqual({ name, staged: true });
+      }
+    }
+  });
+
+  it('local-install packs and installs every one of them', () => {
+    // `pnpm -w run local-install` is the step that makes a merged change visible to
+    // Tower, and it runs far more often than a release. `pnpm pack` rewrites
+    // `workspace:*` the same way `pnpm publish` does, so a dependency missing here
+    // makes npm resolve it from the registry and the install fails before Tower restarts.
+    const script = readFileSync(join(repoRoot, 'scripts/local-install.sh'), 'utf8');
+    const uninstallLine = script.split('\n').find((l) => l.startsWith('npm uninstall -g '));
+    expect(uninstallLine).toBeDefined();
+
+    for (const { name, path } of workspaceDeps()) {
+      expect({ name, packed: script.includes(`pnpm --filter ${name} pack`) })
+        .toEqual({ name, packed: true });
+      expect({ name, uninstalled: uninstallLine!.includes(` ${name}`) })
+        .toEqual({ name, uninstalled: true });
+      expect({ name, installed: script.includes(`$REPO_ROOT/${path}/`) })
+        .toEqual({ name, installed: true });
     }
   });
 

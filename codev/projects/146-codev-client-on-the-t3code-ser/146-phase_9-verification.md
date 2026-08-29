@@ -146,18 +146,30 @@ next release of `@cluesmith/codev` would have shipped declaring `"@cluesmith/por
 "0.0.0"` and `npm install -g @cluesmith/codev` would have failed with **E404** — the exact
 failure the release protocol already warns about for core/sdk/types.
 
-Fixed in four places:
+Fixed in six places:
 
 - `packages/porch-driver/package.json`, `packages/t3-client/package.json` — `0.0.0` → `3.3.1`.
 - `scripts/bump-all.sh` — both added to the lockstep loop, so they move with the next release.
 - `codev/protocols/release/protocol.md` — both added to the lockstep list, to all three
   `pnpm publish --filter` lines, to the E404 warning, and to the backport bump note.
   `t3-client` is listed before `porch-driver` because porch-driver depends on it.
-- `spec-146-phase-9-thread-backend.test.ts` — 11 tests → 13. One asserts version alignment
-  against `packages/codev`'s version; the other asserts the release tooling actually carries
-  both packages, since alignment today is undone by the next `pnpm bump-version` otherwise.
+- `scripts/local-install.sh` — both added to its pack, uninstall, `rm -rf` and install lists.
+  `pnpm pack` rewrites `workspace:*` exactly as `pnpm publish` does, so this path broke first
+  and breaks far more often: `pnpm -w run local-install` is the step that makes a merged change
+  visible to Tower, and it would have E404d before the Tower restart. Found by the claude
+  reviewer, against the tree with the publish fix already in it.
+- `codev/protocols/release/protocol.md` — both manifests added to the two `git add` lines of
+  the release commit. `bump-all.sh` writes seven manifests and those lines staged five, so the
+  release commit and tag would have disagreed with what npm received. Also found by claude.
+- `spec-146-phase-9-thread-backend.test.ts` — 11 tests → 14. The assertions do not name
+  porch-driver and t3-client: they read every runtime `@cluesmith/*` dependency out of
+  `packages/codev/package.json`, resolve each to its `packages/<dir>`, and assert version
+  alignment plus coverage in `bump-all.sh`, every `pnpm publish --filter` line, both `git add`
+  lines and all four `local-install.sh` lists. Hardcoding the two names is what made the first
+  fix miss three of those five sites, so the next dependency addition fails loudly instead.
 
 **Mutation-checked, not just written:** reverting porch-driver to `0.0.0` and removing it from
-`bump-all.sh` and the publish filters fails both new tests (2 failed | 11 passed); restoring
-passes 13. The existing manifest test already knew `workspace:*` resolves to a version at
+`bump-all.sh` and the publish filters fails the new tests; so does dropping the t3-client pack
+line from `local-install.sh` or the porch-driver manifest from a `git add` line (2 failed | 12
+passed each time). Restoring passes 14. The existing manifest test already knew `workspace:*` resolves to a version at
 publish time and stopped one step short of asserting that version is one that will exist.
