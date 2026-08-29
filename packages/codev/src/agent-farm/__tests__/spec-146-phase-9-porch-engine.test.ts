@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { DispatchJournal } from '../../../../porch-driver/src/commands.js';
 import { TurnTracker } from '../../../../porch-driver/src/turn.js';
 import { createPorchThreadEngine } from '../porch-thread-engine.js';
@@ -76,5 +77,28 @@ describe('createPorchThreadEngine (Spec 146 Phase 9)', () => {
     );
     expect(interrupted).toBeDefined();
     expect((interrupted!.payload as { threadId: string }).threadId).toBe(threadId);
+  });
+});
+
+describe('Spec 146 Phase 9 — porch-driver pack includes dist/thread.js', () => {
+  it('npm pack of @cluesmith/porch-driver includes dist/thread.js', () => {
+    const pkg = resolve(import.meta.dirname, '../../../../porch-driver');
+    const packDirectory = mkdtempSync(join(tmpdir(), 'porch-driver-pack-'));
+    try {
+      execFileSync('npm', ['pack', '--pack-destination', packDirectory], {
+        cwd: pkg,
+        stdio: 'pipe',
+      });
+      const tarball = readdirSync(packDirectory).find((file) => file.endsWith('.tgz'));
+      expect(tarball).toBeDefined();
+      const packedFiles = execFileSync('tar', ['-tzf', join(packDirectory, tarball!)], {
+        encoding: 'utf8',
+      })
+        .trim()
+        .split('\n');
+      expect(packedFiles).toContain('package/dist/thread.js');
+    } finally {
+      rmSync(packDirectory, { recursive: true, force: true });
+    }
   });
 });
