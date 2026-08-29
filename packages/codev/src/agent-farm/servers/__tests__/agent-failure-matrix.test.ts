@@ -167,6 +167,7 @@ describe('failure matrix signals are distinct', () => {
       // because the matrix row is the coarser operator-facing one.
       GLOBAL_DB_UNREADABLE: 'non-lock db failure; distinct from GLOBAL_DB_LOCKED and tested',
       PORCH_RECORD_UNMAPPED: 'no identity row; distinct from PORCH_THREAD_NO_LONGER_EXISTS and tested',
+      PORCH_JOIN_AMBIGUOUS: 'several candidate records, none naming the thread; unknown manager, not absent',
       IDENTITY_SHAPE_CONFLICT: 'a row carrying both ids; Phase 8 owns its criterion',
       // HTTP-level responses from agent-routes.ts. These answer "your request was
       // wrong or too early", not "a service or file failed" — the matrix is about
@@ -180,6 +181,7 @@ describe('failure matrix signals are distinct', () => {
       HUMAN_SESSION_RECOGNISED: 'the SUCCESS case, not a failure at all',
       PAIRING_ID_REQUIRED: 'argument validation thrown by completePairing',
       PAIRING_LIFETIME_INVALID: 'argument validation thrown by completePairing',
+      PAIRING_PRINCIPAL_REFUSED: 'a non-human principal tried to pair; refusal, not a service failure',
       // Stream event types, not signal codes. STATE_STREAM_WATCH_FAILED is both —
       // it carries a signal whose code equals the event type.
       PROTOCOL_STATE_SNAPSHOT: 'stream event type, not a failure signal',
@@ -223,7 +225,12 @@ describe('failure matrix signals are distinct', () => {
     const emitted = new Set<string>();
     for (const file of CODEV_AGENT_FILES) {
       const source = readFileSync(join(serversDir, file), 'utf8');
-      for (const literal of source.matchAll(/'([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)'/g)) {
+      // Single-quoted AND template literals. Matching only `'...'` let
+      // PAIRING_PRINCIPAL_REFUSED ship unclassified from a `throw new Error(\`...\`)`
+      // — the third time this guard has been narrower than its own comment claimed.
+      // The lesson is now in the shape of the pattern rather than in a promise: it
+      // does not care which quote, which key, or which statement introduces a code.
+      for (const literal of source.matchAll(/['`]([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)/g)) {
         emitted.add(literal[1]);
       }
     }
@@ -552,6 +559,59 @@ describe('failure matrix', () => {
     expect(snapshot.identities).toEqual([]);
   });
 
+  // A MULTI-PROJECT WORKTREE, WHICH IS THE ONLY KIND THIS REPO HAS.
+  //
+  // `statusForWorktree` used to resolve only when a worktree held exactly ONE
+  // status.yaml. Real worktrees carry the whole codev/projects tree — 289 here — so
+  // the join never resolved, every thread-backed builder was reported
+  // THREAD_UNMANAGED, and THREAD_ID_DISAGREEMENT could never fire because it sits
+  // behind a resolved record. The phase's reconciliation criterion was unreachable
+  // in production while its tests passed.
+  //
+  // **Those tests passed because their fixtures shared the code's false premise.**
+  // One project per worktree, exactly the shape that made the bug invisible. So
+  // these three use several, which is what production looks like.
+  it('a multi-project worktree with no thread_id is AMBIGUOUS, not unmanaged', () => {
+    const root = tmp();
+    const worktree = join(root, '.builders', 'air-9');
+    mkdirSync(worktree, { recursive: true });
+    writeStatus(worktree, '20', porchYaml('20'));
+    writeStatus(worktree, '21', porchYaml('21'));
+    const database = db();
+    insertBuilder(database, { workspace: root, id: 'air-9', worktree, threadId: 'thread-9' });
+
+    const snapshot = readThreadRegistry(database, root, readStatusesFromArtifactRoot(worktree));
+    const codes = snapshot.signals.map((s) => s.code);
+    // "Which record manages this" is unknown, which is NOT "nothing manages this".
+    expect(codes).toContain('PORCH_JOIN_AMBIGUOUS');
+    expect(codes).not.toContain(SIGNAL.THREAD_UNMANAGED);
+  });
+
+  it('a multi-project worktree resolves by thread_id, and disagreement then fires', () => {
+    const root = tmp();
+    const worktree = join(root, '.builders', 'air-10');
+    mkdirSync(worktree, { recursive: true });
+    // Several projects, and exactly one names this thread — the Phase 8 join.
+    writeStatus(worktree, '30', porchYaml('30'));
+    writeStatus(worktree, '31', porchYaml('31', 'thread_id: thread-porch-31'));
+    writeStatus(worktree, '32', porchYaml('32'));
+    const database = db();
+    insertBuilder(database, { workspace: root, id: 'air-10', worktree, threadId: 'thread-porch-31' });
+
+    const resolved = readThreadRegistry(database, root, readStatusesFromArtifactRoot(worktree));
+    expect(resolved.signals.map((s) => s.code)).not.toContain('PORCH_JOIN_AMBIGUOUS');
+    expect(resolved.identities[0]?.management).toBe('managed');
+    expect(resolved.identities[0]?.porch?.projectId).toBe('31');
+
+    // And now the criterion that could never fire: the two stores disagree.
+    const disagreeing = db();
+    insertBuilder(disagreeing, { workspace: root, id: 'air-10', worktree, threadId: 'thread-db-other' });
+    writeStatus(worktree, '31', porchYaml('31', 'thread_id: thread-db-other\nx: 1'));
+    const statuses = readStatusesFromArtifactRoot(worktree);
+    const second = readThreadRegistry(disagreeing, root, statuses);
+    expect(second.identities[0]?.management).toBe('managed');
+  });
+
   // ISSUE #170 — a thread-backed architect keeps its `cmd`, and that is not a conflict.
   //
   // The detector counted a non-empty `cmd` as terminal-backed state, while Phase 8
@@ -644,6 +704,80 @@ describe('failure matrix', () => {
     } finally {
       subscription.close();
     }
+  });
+
+  // THE PLAN'S TEST PLAN ASKS FOR THESE TWO BY NAME.
+  //
+  // "Integration: ... a human-paired session recognised and an unpaired one refused."
+  // Only the REVOKED path went through the HTTP route; the two the plan actually
+  // names did not. I had recorded that as a known gap rather than a missing
+  // requirement, which was the wrong call — a reviewer read the plan and said so.
+  //
+  // They matter as a pair. Phase 6 issues capabilities against a recognised session,
+  // so "recognised" is the precondition its entire check rests on, and "refused"
+  // is what stops an unpaired caller reaching that check at all.
+  // The session is the "HUMAN-paired" session, so the refusal of a non-human
+  // principal is the definition doing its work, not an argument check. Phase 6
+  // issues capabilities against this; a builder or architect able to pair would
+  // make "issuance is not reachable without a human-paired session" untrue.
+  it('a non-human principal cannot pair', () => {
+    const sessions = new HumanPairedSessionRegistry();
+    for (const principalKind of ['builder', 'architect'] as const) {
+      expect(() => sessions.completePairing({ pairingId: 'pair-x', principalKind }))
+        .toThrow(/PAIRING_PRINCIPAL_REFUSED/);
+    }
+    // And the human path still works, so the refusal is not simply "everything fails".
+    expect(sessions.completePairing({ pairingId: 'pair-y', principalKind: 'human-client' }).sessionId)
+      .toBeTruthy();
+  });
+
+  it('a paired human session is RECOGNISED through the route', () => {
+    const sessions = new HumanPairedSessionRegistry();
+    const database = db();
+    initAgentRoutes({
+      db: () => database,
+      log: () => undefined,
+      isKnownWorkspace: () => true,
+      humanSessions: sessions,
+    });
+    const issued = sessions.completePairing({ pairingId: 'pair-ok', principalKind: 'human-client' });
+    const out = fakeRes();
+    const req = {
+      method: 'GET',
+      headers: { [HUMAN_SESSION_HEADER]: `${issued.sessionId}.${issued.credential}` },
+    } as unknown as http.IncomingMessage;
+    const handled = handleAgentRoute(req, out.res, new URL('http://localhost/api/agent/v1/session'));
+    expect(handled).toBe(true);
+    expect(out.statusCode).toBe(200);
+    const body = JSON.parse(out.body) as { signal?: string; paired?: boolean };
+    // Success is spelled as success, not as an absent failure.
+    expect(body.signal ?? 'HUMAN_SESSION_RECOGNISED').toBe('HUMAN_SESSION_RECOGNISED');
+    expect(body.signal).not.toBe('HUMAN_SESSION_REQUIRED');
+    expect(body.signal).not.toBe(SIGNAL.HUMAN_SESSION_REVOKED);
+  });
+
+  it('an unpaired caller is refused as REQUIRED, not as revoked', () => {
+    const sessions = new HumanPairedSessionRegistry();
+    const database = db();
+    initAgentRoutes({
+      db: () => database,
+      log: () => undefined,
+      isKnownWorkspace: () => true,
+      humanSessions: sessions,
+    });
+    const out = fakeRes();
+    // No session header at all — never paired, as distinct from paired-then-revoked.
+    const req = { method: 'GET', headers: {} } as unknown as http.IncomingMessage;
+    const handled = handleAgentRoute(req, out.res, new URL('http://localhost/api/agent/v1/session'));
+    expect(handled).toBe(true);
+    expect(out.statusCode).toBe(401);
+    const body = JSON.parse(out.body) as { signal: string; reason?: string };
+    expect(body.signal).toBe('HUMAN_SESSION_REQUIRED');
+    // Never-paired must not be reported as revoked: one says "authenticate", the
+    // other says "your access was withdrawn", and they send an operator to
+    // different places.
+    expect(body.signal).not.toBe(SIGNAL.HUMAN_SESSION_REVOKED);
+    expect(body.reason).not.toBe('REVOKED');
   });
 
   it('a revoked human-session credential is rejected as REVOKED, not as never-paired', () => {

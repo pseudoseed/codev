@@ -67,15 +67,43 @@ function dbSignal(error: unknown): AgentStateSignal {
   };
 }
 
+/**
+ * Resolve the porch record for a builder worktree.
+ *
+ * **"A worktree owns one project" was false, and it was load-bearing.** The previous
+ * version returned a match only when exactly one `status.yaml` lived under the
+ * worktree. Real worktrees carry the whole `codev/projects/` tree — 289 of them in
+ * this repository — so the join never resolved, every thread-backed builder was
+ * reported `THREAD_UNMANAGED`, and `THREAD_ID_DISAGREEMENT` could not fire at all
+ * because it sits behind a resolved record. The phase's own reconciliation criterion
+ * was therefore unreachable in production while its tests passed on single-project
+ * fixtures that shared the code's false premise.
+ *
+ * `thread_id` is the designed join and Phase 8 is its first writer, so it is tried
+ * first and simply finds nothing until then. That is honest, and it is why the
+ * ambiguous case must NOT be reported as "no porch record": one says nobody is
+ * managing this thread, the other says several records could be and we will not
+ * guess. Same word, two different situations, which is the failure this phase exists
+ * to prevent.
+ */
 function statusForWorktree(
   successful: readonly PorchStatusProjection[],
   worktree: string,
-): PorchStatusProjection | undefined {
+  threadId: string,
+): { readonly status?: PorchStatusProjection; readonly candidates: number } {
   const canonical = normalizeWorkspacePath(worktree);
   const matches = successful.filter((status) => normalizeWorkspacePath(status.artifactRoot) === canonical);
-  // A builder worktree normally owns one project.  If it contains more than
-  // one, no arbitrary project is selected as its identity.
-  return matches.length === 1 ? matches[0] : undefined;
+
+  // THE DESIGNED JOIN. Unambiguous whatever else the worktree contains.
+  const byThread = matches.filter((status) => status.threadId === threadId);
+  if (byThread.length === 1) return { status: byThread[0], candidates: matches.length };
+
+  // The single-project case still resolves, for worktrees that really do hold one.
+  if (matches.length === 1) return { status: matches[0], candidates: 1 };
+
+  // Zero, or several with no `thread_id` to choose between them. No record is
+  // invented, and the caller is told which of the two it is.
+  return { candidates: matches.length };
 }
 
 /**
@@ -184,7 +212,8 @@ export function readThreadRegistry(
     if (row.thread_id === null) continue;
     builderMap[row.id] = row.thread_id;
     consumed.add(row.thread_id);
-    const porch = statusForWorktree(statuses, row.worktree);
+    const resolved = statusForWorktree(statuses, row.worktree, row.thread_id);
+    const porch = resolved.status;
     const management = porch ? 'managed' : 'unmanaged';
     identities.push({
       threadId: row.thread_id,
@@ -195,7 +224,21 @@ export function readThreadRegistry(
       management,
       ...(porch ? { porch } : {}),
     });
-    if (!porch) {
+    if (!porch && resolved.candidates > 1) {
+      // NOT "unmanaged". Several porch records live under this worktree and none
+      // names this thread, so which one manages it is unknown — which is a different
+      // fact, with a different remedy, from nothing managing it at all. Phase 8
+      // writing `thread_id` is what resolves this.
+      signals.push({
+        code: 'PORCH_JOIN_AMBIGUOUS',
+        message:
+          `Thread ${row.thread_id} has ${resolved.candidates} candidate porch records under ` +
+          `${row.worktree} and none names it; the managing record is unknown, not absent`,
+        threadId: row.thread_id,
+        role: 'builder',
+        roleId: row.id,
+      });
+    } else if (!porch) {
       signals.push({
         code: 'THREAD_UNMANAGED',
         message: `Thread ${row.thread_id} has no matching porch record`,

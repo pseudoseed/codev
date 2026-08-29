@@ -45,5 +45,6 @@ prose cannot do that, and a number that drifts is worse than none.
 | Failure | Signal | Client renders | Auto-resolved |
 |---|---|---|---|
 | `global.db` unreadable for any non-lock reason (corrupt, schema mismatch) | `GLOBAL_DB_UNREADABLE` | Identity maps unavailable and **not retryable**, unlike `GLOBAL_DB_LOCKED`. Reporting a corrupt database as "locked" invites a retry loop instead of a restore. | No |
+| A builder worktree holds several porch records and none names the thread | `PORCH_JOIN_AMBIGUOUS` | The managing record is **unknown, not absent**. Distinct from `THREAD_UNMANAGED`, which asserts nothing manages the thread — a different fact with a different remedy. Resolved once Phase 8 writes `thread_id`. | No |
 | Porch record names a thread, t3code still has it, but `global.db` has no identity row | `PORCH_RECORD_UNMAPPED` | Record kept; the missing join is named. Distinct from `PORCH_THREAD_NO_LONGER_EXISTS`, which asserts t3code lost the thread — a different fact with a different remedy. | No |
 | A row carries both terminal-backed and thread-backed state | `IDENTITY_SHAPE_CONFLICT` | Row is refused as a join and reported. This is the guard behind Phase 8's "a row carrying both a `terminal_id` and a `thread_id` is rejected". | No |
