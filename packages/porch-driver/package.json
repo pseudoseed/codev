@@ -32,6 +32,18 @@
     "./worktree-setup": {
       "types": "./src/worktree-setup.ts",
       "default": "./dist/worktree-setup.js"
+    },
+    "./deliver": {
+      "types": "./src/deliver.ts",
+      "default": "./dist/deliver.js"
+    },
+    "./queue": {
+      "types": "./src/queue.ts",
+      "default": "./dist/queue.js"
+    },
+    "./scheduled": {
+      "types": "./src/scheduled.ts",
+      "default": "./dist/scheduled.js"
     }
   },
   "files": [
