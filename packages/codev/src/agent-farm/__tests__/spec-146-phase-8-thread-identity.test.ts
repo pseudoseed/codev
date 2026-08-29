@@ -338,6 +338,37 @@ describe('Spec 146 Phase 8 — v21 migration, backup, restore, convergence', () 
     restored.close();
   });
 
+  /**
+   * The reuse branch is the one that protects the restore point. A second migration
+   * attempt — a crash between the backup and the ALTER, then a retry — must NOT
+   * overwrite the backup, because by then the live database may already be half
+   * migrated and a fresh VACUUM INTO would capture that instead of the pre-v21 state.
+   * Flagged as untested by the phase_8 iteration-2 `claude` lane.
+   */
+  it('reuses an existing pre-v21 backup instead of overwriting the restore point', () => {
+    const backupPath = threadIdentityBackupPath(dbPath);
+    writeFileSync(backupPath, 'ORIGINAL RESTORE POINT');
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      logs.push(args.map(String).join(' '));
+    });
+
+    const db = openPreV21();
+    const result = applyThreadIdentityMigration(db, dbPath);
+
+    expect(result.backupPath).toBe(backupPath);
+    expect(readFileSync(backupPath, 'utf8')).toBe('ORIGINAL RESTORE POINT');
+    expect(logs.some((l) => l.includes('Reusing pre-v21 global.db backup') && l.includes(backupPath))).toBe(true);
+    expect(logs.some((l) => l.includes('Backed up global.db before'))).toBe(false);
+
+    // The migration still completes: reuse governs the backup, never the ALTER.
+    expect(columnOrder(db, 'architect')).toContain('thread_id');
+    expect(columnOrder(db, 'builders')).toContain('thread_id');
+
+    db.close();
+    spy.mockRestore();
+  });
+
   it('a migrated database accepts previous-release writes that do not name thread_id', () => {
     const db = openPreV21();
     applyThreadIdentityMigration(db, dbPath);

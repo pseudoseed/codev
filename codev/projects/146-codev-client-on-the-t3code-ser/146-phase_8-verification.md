@@ -68,6 +68,11 @@ in code, because the architect's instruction for this phase is **verify, do not 
      preserved rather than substituted.
    - Mutation-checked: blanking `cmd` in `architectWriteValues` makes the first of those tests
      fail. The test can fail, so it is holding something.
+   - **The `pid`/`port` assertions in those tests cannot fail**, and should not be read as
+     coverage. `architectWriteValues` hardcodes `pid: 0, port: 0` in *both* branches
+     (`db/thread-identity.ts:33-34,41-42`) and `ArchitectState` (`agent-farm/types.ts:45-55`)
+     carries neither field, so `expect(written.pid).toBe(0)` passes whichever branch ran. Only
+     the `cmd` assertions hold the #170 decision. Raised by the iteration-2 `claude` lane.
 
 3. **Two acceptance criteria are simulated, not exercised. PARTIALLY ADDRESSED in iteration 2.**
    The plan asks for the migration "against a copy of a real `global.db`" and for "the
@@ -113,5 +118,13 @@ The comment logged by the v21 block reads `Spec 146 Phase 5`, because the column
 Phase 5's. Phase 8 added the backup and the sentinel/exclusivity layer into the same guarded
 block. That is the merged shape on `main`; it is recorded here so the next reader does not
 mistake the log line for the whole of what v21 does.
+
+The backup path has two branches and both are now tested. The reuse branch — a second
+migration attempt finding a `.pre-v21.bak` already present and leaving it alone — was untested
+until the iteration-2 `claude` lane flagged it. It matters because that branch is what protects
+the restore point: after a crash between the backup and the `ALTER`, a retry that refreshed the
+backup would capture the half-migrated database instead of the pre-v21 state.
+`reuses an existing pre-v21 backup instead of overwriting the restore point` covers it, and is
+mutation-checked — forcing the `VACUUM INTO` unconditionally makes it fail.
 
 Build exit 0. Full suite run recorded in the phase-8 porch checks.
