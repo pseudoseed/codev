@@ -2139,3 +2139,36 @@ part the assertions depended on.
 
 All five delivery properties are now demonstrated live, so criterion 12b holds and
 criterion 13 is not blocked.
+
+## Two status.yaml files, and why the second one was invisible
+
+Phase 4's review round happened, both lanes returned REQUEST_CHANGES, every finding
+was fixed and committed. Then porch's iteration counter read 1 again.
+
+Nothing had been undone. **Project 146 had two `status.yaml` files.** The real one is
+at `codev/projects/146-codev-client-on-the-t3code-ser/status.yaml`; a second sat
+inside a nested builder worktree at `.builders/spir-146/.builders/task-gBv6/`, and
+porch's resolver reached the nested one first. Every `porch done` and `porch next`
+over roughly eight hours — phase 3's force-advance included — wrote the copy nobody
+was reading.
+
+The failure mode is the one worth keeping: **a resolver that searches upward will
+find a file you did not know was a candidate, and it reports success either way.**
+Every command returned normally. The state it wrote was internally consistent. The
+only symptom was a counter that disagreed with the commits, which reads as "porch is
+confused" rather than "porch is reading a different file."
+
+What it cost: the review-round bookkeeping. What it did not cost: any code, test or
+evidence, because all of that lives in commits rather than in protocol state. That
+asymmetry is the argument for committing evidence files rather than leaving them as
+run artifacts — it is why `146-phase4-live-evidence.json` survived and the round
+record did not.
+
+The nested worktree is gone (its branch is safe on origin at `3ebc6cc30`) and there
+is now exactly one `status.yaml`. Reconciliation went through porch commands only;
+the file was never hand-edited, which is the rule that made the recovery boring
+instead of a second incident.
+
+**The lanes are not re-run on work they have already judged.** The reset is a
+bookkeeping fact, not a change to the code under review, and iteration 1's context
+file now says so at the top rather than leaving a future reader to infer it.
