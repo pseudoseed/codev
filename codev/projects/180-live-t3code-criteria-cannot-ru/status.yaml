@@ -1,7 +1,7 @@
 id: '180'
 title: live-t3code-criteria-cannot-ru
 protocol: air
-phase: implement
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-29T16:21:57.544Z'
-updated_at: '2026-08-29T16:21:57.545Z'
+updated_at: '2026-08-29T17:15:31.962Z'
