@@ -33,3 +33,7 @@ CMAP (all APPROVE, HIGH):
 - gemini: APPROVE
 - codex: APPROVE
 - claude: APPROVE (non-blocking: CI-vacuous wiring test; opt-in list duplicated from test-env.ts)
+
+Architect follow-up before PR approval: raised the shared-suite-lock wait from 120s to 900s.
+The full suite measures about 200s, so the prior timeout could never queue successfully behind a
+complete contending run. The adjacent comment records that the timeout must grow with the suite.

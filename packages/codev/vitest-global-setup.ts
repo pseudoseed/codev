@@ -42,7 +42,8 @@ export function scrubCodevNamespace(env: NodeJS.ProcessEnv = process.env): void 
 // Immediately below the test Tower range (14100+), and deliberately outside it.
 export const TEST_SUITE_LOCK_PORT = 13_999;
 const POLL_MS = 200;
-const WAIT_TIMEOUT_MS = 120_000;
+// The full suite currently takes ~200s; keep this above its duration and raise it as the suite grows.
+const WAIT_TIMEOUT_MS = 900_000;
 
 export class SuiteLockBusyError extends Error {
   readonly exitCode = SUITE_LOCK_BUSY_EXIT;
