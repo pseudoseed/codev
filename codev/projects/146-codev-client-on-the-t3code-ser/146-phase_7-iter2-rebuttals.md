@@ -105,6 +105,50 @@ the variable.
 
 ---
 
+## Claude's two non-blocking notes — both ACCEPTED, both fixed
+
+Claude approved, and then found two things worth more than the verdict.
+
+### The delegated set was one path wider than the claimed set
+
+`isPublicRoute` delegated the bare `/api/agent/v1` as well as the prefix;
+`handleAgentRoute` claims only `` `${AGENT_ROUTE_PREFIX}/` ``, with the slash. So one
+path was handed past the key layer that the dispatcher does not take responsibility for.
+
+Nothing was exposed — it falls through to a generic 404. But the note is right about why
+it still matters, and that is the sharper half of the observation: the entire case for
+delegating a whole prefix is that *what is handed over* and *what the dispatcher claims*
+are the same set. The moment they differ the safety argument is not true, it is only
+nearly true, and a comment asserting an invariant that does not hold is worse than no
+comment, because the next person rests on it.
+
+**Fixed** by dropping the bare case so the two checks are byte-identical, with a test on
+both sides of the boundary (`AGENT_ROUTE_PREFIX` false, `${AGENT_ROUTE_PREFIX}/` true).
+
+### A test that had never run the code it names
+
+`bridge-mode.e2e.test.ts` resolved `tower-server.js` four levels up, at `packages/dist/`,
+which does not exist. Every spawn died of `MODULE_NOT_FOUND`, and the only assertion was
+`exitCode !== 0` — which `MODULE_NOT_FOUND` satisfies. The test has been green for as long
+as it has existed and has never once reached the bind policy.
+
+This is the failure mode this phase already wrote a rule about in the pairing e2e: a test
+that cannot fail reports coverage that does not exist. It was sitting in the same file as
+Phase 7's own bind test.
+
+**Fixed** three ways, because correcting the path alone leaves the trap armed:
+- the path, to three levels;
+- an `existsSync` guard that throws "run `npm run build` first", so a missing build can
+  never again impersonate the refusal;
+- the assertion now names the REASON (`Invalid bind host`) instead of only checking that
+  the process is dead. A dead process is not evidence about a bind policy.
+
+Pre-existing and outside Phase 7's scope. Fixed anyway: it is four lines, it sits in the
+file this phase extends, and leaving a known-vacuous test in place because it predates the
+phase is how it stays vacuous for another year.
+
+---
+
 ## What this iteration cost, and the rule it earned
 
 Iteration 1 and iteration 2 found the same defect. The fix in between was real and the
@@ -117,8 +161,8 @@ only line that was ever load-bearing here.
 
 ## Verification
 
-- `vitest run src/agent-farm`: **183 files, 3663 passed**, 1 skipped.
-- `vitest run --config vitest.e2e.config.ts src/agent-farm/__tests__/phase7-pairing.e2e.test.ts src/agent-farm/__tests__/bridge-mode.e2e.test.ts`: **15 passed**.
+- `vitest run src/agent-farm`: **183 files, 3665 passed**, 1 skipped.
+- `vitest run --config vitest.e2e.config.ts src/agent-farm/__tests__/phase7-pairing.e2e.test.ts src/agent-farm/__tests__/bridge-mode.e2e.test.ts`: **16 passed** — including the bridge-mode case that had never run.
 - `tsc --noEmit`: clean.
 - Pre-existing failures in `cli-tower-mode`, `tower-reconnect`, `send-integration` and
   `bugfix-1515-tower-isolation` were confirmed pre-existing by stashing this change and
