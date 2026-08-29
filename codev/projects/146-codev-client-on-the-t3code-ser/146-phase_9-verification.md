@@ -98,6 +98,12 @@ merge state. `cleanup.ts` uses `isWorktreeMerged` instead, so nothing reads it t
 `vcs.removeWorktree` refusal response has not been observed, and inventing a refusal branch
 against a shape I have not seen would be a guess.
 
+**Verified from the built `dist`, not from source.** After `pnpm -w run build` (exit 0),
+`createPorchThreadEngine` was loaded out of `packages/codev/dist/agent-farm/porch-thread-engine.js`
+with a recording dispatcher and `create({ prompt: 'MISSION', roleContent: 'ROLE' })` called on
+it. A `thread.turn.start` was dispatched and its `message.text` contained both. The three
+prompt-bearing call sites carry `prompt: builderPrompt` in `dist/agent-farm/commands/spawn.js`.
+
 #### What item 2 does NOT do, named rather than left to be discovered
 
 `ensureThreadBackendReady` is called from `launchSpawnedBuilder` and nowhere else. `afx
