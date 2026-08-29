@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import chalk from 'chalk';
 import { globSync } from 'glob';
-import type { ProjectState, Protocol, PlanPhase } from './types.js';
+import type { ProjectState, Protocol, PlanPhase, CheckResult } from './types.js';
 import { stalledRefreshes, unacknowledgedRefreshes } from './context-refresh.js';
 import {
   readState,
@@ -24,6 +24,7 @@ import {
   detectProjectId,
   resolveProjectId,
   resolveArtifactBaseName,
+  resolvePorchWorkspaceRoot,
 } from './state.js';
 import {
   loadProtocol,
@@ -48,8 +49,10 @@ import {
   runPhaseChecks,
   formatCheckResults,
   allChecksPassed,
+  anyCheckBlocked,
   type CheckEnv,
 } from './checks.js';
+import { SUITE_LOCK_BUSY_EXIT } from '../../lib/suite-lock.js';
 import { loadCheckOverrides, resolveConsultationModels } from './config.js';
 import { findUnlandedCommits, completionReport } from './unlanded.js';
 import { resolveDefaultBranch } from '../../lib/default-branch.js';
@@ -407,6 +410,20 @@ export async function status(
   console.log('');
 }
 
+function exitChecksNotPassed(results: CheckResult[], cannot: string): never {
+  console.log('');
+  if (anyCheckBlocked(results)) {
+    console.log(chalk.yellow(`CHECKS BLOCKED. ${cannot}`));
+    console.log('\n  Another Vitest run holds the suite lock. Retry when it finishes.');
+    process.exit(SUITE_LOCK_BUSY_EXIT);
+    throw new Error('unreachable');
+  }
+  console.log(chalk.red(`CHECKS FAILED. ${cannot}`));
+  console.log('\n  Fix the failures and try again.');
+  process.exit(1);
+  throw new Error('unreachable');
+}
+
 /**
  * porch check <id>
  * Runs the phase checks and reports results.
@@ -458,6 +475,9 @@ export async function check(workspaceRoot: string, projectId: string, resolver?:
   if (allChecksPassed(results)) {
     console.log(chalk.green('RESULT: ALL CHECKS PASSED'));
     console.log(`\n  Run: porch done ${state.id} (to advance)`);
+  } else if (anyCheckBlocked(results)) {
+    console.log(chalk.yellow('RESULT: CHECKS BLOCKED'));
+    console.log('\n  Another Vitest run holds the suite lock. Retry when it finishes.');
   } else {
     console.log(chalk.red('RESULT: CHECKS FAILED'));
     console.log(`\n  Fix the failures and run: porch check ${state.id}`);
@@ -543,10 +563,7 @@ export async function done(workspaceRoot: string, projectId: string, resolver?: 
         console.log(formatCheckResults(results));
 
         if (!allChecksPassed(results)) {
-          console.log('');
-          console.log(chalk.red('CHECKS FAILED. Cannot advance.'));
-          console.log(`\n  Fix the failures and try again.`);
-          process.exit(1);
+          exitChecksNotPassed(results, 'Cannot advance.');
         }
       } else {
         console.log(chalk.dim('  (all checks skipped via .codev/config.json)'));
@@ -947,10 +964,7 @@ export async function approve(
       console.log(formatCheckResults(results));
 
       if (!allChecksPassed(results)) {
-        console.log('');
-        console.log(chalk.red('CHECKS FAILED. Cannot approve gate.'));
-        console.log(`\n  Fix the failures and try again.`);
-        process.exit(1);
+        exitChecksNotPassed(results, 'Cannot approve gate.');
       }
     } else {
       console.log(chalk.dim('  (all checks skipped via .codev/config.json)'));
@@ -1355,7 +1369,7 @@ export async function cli(args: string[]): Promise<void> {
     return;
   }
 
-  const workspaceRoot = process.cwd();
+  const workspaceRoot = resolvePorchWorkspaceRoot();
   const resolver = getResolver(workspaceRoot);
 
   // Auto-detect project ID for commands that need it
@@ -1385,6 +1399,7 @@ export async function cli(args: string[]): Promise<void> {
         const { next: porchNext } = await import('./next.js');
         const result = await porchNext(workspaceRoot, getProjectId(rest[0]));
         console.log(JSON.stringify(result, null, 2));
+        if (result.status === 'error') process.exit(1);
         break;
       }
 

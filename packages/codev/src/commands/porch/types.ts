@@ -339,6 +339,8 @@ export interface CheckResult {
   name: string;
   command: string;
   passed: boolean;
+  /** True when the check did not run because the #130 suite lock was busy. Not a failure. */
+  blocked?: boolean;
   output?: string;
   error?: string;
   duration_ms?: number;

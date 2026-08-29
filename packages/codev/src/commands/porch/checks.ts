@@ -11,6 +11,7 @@ import * as path from 'node:path';
 import type { CheckResult, CheckDef } from './types.js';
 import type { ArtifactResolver } from './artifacts.js';
 import { executeForgeCommand, getForgeCommand, loadForgeConfig } from '../../lib/forge.js';
+import { SUITE_LOCK_BUSY_EXIT, SUITE_LOCK_TIMEOUT_NEEDLE } from '../../lib/suite-lock.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -141,12 +142,14 @@ export async function runCheck(
           duration_ms: duration,
         });
       } else {
+        const blocked = isSuiteLockContention(code, stdout, stderr);
         resolve({
           name,
           command,
           passed: false,
+          ...(blocked ? { blocked: true } : {}),
           output: stdout.trim(),
-          error: stderr.trim() || `Exit code ${code}`,
+          error: stderr.trim() || (blocked ? `Suite lock busy (exit ${code})` : `Exit code ${code}`),
           duration_ms: duration,
         });
       }
@@ -458,7 +461,7 @@ export function formatCheckResults(results: CheckResult[]): string {
   const lines: string[] = [];
 
   for (const result of results) {
-    const status = result.passed ? '✓' : '✗';
+    const status = result.passed ? '✓' : result.blocked ? '⚠' : '✗';
     const duration = result.duration_ms
       ? ` (${(result.duration_ms / 1000).toFixed(1)}s)`
       : '';
@@ -485,4 +488,15 @@ export function formatCheckResults(results: CheckResult[]): string {
  */
 export function allChecksPassed(results: CheckResult[]): boolean {
   return results.every(r => r.passed);
+}
+
+export function anyCheckBlocked(results: CheckResult[]): boolean {
+  return results.some(r => r.blocked);
+}
+
+/** Contention (#130 suite lock) must not be spelled the same as a failing suite (#151). */
+export function isSuiteLockContention(code: number | null, stdout: string, stderr: string): boolean {
+  if (code === SUITE_LOCK_BUSY_EXIT) return true;
+  if (code === 0 || code == null) return false;
+  return `${stdout}\n${stderr}`.includes(SUITE_LOCK_TIMEOUT_NEEDLE);
 }
