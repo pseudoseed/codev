@@ -100,7 +100,7 @@ porch next {{project_id}}
 
 Output something like:
 
-> Plan written to `codev/plans/{{artifact_name}}.md` and committed. Ready for review — type any feedback here, edit the plan file directly in VSCode, or approve with `porch approve {{project_id}} plan-approval --a-human-explicitly-approved-this` (Cmd+K G in VSCode).
+> Plan written to `codev/plans/{{artifact_name}}.md` and committed. Ready for review — type any feedback here, edit the plan file directly in VSCode, or approve with Cmd+K G in VSCode, or from the **workspace root** (not this worktree): `porch approve {{project_id}} plan-approval --a-human-explicitly-approved-this`.
 
 Then **stay in the interactive session**. Do not exit. Wait for the user's next message.
 
@@ -116,7 +116,7 @@ Then **stay in the interactive session**. Do not exit. Wait for the user's next 
 ## What NOT to Do
 
 - Don't write code — that's the implement phase
-- Don't run `porch approve` on your own initiative — only when the architect relays the human's approval
+- Don't run `porch approve` at all — it refuses any call from inside a `.builders/` worktree, including one relaying a human's approval. The human approves from the workspace root; you wait.
 - Don't post the plan content as a GitHub issue comment — the plan lives in the file, not the issue thread. A one-line pointer comment on the issue is fine if you think it helps the discussion.
 - Don't exit the interactive session at the gate
 

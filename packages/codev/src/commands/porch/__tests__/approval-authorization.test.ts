@@ -215,6 +215,41 @@ describe('an approval typed inside a builder worktree', () => {
     expect(commitAttempts).toEqual([]);
   });
 
+  // A SINGLE-USE NONCE MUST BE SPENT ON AN APPROVAL THAT HAPPENS. Authorization
+  // used to consume it, so a run that stopped at the already-approved return (or
+  // at a failed phase check) burned it and forced a re-mint through the
+  // authenticated route.
+  it('does not burn the nonce on a call that stops at the already-approved return', async () => {
+    const store = capabilities();
+    const issued = store.issue({ sessionId: 'human-session-9' });
+    const nonceStore = nonces();
+    const nonce = nonceStore.mint({
+      projectId: '146',
+      gateName: 'plan-approval',
+      capabilityId: issued.capabilityId,
+    });
+    const env = {
+      CODEV_WORKTREE_ROOT: worktreeRoot,
+      [CAPABILITY_ENV_VAR]: issued.presentation,
+      [NONCE_ENV_VAR]: nonce,
+    };
+
+    const approved = makeState();
+    approved.gates['plan-approval'] = { status: 'approved', approved_at: '2026-08-29T00:00:00.000Z' };
+    writeState(statusPath, approved);
+
+    await approve(worktreeRoot, '146', 'plan-approval', true, undefined, {
+      env, cwd: worktreeRoot, capabilities: store, nonces: nonceStore,
+    });
+
+    // The call returned at "already approved" and wrote nothing — and the nonce
+    // is still usable, which is the point.
+    expect(commitAttempts).toEqual([]);
+    expect(nonceStore.peek(nonce, {
+      projectId: '146', gateName: 'plan-approval', capabilityId: issued.capabilityId,
+    }).accepted).toBe(true);
+  });
+
   it('refuses a revoked capability while another machine keeps approving', async () => {
     const store = capabilities();
     const local = store.issue({ sessionId: 'session-local', machine: 'test-machine' });

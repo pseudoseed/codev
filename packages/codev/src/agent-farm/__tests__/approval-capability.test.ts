@@ -193,17 +193,47 @@ describe('approval nonces', () => {
       .toBe(true);
   });
 
-  it('a nonce older than its lifetime is refused', () => {
+  // EXPIRED AND UNKNOWN ARE DIFFERENT EVENTS AND MUST STAY DIFFERENT ANSWERS.
+  // Sweeping at the TTL made APPROVAL_NONCE_EXPIRED unreachable — the row was
+  // gone before consume could look at it — so an expired nonce answered UNKNOWN.
+  // A reviewer found the dead branch. The retention window is what makes it live.
+  it('a nonce past its TTL is refused as EXPIRED while the record is still held', () => {
     let clock = 5_000_000;
     const nonces = new ApprovalNonceStore({ root, now: () => clock });
     const nonce = nonces.mint({ projectId: '146', gateName: 'pr', capabilityId: 'cap-1' });
     clock += 6 * 60 * 1000;
     const verdict = nonces.consume(nonce, { projectId: '146', gateName: 'pr', capabilityId: 'cap-1' });
     expect(verdict.accepted).toBe(false);
-    // Past the TTL the entry is swept, so the honest answer is that this host does
-    // not know the nonce — not that it expired, which would claim a record we no
-    // longer hold.
+    expect(verdict.code).toBe(APPROVAL_SIGNAL.APPROVAL_NONCE_EXPIRED);
+    expect(verdict.code).not.toBe(APPROVAL_SIGNAL.APPROVAL_NONCE_UNKNOWN);
+  });
+
+  it('past the retention window the record is gone and UNKNOWN is the honest answer', () => {
+    let clock = 5_000_000;
+    const nonces = new ApprovalNonceStore({ root, now: () => clock });
+    const nonce = nonces.mint({ projectId: '146', gateName: 'pr', capabilityId: 'cap-1' });
+    clock += 25 * 60 * 1000;
+    const verdict = nonces.consume(nonce, { projectId: '146', gateName: 'pr', capabilityId: 'cap-1' });
+    expect(verdict.accepted).toBe(false);
+    // Not EXPIRED: claiming expiry here would claim a record this host no longer
+    // holds. The bounded window is why both answers can be true at their own time.
     expect(verdict.code).toBe(APPROVAL_SIGNAL.APPROVAL_NONCE_UNKNOWN);
+  });
+
+  // PEEK MUST NOT CONSUME. `porch approve` peeks at authorization time so a bad
+  // nonce fails in a second rather than after a full build, then consumes just
+  // before the write. If peek consumed, every failed phase check would burn a
+  // single-use nonce and force a re-mint through the authenticated route.
+  it('peek validates without consuming, and consume still works afterwards', () => {
+    const nonces = new ApprovalNonceStore({ root });
+    const nonce = nonces.mint({ projectId: '146', gateName: 'pr', capabilityId: 'cap-1' });
+    const scope = { projectId: '146', gateName: 'pr', capabilityId: 'cap-1' };
+
+    expect(nonces.peek(nonce, scope).accepted).toBe(true);
+    expect(nonces.peek(nonce, scope).accepted).toBe(true);
+    expect(nonces.consume(nonce, scope).accepted).toBe(true);
+    // And after a real consume, peek reports the replay rather than accepting.
+    expect(nonces.peek(nonce, scope).code).toBe(APPROVAL_SIGNAL.APPROVAL_NONCE_REPLAYED);
   });
 
   // THE PLAN REQUIRES THESE TWO STORES TO BE SEPARATE. Asserted, not commented:

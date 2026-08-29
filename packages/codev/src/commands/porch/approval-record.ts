@@ -46,7 +46,16 @@ export interface ApprovalRecord {
 }
 
 export type ApprovalDecision =
-  | { readonly authorized: true; readonly record: ApprovalRecord }
+  | {
+      readonly authorized: true;
+      readonly record: ApprovalRecord;
+      /**
+       * Present only on the capability path. Called immediately before the gate
+       * is written, so single-use is spent on an approval that actually happens.
+       * `consume` — not `peek` — is the authoritative single-use step.
+       */
+      readonly consumeNonce?: () => { readonly accepted: boolean; readonly code: ApprovalSignal; readonly message: string };
+    }
   | { readonly authorized: false; readonly code: ApprovalSignal; readonly message: string };
 
 export interface ApprovalAuthorizationInput {
@@ -112,15 +121,21 @@ export function resolveApprovalAuthorization(input: ApprovalAuthorizationInput):
     return { authorized: false, code: verification.code, message: verification.message };
   }
 
-  const consumption = input.nonces.consume(input.env[NONCE_ENV_VAR]?.trim(), {
+  // PEEK, do not consume. This refusal happens before the phase checks run, so a
+  // bad nonce fails in a second rather than after a full build — but consuming
+  // here would burn a single-use nonce on a run that then fails a check or finds
+  // the gate already approved, forcing a re-mint through the authenticated
+  // route. `commitApprovalNonce` does the consuming, immediately before the write.
+  const scope = {
     projectId: input.projectId,
     gateName: input.gateName,
     // Bound to the capability that just verified, so a nonce minted for one
     // capability cannot authorize an approval presented with another.
     capabilityId: verification.capabilityId ?? '',
-  });
-  if (!consumption.accepted) {
-    return { authorized: false, code: consumption.code, message: consumption.message };
+  };
+  const inspection = input.nonces.peek(input.env[NONCE_ENV_VAR]?.trim(), scope);
+  if (!inspection.accepted) {
+    return { authorized: false, code: inspection.code, message: inspection.message };
   }
 
   return {
@@ -133,5 +148,6 @@ export function resolveApprovalAuthorization(input: ApprovalAuthorizationInput):
       session_id: verification.sessionId,
       capability_id: verification.capabilityId,
     },
+    consumeNonce: () => input.nonces.consume(input.env[NONCE_ENV_VAR]?.trim(), scope),
   };
 }

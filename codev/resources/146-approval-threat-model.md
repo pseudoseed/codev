@@ -111,9 +111,19 @@ so a **replay** reports `APPROVAL_NONCE_REPLAYED` and a nonce this host never mi
 `APPROVAL_NONCE_UNKNOWN`. Spelling those the same way would spell "I could not tell" the
 same way as "no".
 
-Past the TTL the entry is swept and a replay is genuinely indistinguishable from an unknown
-nonce; in that window the answer is `APPROVAL_NONCE_UNKNOWN`, which is the honest one,
-because the record no longer exists.
+A nonce past its TTL is kept for a bounded **retention window** (four TTLs) rather than swept
+at the TTL, so it reports `APPROVAL_NONCE_EXPIRED` while the record is still held. Sweeping at
+the TTL made that code unreachable — the row was gone before anything could look at it, so an
+expired nonce answered `APPROVAL_NONCE_UNKNOWN`, two events with one answer. Beyond the
+retention window the record genuinely no longer exists and `APPROVAL_NONCE_UNKNOWN` is the
+honest answer, which is why the window is bounded rather than infinite.
+
+`porch approve` **peeks** at the nonce during authorization and **consumes** it immediately
+before the gate is written. Peeking first means a bad nonce is refused in a second rather than
+after a full build; consuming last means a run that stops at the already-approved return, or at
+a failed phase check, does not burn a single-use nonce and force a re-mint through the
+authenticated route. `consume` remains the authoritative single-use step: a replay arriving
+between the peek and the consume loses there.
 
 The nonce is also bound to **the capability that presents it**. That field was stored and not
 checked in the first cut of this phase, which made it a claim rather than a constraint: a

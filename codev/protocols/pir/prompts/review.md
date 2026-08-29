@@ -188,7 +188,7 @@ Your active merge is gated by porch state — not by user-in-pane prose. Sit idl
 The human will:
 
 1. Review the PR on GitHub (or by running the worktree via `afx dev pir-{{project_id}}` again)
-2. Approve the `pr` gate via VSCode (Cmd+K G) or `porch approve {{project_id}} pr --a-human-explicitly-approved-this` in a shell
+2. Approve the `pr` gate via VSCode (Cmd+K G), or in a shell **at the workspace root** (not the builder worktree, where the call is refused): `porch approve {{project_id}} pr --a-human-explicitly-approved-this`
 
 Porch will then fire the gate-approved wake-up to you.
 
@@ -245,7 +245,7 @@ Together with the `--pr` record from step 4a and the `--merged` record from step
 
 - **Don't merge before the `pr` gate is approved** (steps 8–9). Neither a consultation APPROVE verdict nor user-in-pane prose ("looks good", "lgtm", "merge it") authorizes `gh pr merge` — only porch reporting `gate_status: approved` for the `pr` gate does.
 - Don't skip porch's PR/merge records (steps 4a, 9). The `--pr` record (step 4a) lets the gate-pending state link to the actual PR; the `--merged` record (step 9) closes the lifecycle in porch state. Skipping either leaves `history:` empty and downstream tooling blind.
-- Don't run `porch approve` for any gate on your own initiative — only when the architect relays the human's approval
+- Don't run `porch approve` for any gate — it refuses any call from inside a `.builders/` worktree, including one relaying a human's approval. The human approves from the workspace root; you wait.
 - Don't push to the default branch — only merge via PR
 - Don't skip the Architecture Updates / Lessons Learned sections — porch checks enforce their presence (the section must exist; explaining "no changes needed" in one line is fine)
 - **Don't run `consult` commands yourself** — porch handles consultations via the `verify` block. Manually invoking `consult` causes the consultation to run twice.

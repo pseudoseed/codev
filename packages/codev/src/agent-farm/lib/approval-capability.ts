@@ -79,6 +79,8 @@ const PRESENTATION_SEPARATOR = '.';
 const DEFAULT_CAPABILITY_LIFETIME_MS = 12 * 60 * 60 * 1000;
 const MAX_CAPABILITY_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const NONCE_TTL_MS = 5 * 60 * 1000;
+/** How long an expired nonce is kept so `EXPIRED` stays distinct from `UNKNOWN`. */
+const NONCE_RETENTION_MS = 4 * NONCE_TTL_MS;
 
 /** Env var a human's own shell carries; deliberately absent from builder launch scripts. */
 export const CAPABILITY_ENV_VAR = 'CODEV_APPROVAL_CAPABILITY';
@@ -415,10 +417,15 @@ export class ApprovalNonceStore {
   #read(): StoredNonce[] {
     const file = readJsonFile<{ version?: number; nonces?: StoredNonce[] }>(this.#path, {});
     const nonces = Array.isArray(file.nonces) ? file.nonces : [];
-    // Sweep entries whose TTL has passed, tombstones included: past the TTL a
-    // replay is indistinguishable from a fresh unknown nonce, and claiming
-    // otherwise would be inventing a distinction the data no longer supports.
-    const cutoff = this.#now() - NONCE_TTL_MS;
+    // Entries are kept for a GRACE WINDOW past their TTL, not swept at it.
+    //
+    // Sweeping at the TTL made `APPROVAL_NONCE_EXPIRED` unreachable: the row was
+    // gone before `consume` could look at it, so an expired nonce answered
+    // UNKNOWN. Two different events, one answer — the defect this codebase keeps
+    // finding. Within the grace window a nonce that this host really did mint
+    // reports EXPIRED; beyond it the record is genuinely gone and UNKNOWN is the
+    // honest answer, which is why the window is bounded rather than infinite.
+    const cutoff = this.#now() - NONCE_RETENTION_MS;
     return nonces.filter((entry) => entry.createdAt > cutoff);
   }
 
@@ -458,10 +465,64 @@ export class ApprovalNonceStore {
     return withLock(this.#path, () => this.#consumeLocked(nonce, scope));
   }
 
+  /**
+   * Same checks as `consume`, WITHOUT consuming.
+   *
+   * `porch approve` refuses early on a bad nonce — before it spends minutes
+   * running phase checks — but must not burn a single-use nonce on a run that
+   * then fails a check or finds the gate already approved. So it peeks first and
+   * consumes immediately before the write. `consume` remains the authoritative
+   * single-use step: a replay between the two still loses there.
+   */
+  peek(
+    nonce: string | undefined,
+    scope: { projectId: string; gateName: string; capabilityId: string },
+  ): NonceConsumption {
+    if (nonce === undefined || nonce.length === 0) {
+      return {
+        accepted: false,
+        code: APPROVAL_SIGNAL.APPROVAL_NONCE_MISSING,
+        message: 'no approval nonce was presented',
+      };
+    }
+    return this.#inspect(nonce, scope) ?? {
+      accepted: true,
+      code: APPROVAL_SIGNAL.APPROVAL_AUTHORIZED,
+      message: 'approval nonce is valid and not yet consumed',
+    };
+  }
+
   #consumeLocked(
     nonce: string,
     scope: { projectId: string; gateName: string; capabilityId: string },
   ): NonceConsumption {
+    const refusal = this.#inspect(nonce, scope);
+    if (refusal) return refusal;
+    const nonces = this.#read();
+    const entry = nonces.find((candidate) => candidate.nonce === nonce);
+    if (!entry) {
+      // Swept between the inspect and here. Reported as unknown rather than
+      // silently accepted.
+      return {
+        accepted: false,
+        code: APPROVAL_SIGNAL.APPROVAL_NONCE_UNKNOWN,
+        message: 'approval nonce disappeared between validation and consumption',
+      };
+    }
+    entry.consumedAt = this.#now();
+    this.#write(nonces);
+    return {
+      accepted: true,
+      code: APPROVAL_SIGNAL.APPROVAL_AUTHORIZED,
+      message: 'approval nonce consumed',
+    };
+  }
+
+  /** Every refusal reason, in order. Returns null when the nonce is usable. */
+  #inspect(
+    nonce: string,
+    scope: { projectId: string; gateName: string; capabilityId: string },
+  ): NonceConsumption | null {
     const nonces = this.#read();
     const entry = nonces.find((candidate) => candidate.nonce === nonce);
     if (!entry) {
@@ -505,13 +566,7 @@ export class ApprovalNonceStore {
         message: `approval nonce was minted for capability ${entry.capabilityId}, not ${scope.capabilityId}`,
       };
     }
-    entry.consumedAt = this.#now();
-    this.#write(nonces);
-    return {
-      accepted: true,
-      code: APPROVAL_SIGNAL.APPROVAL_AUTHORIZED,
-      message: 'approval nonce consumed',
-    };
+    return null;
   }
 }
 

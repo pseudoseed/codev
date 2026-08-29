@@ -42,9 +42,10 @@ the code directly in the worktree (you see it via `git diff`), typing into your 
 `afx send <your-builder-id>` (queued — check next turn), or a comment on the GitHub issue
 (re-fetch with `gh issue view <N> --comments`).
 
-Revise, recommit, ask whether more remains. **The gate stays pending until the human approves. When
-the architect relays that approval, run `porch approve <id> <gate> --a-human-explicitly-approved-this`
-to record it and continue — never on your own initiative.**
+Revise, recommit, ask whether more remains. **The gate stays pending until the human approves, and
+you never record it yourself.** `porch approve` refuses any call whose cwd is inside a `.builders/`
+worktree, so running it here exits 1. The human or the architect approves from the workspace root;
+you learn it happened from `porch next`, or from the architect relaying it. Then continue.
 
 ## Resumption After Crash
 

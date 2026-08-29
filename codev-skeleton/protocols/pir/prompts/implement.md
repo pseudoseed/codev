@@ -123,7 +123,7 @@ When the gate goes pending, output a short prose summary in the pane to orient t
 >
 > **How to test locally**: VSCode → right-click builder → **Run Dev**, or `afx dev pir-{{project_id}}`. View diff via VSCode → **View Diff** (auto-detects the repo's default branch).
 >
-> Ready for review — type feedback here, or approve with `porch approve {{project_id}} dev-approval --a-human-explicitly-approved-this` (Cmd+K G in VSCode).
+> Ready for review — type feedback here, or approve with Cmd+K G in VSCode, or from the **workspace root** (not this worktree): `porch approve {{project_id}} dev-approval --a-human-explicitly-approved-this`.
 
 Then **stay in the interactive session**. Do not exit. Wait for the user's next message.
 
@@ -142,7 +142,7 @@ Then **stay in the interactive session**. Do not exit. Wait for the user's next 
 
 - **Don't write `codev/reviews/<id>-<slug>.md` in this phase** — it's the next phase's artifact, with a different shape (retrospective with arch + lessons updates)
 - Don't add features not in the plan — scope creep is a `BLOCKED` signal, not a free expansion
-- Don't run `porch approve` on your own initiative — only when the architect relays the human's approval
+- Don't run `porch approve` at all — it refuses any call from inside a `.builders/` worktree, including one relaying a human's approval. The human approves from the workspace root; you wait.
 - Don't push to the default branch — only to your builder branch
 - Don't squash commits — let the merge commit preserve history
 - Don't open the PR yet — that's the `review` phase

@@ -1018,6 +1018,19 @@ export async function approve(
     }
   }
 
+  // Spend the single-use nonce HERE, not at authorization time. Everything above
+  // this line — the already-approved early return and the phase checks — can end
+  // the call without an approval, and burning the nonce on those would force a
+  // re-mint through the authenticated route for no reason.
+  const nonceCommit = approvalDecision.consumeNonce?.();
+  if (nonceCommit && !nonceCommit.accepted) {
+    console.log('');
+    console.log(chalk.red(`ERROR: approval refused (${nonceCommit.code}).`));
+    console.log(`  ${nonceCommit.message}`);
+    console.log('');
+    process.exit(1);
+  }
+
   state.gates[gateName].status = 'approved';
   state.gates[gateName].approved_at = approvalRecord.approved_at;
   state.gates[gateName].approval = approvalRecord;
