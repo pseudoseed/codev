@@ -36,6 +36,7 @@ describe('extension retirement', () => {
 
   it('removes both extensions from active release automation and instructions', () => {
     expect(existsSync(join(workspaceRoot, 'scripts/bump-vscode.sh'))).toBe(false);
+    expect(existsSync(join(workspaceRoot, '.github/workflows/sdk-canary.yml'))).toBe(false);
 
     const releaseSurfaces = [
       'scripts/bump-all.sh',

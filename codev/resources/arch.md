@@ -1197,6 +1197,11 @@ hand-list). `apps/vscode` is outside this graph.
 
 **Publishing:** `codev-core` and `codev-sdk` must be published to npm before `codev` (runtime dependencies).
 
+**Published-SDK coverage:** retiring the Stream Deck plugin also retired the repository's only
+canary against the already-published `@cluesmith/codev-sdk`. Normal CI resolves the sdk from the
+workspace, so it does not exercise the registry artifact; external-consumer fidelity currently
+has no automated in-repo check.
+
 **Per-package build tools:** most packages compile with plain `tsc`; `apps/web` uses Vite; `packages/artifact-canvas` produces its dual-format (CJS + ESM) library via **tsdown** (Rolldown-powered, the maintained successor to tsup — migrated in Issue #1187). tsdown emits per-format filenames (`index.mjs`/`index.d.mts` for ESM, `index.cjs`/`index.d.cts` for CJS), so the package's `exports` map uses nested `import`/`require` conditions each pointing at their matching declaration file.
 
 ## VS Code Extension
@@ -2111,7 +2116,6 @@ the lease — delivery is fire-and-forget and proves nothing about the host stil
 The command vocabulary lives in `@cluesmith/codev-types` (`canvas-command.ts`) as a closed union;
 Tower, the sdk and the canvas package each keep a local `satisfies`-bound copy of any runtime list
 because codev-types is type-only for all three.
-
 
 ### Internal Dependencies
 - **Git**: Version control, worktrees for builder isolation

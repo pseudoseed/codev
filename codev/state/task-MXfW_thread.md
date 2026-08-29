@@ -44,3 +44,9 @@
 - Strengthened the regression suite: it now requires the Stream Deck directory and VS Code bump
   script to be absent and checks the active release surfaces for extension hooks. The revised
   phase test passes 5/5.
+- Review round 2: Gemini again skipped without reviewing; Claude approved. Codex found one remaining
+  blocking cold-doc problem: a historical Stream Deck lesson still gave present-tense build/link
+  commands and claimed CI built both extensions. Rewrote it as explicitly historical while
+  preserving the durable multi-artifact verification lesson. Added a direct regression assertion
+  that the deleted SDK canary workflow stays absent, and documented the resulting published-SDK
+  coverage gap in cold `arch.md`. The phase suite remains 5/5.
