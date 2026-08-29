@@ -408,3 +408,48 @@ a control asserting `user-text` still produces its Ctrl+C where the assertions l
 All three worktrees now carry `WAIT_TIMEOUT_MS = 900_000` — bugfix-196 picked up #192's long
 wait when it merged `origin/main` at `01330f801`. Nobody can be timed out by anyone else's
 run, so the yield rule has no remaining purpose and it is first-come from here.
+
+## Flaky test observed (not skipped, not touched)
+
+`spec-146-phase-9-porch-engine.test.ts` — "every relative import in packed dist/ resolves
+inside the @cluesmith/codev tarball" — failed once during a local `porch done` with
+`Test timed out in 5000ms`, alongside 6533 passing tests.
+
+Timing-fragile by construction: it runs `execFileSync('npm', ['pack', ...])` **synchronously**
+under vitest's default 5000ms timeout, no override, on a package that packs a vendored
+three.js and a copied skeleton.
+
+Evidence it is load rather than this diff: it passed in an earlier clean `porch check` on this
+branch (tests 211.6s, all green); it passed on isolated re-run (16 passed, 1 skipped); CI is
+green on it across every run of this PR; and it exercises `npm pack`, which this diff does not
+touch.
+
+The load was mine. I had two of my own vitest runs contending — a full suite and a targeted
+run launched without checking I was competing with myself. The lock serialises the runners but
+the `pack` subprocess still ran on a busy machine. Same class of mistake as racing the lock,
+just against myself.
+
+Arming condition worth knowing: `it.skipIf(!distBuilt)` means it only runs when
+`packages/codev/dist` exists, and porch's own `build` criterion creates it — so running
+`porch check` / `porch done` is exactly what arms it. In the isolated re-run it skipped.
+
+**Left alone deliberately.** It is Spec 146 Phase 9's file and `builder/spir-146` is active in
+that area; annotating around a sibling's test is not this project's call. Reported to the
+architect instead. If it is worth hardening, the fix is an explicit timeout on that `it()`,
+not a skip.
+
+## Both open questions closed (by the architect, from source)
+
+1. **The escalation is useful, not noisy.** `mailbox-delivery.ts:946` tests
+   `next === LIVENESS_STREAK_THRESHOLD` — equality, not `>=`. The streak resets only on a
+   delivered or empty pass, so under a permanent `geometry-mismatch` it grows monotonically
+   past 10 and the condition is true for exactly one tick. Alarms once per starvation.
+2. **Yes, and the whole table fails the test.** `cancel-draft` cannot always fix `user-text`:
+   opencode's only non-fatal clear is `ctrl+u` (`input_delete_to_line_start`), so a multi-row
+   draft cannot be cleared by any safe byte — the keystroke lands, the composer does not
+   empty, the hold latches. Filed as #198, independently, from the other side of the table.
+
+   So the general test — *does this action fix the state it is mapped to* — was asked of both
+   rows and **both failed**. That makes it a property of how the table was built rather than
+   two coincidences: entries were chosen for what they do to a terminal, not for whether they
+   repair the state they are keyed to.
