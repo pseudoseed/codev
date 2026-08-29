@@ -258,6 +258,12 @@ export interface ProjectState {
    */
   pr_ready_for_human?: boolean;
   /**
+   * t3code thread join recorded at spawn (Spec 146 Phase 8). Optional so a
+   * status.yaml written before this field still loads, matching awaiting_input
+   * and pr_history.
+   */
+  thread_id?: string;
+  /**
    * Context-refresh boundaries already consumed for this project (Spec 1470).
    *
    * Appended in the SAME state write as the transition that triggered the

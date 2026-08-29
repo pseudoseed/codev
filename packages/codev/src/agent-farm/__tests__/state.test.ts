@@ -186,6 +186,29 @@ describe('State Management', () => {
       expect(state.loadState(WS).architect?.sessionId).toBe('sess-main-1');
     });
 
+    it('writes a thread-backed architect with sentinels and no terminalId', () => {
+      state.setArchitectByName(WS, 'uiv2', {
+        name: 'uiv2',
+        cmd: 'claude',
+        startedAt: new Date().toISOString(),
+        threadId: 'thr-arch',
+      });
+      const row = state.getArchitectByName(WS, 'uiv2');
+      expect(row?.threadId).toBe('thr-arch');
+      expect(row?.terminalId).toBeUndefined();
+      expect(row?.cmd).toBe('');
+    });
+
+    it('rejects an architect carrying both terminalId and threadId', () => {
+      expect(() => state.setArchitectByName(WS, 'bad', {
+        name: 'bad',
+        cmd: 'claude',
+        startedAt: new Date().toISOString(),
+        terminalId: 'term-1',
+        threadId: 'thr-1',
+      })).toThrow(/never both/);
+    });
+
     it('round-trips sessionId for a named sibling', () => {
       state.setArchitectByName(WS, 'reviewer', {
         name: 'reviewer',
@@ -374,6 +397,59 @@ describe('State Management', () => {
 
       const row = state.getBuilder('B-spec755-legacy');
       expect(row?.spawnedByArchitect).toBeUndefined();
+    });
+
+    it('writes threadId and no terminalId', () => {
+      state.upsertBuilder({
+        id: 'B-thread',
+        name: 'thread-builder',
+        status: 'implementing',
+        phase: 'init',
+        worktree: '/workspace/test/.builders/wt',
+        branch: 'feature-branch',
+        type: 'spec',
+        threadId: 'thr-1',
+      });
+      const row = state.getBuilder('B-thread');
+      expect(row?.threadId).toBe('thr-1');
+      expect(row?.terminalId).toBeUndefined();
+    });
+
+    it('rejects a row carrying both terminalId and threadId', () => {
+      expect(() => state.upsertBuilder({
+        id: 'B-both',
+        name: 'both',
+        status: 'implementing',
+        phase: 'init',
+        worktree: '/workspace/test/.builders/wt',
+        branch: 'feature-branch',
+        type: 'spec',
+        terminalId: 'term-1',
+        threadId: 'thr-1',
+      })).toThrow(/never both/);
+    });
+
+    it('rejects attaching a threadId onto an existing PTY builder', () => {
+      state.upsertBuilder({
+        id: 'B-pty',
+        name: 'pty',
+        status: 'implementing',
+        phase: 'init',
+        worktree: '/workspace/test/.builders/wt',
+        branch: 'feature-branch',
+        type: 'spec',
+        terminalId: 'term-1',
+      });
+      expect(() => state.upsertBuilder({
+        id: 'B-pty',
+        name: 'pty',
+        status: 'implementing',
+        phase: 'init',
+        worktree: '/workspace/test/.builders/wt',
+        branch: 'feature-branch',
+        type: 'spec',
+        threadId: 'thr-1',
+      })).toThrow(/never both/);
     });
   });
 

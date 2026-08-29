@@ -17,6 +17,7 @@ import {
   dbAnnotationToAnnotation,
 } from './db/types.js';
 import { isPortConflictError } from './db/errors.js';
+import { architectWriteValues, assertExclusiveIdentity } from './db/thread-identity.js';
 // Issue #1118: shared workspace-path canonicalization (single source of truth).
 // The architect/builders tables key on `workspace_path`; writers and readers
 // must agree on its exact form, so both layers normalize through this one leaf
@@ -128,15 +129,19 @@ export function setArchitect(workspacePath: string, architect: ArchitectState | 
   if (architect === null) {
     db.prepare("DELETE FROM architect WHERE workspace_path = ? AND id = 'main'").run(ws);
   } else {
+    const written = architectWriteValues(architect);
     db.prepare(`
-      INSERT OR REPLACE INTO architect (workspace_path, id, pid, port, cmd, started_at, terminal_id, session_id)
-      VALUES (@workspacePath, 'main', 0, 0, @cmd, @startedAt, @terminalId, @sessionId)
+      INSERT OR REPLACE INTO architect (workspace_path, id, pid, port, cmd, started_at, terminal_id, session_id, thread_id)
+      VALUES (@workspacePath, 'main', @pid, @port, @cmd, @startedAt, @terminalId, @sessionId, @threadId)
     `).run({
       workspacePath: ws,
-      cmd: architect.cmd,
+      pid: written.pid,
+      port: written.port,
+      cmd: written.cmd,
       startedAt: architect.startedAt,
-      terminalId: architect.terminalId ?? null,
+      terminalId: written.terminalId,
       sessionId: architect.sessionId ?? null,
+      threadId: written.threadId,
     });
   }
 }
@@ -158,16 +163,20 @@ export function setArchitectByName(workspacePath: string, name: string, architec
     return;
   }
 
+  const written = architectWriteValues(architect);
   db.prepare(`
-    INSERT OR REPLACE INTO architect (workspace_path, id, pid, port, cmd, started_at, terminal_id, session_id)
-    VALUES (@workspacePath, @name, 0, 0, @cmd, @startedAt, @terminalId, @sessionId)
+    INSERT OR REPLACE INTO architect (workspace_path, id, pid, port, cmd, started_at, terminal_id, session_id, thread_id)
+    VALUES (@workspacePath, @name, @pid, @port, @cmd, @startedAt, @terminalId, @sessionId, @threadId)
   `).run({
     workspacePath: ws,
     name,
-    cmd: architect.cmd,
+    pid: written.pid,
+    port: written.port,
+    cmd: written.cmd,
     startedAt: architect.startedAt,
-    terminalId: architect.terminalId ?? null,
+    terminalId: written.terminalId,
     sessionId: architect.sessionId ?? null,
+    threadId: written.threadId,
   });
 }
 
@@ -193,16 +202,26 @@ export function upsertBuilder(builder: Builder): void {
   // Issue #1118: derive the owning workspace from the worktree so the row is
   // keyed by (workspace_path, id) — letting the same id exist in two workspaces.
   const ws = deriveWorkspaceFromWorktree(builder.worktree);
+  assertExclusiveIdentity(builder);
+  const existing = db.prepare(
+    'SELECT terminal_id, thread_id FROM builders WHERE workspace_path = ? AND id = ?',
+  ).get(ws, builder.id) as { terminal_id: string | null; thread_id: string | null } | undefined;
+  if (existing) {
+    assertExclusiveIdentity({
+      terminalId: builder.terminalId ?? existing.terminal_id,
+      threadId: builder.threadId ?? existing.thread_id,
+    });
+  }
 
   db.prepare(`
     INSERT INTO builders (
       workspace_path, id, name, port, pid, status, phase, worktree, branch,
-      type, task_text, protocol_name, issue_number, terminal_id, spawned_by_architect,
+      type, task_text, protocol_name, issue_number, terminal_id, thread_id, spawned_by_architect,
       harness, model
     )
     VALUES (
       @workspacePath, @id, @name, 0, 0, @status, @phase, @worktree, @branch,
-      @type, @taskText, @protocolName, @issueNumber, @terminalId, @spawnedByArchitect,
+      @type, @taskText, @protocolName, @issueNumber, @terminalId, @threadId, @spawnedByArchitect,
       @harness, @model
     )
     ON CONFLICT(workspace_path, id) DO UPDATE SET
@@ -215,7 +234,8 @@ export function upsertBuilder(builder: Builder): void {
       task_text = excluded.task_text,
       protocol_name = excluded.protocol_name,
       issue_number = excluded.issue_number,
-      terminal_id = excluded.terminal_id,
+      terminal_id = COALESCE(excluded.terminal_id, builders.terminal_id),
+      thread_id = COALESCE(excluded.thread_id, builders.thread_id),
       spawned_by_architect = COALESCE(excluded.spawned_by_architect, builders.spawned_by_architect),
       harness = COALESCE(excluded.harness, builders.harness),
       model = COALESCE(excluded.model, builders.model)
@@ -232,6 +252,7 @@ export function upsertBuilder(builder: Builder): void {
     protocolName: builder.protocolName ?? null,
     issueNumber: builder.issueNumber != null ? String(builder.issueNumber) : null,
     terminalId: builder.terminalId ?? null,
+    threadId: builder.threadId ?? null,
     spawnedByArchitect: builder.spawnedByArchitect ?? null,
     harness: builder.harness ?? null,
     model: builder.model ?? null,
