@@ -98,3 +98,27 @@ without it. None of them writes the local filesystem, so #149 as reported is clo
 reviewer holding outward-facing mutation tools is the same defect one layer out. Closing it needs
 a mechanism I do not have from the SDK options, so it is a separate issue, not a line in this
 fix.
+
+## PR (2026-08-29)
+
+PR #187 opened. Full suite green (192.6s) after two `porch done` attempts — the first reported
+CHECKS FAILED for tests that were only queued behind spir-146 on the port-13999 suite lock, which
+is #151's exact symptom and not a failure here. Build passed both times.
+
+Posted the exposure-window note on #149 at the architect's direction: every consult verdict in
+this program, claude and opencode alike, came from a lane that had write access. That is a
+statement about the window, not about what went through it — no evidence any opencode lane wrote,
+and no audit has been done to look.
+
+CMAP running: gemini, codex, claude.
+
+### CMAP verdicts on PR #187
+
+| Lane | Verdict | Confidence |
+|---|---|---|
+| gemini (agy) | APPROVE | HIGH |
+| codex | APPROVE | HIGH |
+| claude | APPROVE | HIGH |
+
+The claude lane reviewing this PR ran under the fix it was reviewing — read-only tools — which is
+the change working on its own review round.
