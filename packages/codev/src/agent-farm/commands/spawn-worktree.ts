@@ -882,6 +882,17 @@ done
  * re-orients itself and continues autonomously. Deliberately free of
  * single quotes: it is embedded single-quoted in the generated script.
  */
+/**
+ * The role document a builder finds at its worktree root.
+ *
+ * Named here because the thread path needs the same path: the PTY path writes this file
+ * and injects it through harness-specific script fragments, while `DriverThread.create`
+ * takes `roleFilePath` and carries the role into the thread's first turn. Two spellings
+ * of the filename would give a thread-backed builder a role document at a path nothing
+ * else looks at.
+ */
+export const BUILDER_ROLE_FILE = '.builder-role.md';
+
 export const CRASH_RESUME_NUDGE =
   'You were automatically restarted after a crash. Your prior conversation context has been restored. '
   + 'Re-orient yourself (in strict mode run porch next for your project; check queued afx messages) '
@@ -1099,7 +1110,7 @@ export async function startBuilderSession(
 
   if (roleContent) {
     // Write role to a file for harness-based injection
-    const roleFile = resolve(worktreePath, '.builder-role.md');
+    const roleFile = resolve(worktreePath, BUILDER_ROLE_FILE);
     // Inject the actual dashboard port into the role prompt
     const roleWithPort = roleContent.replace(/\{PORT\}/g, String(DEFAULT_TOWER_PORT));
     writeFileSync(roleFile, roleWithPort);
@@ -1223,7 +1234,7 @@ export function buildWorktreeLaunchScript(
   let command = agentCmd;
 
   if (role) {
-    const roleFile = resolve(worktreePath, '.builder-role.md');
+    const roleFile = resolve(worktreePath, BUILDER_ROLE_FILE);
     const roleWithPort = role.content.replace(/\{PORT\}/g, String(DEFAULT_TOWER_PORT));
     writeFileSync(roleFile, roleWithPort);
     logger.info(`Loaded role (${role.source})`);

@@ -55,6 +55,17 @@ export type SpawnThreadFactory = (input: {
   prompt?: string;
   launchScript?: string;
   role?: 'builder' | 'architect';
+  /**
+   * The role prompt, and where the PTY path writes it.
+   *
+   * On the PTY path a role is injected by harness-specific script fragments and env
+   * (`startBuilderSession`), which a thread has no equivalent of. `DriverThread.create`
+   * already takes both and carries the role into the thread's first turn, so the thread
+   * path needs them forwarded, not reimplemented. Without them a thread-backed builder
+   * comes up with no role at all while the PTY path gives it one.
+   */
+  roleContent?: string | null;
+  roleFilePath?: string | null;
 }) => Promise<string>;
 
 let spawnThreadFactory: SpawnThreadFactory | undefined;

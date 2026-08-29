@@ -60,31 +60,112 @@ applied at the one seam where a silent PTY fallback would look like a successful
 **Verified from the built `dist`:** `chooseSpawnPath()` returns `pty`, and `thread` after
 `installThreadSpawnFactory()` — run against `packages/codev/dist`, not the TypeScript source.
 
-### Item 5 — the second half of the interrupt assertion
+#### The caller was reached and carried nothing — found in review, fixed here
 
-The plan states the criterion as two clauses: `activeTurnId: null` **and** the interrupted
-command's side effect absent. Only the first was asserted, because
-`createMemoryThreadEngine.startTurn` records a turn id and runs nothing — there is no side
-effect for an interrupt to prevent.
+A production caller that reaches the thread path is not the same as a thread-backed spawn.
+All five `launchSpawnedBuilder` call sites passed the generated builder prompt **only into
+the `startPty` closure**, never as `prompt:` on the options object. On the thread path the
+engine therefore got `prompt: undefined`, `createPorchThreadEngine.create` never called
+`beginTurn`, and the result was a thread that exists and has been told nothing — a spawn that
+reports success and did not spawn anything. `roleContent` was dropped the same way, even
+though `DriverThread.create` already accepts `roleContent`/`roleFilePath` and joins the role
+onto the first turn.
 
-Two changes:
+Nothing in the suite could see it. `spec-146-phase-9-afx-parity.test.ts` asserts an in-memory
+`launched` boolean, which is computed from the input rather than from a dispatched turn.
 
-1. `spec-146-phase-9-interrupt-side-effect.test.ts` — a process-backed `ThreadEngine` whose
-   turns are real child processes. It asserts both clauses, waits on the child's `exit` event
-   rather than a timer, and carries a **control test** showing the same turn *does* write the
-   marker without the interrupt. The assertion can fail, so it is holding something.
-2. The live-harness test's fixed `4000` ms wait is replaced by a **poll**. A fixed wait cannot
-   be right here, and both failure modes were observed by running it:
-   - at 4 s the provider has not started the command, so the test aborts `could not check`;
-   - at 90 s the `sleep 30` has already elapsed, so `SHOULD_NOT_FINISH` is written before the
-     interrupt fires and the test fails **against a working interrupt**.
-   It now polls for `STARTED` and interrupts the moment it lands, and asserts
-   `activeTurnId: null` as well as the absent marker.
+Fixed:
 
-The deterministic test proves the seam — `interruptThread` → `ThreadEngine.interrupt` — stops
-running work rather than only clearing a field, and it runs in CI with no server. It does
-**not** prove t3code's `thread.turn.interrupt` kills a provider's command; that is the live
-test's claim, and the live test skips loudly rather than passing quietly when it cannot check.
+- `SpawnThreadFactory` gains `roleContent` / `roleFilePath`; `launchSpawnedBuilder` accepts
+  and forwards both plus `prompt`.
+- All five call sites pass their prompt and role. The worktree spawn has no prompt by
+  definition — its payload is the launch script — and already passed `launchScript`.
+- `.builder-role.md` is now `BUILDER_ROLE_FILE`, exported from `spawn-worktree.ts`, so both
+  paths write and name the same file rather than two spellings of it.
+- `createPorchThreadEngine.create` forwards the role to `DriverThread.create`, and tracks the
+  first turn like any other.
+
+**Also in the engine:** `activeTurnId` was written as the invented `turn-${threadId}` and
+cleared only by `interrupt`, so a turn that settled normally left the record claiming one was
+still running. It is now the dispatched command's id, refined to the server's turn id when the
+server names it, and cleared when the turn settles. It is set from `commandId` immediately
+rather than after awaiting `running`, because a window where a turn IS running and the record
+reads `null` spells "not named yet" the same way as "idle".
+
+**Not fixed, and stated rather than papered over:** `ThreadRecord.merged` is written `false`
+at create and never updated, and `removeWorktree` always reports `removed` without consulting
+merge state. `cleanup.ts` uses `isWorktreeMerged` instead, so nothing reads it today. The
+`vcs.removeWorktree` refusal response has not been observed, and inventing a refusal branch
+against a shape I have not seen would be a guess.
+
+#### What item 2 does NOT do, named rather than left to be discovered
+
+`ensureThreadBackendReady` is called from `launchSpawnedBuilder` and nowhere else. `afx
+interrupt`, `afx cleanup` and `afx workspace add-architect` each reach `getThreadEngine()` in
+a **fresh process**, where no engine is registered. Raised by the codex reviewer, and it is
+correct.
+
+Calling `ensureThreadBackendReady` from those three commands would not fix them, which is why
+it was not done as a quick win. The engine holds its threads in process-local `Map`s and
+cannot re-attach to a thread it did not create, so a freshly-connected engine would answer
+`interrupt(threadId)` with "unknown thread" instead of "no engine" — the same failure wearing
+a different message. Rehydrating a `DriverThread` from a thread id is real work and belongs
+with items 3 and 4, which are about surviving a restart.
+
+What was fixed is the part that was actively misleading: both errors now say which of the
+three things is true — no server configured, a command that reached a thread-backed row
+without connecting, or a thread this process did not create and cannot re-attach to. A caller
+could not tell those apart from `Thread engine is not registered` and `Unknown thread <id>`,
+and the middle one is the only one that is a bug in this repo.
+
+#### The bootstrap token had no gitignore rule for adopters
+
+The codex reviewer called `.codev/config.json` "tracked" and recommended moving the token to
+the phase 7 credential store. Both halves are wrong, but the concern underneath is real.
+
+`.codev/config.json` **is** ignored in this repo (`.gitignore` line 11), so nothing here
+commits a token. And `MachineCredentialStore` is the wrong home: it stores credentials this
+host **issues to inbound clients** — "which client machine is talking to this host". The t3code
+bootstrap token is the opposite direction, one this workspace **presents to a server**. Its
+own module says so.
+
+What is real: `CODEV_GITIGNORE_ENTRIES` — what `codev init` and `codev adopt` write into an
+adopter's `.gitignore` — never listed `.codev/config.json`. This repo ignored it by hand. So
+an adopter that configured `threads.bootstrapToken` would commit the credential, and phase 9
+is what made that file a place secrets live.
+
+Added to `CODEV_GITIGNORE_ENTRIES`, which means `codev update` backfills it into existing
+projects as well as new ones. Only the file, not `.codev/` — protocol and template overrides
+live under that directory and are meant to be committed, and a test asserts both halves.
+Adding the rule does not untrack a file a project already tracks.
+
+### Item 5 — reassigned to builder-air-180, one half kept
+
+Item 5 is **no longer this builder's**. `builder-air-180` ran the live interrupt criterion
+for real against the pinned checkout and pinned `t3@0.0.36` under Node 26.4.0: the turn wrote
+`STARTED`, was interrupted, and `SHOULD_NOT_FINISH` was absent. Getting there exposed and
+fixed two things — no global `WebSocket` on Node 20, and a 4 s wait too short to establish
+that a turn had started, now a bounded 30 s poll.
+
+**Reverted here:** `c7cd64dae` had made the same fixed-wait-to-poll change to
+`spec-146-phase-9-live-harness.test.ts`. Restored byte-identical to `c7cd64dae^`
+(`git diff c7cd64dae^ -- <file>` is empty) so air-180's version, which has the live evidence
+behind its number, lands without a conflict. Architect ruling.
+
+**Kept here:** `spec-146-phase-9-interrupt-side-effect.test.ts` — a process-backed
+`ThreadEngine` whose turns are real child processes. It asserts both clauses of the criterion
+(`activeTurnId: null` **and** the interrupted command's side effect absent), waits on the
+child's `exit` event rather than a timer, and carries a control test showing the same turn
+*does* write the marker without the interrupt. `createMemoryThreadEngine.startTurn` records a
+turn id and runs nothing, so it has no side effect for an interrupt to prevent, which is why
+only the first clause had ever been asserted.
+
+**The two tests are complementary, not duplicative, and neither should be deleted as a copy
+of the other.** This one is deterministic and runs in CI on every push with no server.
+air-180's is live and needs one running. This one proves the seam — `interruptThread` →
+`ThreadEngine.interrupt` — stops running work rather than only clearing a field. It does not
+prove t3code's `thread.turn.interrupt` kills a provider's command; that is the live test's
+claim, and only the live test can make it.
 
 ## Not met — recorded, not ticked
 
@@ -92,20 +173,23 @@ Per the architect's ruling these are not implemented here, and none is ticked.
 
 | #179 item | Criterion | Status |
 |---|---|---|
-| 3 | An architect is a thread whose worktree is the workspace root | **Waiting on #180**, not blocked |
-| 4 | An architect thread survives a server restart and resumes with context | **Waiting on #180**, not blocked |
+| 3 | An architect is a thread whose worktree is the workspace root | **Runnable once air-180's PR merges** |
+| 4 | An architect thread survives a server restart and resumes with context | **Runnable once air-180's PR merges** |
+| 5 | The interrupt criterion, both clauses, proven live | **Reassigned to air-180**, met there |
 | 6 | One architect + six builders concurrently, measured | **Held by the architect** |
 | 7 | The cutover runbook exercised — `/arch-save` actually run | **Blocked** |
 
 **Items 3 and 4** were filed as blocked on #180 because no Node on this machine satisfies
 t3code's `^24.13.1` (Homebrew's `node@24`/`node@25`/`node@26` all resolve to v26.4.0; nvm tops
-out at v22.22.2). `builder-air-180` has since measured that `t3 serve` **does** start and answer
-under v26.4.0 against the pinned checkout `082e6ea` — verify matched the pin, `ready` returned
-authenticated JSON, `status` reported checkout == pin. That is serve evidence, not
-`--version` evidence. So these are a short wait for air-180's explicit-interpreter fix, not a
-permanent block. They were deliberately **not** run here by hand-setting `PATH`: the point of
-that fix is that these criteria run reproducibly rather than from a `PATH` someone remembered
-to export.
+out at v22.22.2). That is no longer a block: `builder-air-180` has run `t3 serve` under
+v26.4.0 against the pinned checkout `082e6ea` and had it answer — verify matched the pin,
+`ready` returned authenticated JSON, `status` reported checkout == pin — and has since run a
+live turn and interrupt against it. They become **runnable** the moment air-180's
+explicit-interpreter fix merges, and they stay untickable until then.
+
+They were deliberately **not** run here by hand-setting `PATH`. The point of air-180's fix is
+that these criteria run reproducibly rather than from a `PATH` someone remembered to export,
+and a pass obtained the other way would not be evidence for the criterion as written.
 
 **Item 6** is held by the architect: fleet RSS is 2.4 GB with one builder running, and this
 workspace hosts the architect driving the program.
@@ -117,14 +201,21 @@ is the one running the program, so `/arch-save` cannot be exercised against it.
 
 | File | Tests |
 |---|---|
-| `spec-146-phase-9-thread-backend.test.ts` | 11 — new; items 1 and 2, including the manifest guards |
-| `spec-146-phase-9-interrupt-side-effect.test.ts` | 2 — new; item 5, with its control |
+| `spec-146-phase-9-thread-backend.test.ts` | 16 — new; items 1 and 2, the packaging guards, and the spawn payload |
+| `spec-146-phase-9-porch-engine.test.ts` | 7 — 4 added; the first turn, the role on it, the idle control, and `activeTurnId` |
+| `spec-146-phase-9-interrupt-side-effect.test.ts` | 2 — new; the deterministic half of the interrupt criterion, with its control |
 | `spec-146-phase-9-afx-parity.test.ts` | unchanged |
-| `spec-146-phase-9-live-harness.test.ts` | poll replaces the fixed wait |
+| `spec-146-phase-9-live-harness.test.ts` | **reverted to `c7cd64dae^`** — air-180's file |
 
-The manifest assertions are deliberate. Moving the engine into `src/` is undone by one
-`private: true` and nothing else in the suite would notice, so the test asserts the manifests
-directly rather than only the file's location.
+The assertions that look like bookkeeping are the load-bearing ones. Moving the engine into
+`src/` is undone by one `private: true` and nothing else in the suite would notice, so the
+tests read the manifests. The dependency-set assertions do not name porch-driver or t3-client
+at all — they read every runtime `@cluesmith/*` dependency out of `packages/codev/package.json`
+and check each of the five places that enumerate that set by hand, because hardcoding the two
+names is exactly what made the first attempt at this fix miss three of them.
+
+Every assertion added in this phase was mutation-checked: the change it guards was reverted,
+the test was watched to fail, and the change was restored.
 
 ## A note on running the suite here
 
@@ -133,6 +224,19 @@ The suite fails with 40 unrelated errors when `CODEV_WORKTREE_ROOT` is set in th
 fixtures in three test files. Filed as **#189**; the architect is spawning a bugfix builder.
 Until it lands, run checks as
 `env -u CODEV_WORKTREE_ROOT -u CODEV_BUILDER_ID -u CODEV_ARCHITECT_NAME <cmd>`.
+
+## This makes two new packages public on npm — a release-time decision, not a detail
+
+`@cluesmith/porch-driver` and `@cluesmith/t3-client` were private. This phase makes
+`@cluesmith/codev` depend on both at runtime, which means the next release **publishes them
+to npm as new public packages**. That is an outward-facing commitment: two new names on the
+public registry, under the project's scope, that adopters can install and that cannot be
+quietly unpublished later. It is the human's call at release time.
+
+The alternative was vendoring porch-driver's surface into `packages/codev/src`, which was
+rejected because it is live logic with its own tests and a second copy is how the tested
+engine and the shipped one drift. That trade is recorded under item 1; the publishing
+consequence is recorded here so it is not discovered at release.
 
 ## Follow-up found after the build passed — the publish path was still broken
 

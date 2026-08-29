@@ -48,7 +48,18 @@ export function tryGetThreadEngine(): ThreadEngine | undefined {
 }
 
 export function getThreadEngine(): ThreadEngine {
-  if (!engine) throw new Error('Thread engine is not registered');
+  if (!engine) {
+    // "No engine registered" was true and useless: it is the same sentence for a
+    // workspace that has no t3code server configured, and for one that has a server but
+    // reached this line from a command that never called `ensureThreadBackendReady`.
+    // Only the second is a bug in this repo, and a caller cannot tell them apart from
+    // the old message.
+    throw new Error(
+      'No thread engine is registered in this process. Either this workspace has no t3code '
+      + 'server configured (in which case nothing should be thread-backed), or this command '
+      + 'reached a thread-backed row without calling ensureThreadBackendReady() first.',
+    );
+  }
   return engine;
 }
 

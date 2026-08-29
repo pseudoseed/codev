@@ -119,6 +119,13 @@ describe('Gitignore Utilities', () => {
       expect(CODEV_GITIGNORE_ENTRIES).toContain('.agent-farm/');
       expect(CODEV_GITIGNORE_ENTRIES).toContain('.consult/');
       expect(CODEV_GITIGNORE_ENTRIES).toContain('.builders/');
+      // Spec 146 phase 9: `.codev/config.json` can hold a t3code bootstrap token, and
+      // `codev init` never wrote a rule for it, so an adopter that configured a server
+      // would commit the credential.
+      expect(CODEV_GITIGNORE_ENTRIES).toContain('.codev/config.json');
+      // The directory itself must NOT be ignored — protocol and template overrides live
+      // under `.codev/` and are meant to be committed.
+      expect(CODEV_GITIGNORE_ENTRIES).not.toMatch(/^\.codev\/$/m);
     });
 
     // Regression for issue #880
@@ -150,7 +157,7 @@ describe('Gitignore Utilities', () => {
       const result = backfillGitignore(targetDir, CODEV_GITIGNORE_ENTRIES, { today: new Date('2026-05-27') });
 
       expect(result.skipped).toBe(false);
-      expect(result.added).toEqual(['.architect-role.md', 'codev/state/*.md', '!codev/state/*_thread.md']);
+      expect(result.added).toEqual(['.architect-role.md', '.codev/config.json', 'codev/state/*.md', '!codev/state/*_thread.md']);
       expect(result.alreadyPresent).toEqual(
         expect.arrayContaining(['.agent-farm/', '.consult/', 'codev/.update-hashes.json', '.builders/'])
       );
@@ -221,7 +228,7 @@ describe('Gitignore Utilities', () => {
 
       const result = backfillGitignore(targetDir, CODEV_GITIGNORE_ENTRIES, { dryRun: true });
 
-      expect(result.added).toEqual(['.architect-role.md', 'codev/state/*.md', '!codev/state/*_thread.md']);
+      expect(result.added).toEqual(['.architect-role.md', '.codev/config.json', 'codev/state/*.md', '!codev/state/*_thread.md']);
       expect(fs.readFileSync(path.join(targetDir, '.gitignore'), 'utf-8')).toBe(original);
     });
 
@@ -255,7 +262,7 @@ describe('Gitignore Utilities', () => {
 
       const result = backfillGitignore(targetDir, CODEV_GITIGNORE_ENTRIES, { today: new Date('2026-07-19') });
 
-      expect(result.added).toEqual(['codev/state/*.md', '!codev/state/*_thread.md']);
+      expect(result.added).toEqual(['.codev/config.json', 'codev/state/*.md', '!codev/state/*_thread.md']);
 
       const content = fs.readFileSync(path.join(targetDir, '.gitignore'), 'utf-8');
       expect(content.indexOf('codev/state/*.md')).toBeLessThan(

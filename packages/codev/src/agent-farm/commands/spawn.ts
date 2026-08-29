@@ -81,6 +81,7 @@ import {
   startBuilderSession,
   startShellSession,
   buildWorktreeLaunchScript,
+  BUILDER_ROLE_FILE,
 } from './spawn-worktree.js';
 import { getTowerClient } from '../lib/tower-client.js';
 import { executeForgeCommand, loadForgeConfig } from '../../lib/forge.js';
@@ -141,6 +142,8 @@ export async function launchSpawnedBuilder(opts: {
   model?: string;
   prompt?: string;
   launchScript?: string;
+  roleContent?: string | null;
+  roleFilePath?: string | null;
   startPty: () => Promise<{ terminalId: string }>;
   workspaceRoot?: string;
 }): Promise<{ terminalId?: string; threadId?: string }> {
@@ -152,6 +155,12 @@ export async function launchSpawnedBuilder(opts: {
   //
   // Skipped when the caller passes no workspaceRoot, which is how the unit tests drive
   // this function with an injected factory and no server.
+  //
+  // `prompt` and `roleContent` are the builder's actual mission, and reaching the thread
+  // path is not the same as spawning a builder on it. Every call site used to pass the
+  // generated prompt only into the `startPty` closure, so on the thread path the engine
+  // received `prompt: undefined`, never began a turn, and produced a thread that exists
+  // and has been told nothing — a spawn that looks successful and did not spawn anything.
   if (opts.workspaceRoot) await ensureThreadBackendReady(opts.workspaceRoot);
   const pathKind = chooseSpawnPath(opts.existing ?? undefined);
   if (pathKind === 'thread') {
@@ -163,6 +172,8 @@ export async function launchSpawnedBuilder(opts: {
       model: opts.model,
       prompt: opts.prompt,
       launchScript: opts.launchScript,
+      roleContent: opts.roleContent,
+      roleFilePath: opts.roleFilePath,
     });
     return { threadId };
   }
@@ -604,6 +615,9 @@ async function spawnSpec(options: SpawnOptions, config: Config, selection: Agent
     builderId, worktreePath, branch: branchName,
     workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
+    prompt: builderPrompt,
+    roleContent: role?.content ?? null,
+    roleFilePath: role ? resolve(worktreePath, BUILDER_ROLE_FILE) : null,
     startPty: () => startBuilderSession(
       config, builderId, worktreePath, effective.command,
       builderPrompt, role?.content ?? null, role?.source ?? null,
@@ -688,6 +702,9 @@ async function spawnTask(options: SpawnOptions, config: Config, selection: Agent
     builderId, worktreePath, branch: branchName,
     workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
+    prompt: builderPrompt,
+    roleContent: role?.content ?? null,
+    roleFilePath: role ? resolve(worktreePath, BUILDER_ROLE_FILE) : null,
     startPty: () => startBuilderSession(
       config, builderId, worktreePath, effective.command,
       builderPrompt, role?.content ?? null, role?.source ?? null,
@@ -758,6 +775,9 @@ async function spawnProtocol(options: SpawnOptions, config: Config, selection: A
     builderId, worktreePath, branch: branchName,
     workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
+    prompt,
+    roleContent: role?.content ?? null,
+    roleFilePath: role ? resolve(worktreePath, BUILDER_ROLE_FILE) : null,
     startPty: () => startBuilderSession(
       config, builderId, worktreePath, effective.command,
       prompt, role?.content ?? null, role?.source ?? null,
@@ -1030,6 +1050,9 @@ async function spawnIssueDrivenBuilder(
     builderId, worktreePath, branch: branchName,
     workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
+    prompt: builderPrompt,
+    roleContent: role?.content ?? null,
+    roleFilePath: role ? resolve(worktreePath, BUILDER_ROLE_FILE) : null,
     startPty: () => startBuilderSession(
       config, builderId, worktreePath, effective.command,
       builderPrompt, role?.content ?? null, role?.source ?? null,

@@ -35,9 +35,62 @@ export interface PorchThreadEngineOptions {
   readonly defaultModel?: string;
 }
 
+/**
+ * Why a thread this engine has never heard of is not the same as a thread that does not exist.
+ *
+ * The engine holds its threads in process-local maps and cannot rehydrate one from the
+ * server. Every `afx` invocation is a fresh process, so a thread created by `afx spawn` is
+ * unknown to the `afx interrupt` that follows it — and `Unknown thread <id>` reads as "no
+ * such thread", which is a different and wrong diagnosis. The limitation is real and is not
+ * fixed here; the message at least names it.
+ */
+function unknownThread(threadId: string): string {
+  return (
+    `Thread ${threadId} was not created by this process. This engine keeps threads in memory `
+    + `and cannot yet re-attach to one from a previous process or after a server restart, so `
+    + `this is not evidence that the thread does not exist.`
+  );
+}
+
 export function createPorchThreadEngine(options: PorchThreadEngineOptions): ThreadEngine {
   const threads = new Map<string, DriverThread>();
   const records = new Map<string, ThreadRecord>();
+
+  /**
+   * Follow one started turn onto the record, and off it again when it settles.
+   *
+   * `activeTurnId` was previously written as `turn-${threadId}` and cleared only by
+   * `interrupt`, so a turn that finished normally left the record claiming one was still
+   * running — and the id was invented rather than the server's.
+   *
+   * It is set from `commandId` first and refined to the real turn id when the server
+   * names it. Waiting for `started.running` before writing anything would leave a window
+   * where a turn IS running and the record reads `null`, which is an idle thread and a
+   * thread whose turn has not been named yet spelled the same way. Both promises are
+   * followed rather than awaited: the caller asked to start a turn, not to wait for it.
+   *
+   * The `activeTurnId === ` guards keep a late settle from clearing a NEWER turn's id.
+   */
+  function track(record: ThreadRecord, started: { commandId: string; running: Promise<string>; settled: Promise<unknown> }): void {
+    record.activeTurnId = started.commandId;
+    let current = started.commandId;
+    let finished = false;
+    void started.running.then(
+      (turnId) => {
+        // `settled` can land first; without this the refinement would resurrect a turn
+        // that has already finished.
+        if (finished) return;
+        if (record.activeTurnId === current) record.activeTurnId = turnId;
+        current = turnId;
+      },
+      () => {},
+    );
+    const clear = () => {
+      finished = true;
+      if (record.activeTurnId === current) record.activeTurnId = null;
+    };
+    void started.settled.then(clear, clear);
+  }
 
   return {
     async create(input: Parameters<SpawnThreadFactory>[0]) {
@@ -55,10 +108,15 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
           defaultModel: options.defaultModel,
           worktreePath: input.worktreePath,
           branch: input.branch,
+          // The PTY path injects a role through harness-specific script fragments and
+          // env; a thread has none of that, and `DriverThread` already carries a role
+          // into the first turn. Forwarded rather than reimplemented.
+          roleContent: input.roleContent ?? undefined,
+          roleFilePath: input.roleFilePath ?? undefined,
         },
       );
       threads.set(thread.threadId, thread);
-      records.set(thread.threadId, {
+      const record: ThreadRecord = {
         threadId: thread.threadId,
         worktreePath: input.worktreePath,
         branch: input.branch,
@@ -66,22 +124,26 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
         activeTurnId: null,
         merged: false,
         launched: Boolean(input.launchScript || input.prompt || input.role === 'architect'),
-      });
-      if (input.prompt) await thread.beginTurn(input.prompt);
+      };
+      records.set(thread.threadId, record);
+      // The initial turn IS the spawn: without it the thread exists and the builder has
+      // been given nothing to do. Tracked like any other turn so the record does not
+      // read idle while the first one runs.
+      if (input.prompt) track(record, await thread.beginTurn(input.prompt));
       return thread.threadId;
     },
 
     async startTurn(threadId, text) {
       const thread = threads.get(threadId);
-      if (!thread) throw new Error(`Unknown thread ${threadId}`);
+      if (!thread) throw new Error(unknownThread(threadId));
       const record = records.get(threadId);
-      if (record) record.activeTurnId = `turn-${threadId}`;
-      await thread.beginTurn(text);
+      const started = await thread.beginTurn(text);
+      if (record) track(record, started);
     },
 
     async interrupt(threadId) {
       const thread = threads.get(threadId);
-      if (!thread) throw new Error(`Unknown thread ${threadId}`);
+      if (!thread) throw new Error(unknownThread(threadId));
       await thread.interrupt();
       const record = records.get(threadId);
       if (record) record.activeTurnId = null;
@@ -96,7 +158,7 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
       const thread = threads.get(threadId);
       const record = records.get(threadId);
       const path = thread?.worktreePath ?? record?.worktreePath;
-      if (!path) throw new Error(`Unknown thread ${threadId}`);
+      if (!path) throw new Error(unknownThread(threadId));
       await options.dispatcher.call('vcs.removeWorktree', {
         cwd: options.workspaceRoot,
         path,

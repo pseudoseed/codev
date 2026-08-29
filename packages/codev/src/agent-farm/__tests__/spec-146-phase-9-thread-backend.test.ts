@@ -17,6 +17,7 @@ import { join, resolve } from 'node:path';
 import { chooseSpawnPath, setSpawnThreadFactory } from '../db/thread-identity.js';
 import { setThreadEngine, createMemoryThreadEngine } from '../thread-runtime.js';
 import { ensureThreadBackendReady, readThreadBackendConfig } from '../thread-backend.js';
+import { launchSpawnedBuilder } from '../commands/spawn.js';
 
 const repoRoot = resolve(import.meta.dirname, '../../../../..');
 const pkg = (rel: string) => JSON.parse(readFileSync(join(repoRoot, rel), 'utf8'));
@@ -189,6 +190,62 @@ describe('Spec 146 Phase 9 — production spawn wiring (#179 item 2)', () => {
   it('an already-registered engine is left alone', async () => {
     setThreadEngine(createMemoryThreadEngine());
     await expect(ensureThreadBackendReady(workspace())).resolves.toBe('already-installed');
+  });
+
+  it('launchSpawnedBuilder forwards the mission to the factory, not only to the PTY closure', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    setSpawnThreadFactory(async (input) => {
+      seen.push(input as unknown as Record<string, unknown>);
+      return 'thr-1';
+    });
+    const identity = await launchSpawnedBuilder({
+      existing: { threadId: undefined, terminalId: undefined },
+      builderId: 'b1',
+      worktreePath: '/tmp/wt',
+      branch: 'builder/b1',
+      prompt: 'IMPLEMENT ISSUE 179',
+      roleContent: 'YOU ARE A BUILDER',
+      roleFilePath: '/tmp/wt/.builder-role.md',
+      startPty: async () => {
+        throw new Error('the thread path must not fall through to the PTY');
+      },
+    });
+
+    expect(identity).toEqual({ threadId: 'thr-1' });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      prompt: 'IMPLEMENT ISSUE 179',
+      roleContent: 'YOU ARE A BUILDER',
+      roleFilePath: '/tmp/wt/.builder-role.md',
+    });
+  });
+
+  it('every spawn call site gives the thread path something to run', () => {
+    // The behaviour test above proves the forwarding; this proves the call sites
+    // actually use it. They passed the generated prompt only into their `startPty`
+    // closure, so on the thread path the engine got `prompt: undefined`, never began a
+    // turn, and produced a thread that had been told nothing. Nothing in the suite
+    // noticed, because the parity test asserted an in-memory `launched` boolean.
+    //
+    // A worktree spawn is the one form with no prompt by definition — its payload is
+    // the launch script — so either satisfies this.
+    const src = readFileSync(
+      join(repoRoot, 'packages/codev/src/agent-farm/commands/spawn.ts'),
+      'utf8',
+    );
+    const calls: string[] = [];
+    let from = src.indexOf('await launchSpawnedBuilder({');
+    while (from !== -1) {
+      const end = src.indexOf('\n  });', from);
+      expect(end).toBeGreaterThan(from);
+      calls.push(src.slice(from, end));
+      from = src.indexOf('await launchSpawnedBuilder({', end);
+    }
+    expect(calls.length).toBeGreaterThanOrEqual(5);
+    for (const [index, call] of calls.entries()) {
+      expect({ index, carriesPayload: /\n\s+(prompt[,:]|launchScript:)/.test(call) })
+        .toEqual({ index, carriesPayload: true });
+    }
   });
 
   it('launchSpawnedBuilder calls the wiring — the production caller exists', () => {
