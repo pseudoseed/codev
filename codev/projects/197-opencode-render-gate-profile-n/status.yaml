@@ -1,7 +1,7 @@
 id: '197'
 title: opencode-render-gate-profile-n
 protocol: air
-phase: pr
+phase: verified
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -13,7 +13,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-29T17:39:38.758Z'
-updated_at: '2026-08-29T19:13:15.552Z'
+updated_at: '2026-08-29T19:14:04.064Z'
 pr_history:
   - phase: implement
     pr_number: 203
