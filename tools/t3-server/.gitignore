@@ -1,0 +1,7 @@
+# The harness's live server data directory. NEVER commit this.
+#
+# `start` creates a real t3 server instance here, which generates private
+# signing keys, a state database, and a log containing pairing tokens and
+# WebSocket tickets. An earlier commit swept the whole directory in via
+# `git add tools/t3-server/` and tracked all of it. Review caught it.
+.runtime/

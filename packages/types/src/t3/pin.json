@@ -1,0 +1,60 @@
+{
+  "_comment": "The pinned t3code contract. Edited only by the refresh procedure in tools/t3-codegen/REFRESH.md. Spec 146.",
+  "repo": "https://github.com/pingdotgg/t3code",
+  "commit": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
+  "commitDate": "2026-08-25",
+  "effectVersion": "4.0.0-beta.103",
+  "contractsRoot": "packages/contracts/src",
+  "closure": [
+    "auth.ts",
+    "baseSchemas.ts",
+    "environment.ts",
+    "git.ts",
+    "model.ts",
+    "orchestration.ts",
+    "providerInstance.ts",
+    "sourceControl.ts",
+    "vcs.ts"
+  ],
+  "closureNote": "Transitive import closure of orchestration.ts + git.ts + auth.ts. 9 files, 3663 lines. rpc.ts is deliberately excluded: its own closure is 27 files / 11120 lines because it names every unrelated subsystem's RPCs. The generator FAILS if the real import graph reaches a file not on this list.",
+  "methods": {
+    "_comment": "The mapping rpc.ts would have given us, pinned explicitly instead. Orchestration entries are DERIVED from OrchestrationRpcSchemas in the closure and verified against this list. The vcs method strings live in the unvendored rpc.ts, so they are recorded here and their schemas resolved from the vendored git.ts.",
+    "orchestration.dispatchCommand": {
+      "key": "dispatchCommand",
+      "source": "OrchestrationRpcSchemas"
+    },
+    "orchestration.subscribeThread": {
+      "key": "subscribeThread",
+      "source": "OrchestrationRpcSchemas",
+      "stream": true
+    },
+    "orchestration.getTurnDiff": {
+      "key": "getTurnDiff",
+      "source": "OrchestrationRpcSchemas"
+    },
+    "orchestration.searchThreads": {
+      "key": "searchThreads",
+      "source": "OrchestrationRpcSchemas"
+    },
+    "vcs.createWorktree": {
+      "input": "VcsCreateWorktreeInput",
+      "output": "VcsCreateWorktreeResult",
+      "source": "git.ts"
+    },
+    "vcs.removeWorktree": {
+      "input": "VcsRemoveWorktreeInput",
+      "output": null,
+      "source": "git.ts"
+    },
+    "vcs.createRef": {
+      "input": "VcsCreateRefInput",
+      "output": "VcsCreateRefResult",
+      "source": "git.ts"
+    },
+    "vcs.status": {
+      "input": "VcsStatusInput",
+      "output": "VcsStatusResult",
+      "source": "git.ts"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "mutation": "removed isNonEmpty() from TrimmedNonEmptyString",
+  "emittedBefore": {
+    "TrimmedNonEmptyString": "{\"type\":\"string\"}",
+    "ThreadId": "{\"type\":\"string\"}",
+    "CommandId": "{\"type\":\"string\"}"
+  },
+  "emittedAfter": {
+    "TrimmedNonEmptyString": "{\"type\":\"string\"}",
+    "ThreadId": "{\"type\":\"string\"}",
+    "CommandId": "{\"type\":\"string\"}"
+  },
+  "schemaChanged": false,
+  "hashChanged": true,
+  "verdict": "CONFIRMED: the generated layer is blind to this change; only the source hash catches it."
+}

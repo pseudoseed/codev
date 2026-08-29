@@ -49,6 +49,7 @@ import { fetchTeamGitHubData, type TeamMemberGitHubData } from '../../lib/team-g
 import { resolveTarget, resolveAgentInRegistry, broadcastMessage, isResolveError, type ResolveResult } from './tower-messages.js';
 import { handleCommandRoute, COMMAND_ROUTE } from './command-relay.js';
 import { handleV2Route } from './v2-routes.js';
+import { handleAgentRoute } from './agent-routes.js';
 import { handleCanvasRoute, CANVAS_ROUTE_PREFIX } from './canvas-relay.js';
 import { formatArchitectMessage, formatBuilderMessage, formatUserViaVsCodeMessage } from '../utils/message-format.js';
 import type { PtySession } from '../../terminal/pty-session.js';
@@ -238,7 +239,10 @@ export async function handleRequest(
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', `Content-Type, ${TOWER_KEY_HEADER}, ${LEGACY_WEB_KEY_HEADER}`);
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    `Content-Type, ${TOWER_KEY_HEADER}, ${LEGACY_WEB_KEY_HEADER}, X-Codev-Human-Session`,
+  );
   res.setHeader('Cache-Control', 'no-store');
 
   // A CORS preflight carries no credentials and performs no action, so it is
@@ -269,6 +273,11 @@ export async function handleRequest(
   const url = new URL(req.url || '/', `http://localhost:${ctx.port}`);
 
   try {
+    // Spec 146 Phase 5: additive codev-agent protocol-state surface. It shares
+    // this process and the authentication choke point above; terminal routes
+    // remain in place throughout the dual-write window.
+    if (handleAgentRoute(req, res, url)) return;
+
     // Exact-match route dispatch (O(1) lookup)
     const routeKey = `${req.method} ${url.pathname}`;
     const handler = ROUTES[routeKey];

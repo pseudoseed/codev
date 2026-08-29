@@ -65,6 +65,12 @@ import { runBootConsolidation } from '../db/consolidate.js';
 import { DEFAULT_TOWER_PORT, AGENT_FARM_DIR } from '../lib/tower-client.js';
 import { validateHost, getExpectedKey, selectWsSubprotocol } from '../utils/server-utils.js';
 import { version } from '../../version.js';
+import {
+  HumanPairedSessionRegistry,
+  initAgentRoutes,
+  shutdownAgentRoutes,
+} from './agent-routes.js';
+import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -215,6 +221,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   // 6b. Close per-workspace .codev/config(.local).json watchers.
   stopAllCodevConfigWatchers();
+
+  // 6c. Stop accepting codev-agent state/session work.
+  shutdownAgentRoutes();
 
   // 7. Tear down instance module (Spec 0105 Phase 3)
   shutdownInstances();
@@ -687,6 +696,21 @@ async function bootSequence(): Promise<void> {
     getTerminalsForWorkspace,
   });
 
+  // Spec 146 Phase 5: codev-agent is the surviving Tower process, not a
+  // second daemon. Wire its read-only protocol surface before readiness opens.
+  // The registry is in-memory: a restart expires every human session instead
+  // of resurrecting a replayable credential.
+  const humanSessions = new HumanPairedSessionRegistry();
+  initAgentRoutes({
+    db: getGlobalDb,
+    log,
+    humanSessions,
+    isKnownWorkspace: (workspacePath) => {
+      const wanted = normalizeWorkspacePath(workspacePath);
+      return getKnownWorkspacePaths().some((known) => normalizeWorkspacePath(known) === wanted);
+    },
+  });
+
   // Spec 399: Initialize cron scheduler after instances are ready.
   // Spec 1313 (Phase 6): cron delivers through the mailbox + gate via `deliverCronMessage`
   // (the same single gated path as `handleSend`) instead of a blind PTY write.
@@ -765,4 +789,3 @@ terminalWss = new WebSocketServer({
 
 // Spec 0105 Phase 5: WebSocket upgrade handler extracted to tower-websocket.ts
 setupUpgradeHandler(server, terminalWss, port);
-

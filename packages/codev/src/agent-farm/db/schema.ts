@@ -183,6 +183,8 @@ CREATE TABLE IF NOT EXISTS architect (
   started_at TEXT NOT NULL DEFAULT (datetime('now')),
   terminal_id TEXT,
   session_id TEXT,
+  -- Spec 146 Phase 5: nullable t3code join. Phase 8 begins writing it.
+  thread_id TEXT,
   PRIMARY KEY (workspace_path, id)
 );
 
@@ -207,6 +209,8 @@ CREATE TABLE IF NOT EXISTS builders (
   protocol_name TEXT,
   issue_number TEXT,
   terminal_id TEXT,
+  -- Spec 146 Phase 5: nullable t3code join. Phase 8 begins writing it.
+  thread_id TEXT,
   spawned_by_architect TEXT,
   -- Issue #2: the (harness, model) pair this builder was spawned with. NULL means
   -- "not recorded" — every row written before this existed, and any spawn that
