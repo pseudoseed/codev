@@ -356,3 +356,55 @@ Lock discipline held throughout: yielded to spir-146 and bugfix-196 all afternoo
 raced, never killed anything. The window-taker required two consecutive FREE polls 20s apart
 so it would not fire on a gap between another builder's runs, and it opened at 12:26:13 when
 spir-146 released for its merge.
+
+---
+
+## Second review round (fresh lane on current HEAD): REQUEST_CHANGES
+
+The fix was sound at the seam. Everything blocking was on the **human-facing surfaces the
+telemetry fix did not reach** — the same hole this issue is about, on the other side.
+
+1. **`inbox.ts` promised an ESC that can never fire.** Its paragraph named
+   `geometry-mismatch` among the details that get "one automatic ESC after the starvation
+   window". This PR made that false. Worse, the filter above it keys on
+   `heldRecoveryAction(...) === 'escape-screen'`, so it correctly *excluded* those rows — and
+   they therefore printed **no guidance at all** while the prose beside them promised a
+   keystroke. #190's exact shape, introduced by the change that fixed its telemetry twin.
+   Fixed by removing the hand-maintained detail list from the prose (the filter already
+   decides membership) and giving `geometry-mismatch` its own block.
+
+2. **`heldRemedy` had no `geometry-mismatch` branch**, so the one detail with a non-obvious
+   remedy was the one the operator was told nothing specific about. Added a branch naming
+   what actually works: open the terminal tab, because a connected client's resize realigns
+   the mirror, and it self-clears on the next re-attach. Deliberately a branch, **not** a
+   second detail list — keying on `heldRecoveryAction` is why this degraded gracefully at all.
+
+3. **An inverted claim in the record, and the correction matters more than the code.** The
+   `codev terminal` case was written up as "an honest hold, but a permanent one". It is not a
+   hold — it is a **false negative**. Verified in `shellper-process.ts:429`: `handleResize`
+   sets `this.cols/rows` and resizes the PTY but **broadcasts nothing**, so when a second
+   client resizes, Tower's mirror and its `_ptyGeometry` both stay at the old value and stay
+   EQUAL. The fact-based check compares them, sees agreement, and passes — while both are
+   wrong relative to the grid the agent now paints at.
+
+   The consequence for anyone writing the follow-up: the spec has to **push geometry to
+   clients on RESIZE**. Softening a hold would be fixing a symptom that does not exist.
+
+Nits, also fixed: two comments still quoted the pre-change cliff as "clean at 31+" against an
+assertion of `rows >= 32`; and the byte-assertion tests had **no positive control**, so
+`expect(writes).toEqual([])` would have passed just as well against a harness that could not
+observe a write at all — the empty-fixture-directory defect again, in my own new tests. Added
+a control asserting `user-text` still produces its Ctrl+C where the assertions look for it.
+
+### Still open, still not answered by me
+
+1. Whether `geometry-mismatch` joining `isClassifierStuck` gives a useful escalation or a
+   noisy one, now that the condition is permanent-until-resize rather than occasional.
+2. Whether anything else in the recovery table has an action mapped to a state it cannot fix.
+   ESC cannot fix geometry; nobody has asked whether `cancel-draft` can always fix `user-text`.
+
+### Lock rule dissolved
+
+All three worktrees now carry `WAIT_TIMEOUT_MS = 900_000` — bugfix-196 picked up #192's long
+wait when it merged `origin/main` at `01330f801`. Nobody can be timed out by anyone else's
+run, so the yield rule has no remaining purpose and it is first-come from here.

@@ -211,6 +211,20 @@ describe('render gate — a live turn is never handed a recovery keystroke (Issu
     if (action) session.write(heldRecoveryKeystroke(action));
   }
 
+  it('POSITIVE CONTROL: the harness DOES record a keystroke when one is sent', () => {
+    // Without this, every `expect(writes).toEqual([])` below is satisfied just as well by a
+    // harness that cannot observe a write at all — a green test proving nothing, which is
+    // the same defect as a fixture sweep over an empty directory (#190, #193, #194). This
+    // pins the reach: `user-text` still maps to `cancel-draft`, and the byte lands where the
+    // assertions look for it.
+    const session = makeSession();
+    session.attachShellper(makeFakeClient({ cols: CAPTURE_COLS, rows: CAPTURE_ROWS }), Buffer.alloc(0), 111);
+
+    applyRecovery(session, 'user-text');
+
+    expect(writes).toEqual(['\x03']);
+  });
+
 
   it('a mid-turn screen on a mismatched mirror writes NO bytes at all', async () => {
     const seed = readFileSync(`${FIXTURE_DIR}/opencode197-midturn.busy.txt`);

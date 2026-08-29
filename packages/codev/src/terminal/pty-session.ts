@@ -256,7 +256,7 @@ export class PtySession extends EventEmitter {
     // frame's last rows, a shorter viewport clips it away entirely, `rulePattern` matches
     // nothing, and the render gate returns `no-composer-marker` for every message forever.
     // Measured on a real 32-row opencode capture: held at every mirror height 10..30,
-    // clean at 31+. That is the Issue #197 field failure — holds of 3.5m, 8m and 12m to an
+    // clean at 32+ (its capture height). That is the Issue #197 field failure — holds of 3.5m, 8m and 12m to an
     // opencode builder while claude and codex in the same workspace delivered first try.
     //
     // ADOPT, don't command: we align our mirror to the app's truth and deliberately do NOT

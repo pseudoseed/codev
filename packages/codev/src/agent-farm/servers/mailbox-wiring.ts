@@ -335,9 +335,16 @@ function formatOwnerNoticeBody(info: HeldOwnerNoticeInfo): string {
  * 2026-08-21, each needing manual intervention.
  *
  * `user-text` gets the clearing command. `busy-indicator` is an agent mid-turn:
- * clearing there would corrupt a live turn, and the answer is to wait. Anything
- * else is a screen the gate could not read at all, which is a different problem
- * and says so rather than offering a remedy for the wrong one.
+ * clearing there would corrupt a live turn, and the answer is to wait.
+ * `geometry-mismatch` (Issue #197) is the third shape: nothing is wrong with the
+ * composer, Tower's mirror is simply the wrong SIZE for it, so no keystroke helps
+ * and Tower deliberately sends none — the remedy is a resize, which only a client
+ * can produce. Anything else is a screen the gate could not read at all, which is
+ * a different problem and says so rather than offering a remedy for the wrong one.
+ *
+ * Note the branches key on `heldRecoveryAction`, not on a second list of details.
+ * That is why removing geometry-mismatch's recovery action degraded gracefully here
+ * instead of promising an ESC that would never fire; do not replace it with a list.
  */
 export function heldRemedy(toAgent: string, detail: string | null): string {
   const inspect = `Inspect with 'afx inbox'.`;
@@ -356,6 +363,20 @@ export function heldRemedy(toAgent: string, detail: string | null): string {
       `${inspect} The agent is MID-TURN, not stuck on a leftover prompt. Do not clear its composer — ` +
       `that corrupts a live turn. Delivery resumes on its own when the turn ends; ` +
       `'afx interrupt ${toAgent}' ends the turn if it is genuinely wedged.`
+    );
+  }
+
+  if (detail === 'geometry-mismatch') {
+    // The one detail whose remedy is neither "wait" nor "clear the composer" — and, until
+    // Issue #197, the one an operator was told nothing specific about. Tower's gate mirror
+    // is a different SIZE from the grid the agent paints at, so no keystroke helps: the
+    // repair is a resize, and only a client can produce one.
+    return (
+      `${inspect} Tower's screen mirror is a different SIZE from the terminal the agent is ` +
+      `drawing to, so the gate cannot read the composer and NO keystroke will fix it — ` +
+      `Tower sends none for this state. Open ${toAgent}'s terminal tab: a connected client ` +
+      `sends a resize, which realigns the mirror and delivery resumes. It also clears by ` +
+      `itself the next time the session re-attaches (a Tower restart).`
     );
   }
 

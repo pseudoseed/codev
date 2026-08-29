@@ -481,7 +481,7 @@ describe('render-gate — opencode fixtures across terminal widths (Issue #4)', 
    * from "this app has no composer", which is how a geometry bug was filed as profile drift.
    *
    * Measured cliff on a real 32-row opencode capture: held at every mirror height 10..30,
-   * clean at 31+. The asymmetry is the finding — claude and agy stay clean at every height
+   * clean at 32+, its capture height. The asymmetry is the finding — claude and agy stay clean at every height
    * 10..40 and codex holds only below 20, so those three survive a short mirror because
    * their composers happen to sit at the cursor and stay in view, NOT because anything
    * guarantees it. A claude that grew its composer downward would fail identically, and
