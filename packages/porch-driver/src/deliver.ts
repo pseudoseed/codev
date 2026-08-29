@@ -130,7 +130,33 @@ export interface OutboundMessage {
   readonly idempotencyKey: string;
 }
 
-export const MESSAGE_METHOD = 'thread.message.send';
+/**
+ * The command a message to a builder actually is.
+ *
+ * **Not `thread.message.send`.** An earlier draft of this file used that name and
+ * every unit test passed, because the tests inject a fake dispatcher that accepts
+ * any payload. The live server refused it on sight: there is no such member of
+ * t3code's command union, and the generated contract lists no `thread.message.*`
+ * command at all. Sending user text to a thread IS starting a turn with it.
+ *
+ * The lesson is Phase 3's, unlearned and relearned one phase later: a fake
+ * dispatcher validates nothing about the contract, so a payload check against the
+ * vendored schema is what has to carry it. The test for this asserts
+ * `checkPayload(method, 'input', payload)` returns `ok`, which is the only thing in
+ * the suite that could have caught an invented method name.
+ */
+export const MESSAGE_METHOD = 'thread.turn.start';
+
+/**
+ * The `messageId` for an idempotency key.
+ *
+ * Derived, like the `commandId`, so a retry rebuilds a byte-identical payload
+ * rather than a new message inside a deduplicated command. A different namespace,
+ * so the two ids never collide.
+ */
+export function messageIdForKey(idempotencyKey: string): string {
+  return commandIdForKey(`message:${idempotencyKey}`);
+}
 
 /**
  * Send one message now, without consulting turn state.
@@ -174,8 +200,22 @@ export async function sendMessage(
       type: MESSAGE_METHOD,
       commandId,
       threadId: message.threadId,
-      idempotencyKey: message.idempotencyKey,
-      message: { role: 'user', text: message.text },
+      // The contract's shape, not an approximation of it: `messageId` and
+      // `attachments` are required members of `message`, and `runtimeMode` is a
+      // required member of the command. The earlier payload carried a bare
+      // `{ role, text }` plus a top-level `idempotencyKey` the union does not
+      // define — invisible against a fake dispatcher, refused by the server.
+      //
+      // The key is not sent. It is not a field t3code knows; its whole job is to
+      // derive the `commandId`, which IS what the server deduplicates on.
+      message: {
+        messageId: messageIdForKey(message.idempotencyKey),
+        role: 'user',
+        text: message.text,
+        attachments: [],
+      },
+      runtimeMode: 'full-access',
+      interactionMode: 'default',
       createdAt: new Date().toISOString(),
     },
     options,

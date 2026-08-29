@@ -24,7 +24,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DispatchJournal, recoverPendingCommands } from '../../../porch-driver/src/commands.js';
+import { DISPATCH_METHOD, DispatchJournal, recoverPendingCommands } from '../../../porch-driver/src/commands.js';
 import {
   MESSAGE_METHOD,
   commandIdForKey,
@@ -32,6 +32,7 @@ import {
   type OutboundMessage,
 } from '../../../porch-driver/src/deliver.js';
 import { ThreadMessageQueue, type QueueTarget } from '../../../porch-driver/src/queue.js';
+import { checkPayload } from '../../../t3-client/src/checked.js';
 import {
   ScheduleCorruptError,
   ScheduleStore,
@@ -146,6 +147,40 @@ describe('spec 146 phase 4: idempotency keys', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('dispatches a command the CONTRACT actually defines', async () => {
+    // The only test here that could have caught an invented method name, and it is
+    // the one that was missing.
+    //
+    // Every other test in this file injects a fake dispatcher, which accepts any
+    // payload — so the suite was 20/20 green while `MESSAGE_METHOD` was
+    // `thread.message.send`, a command t3code's union does not contain. The live
+    // server refused it on sight. Phase 3 learned this exact lesson when
+    // `thread.create` turned out to require `modelSelection`, and the fix then was
+    // the same as the fix now: check the outbound payload against the vendored
+    // contract's own input schema, where an omission is caught by construction
+    // rather than by someone noticing.
+    const dir = tempDir('contract-shape');
+    try {
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      const dispatcher = recordingDispatcher();
+      await sendMessage(dispatcher, journal, message('hello builder', 'k-contract'));
+
+      // Two layers, and conflating them is how the invented name survived: the RPC
+      // METHOD is always `orchestration.dispatchCommand`, and the command TYPE
+      // travels inside its payload. The contract constrains the second.
+      const sent = dispatcher.calls[0];
+      expect(sent.method).toBe(DISPATCH_METHOD);
+      expect(sent.payload.type).toBe(MESSAGE_METHOD);
+      expect(sent.payload.type).toBe('thread.turn.start');
+
+      // `ok`, not `not.toBe('failed')`: the checker also answers `unchecked`, and
+      // "I could not check this" must not pass as "this is valid".
+      expect(checkPayload(DISPATCH_METHOD, 'input', sent.payload).status).toBe('ok');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ------------------------------------------------------------------- ordering
@@ -254,6 +289,58 @@ describe('spec 146 phase 4: queued while a turn is active', () => {
       await queue.flush();
       await held;
       expect(dispatcher.texts).toEqual(['a', 'b']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('drains the whole backlog when each dispatch STARTS a turn', async () => {
+    // The test the fake dispatcher was hiding.
+    //
+    // Every other queue test uses a dispatcher that returns without side effects,
+    // so `isTurnActive` never becomes true mid-drain and all ten drain in one pass.
+    // On the real path a message IS a `thread.turn.start`, so the head of the queue
+    // starts a turn and the next iteration stops on it. Live, exactly five of ten
+    // arrived — in order, with nothing interleaved — and waiting longer never
+    // produced the rest. So this dispatcher does what the server does: it makes a
+    // turn active, and only `awaitSettle` lets the drain continue.
+    const dir = tempDir('queue-turn-per-message');
+    try {
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      let turnActive = false;
+      const dispatcher = {
+        calls: [] as any[],
+        get texts(): string[] {
+          return this.calls.map((c) => c.payload?.message?.text);
+        },
+        async call(_method: string, payload: any) {
+          this.calls.push({ payload });
+          // Dispatching a turn start makes a turn active, exactly as the server does.
+          turnActive = true;
+          return {};
+        },
+      };
+
+      const queue = new ThreadMessageQueue(
+        () => ({
+          threadId: 't1',
+          isTurnActive: turnActive,
+          // The settle the server would eventually emit.
+          awaitSettle: async () => {
+            turnActive = false;
+          },
+        }),
+        dispatcher,
+        journal,
+      );
+
+      const texts = Array.from({ length: 10 }, (_, i) => `m-${i}`);
+      await Promise.all(texts.map((t) => queue.send(message(t, t))));
+      await queue.flush();
+
+      // All ten, in order. Without `awaitSettle` this stalls after the first.
+      expect(dispatcher.texts).toEqual(texts);
+      expect(queue.depth).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

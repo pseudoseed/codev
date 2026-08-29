@@ -159,10 +159,38 @@ async function main() {
     await sleep(1_500);
 
     const ctx = { thread, journal, primary, seen, journalDir, baseUrl, auth, server };
-    if (requested.has('1')) await scenarioOrdering(ctx);
-    if (requested.has('2')) await scenarioQueuedDuringTurn(ctx);
-    if (requested.has('3')) await scenarioDurableAck(ctx);
-    if (requested.has('4')) await scenarioIdempotency(ctx);
+
+    // QUIESCE BETWEEN SCENARIOS, because a message IS a turn.
+    //
+    // On this path `sendMessage` dispatches `thread.turn.start`, so scenario 1's
+    // ten messages are ten TURNS the server runs one after another. Without a wait
+    // the next scenario starts a turn behind that backlog, its own events do not
+    // arrive, and the subscription idles out — which is exactly how the first full
+    // run died, 300 s into a `subscribeThread` that was healthy and simply had
+    // nothing to carry. Each scenario passes alone; only the sequence failed.
+    const quiesce = async (label) => {
+      const deadline = Date.now() + 240_000;
+      while (thread.isTurnActive && Date.now() < deadline) await sleep(1_000);
+      if (thread.isTurnActive) log(`[${label}] still active after 240s — continuing anyway`);
+      await sleep(1_000);
+    };
+
+    if (requested.has('1')) {
+      await scenarioOrdering(ctx);
+      await quiesce('after 1');
+    }
+    if (requested.has('2')) {
+      await scenarioQueuedDuringTurn(ctx);
+      await quiesce('after 2');
+    }
+    if (requested.has('3')) {
+      await scenarioDurableAck(ctx);
+      await quiesce('after 3');
+    }
+    if (requested.has('4')) {
+      await scenarioIdempotency(ctx);
+      await quiesce('after 4');
+    }
     if (requested.has('5')) await scenarioUnreachable(ctx);
 
     primary.close();
@@ -178,6 +206,10 @@ async function main() {
 
   const anyFailed = scenarios.some((s) => s.state === 'failed');
   process.exit(anyFailed ? 1 : 0);
+  // Unreachable, but see `main().catch` below: the in-flight rejection that lands
+  // as the sockets close is teardown noise, and it must not be able to crash the
+  // process AFTER the evidence file is written. A run whose evidence is complete
+  // and whose exit looks like a crash reports failure it did not have.
 }
 
 // ------------------------------------------------------------- 1: ordering
@@ -222,8 +254,17 @@ async function scenarioQueuedDuringTurn({ thread, journal, primary, seen }) {
   const name = '2: a message sent during an active turn is queued and delivered on settle';
   const tag = `q-${Date.now()}`;
   try {
+    // `awaitSettle` is what lets the backlog drain at all: each queued message is a
+    // turn, so without it the drain stops on the turn its own dispatch started.
     const queue = new ThreadMessageQueue(
-      () => ({ threadId: thread.threadId, isTurnActive: thread.isTurnActive }),
+      () => ({
+        threadId: thread.threadId,
+        isTurnActive: thread.isTurnActive,
+        awaitSettle: async () => {
+          const deadline = Date.now() + 120_000;
+          while (thread.isTurnActive && Date.now() < deadline) await sleep(500);
+        },
+      }),
       primary.dispatcher,
       journal,
     );
@@ -242,9 +283,21 @@ async function scenarioQueuedDuringTurn({ thread, journal, primary, seen }) {
 
     await started.settled;
     await queue.flush();
-    await sleep(3_000);
 
-    const arrived = userMessagesFrom(seen).filter((t) => t.startsWith(tag));
+    // WAIT FOR ARRIVAL, do not sleep a guess.
+    //
+    // A fixed 3s wait was right when a queued message was a bare message. Under the
+    // ruling that a message IS a turn, these ten drain as ten SEQUENTIAL turns, so
+    // three seconds measured a half-finished backlog and reported the property
+    // broken when it held: the first run recorded duringTurn 0 and allQueued true —
+    // both correct — with 5 of 10 arrived. The assertion is unchanged and still
+    // demands all ten in order; only the moment of measurement moved.
+    const deadline = Date.now() + 300_000;
+    let arrived = userMessagesFrom(seen).filter((t) => t.startsWith(tag));
+    while (arrived.length < texts.length && Date.now() < deadline) {
+      await sleep(2_000);
+      arrived = userMessagesFrom(seen).filter((t) => t.startsWith(tag));
+    }
     const ordered = arrived.length === texts.length && arrived.every((t, i) => t === texts[i]);
 
     record(
@@ -423,5 +476,23 @@ function limits() {
       'accident.',
   };
 }
+
+/**
+ * Teardown noise must not be able to report a failure the run did not have.
+ *
+ * Closing the sockets rejects whatever request was still in flight, and that
+ * rejection lands AFTER the evidence file is written. Unhandled, it crashes node
+ * with a stack trace on a run whose scenarios all passed — a result a reader would
+ * reasonably record as a failed run. The evidence file is the verdict; this makes
+ * the exit code agree with it.
+ */
+process.on('unhandledRejection', (reason) => {
+  const name = reason?.name ?? '';
+  if (name === 'NotConnectedError' || name === 'RequestTimeoutError') {
+    log('teardown:', String(reason?.message ?? reason).split('\n')[0]);
+    return;
+  }
+  throw reason;
+});
 
 await main();

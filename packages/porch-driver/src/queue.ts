@@ -52,6 +52,25 @@ export interface QueueTarget {
   readonly threadId: string;
   /** True while a turn is running. Read at dispatch time, never cached. */
   readonly isTurnActive: boolean;
+  /**
+   * Resolve when the running turn settles. Optional.
+   *
+   * **Without it the backlog stalls, and only a live server shows you.** A message
+   * on this path IS a `thread.turn.start`, so dispatching the head of the queue
+   * starts a turn — and the next iteration then sees `isTurnActive` and stops. One
+   * message goes, the rest sit there until someone happens to call `flush()` again.
+   *
+   * Every unit test missed this because a fake dispatcher never starts a real turn,
+   * so `isTurnActive` stays false and all ten drain in one pass. Against the real
+   * server exactly five of ten arrived, in order, and waiting longer never produced
+   * the other five: not a timing problem, a stalled queue.
+   *
+   * Supplied, the drain waits for each turn to settle and keeps going, which is
+   * what "delivered when the turn settles" means once a message is a turn. Omitted,
+   * the drain stops at an active turn and the caller owns re-flushing — the older
+   * behaviour, kept because it is what a caller with no settle signal can honour.
+   */
+  readonly awaitSettle?: () => Promise<void>;
 }
 
 interface QueuedItem {
@@ -176,9 +195,17 @@ export class ThreadMessageQueue {
 
   async #drain(): Promise<void> {
     while (this.#queue.length > 0) {
-      // Re-read every iteration. A turn that starts midway through a drain stops
-      // the rest of the backlog rather than being raced by it.
-      if (this.target().isTurnActive) return;
+      // Re-read every iteration. A turn that starts midway through a drain must not
+      // be raced by the rest of the backlog.
+      if (this.target().isTurnActive) {
+        const settle = this.target().awaitSettle;
+        // No settle signal: stop, and the caller re-flushes. With one: wait, then
+        // continue — otherwise the drain stops on the turn its OWN dispatch started
+        // and the backlog never moves.
+        if (!settle) return;
+        await settle();
+        continue;
+      }
 
       const item = this.#queue[0];
       try {
