@@ -97,6 +97,19 @@ export interface QueueTarget {
    * dispatches one at a time. What it cannot guarantee under a slow projection is
    * NON-INTERLEAVING, so a caller that needs the phase's full property supplies
    * this.
+   *
+   * **DO NOT WIRE THIS TO A `TurnTracker` THAT A `DriverThread` IS ALSO USING.**
+   * `TurnTracker` keeps ONE waiter per thread and `expectTurn` abandons the previous
+   * one with `TurnDisplacedError`, so two registrants on one thread destroy each
+   * other's expectations. Doing exactly that stalled the live backlog to 300 s and
+   * looked, wrongly, like the turn machinery failing for message-started turns — it
+   * does not; a sole registrant settles in ~1.5 s. Repro and captured events:
+   * `codev/experiments/146-phase4-expectturn-repro/run.mjs`.
+   *
+   * A sound wiring needs either a tracker that supports multiple waiters per thread,
+   * or a queue that observes turns through the thread it already has instead of
+   * registering its own expectation. Neither exists yet, which is why nothing in
+   * production supplies this today.
    */
   readonly expectTurn?: () => { readonly settled: Promise<void> };
   /**

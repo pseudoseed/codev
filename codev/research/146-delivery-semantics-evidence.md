@@ -198,17 +198,36 @@ chore.
   on the turn its own dispatch began instead, and a unit test reproduces the
   interleaving without it.
 
-  Wiring that to `TurnTracker.expectTurn` in this harness **did not work**: `settled`
-  resolves only after the turn is seen RUNNING, and for these message-started turns
-  it never resolved, so every message waited out the drain's bound and scenario 2
-  failed twice at 300 s. **Why it never resolves is not diagnosed**, and this
-  document does not imply otherwise. The harness therefore uses the settle poll that
-  is demonstrated, which preserves ORDER — never at risk, the queue is FIFO and
-  dispatches one at a time — while leaving NON-INTERLEAVING dependent on the
-  projection being current. Scenario 2 measures zero messages reaching the server
-  during the turn and has never observed an interleave, but it does not force the
-  lag, so it is not evidence that the race cannot occur.
+  Wiring that to `TurnTracker.expectTurn` in this harness **did not work**: every
+  message waited out the drain's bound and scenario 2 failed twice at 300 s.
 
-  Phase 14 wires the production path and should resolve this before relying on it.
-  Recorded as an open question rather than a closed one, because a partial answer
-  read as a complete one is the failure this project has a standing rule about.
+  **CORRECTION — an earlier version of this section named the wrong cause.** It said
+  `settled` "never resolved for these message-started turns". That is false, and the
+  repro at `codev/experiments/146-phase4-expectturn-repro/run.mjs` disproves it:
+  a message-started turn settles in ~1.5 s with a clean `activeTurnId` non-null →
+  null trace. The record is `codev/research/146-phase4-expectturn-repro.json`,
+  reproduced twice.
+
+  **The actual mechanism is displacement.** `TurnTracker` keeps **one waiter per
+  thread**, and `expectTurn` abandons the previous one with `TurnDisplacedError` —
+  by design, since a waiter that can never resolve should say so rather than hang.
+  The queue called `expectTurn` on the **same tracker its `DriverThread` uses**, so
+  the two registrants destroyed each other's expectations. The turn machinery was
+  never the problem; sharing a single-waiter tracker between two watchers was.
+
+  This is a **design constraint, not a bug to patch in place**: any wiring where the
+  queue and the thread both watch one thread on one tracker is unsound as written.
+  Closing the race properly needs either a tracker that supports multiple waiters per
+  thread, or a queue that observes turns through the thread it already has rather
+  than registering its own expectation. **That is a change to Phase 3 code and it is
+  not being made inside a closed phase 4.**
+
+  So the harness keeps the settle poll that is demonstrated. It preserves ORDER —
+  never at risk, the queue is FIFO and dispatches one at a time — while leaving
+  NON-INTERLEAVING dependent on the projection being current. Scenario 2 measures
+  zero messages reaching the server during the turn and has never observed an
+  interleave, but it does not force the lag, so it is not evidence that the race
+  cannot occur.
+
+  **Status: mechanism diagnosed and reproduced; the fix is designed but not built.**
+  Phase 14 wires the production path and owns it.
