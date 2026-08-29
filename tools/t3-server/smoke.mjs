@@ -33,7 +33,9 @@ const runsIdx = process.argv.indexOf('--runs');
 const runs = runsIdx >= 0 ? Number(process.argv[runsIdx + 1]) : 2;
 
 const harness = (cmd) =>
-  execFileSync('node', [join(here, 't3-server.mjs'), cmd], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  execFileSync(process.execPath, [join(here, 't3-server.mjs'), cmd], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
 
 const id = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 const now = () => new Date().toISOString();
@@ -154,6 +156,7 @@ for (let run = 1; run <= runs; run += 1) {
     harness('acquire');
     harness('verify');
     harness('start');
+    record.serverRuntime = JSON.parse(harness('status')).runtime;
     const readyOut = harness('ready');
     const { token } = JSON.parse(readyOut.slice(readyOut.indexOf('{')));
     record.pairingTokenPresent = Boolean(token);
@@ -208,6 +211,7 @@ console.log(
     {
       criterion: 'Phase 1: harness brings up a live pinned server, twice, with a real dispatched command',
       pinnedCommit: pin.commit,
+      pinnedCliVersion: pin.cliVersion,
       runs: results,
       allRunsPassed: allOk,
       gatesPhase2: true,
