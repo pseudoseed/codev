@@ -41,8 +41,10 @@ const repoRoot = resolve(import.meta.dirname, '../../../../..');
  * for its entire life: a green suite absorbs an honest "could not check" exactly as
  * completely as it absorbs a pass. Fail loudly, immediately, and name the remedy.
  *
- * A suite-wide declared build prerequisite would make this redundant and it should be
- * deleted if that lands.
+ * A suite-wide declared build prerequisite would make this redundant: **delete this block if
+ * issue #212 lands.** That issue carries both instances from opposite directions — the packed-
+ * imports test skipping invisibly because it runs in neither CI job, and these eight failures
+ * pointing at `classifyConnectFailure` while that function works correctly.
  */
 const T3_CLIENT_DIST = resolve(repoRoot, 'packages/t3-client/dist/client.js');
 if (!existsSync(T3_CLIENT_DIST)) {
