@@ -29,10 +29,10 @@ plan_phases:
     status: complete
   - id: phase_9
     title: Architect threads and afx command parity
-    status: in_progress
+    status: complete
   - id: phase_10
     title: Full protocol on a second driver
-    status: pending
+    status: in_progress
   - id: phase_11
     title: codev-client tree and live status
     status: pending
@@ -48,7 +48,7 @@ plan_phases:
   - id: phase_15
     title: Terminal schema drop
     status: pending
-current_plan_phase: phase_9
+current_plan_phase: phase_10
 gates:
   spec-approval:
     status: approved
@@ -62,8 +62,8 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 3
-build_complete: true
+iteration: 1
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -403,7 +403,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/spir-146/codev/projects/146-codev-client-on-the-t3code-ser/146-phase_9-iter2-claude.txt
         stated: true
 started_at: '2026-08-28T15:56:27.086Z'
-updated_at: '2026-08-29T18:06:35.160Z'
+updated_at: '2026-08-29T18:51:12.501Z'
 context_refreshes:
   - boundary: enter:plan
     at: '2026-08-28T15:58:58.492Z'
@@ -432,6 +432,8 @@ context_refreshes:
   - boundary: plan-phase:phase_9
     at: '2026-08-29T16:16:52.242Z'
     acknowledged_at: '2026-08-29T16:17:58.114Z'
+  - boundary: plan-phase:phase_10
+    at: '2026-08-29T18:51:12.501Z'
 force_advanced:
   phase: phase_7
   iteration: 3
