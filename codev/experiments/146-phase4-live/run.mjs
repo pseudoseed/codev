@@ -77,7 +77,12 @@ function clientCommit() {
 
 function treeDirty() {
   try {
-    return shell('git status --porcelain -- packages/porch-driver packages/t3-client', repoRoot).length > 0;
+    // The harness is included, not just the code under test. An uncommitted change
+    // to the measuring instrument makes the record just as unreproducible as an
+    // uncommitted change to the driver, and this check previously covered only the
+    // latter — so it could report a clean tree for a run nobody else could repeat.
+    const scope = 'packages/porch-driver packages/t3-client codev/experiments/146-phase4-live';
+    return shell(`git status --porcelain -- ${scope}`, repoRoot).length > 0;
   } catch {
     return null;
   }
@@ -264,16 +269,24 @@ async function scenarioQueuedDuringTurn({ thread, journal, primary, seen }) {
           const deadline = Date.now() + 120_000;
           while (thread.isTurnActive && Date.now() < deadline) await sleep(500);
         },
-        // `isTurnActive` is a PROJECTION fed by the subscription, so between the
-        // server accepting our `thread.turn.start` and the projection updating, it
-        // still reads false — and the drain would dispatch the next queued message
-        // into the turn it just started. `awaitSettle` above cannot close that: it
-        // polls the same stale projection and returns instantly inside the window.
+        // NOT WIRED HERE, DELIBERATELY, AND THE REASON IS RECORDED RATHER THAN THE
+        // WIRING QUIETLY OMITTED.
         //
-        // `expectTurn` is registered BEFORE each dispatch and its `settled` resolves
-        // only after the turn was seen RUNNING, so the drain waits on the turn
-        // rather than on a flag that has not caught up.
-        expectTurn: () => tracker.expectTurn(thread.threadId),
+        // The queue supports `expectTurn` so the drain can wait on the turn its own
+        // dispatch started instead of on `isTurnActive`, which is a projection and
+        // lags behind the server. That closes a real race, and it is unit-tested.
+        //
+        // Wiring it to `tracker.expectTurn` here does NOT work against the live
+        // server: `settled` resolves only after the turn is seen RUNNING, and for
+        // these message-started turns it never resolved, so every message waited out
+        // the drain's bound and scenario 2 failed twice at 300 s. The bound is what
+        // keeps that from being a permanent stall, but a fallback firing on every
+        // message is not a working signal.
+        //
+        // Why it never resolves is NOT diagnosed, and this comment does not pretend
+        // otherwise. Until it is, this harness uses the settle poll that is actually
+        // demonstrated, and the race stays closed only in the unit-tested path.
+        // Phase 14 wires the production path and should settle this first.
       }),
       primary.dispatcher,
       journal,
