@@ -4,9 +4,10 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type http from 'node:http';
 import Database from 'better-sqlite3';
 import { GLOBAL_SCHEMA } from '../../db/schema.js';
@@ -129,10 +130,69 @@ afterEach(() => {
 });
 
 describe('failure matrix signals are distinct', () => {
-  it('names twelve unique codes', () => {
+  // This asserts the CONSTANT, not the emitter. Read on: the emitter produces
+  // codes beyond the matrix, and a length check here cannot see them.
+  it('names only unique codes in the documented matrix', () => {
     const codes = Object.values(SIGNAL);
-    expect(codes).toHaveLength(12);
-    expect(new Set(codes).size).toBe(12);
+    // Uniqueness is worth asserting; the COUNT is not. A hand-maintained number
+    // drifts the moment someone adds a code, and the passing test then reads as
+    // coverage of a set it never looked at. See the emitter-derived test below,
+    // which is the one that actually fails when a code escapes.
+    expect(new Set(codes).size).toBe(codes.length);
+  });
+
+  // DERIVED FROM THE EMITTER, NOT FROM A LITERAL.
+  //
+  // The previous assertion was `expect(Object.values(SIGNAL)).toHaveLength(12)`,
+  // which compares the constant to itself. It looks like a completeness claim and
+  // is not one: production emits codes that were never in `SIGNAL` at all, and that
+  // test passed throughout. Replacing it with a bigger number, or with a second
+  // hand-written list of "codes beyond the matrix", reproduces the same defect one
+  // layer out — it breaks when someone forgets to update a literal, which is not
+  // when we need to hear about it.
+  //
+  // So this reads the emitters and fails on any code that is in NEITHER the matrix
+  // NOR the explicitly justified non-matrix set below. Add a code to production and
+  // this test tells you to classify it.
+  it('every code production can emit is either a matrix row or explicitly excluded', () => {
+    // Not matrix rows, each for a stated reason. This list is allowed to exist only
+    // because every entry names why it is not an operator-facing failure row.
+    const NON_MATRIX: Record<string, string> = {
+      // status-reader's internal read outcomes. NOT_FOUND and OUT_OF_SCOPE are
+      // routing/containment results, not service failures an operator diagnoses.
+      STATUS_NOT_FOUND: 'a project without status.yaml is absence, not failure',
+      STATUS_OUT_OF_SCOPE: 'path containment refusal, a security response not a failure mode',
+      // thread-registry's finer-grained cousins of matrix rows. Each IS covered by
+      // its own mutation-verified test above; they are excluded from the matrix
+      // because the matrix row is the coarser operator-facing one.
+      GLOBAL_DB_UNREADABLE: 'non-lock db failure; distinct from GLOBAL_DB_LOCKED and tested',
+      PORCH_RECORD_UNMAPPED: 'no identity row; distinct from PORCH_THREAD_NO_LONGER_EXISTS and tested',
+      IDENTITY_SHAPE_CONFLICT: 'a row carrying both ids; Phase 8 owns its criterion',
+      // tower-messages.ts is the pre-existing terminal surface, not codev-agent.
+      AMBIGUOUS: 'tower-messages routing, outside the codev-agent surface',
+      NOT_FOUND: 'tower-messages routing, outside the codev-agent surface',
+      NO_CONTEXT: 'tower-messages routing, outside the codev-agent surface',
+    };
+
+    const serversDir = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const emitted = new Set<string>();
+    for (const file of readdirSync(serversDir).filter((name) => name.endsWith('.ts'))) {
+      const source = readFileSync(join(serversDir, file), 'utf8');
+      // `code:` expressions (including both arms of a ternary) and `failure('X')`.
+      for (const match of source.matchAll(/(?:code:\s*([^,\n]+)|failure\(\s*('[A-Z][A-Z0-9_]{3,}'))/g)) {
+        const expression = match[1] ?? match[2] ?? '';
+        for (const literal of expression.matchAll(/'([A-Z][A-Z0-9_]{3,})'/g)) {
+          emitted.add(literal[1]);
+        }
+      }
+    }
+
+    // The emitter must not be silently empty — that would make this test vacuous.
+    expect(emitted.size).toBeGreaterThan(10);
+
+    const matrix = new Set<string>(Object.values(SIGNAL));
+    const unclassified = [...emitted].filter((code) => !matrix.has(code) && !(code in NON_MATRIX)).sort();
+    expect(unclassified).toEqual([]);
   });
 });
 
@@ -145,14 +205,51 @@ describe('failure matrix', () => {
     expect(failure.code).toBe(SIGNAL.CODEV_AGENT_UNREACHABLE);
   });
 
-  it('codev-agent up but t3code down emits T3CODE_UNREACHABLE', () => {
+  // NAMED FOR THE PATH IT EXERCISES, not for the matrix row.
+  //
+  // This drives `readThreadRegistry` with an injected unreachable t3code — the
+  // registry's own surfacing of that state. It is NOT the classifier, and while its
+  // two sibling rows both call `classifyDualServiceFailure`, this one never did.
+  // The row's classifier path is covered separately below.
+  //
+  // The old name, "codev-agent up but t3code down emits T3CODE_UNREACHABLE", read
+  // as though the matrix row were pinned here. That drift between a test's name and
+  // the code path it runs is the systematic weakness in this suite: it is how the
+  // STATUS_UNREADABLE regression survived, and two independent reviewers landed on
+  // instances of it. A name that overstates its reach is how coverage is believed
+  // to exist where it does not.
+  it('the registry surfaces an injected unreachable t3code as T3CODE_UNREACHABLE', () => {
     const snapshot = readThreadRegistry(db(), tmp(), [], {
       status: 'unreachable',
       message: 't3code connection refused',
     });
-    expect(snapshot.signals.map((s) => s.code)).toContain(SIGNAL.T3CODE_UNREACHABLE);
-    expect(snapshot.signals.find((s) => s.code === SIGNAL.T3CODE_UNREACHABLE)?.code)
-      .not.toBe(SIGNAL.CODEV_AGENT_UNREACHABLE);
+    const codes = snapshot.signals.map((s) => s.code);
+    expect(codes).toContain(SIGNAL.T3CODE_UNREACHABLE);
+    // Assert against the whole list.  Finding the signal *by* its code and then
+    // asserting that code is not some other code is a tautology that can never
+    // fail, so it would not notice the two rows collapsing.
+    expect(codes).not.toContain(SIGNAL.CODEV_AGENT_UNREACHABLE);
+    expect(codes).not.toContain(SIGNAL.CODEV_AGENT_UNREACHABLE_T3CODE_LIVE);
+  });
+
+  // The row above exercises readThreadRegistry.  The client-facing classifier is
+  // a second emitter of the same row and needs its own case, or its t3code
+  // branch can return the agent-down code with the suite still green.
+  it('the classifier maps agent-up/t3code-down to T3CODE_UNREACHABLE', () => {
+    const failure = classifyDualServiceFailure({
+      codevAgent: 'reachable',
+      t3code: 'unreachable',
+    });
+    expect(failure.code).toBe(SIGNAL.T3CODE_UNREACHABLE);
+    expect(failure.code).not.toBe(SIGNAL.CODEV_AGENT_UNREACHABLE);
+    expect(failure.code).not.toBe(SIGNAL.CODEV_AGENT_UNREACHABLE_T3CODE_LIVE);
+  });
+
+  it('the classifier refuses to invent a failure when both services are reachable', () => {
+    expect(() => classifyDualServiceFailure({
+      codevAgent: 'reachable',
+      t3code: 'reachable',
+    })).toThrow(/both services reachable/);
   });
 
   it('t3code up but codev-agent down emits CODEV_AGENT_UNREACHABLE_T3CODE_LIVE', () => {
@@ -238,6 +335,31 @@ describe('failure matrix', () => {
     },
   );
 
+  // The chmod-the-directory test above exercises readdirSync in
+  // readStatusesFromArtifactRoot, which is a neighbouring path. This one makes
+  // the FILE unreadable so readScopedStatus's own EACCES branch is the subject.
+  // Deleting that branch must turn this red; without it an unreadable file
+  // reports as MALFORMED, telling an operator "corrupt" for a permissions fault.
+  it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
+    'an unreadable status.yaml FILE emits STATUS_UNREADABLE, not STATUS_MALFORMED',
+    () => {
+      const root = tmp();
+      const statusPath = writeStatus(root, '10', porchYaml('10'));
+      chmodSync(statusPath, 0o000);
+      try {
+        const result = readScopedStatus(root, statusPath);
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.signal.code).toBe(SIGNAL.STATUS_UNREADABLE);
+        expect(result.signal.code).not.toBe(SIGNAL.STATUS_MALFORMED);
+        expect(result.signal.code).not.toBe('STATUS_NOT_FOUND');
+        expect(result.signal.source).toBe(statusPath);
+      } finally {
+        chmodSync(statusPath, 0o644);
+      }
+    },
+  );
+
   it('status.yaml malformed emits STATUS_MALFORMED', () => {
     const root = tmp();
     const statusPath = writeStatus(root, '2', 'this: [is: not: yaml\n');
@@ -267,6 +389,26 @@ describe('failure matrix', () => {
       row.threadId === 'thread-live' && row.management === 'unmanaged'
     ))).toBe(true);
     expect(snapshot.identities.find((row) => row.threadId === 'thread-live')).toBeDefined();
+  });
+
+  // The test above inserts a builder row, so `consumed` holds the thread and the
+  // unmanaged loop never runs: its THREAD_UNMANAGED comes from the builder-row
+  // path.  This covers the other emitting site -- a thread t3code reports that
+  // Codev has no row for at all.  That is the one that can silently vanish.
+  it('a t3code thread with no Codev row at all is surfaced as unmanaged, not hidden', () => {
+    const root = tmp();
+    const snapshot = readThreadRegistry(db(), root, [], {
+      status: 'available',
+      threads: [{ threadId: 'thread-stranger' }],
+    });
+    const unmanaged = snapshot.signals.filter((s) => s.code === SIGNAL.THREAD_UNMANAGED);
+    expect(unmanaged).toHaveLength(1);
+    expect(unmanaged[0]?.threadId).toBe('thread-stranger');
+    expect(unmanaged[0]?.role).toBe('unmanaged');
+    const identity = snapshot.identities.find((row) => row.threadId === 'thread-stranger');
+    expect(identity).toBeDefined();
+    expect(identity?.management).toBe('unmanaged');
+    expect(snapshot.builders).toEqual({});
   });
 
   it('a porch record whose thread is gone emits PORCH_THREAD_NO_LONGER_EXISTS', () => {
@@ -303,6 +445,61 @@ describe('failure matrix', () => {
     expect(snapshot.signals.map((s) => s.code)).toContain(SIGNAL.GLOBAL_DB_LOCKED);
     expect(snapshot.architects).toEqual({});
     expect(snapshot.builders).toEqual({});
+  });
+
+  // "Locked" is retryable and transient; any other DB fault is not. Collapsing
+  // dbSignal to always report GLOBAL_DB_LOCKED left the whole suite green, so
+  // this asserts the other side of that branch rather than only the lock side.
+  it('a non-lock global.db error emits GLOBAL_DB_UNREADABLE, not GLOBAL_DB_LOCKED', () => {
+    const corrupt = {
+      prepare() {
+        const error = new Error('database disk image is malformed') as Error & { code: string };
+        error.code = 'SQLITE_CORRUPT';
+        throw error;
+      },
+    } as unknown as Database.Database;
+    const snapshot = readThreadRegistry(corrupt, tmp(), []);
+    const codes = snapshot.signals.map((s) => s.code);
+    expect(codes).toContain('GLOBAL_DB_UNREADABLE');
+    expect(codes).not.toContain(SIGNAL.GLOBAL_DB_LOCKED);
+  });
+
+  // Two different remedies: "t3code lost the thread" versus "global.db has no
+  // identity row for a porch record". t3code is available and still lists the
+  // thread here, so PORCH_THREAD_NO_LONGER_EXISTS would be a false statement.
+  it('a porch record with no global.db identity row emits PORCH_RECORD_UNMAPPED', () => {
+    const root = tmp();
+    const worktree = join(root, '.builders', 'air-5');
+    mkdirSync(worktree, { recursive: true });
+    const statusPath = writeStatus(worktree, '11', porchYaml('11', 'thread_id: thread-orphan'));
+    const status = readScopedStatus(worktree, statusPath);
+    expect(status.ok).toBe(true);
+    // Deliberately no insertBuilder: the identity row is what is missing.
+    const snapshot = readThreadRegistry(db(), root, [status], {
+      status: 'available',
+      threads: [{ threadId: 'thread-orphan' }],
+    });
+    const codes = snapshot.signals.map((s) => s.code);
+    expect(codes).toContain('PORCH_RECORD_UNMAPPED');
+    expect(codes).not.toContain(SIGNAL.PORCH_THREAD_NO_LONGER_EXISTS);
+    expect(snapshot.signals.find((s) => s.code === 'PORCH_RECORD_UNMAPPED')?.projectId).toBe('11');
+  });
+
+  // Phase 8's "a row carrying both a terminal_id and a thread_id is rejected"
+  // rests on this guard, so it is asserted here rather than inherited untested.
+  it('a row carrying both terminal_id and thread_id emits IDENTITY_SHAPE_CONFLICT', () => {
+    const root = tmp();
+    const database = db();
+    database.prepare(`
+      INSERT INTO builders (workspace_path, id, name, worktree, branch, terminal_id, thread_id)
+      VALUES (?, 'air-6', 'air-6', ?, 'builder/test', 'term-1', 'thread-1')
+    `).run(normalizeWorkspacePath(root), join(root, '.builders', 'air-6'));
+    const snapshot = readThreadRegistry(database, root, []);
+    const codes = snapshot.signals.map((s) => s.code);
+    expect(codes).toContain('IDENTITY_SHAPE_CONFLICT');
+    // The conflicted row must not be published as a usable join either way.
+    expect(snapshot.builders).toEqual({});
+    expect(snapshot.identities).toEqual([]);
   });
 
   it('a capability presented after revocation emits HUMAN_SESSION_REVOKED', () => {

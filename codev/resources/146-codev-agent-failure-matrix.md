@@ -25,3 +25,16 @@ once the cause lifts; that is not a repair.
 | Capability presented after revocation | `HUMAN_SESSION_REVOKED` | Rejected as revoked, not as never-paired (`UNKNOWN` / `HUMAN_SESSION_REQUIRED`). Phase 5's revokeable object is the human-paired session Phase 6 issues against. Phase 6 must emit a distinct `CAPABILITY_REVOKED` rather than reuse this code. | No |
 | `status.yaml` vs thread disagreement | `THREAD_ID_DISAGREEMENT` | Both values shown; porch remains authoritative. Human resolves. | **Never** |
 | Stream lagged `status.yaml` (watcher miss) | `STREAM_PROJECTION_REPAIRED` | Snapshot applied; event type is `PROTOCOL_STATE_RECONCILED`, not a plain snapshot. Repair is visible. Bounded schedule (5s). Does not claim the macOS `watch()` arming window is closed. | **Yes** — projection repaired from its source |
+
+## Codes the emitter produces beyond the twelve rows
+
+The twelve rows above are the plan's required minimum. The service emits three
+further codes, listed here because a matrix that omits them is a map with roads
+missing. `FAILURE_MATRIX_SIGNAL` holds twelve entries by design; a length check
+against it tests the constant, not the emitter, and cannot see these.
+
+| Failure | Signal | Client renders | Auto-resolved |
+|---|---|---|---|
+| `global.db` unreadable for any non-lock reason (corrupt, schema mismatch) | `GLOBAL_DB_UNREADABLE` | Identity maps unavailable and **not retryable**, unlike `GLOBAL_DB_LOCKED`. Reporting a corrupt database as "locked" invites a retry loop instead of a restore. | No |
+| Porch record names a thread, t3code still has it, but `global.db` has no identity row | `PORCH_RECORD_UNMAPPED` | Record kept; the missing join is named. Distinct from `PORCH_THREAD_NO_LONGER_EXISTS`, which asserts t3code lost the thread — a different fact with a different remedy. | No |
+| A row carries both terminal-backed and thread-backed state | `IDENTITY_SHAPE_CONFLICT` | Row is refused as a join and reported. This is the guard behind Phase 8's "a row carrying both a `terminal_id` and a `thread_id` is rejected". | No |
