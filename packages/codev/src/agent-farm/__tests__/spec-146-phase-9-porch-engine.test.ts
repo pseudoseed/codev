@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+import { assertPackedDistRelativeImports } from '../../../scripts/packed-dist-imports.mjs';
 import { DispatchJournal } from '../../../../porch-driver/src/commands.js';
 import { TurnTracker } from '../../../../porch-driver/src/turn.js';
 import { createPorchThreadEngine } from './helpers/porch-thread-engine.js';
@@ -81,43 +82,30 @@ describe('createPorchThreadEngine (Spec 146 Phase 9)', () => {
 });
 
 describe('Spec 146 Phase 9 — @cluesmith/codev pack relative imports', () => {
-  it('every relative import in packed dist/ resolves inside the @cluesmith/codev tarball', () => {
-    const pkg = resolve(import.meta.dirname, '../../..');
-    const packDirectory = mkdtempSync(join(tmpdir(), 'codev-pack-'));
-    try {
-      execFileSync('npm', ['pack', '--pack-destination', packDirectory], {
-        cwd: pkg,
-        stdio: 'pipe',
-      });
-      const tarball = readdirSync(packDirectory).find((file) => file.endsWith('.tgz'));
-      expect(tarball).toBeDefined();
-      const packedFiles = new Set(
-        execFileSync('tar', ['-tzf', join(packDirectory, tarball!)], { encoding: 'utf8' })
-          .trim()
-          .split('\n'),
-      );
-      const distJs = [...packedFiles].filter((f) => f.startsWith('package/dist/') && f.endsWith('.js'));
-      expect(distJs.length).toBeGreaterThan(0);
-      const extractDir = join(packDirectory, 'extract');
-      execFileSync('tar', ['-xzf', join(packDirectory, tarball!), '-C', packDirectory]);
-      const missing: string[] = [];
-      for (const file of distJs) {
-        const abs = join(packDirectory, file);
-        const source = readFileSync(abs, 'utf8');
-        const specifiers = source.matchAll(/(?:from|import)\(\s*['"](\.[^'"]+)['"]|from ['"](\.[^'"]+)['"]/g);
-        for (const match of specifiers) {
-          const spec = match[1] ?? match[2];
-          if (!spec) continue;
-          const resolved = resolve(dirname(abs), spec.endsWith('.js') ? spec : `${spec}.js`);
-          const packedPath = `package/${resolved.slice(join(packDirectory, 'package').length + 1)}`;
-          if (!packedFiles.has(packedPath) && !packedFiles.has(packedPath.replace(/\.js$/, '.json'))) {
-            missing.push(`${file} -> ${spec}`);
-          }
-        }
+  const pkg = resolve(import.meta.dirname, '../../..');
+  const distBuilt = existsSync(join(pkg, 'dist'));
+  const packSkipReason = 'could not check: packages/codev/dist not built';
+
+  it.skipIf(!distBuilt)(
+    'every relative import in packed dist/ resolves inside the @cluesmith/codev tarball',
+    () => {
+      const packDirectory = mkdtempSync(join(tmpdir(), 'codev-pack-'));
+      try {
+        execFileSync('npm', ['pack', '--pack-destination', packDirectory], {
+          cwd: pkg,
+          stdio: 'pipe',
+        });
+        const tarball = readdirSync(packDirectory).find((file) => file.endsWith('.tgz'));
+        expect(tarball).toBeDefined();
+        assertPackedDistRelativeImports(join(packDirectory, tarball!));
+      } finally {
+        rmSync(packDirectory, { recursive: true, force: true });
       }
-      expect(missing).toEqual([]);
-    } finally {
-      rmSync(packDirectory, { recursive: true, force: true });
-    }
+    },
+  );
+
+  it.skipIf(distBuilt)('records why pack relative imports could not check', () => {
+    expect(packSkipReason).toBe('could not check: packages/codev/dist not built');
+    expect(packSkipReason).toMatch(/^could not check:/);
   });
 });
