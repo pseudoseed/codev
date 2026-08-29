@@ -74,6 +74,10 @@ describe('extension retirement', () => {
     expect(packedFiles.some((file) => file.startsWith('package/apps/streamdeck/'))).toBe(false);
   });
 
+  it('packs packages/porch-driver/dist/thread.js so the phase-9 adapter import is in the tarball', () => {
+    expect(packedFiles).toContain('package/packages/porch-driver/dist/thread.js');
+  });
+
   it('marks the retained VS Code source unsupported', () => {
     const readme = readFileSync(join(workspaceRoot, 'apps/vscode/README.md'), 'utf8');
     expect(readme).toContain('**Unsupported.**');
