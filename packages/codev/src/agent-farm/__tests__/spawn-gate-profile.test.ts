@@ -21,6 +21,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
+import { getBuilders, removeBuilder } from '../state.js';
+import { getTowerClient } from '../lib/tower-client.js';
 
 vi.mock('../utils/logger.js', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -56,20 +58,32 @@ describe('spawn render-gate-profile preflight (Issue #4)', () => {
     process.chdir(ws);
   });
 
-  afterEach(() => {
-    process.chdir(originalCwd);
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
-    // `maxRetries` because these tests spawn a real terminal session into
-    // `.builders/<id>`, and a session still writing there when the walk reaches
-    // it makes rmSync fail with ENOTEMPTY even under `force`. Intermittent, and
-    // only under a loaded full-suite run -- it passes every time in isolation.
-    //
-    // Budget raised from 250ms (5 x 50) to 2s (20 x 100): 250ms was not enough on
-    // a loaded machine, and the same ENOTEMPTY came back. The retry is bounded and
-    // no assertion changed, so a wider budget costs nothing when the directory is
-    // already quiet.
-    rmSync(ws, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  afterEach(async () => {
+    // The two positive-harness cases can reach the real Tower and create a
+    // detached shellper. Kill it (killTerminal waits for process exit) before
+    // removing its cwd; deleting the tree first orphaned two shellpers per run.
+    try {
+      let cleanupError: unknown;
+      for (const builder of getBuilders(ws)) {
+        // `false` means Tower already observed the terminal exit; either way
+        // there is no live managed session left to wait for.
+        try {
+          if (builder.terminalId) await getTowerClient().killTerminal(builder.terminalId);
+        } catch (err) {
+          cleanupError ??= err;
+        } finally {
+          removeBuilder(builder.id, ws);
+        }
+      }
+      if (cleanupError) throw cleanupError;
+    } finally {
+      // Never contaminate later tests with a temp cwd/HOME if cleanup itself
+      // reports an error.
+      process.chdir(originalCwd);
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      rmSync(ws, { recursive: true, force: true });
+    }
   });
 
   function writeBuilderCommand(builder: string): void {
