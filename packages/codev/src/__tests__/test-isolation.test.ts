@@ -18,6 +18,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { scrubCodevNamespace } from '../../vitest-global-setup.js';
 
 const spawnAttempts: unknown[][] = [];
 
@@ -189,5 +190,49 @@ describe('test-suite isolation (#1323)', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+  });
+});
+
+describe('builder-session identity does not leak into the suite (#189)', () => {
+  it('the harness already scrubbed session identity before this file ran', () => {
+    expect(
+      process.env.CODEV_WORKTREE_ROOT,
+      'the vitest harness must scrub CODEV_WORKTREE_ROOT so detectCurrentBuilderId cannot see the runner worktree (#189)',
+    ).toBeUndefined();
+    expect(process.env.CODEV_BUILDER_ID).toBeUndefined();
+    expect(process.env.CODEV_ARCHITECT_NAME).toBeUndefined();
+    expect(process.env.CODEV_THREAD_ID).toBeUndefined();
+  });
+
+  it('scrubCodevNamespace deletes every CODEV_* key on the object it is given', () => {
+    const env: NodeJS.ProcessEnv = {
+      PATH: '/bin',
+      CODEV_WORKTREE_ROOT: '/ws/.builders/x',
+      CODEV_BUILDER_ID: 'builder-x',
+      CODEV_ARCHITECT_NAME: 'main',
+      CODEV_THREAD_ID: 'thr',
+      CODEV_AGY_BIN: '/real/agy',
+    };
+    scrubCodevNamespace(env);
+    expect(env.PATH).toBe('/bin');
+    expect(Object.keys(env).filter((k) => k.startsWith('CODEV_'))).toEqual([]);
+  });
+
+  it('preserves documented harness opt-ins and still drops session identity', () => {
+    const env: NodeJS.ProcessEnv = {
+      CODEV_ALLOW_REAL_AGY: '1',
+      CODEV_ALLOW_REAL_OPENCODE: 'true',
+      CODEV_ALLOW_TEST_CLOUD_MUTATION: '1',
+      CODEV_TEST_ISOLATION: '1',
+      CODEV_WORKTREE_ROOT: '/ws/.builders/x',
+      CODEV_BUILDER_ID: 'builder-x',
+    };
+    scrubCodevNamespace(env);
+    expect(env.CODEV_ALLOW_REAL_AGY).toBe('1');
+    expect(env.CODEV_ALLOW_REAL_OPENCODE).toBe('true');
+    expect(env.CODEV_ALLOW_TEST_CLOUD_MUTATION).toBe('1');
+    expect(env.CODEV_TEST_ISOLATION).toBe('1');
+    expect(env.CODEV_WORKTREE_ROOT).toBeUndefined();
+    expect(env.CODEV_BUILDER_ID).toBeUndefined();
   });
 });
