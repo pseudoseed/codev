@@ -245,13 +245,31 @@ names is exactly what made the first attempt at this fix miss three of them.
 Every assertion added in this phase was mutation-checked: the change it guards was reverted,
 the test was watched to fail, and the change was restored.
 
-## A note on running the suite here
+## A note on running the suite here — now three builders' critical path
 
-The suite fails with 40 unrelated errors when `CODEV_WORKTREE_ROOT` is set in the shell —
-`detectCurrentBuilderId` prefers it over `process.cwd()` and defeats the `process.chdir()`
-fixtures in three test files. Filed as **#189**; the architect is spawning a bugfix builder.
-Until it lands, run checks as
-`env -u CODEV_WORKTREE_ROOT -u CODEV_BUILDER_ID -u CODEV_ARCHITECT_NAME <cmd>`.
+The suite fails with 40 unrelated errors when `CODEV_WORKTREE_ROOT` is set in the shell, across
+`send.test.ts` (19), `spec-1134-whoami.test.ts` (16) and `bugfix-774-detect-builder-id.test.ts`
+(5). Filed as **#189**. `builder-air-180` has since hit the same wall, so it now blocks three
+builders and the architect has escalated it.
+
+**The workaround, which every check in this phase used:**
+
+    env -u CODEV_WORKTREE_ROOT -u CODEV_BUILDER_ID -u CODEV_ARCHITECT_NAME <cmd>
+
+**Diagnosis, verified at HEAD.** `send.ts:194` is
+`const identityPath = rawSessionWorktree?.replace(/\/+$/, '') ?? process.cwd();`. Launch-time
+identity deliberately wins over cwd — issue #47, so a builder stays the same sender after `cd`
+— and that production rule is correct. It defeats the `process.chdir()` fixtures in those three
+files. **It is the test environment that is wrong, not the code under test**, so the fix does
+not belong in `send.ts`.
+
+Clearing the three variables in `vitest-global-setup.ts` — the file that already holds the port
+13999 suite lock — fixes all three files in one place and makes the `env -u` prefix unnecessary
+rather than institutional. Not verified: 15 test files reference those variables. Most set them
+explicitly and a per-test set still wins over a setup-time clear, so this should be safe, but it
+has not been run and should not be believed on inspection alone.
+
+Not fixed here — out of phase scope, and #189 has its own builder.
 
 ## This makes two new packages public on npm — a release-time decision, not a detail
 
