@@ -24,46 +24,44 @@ import { readState, recordThreadId, writeState } from '../../commands/porch/stat
 import type { ProjectState } from '../../commands/porch/types.js';
 import type { Builder } from '../types.js';
 
-const PRE_V21_ARCHITECT = `
-  CREATE TABLE architect (
-    workspace_path TEXT NOT NULL,
-    id TEXT NOT NULL,
-    pid INTEGER NOT NULL,
-    port INTEGER NOT NULL,
-    cmd TEXT NOT NULL,
-    started_at TEXT NOT NULL DEFAULT (datetime('now')),
-    terminal_id TEXT,
-    session_id TEXT,
-    PRIMARY KEY (workspace_path, id)
-  );
-`;
+/**
+ * The pre-v21 fixture is DERIVED from the shipped `GLOBAL_SCHEMA`, not hand-typed.
+ *
+ * The iteration-1 `codex` and `opencode` lanes both flagged that a typed fixture is a claim
+ * about the schema, and a claim can drift from the thing it describes: a column added to
+ * `architect` in `schema.ts` would leave this test passing against a table that no longer
+ * exists in production. Deriving it makes the fixture a fact about the real schema instead.
+ *
+ * `stripThreadId` asserts its own reach — it fails if it did not actually remove a column —
+ * so a rename of `thread_id` breaks this by name rather than silently producing a fixture
+ * identical to the post-migration shape, which would make every migration test vacuous.
+ */
+function extractCreateTable(schema: string, table: string): string {
+  const re = new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\([\\s\\S]*?\\n\\);`, 'm');
+  const match = schema.match(re);
+  if (!match) throw new Error(`GLOBAL_SCHEMA has no CREATE TABLE for ${table}`);
+  return match[0].replace('IF NOT EXISTS ', '');
+}
 
-const PRE_V21_BUILDERS = `
-  CREATE TABLE builders (
-    workspace_path TEXT NOT NULL,
-    id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    port INTEGER NOT NULL DEFAULT 0,
-    pid INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'spawning'
-      CHECK(status IN ('spawning', 'implementing', 'blocked', 'pr', 'complete')),
-    phase TEXT NOT NULL DEFAULT '',
-    worktree TEXT NOT NULL,
-    branch TEXT NOT NULL,
-    type TEXT NOT NULL DEFAULT 'spec'
-      CHECK(type IN ('spec', 'task', 'protocol', 'shell', 'worktree', 'bugfix', 'pir')),
-    task_text TEXT,
-    protocol_name TEXT,
-    issue_number TEXT,
-    terminal_id TEXT,
-    spawned_by_architect TEXT,
-    started_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    harness TEXT,
-    model TEXT,
-    PRIMARY KEY (workspace_path, id)
-  );
-`;
+function stripThreadId(createTable: string, table: string): string {
+  const lines = createTable.split('\n');
+  const columnIndex = lines.findIndex((line) => /^\s*thread_id\s+TEXT\s*,?\s*$/.test(line));
+  if (columnIndex === -1) {
+    throw new Error(`Expected a thread_id column to strip from ${table}; the schema changed`);
+  }
+  // Drop the column and the comment block that documents it, so the fixture reads as a
+  // real pre-v21 table rather than one with a dangling explanation of a missing column.
+  let firstIndex = columnIndex;
+  while (firstIndex > 0 && /^\s*--/.test(lines[firstIndex - 1])) firstIndex -= 1;
+  const stripped = [...lines.slice(0, firstIndex), ...lines.slice(columnIndex + 1)];
+  if (stripped.length === lines.length) {
+    throw new Error(`stripThreadId removed nothing from ${table}`);
+  }
+  return stripped.join('\n');
+}
+
+const PRE_V21_ARCHITECT = stripThreadId(extractCreateTable(GLOBAL_SCHEMA, 'architect'), 'architect');
+const PRE_V21_BUILDERS = stripThreadId(extractCreateTable(GLOBAL_SCHEMA, 'builders'), 'builders');
 
 type TableInfoRow = {
   cid: number;

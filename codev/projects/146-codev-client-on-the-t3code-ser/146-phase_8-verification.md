@@ -69,14 +69,32 @@ in code, because the architect's instruction for this phase is **verify, do not 
    - Mutation-checked: blanking `cmd` in `architectWriteValues` makes the first of those tests
      fail. The test can fail, so it is holding something.
 
-3. **Two acceptance criteria are simulated, not exercised.** The plan asks for the migration
-   "against a copy of a real `global.db`" and for "the **previous** release" to open the
-   restored database. The tests build the pre-v21 shape from `PRE_V21_ARCHITECT` /
-   `PRE_V21_BUILDERS` string literals, and stand in for the previous release by issuing SQL
-   that does not name `thread_id`. That proves the migration is additive at the SQL level. It
-   does not prove a real database survives, and it does not run the previous release at all.
-   The plan's integration case — a thread-backed builder driven alongside a running PTY
-   builder — is likewise not run, and cannot be until (1) is fixed.
+3. **Two acceptance criteria are simulated, not exercised. PARTIALLY ADDRESSED in iteration 2.**
+   The plan asks for the migration "against a copy of a real `global.db`" and for "the
+   **previous** release" to open the restored database. Raised by `codex` and independently by
+   `opencode`.
+
+   **Fixed:** the pre-v21 fixture is no longer hand-typed. `PRE_V21_ARCHITECT` and
+   `PRE_V21_BUILDERS` are now **derived from the shipped `GLOBAL_SCHEMA`** by extracting each
+   `CREATE TABLE` and stripping the `thread_id` column. A typed fixture is a claim about the
+   schema and can drift from it — a column added to `architect` in `schema.ts` would have left
+   these tests passing against a table that no longer exists in production. `stripThreadId`
+   **asserts its own reach**: it throws if it removed nothing, so renaming `thread_id` breaks
+   the tests by name instead of silently yielding a fixture identical to the post-migration
+   shape, which would make every migration test vacuous. Mutation-checked — renaming the column
+   in `schema.ts` produces `Expected a thread_id column to strip from architect`.
+
+   **Still not met, and not fixable here:**
+   - *A copy of a real `global.db`.* A test that reads `~/.agent-farm/global.db` would be
+     machine-dependent and non-deterministic, and would fail in CI where no such file exists.
+     Determinism is a stated requirement of this phase, so the derived-schema fixture is as
+     close as a unit test can honestly get. Exercising a real database belongs in a manual
+     migration rehearsal, not in the suite.
+   - *The previous release opens the restored database.* The test stands in for it by issuing
+     previous-release-shaped SQL on the current handle. Actually loading previous-release code
+     is not something the suite can do.
+   - *A thread-backed builder driven alongside a running PTY builder.* Cannot run until (1) is
+     fixed; it has no production path to drive.
 
 Two of the three stand; the third turned out to be a plan defect and is resolved above. None
 is a regression: the merged code does what its own tests say. What was wrong was this
