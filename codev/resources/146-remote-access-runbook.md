@@ -45,6 +45,13 @@ x-codev-pairing-token: <pairingId>.<secret>
 {"machine": "ipad"}
 ```
 
+This one request needs **no host key** — that is deliberate. A device being paired
+for the first time does not have the host's local key, and handing it one to pair
+would defeat the point of pairing. Redemption is the only route on the
+`/api/agent/v1/` surface that passes Tower's key check, and it is still
+authenticated: by the pairing token, which is single-use and expires in ten
+minutes. Every other route needs both the host key and a machine credential.
+
 The response carries the machine credential once. The host stores only a hash of
 it, so it cannot be recovered later — if the device loses it, issue a new pairing
 token and redeem again, which replaces the old credential.
@@ -102,6 +109,14 @@ export CODEV_BRIDGE_TLS=terminated
 
 Prefer the specific interface address over `0.0.0.0`; `0.0.0.0` is every
 interface, which is almost never what a single proxy needs.
+
+**Understand what this does not give you.** A declared bind is still a plain-HTTP
+listener on that interface. Anything that can route to `<interface>:4100` reaches
+Tower directly and never passes through the terminator, so "all remote transport
+is HTTPS/WSS" is not true of this configuration — it is true of the loopback
+recipe above. No check inside Tower can change that; only not binding there can.
+If you use this path, put a firewall rule in front of the port, and treat the
+declaration as a note to your future self rather than as a control.
 
 If `CODEV_BRIDGE_TLS` is absent or is anything other than `terminated`, Tower
 logs `INSECURE_NON_LOOPBACK_BIND_REFUSED` and **exits**. This is a deliberate

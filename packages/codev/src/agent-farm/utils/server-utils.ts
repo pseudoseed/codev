@@ -140,6 +140,16 @@ export function keysMatch(presented: string, expected: string): boolean {
  * explicitly excluded so a static-asset carve-out never exposes a data route.
  */
 export function isPublicRoute(method: string, pathname: string): boolean {
+  // KEYLESS AT THIS LAYER, NOT UNAUTHENTICATED. Spec 146 Phase 7's pairing
+  // redemption is the bootstrap: a machine that has just been handed an
+  // out-of-band pairing token holds no host-local key, and there is no secure way
+  // to give it one — distributing the shared key to pair a device would defeat
+  // the point of pairing. So this single POST passes the Tower key check and is
+  // then authenticated by `agent-auth.ts` against the pairing token, which is
+  // single-use with a ten-minute TTL. Every other `/api/agent/v1/` route still
+  // requires the key AND a machine credential.
+  if (method === 'POST' && pathname === '/api/agent/v1/pairing/redeem') return true;
+
   if (method !== 'GET') return false;
 
   if (pathname === '/health') return true;

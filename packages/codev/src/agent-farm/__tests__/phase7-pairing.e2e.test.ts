@@ -36,6 +36,20 @@ function towerHeaders(extra: Record<string, string> = {}): Record<string, string
   return { 'codev-tower-key': ensureLocalKey(), ...extra };
 }
 
+/**
+ * Headers for a request that carries NO host key.
+ *
+ * `vitest-e2e-setup.ts` wraps global `fetch` and injects `codev-tower-key` on
+ * every loopback call, so simply omitting the header does not omit it — the first
+ * version of the bootstrap test below "proved" a keyless flow while the harness
+ * was quietly supplying the key. An explicitly-set empty value is that setup's own
+ * documented opt-out: it satisfies `headers.has()`, so nothing is injected, and
+ * the server reads an empty header as no key at all.
+ */
+function keylessHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return { 'codev-tower-key': '', ...extra };
+}
+
 describe('Phase 7 pairing flow, live server', () => {
   beforeAll(async () => {
     tower = await startTower(PORT, {});
@@ -66,10 +80,15 @@ describe('Phase 7 pairing flow, live server', () => {
     const pairings = new PairingStore({ root: join(farmDir, 'pairing') });
     const token = pairings.issue();
 
-    // 3. Redeem it from the DEVICE.
+    // 3. Redeem it from the DEVICE — carrying ONLY the pairing token.
+    //
+    // No `codev-tower-key`. A machine being paired for the first time does not
+    // have the host-local key and there is no secure way to give it one, so a
+    // bootstrap that needed it would be a documented flow that cannot work. This
+    // request is the runbook's request, byte for byte in what it carries.
     const redeemed = await fetch(`${base}${AGENT_ROUTE_PREFIX}/pairing/redeem`, {
       method: 'POST',
-      headers: towerHeaders({
+      headers: keylessHeaders({
         'content-type': 'application/json',
         'x-codev-pairing-token': token.token,
       }),
@@ -82,7 +101,7 @@ describe('Phase 7 pairing flow, live server', () => {
     // 4. The same token a second time is refused as already redeemed.
     const replay = await fetch(`${base}${AGENT_ROUTE_PREFIX}/pairing/redeem`, {
       method: 'POST',
-      headers: towerHeaders({
+      headers: keylessHeaders({
         'content-type': 'application/json',
         'x-codev-pairing-token': token.token,
       }),
@@ -120,7 +139,7 @@ describe('Phase 7 pairing flow, live server', () => {
     const second = pairings.issue();
     const laptop = await fetch(`${base}${AGENT_ROUTE_PREFIX}/pairing/redeem`, {
       method: 'POST',
-      headers: towerHeaders({
+      headers: keylessHeaders({
         'content-type': 'application/json',
         'x-codev-pairing-token': second.token,
       }),
@@ -132,6 +151,42 @@ describe('Phase 7 pairing flow, live server', () => {
     });
     expect(laptopRead.status).toBe(200);
   }, 30000);
+
+  // THE CARVE-OUT IS EXACTLY ONE ROUTE. Pairing redemption passes Tower's key
+  // check because a new device cannot have the key. If that carve-out were wider
+  // than one route it would be an unauthenticated hole in the protocol surface,
+  // so this asserts the neighbours are still refused keyless.
+  it('no other agent route is reachable without the host key', async () => {
+    for (const [method, path] of [
+      ['GET', `${AGENT_ROUTE_PREFIX}/session`],
+      ['GET', `${AGENT_ROUTE_PREFIX}/workspaces/${encodeWorkspacePath(workspacePath!)}/state`],
+      ['POST', `${AGENT_ROUTE_PREFIX}/approval-capabilities`],
+      ['POST', `${AGENT_ROUTE_PREFIX}/approval-nonces`],
+      ['DELETE', `${AGENT_ROUTE_PREFIX}/machines/ipad`],
+      // A near-miss on the carve-out itself: same path, different method.
+      ['GET', `${AGENT_ROUTE_PREFIX}/pairing/redeem`],
+    ] as const) {
+      const response = await fetch(`${base()}${path}`, { method, headers: keylessHeaders() });
+      const body = await response.text();
+      expect(response.status, `${method} ${path} was reachable without the host key`).toBe(401);
+      // Tower's own refusal, before codev-agent sees it.
+      expect(body, `${method} ${path} reached codev-agent without the host key`).toContain('Unauthorized');
+    }
+  }, 20000);
+
+  it('preflight advertises the machine-credential and pairing-token headers', async () => {
+    const response = await fetch(`${base()}${AGENT_ROUTE_PREFIX}/pairing/redeem`, {
+      method: 'OPTIONS',
+      headers: { origin: 'http://localhost:3000' },
+    });
+    expect(response.status).toBe(200);
+    const allowed = (response.headers.get('access-control-allow-headers') ?? '').toLowerCase();
+    // Without these, a browser on an allowed remote origin fails at the preflight
+    // and never reaches any of Phase 7's own checks.
+    expect(allowed).toContain('x-codev-machine-credential');
+    expect(allowed).toContain('x-codev-pairing-token');
+    expect(allowed).toContain('x-codev-human-session');
+  });
 
   it('refuses an agent request from a disallowed Origin, over the wire', async () => {
     const response = await fetch(`${base()}${AGENT_ROUTE_PREFIX}/session`, {

@@ -678,6 +678,12 @@ describe('binding policy', () => {
     // And it says what it does NOT know, rather than claiming the transport is
     // encrypted. A process cannot see the proxy in front of it.
     expect(decision.message).toContain('cannot verify');
+    // THE RESIDUAL, asserted so it cannot be quietly trimmed: a declared bind is
+    // still a plain-HTTP listener that a routable peer reaches directly. An
+    // "allowed" decision that read as approval would be the phase's own defect.
+    expect(decision.message).toContain('plain HTTP');
+    expect(decision.message).toContain('bypassing the terminator');
+    expect(decision.message).toContain('LOOPBACK');
   });
 
   it('does not accept a vague or truthy declaration', () => {
@@ -815,6 +821,21 @@ describe('remote-access runbook', () => {
     expect(tailnet).toContain('Do not set `BRIDGE_TOWER_HOST`');
     expect(tailnet).not.toContain('BRIDGE_TOWER_HOST=0.0.0.0');
     expect(tailnet).toContain('tailscale serve --https=443 http://127.0.0.1:4100');
+  });
+
+  it('states that a declared non-loopback bind is still plain HTTP', () => {
+    const text = runbook();
+    // The deliverable says all remote transport is HTTPS/WSS. That is true of the
+    // loopback recipe and NOT of the escape hatch, and the runbook has to say so
+    // where the escape hatch is, not somewhere else.
+    expect(text).toContain('still a plain-HTTP\nlistener');
+    expect(text).toContain('never passes through the terminator');
+  });
+
+  it('says the pairing route needs no host key, and why', () => {
+    const text = runbook();
+    expect(text).toContain('no host key');
+    expect(text).toContain('single-use');
   });
 
   it('states the blast radius of one unparseable credential file', () => {

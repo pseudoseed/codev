@@ -350,7 +350,16 @@ export interface BindDecision {
  *
  * This is a deliberate behaviour change from the previous warn-and-continue,
  * recorded in the plan's phase 7 deliverables and in the remote-access runbook.
- * `tailscale serve --https=443` and any reverse proxy satisfy the declaration.
+ *
+ * WHAT IT STILL DOES NOT DO, because a reviewer read the deliverable strictly and
+ * was right to: a declared bind is still a plain-HTTP listener on that interface,
+ * so a peer that can route to it reaches it directly and the terminator is not in
+ * the path. No in-process check can change that — only not binding there can. The
+ * runbook's primary recipe is therefore a LOOPBACK bind with the terminator on
+ * the same host (`tailscale serve --https=443 http://127.0.0.1:4100`), which is
+ * the configuration that actually satisfies "all remote transport is HTTPS/WSS".
+ * This escape hatch is for a terminator on a different host, and the allowed
+ * decision's message says the residual out loud rather than reading as approval.
  */
 export function decideBindPolicy(input: {
   readonly host: string;
@@ -372,7 +381,12 @@ export function decideBindPolicy(input: {
       code: TRANSPORT_SIGNAL.BIND_EXPOSED_TLS_DECLARED,
       message:
         `bound to ${input.host} with CODEV_BRIDGE_TLS=terminated. This host cannot verify that `
-        + 'claim — it is the operator\'s declaration that a TLS terminator fronts this bind.',
+        + 'claim — it is the operator\'s declaration that a TLS terminator fronts this bind. '
+        + 'THE RESIDUAL, stated because a declaration is not a control: this listener still '
+        + `speaks plain HTTP, so anything that can route to ${input.host}:<port> reaches it `
+        + 'directly, bypassing the terminator. The configuration that actually makes all '
+        + 'remote transport HTTPS/WSS is a LOOPBACK bind with the terminator on this host; '
+        + 'this path exists only for a terminator that cannot reach 127.0.0.1.',
     };
   }
   return {
