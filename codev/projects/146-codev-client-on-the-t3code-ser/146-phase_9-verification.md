@@ -156,6 +156,52 @@ exact class of defect, which could not fail for the one call site that differed 
 It now also requires `roleContent:` at every site, which has no exception. Mutation-checked:
 removing the two lines from `spawnWorktree` fails it.
 
+#### Iteration 3's review found the error discipline was itself incomplete
+
+Both lanes approved (**claude APPROVE**, **opencode APPROVE**, both HIGH). Three non-blocking
+findings; two were the same defect one step out from where this phase had just fixed it, and both
+are fixed in `28134186e`.
+
+**The connect path could reach four states and could name two, one of them wrongly.**
+
+- **No timeout on the WebSocket open promise.** A server that accepts the TCP connection and never
+  completes the upgrade fired neither listener, so the await never settled. Unbounded, not slow: a
+  spawn hung forever having reported nothing — this phase's own thesis, a driver that does not
+  drive, reappearing inside the code written to enforce it.
+- **Both handshake listeners are `{ once: true }`**, so after `open` resolved the socket had no
+  error listener at all and a later failure vanished.
+- **`isCredentialRefusal` matched any `AuthError`**, so a 4xx from `issueWebSocketTicket` — which
+  happens *after* the token is accepted — was reported as a refused bootstrap token. A message
+  naming the wrong cause. Found by the opencode lane.
+
+Now four states, four sentences: token refused, ticket refused, accepted-then-never-upgraded,
+unreachable. They come from one `Record<ConnectFailure, string>`, so adding a state without a
+message is a type error rather than a silent fallthrough.
+
+**The bound is a parameter, not an environment variable.** `ensureThreadBackendReady` gained an
+optional second argument; `launchSpawnedBuilder`, the only production caller, is unchanged. An env
+var would have been a new `CODEV_*` on a repo whose suite now scrubs every `CODEV_*` except four
+named opt-ins — making the test's correctness depend on where the scrub runs relative to where the
+value is set. That coupling is invisible and nobody would remember it.
+
+**Five tests, and the fifth is the one that earns the claim.** Each asserts its own state *and the
+absence of the other three signatures*; the fifth compares the messages against each other, because
+four tests each asserting their own state would not prove mutual exclusivity — which is the whole
+deliverable.
+
+**It paid on the first run.** The hang fixture did not hang: a plain `http.Server` with no
+`upgrade` listener **destroys** the upgrade socket, firing the client's error handler and producing
+the *unreachable* message. The fixture produced state B while the test asserted state C. A test
+written as "this throws" would have gone green against the wrong state and an untested timeout
+would have shipped believing itself tested.
+
+**Mutation-checked.** Removing the timeout makes the hang test run out **vitest's own 20-second
+timeout** — with the bound gone the connection genuinely never settles, and the only reason the
+test terminates is the runner killing it. Production has no such backstop. Ignoring
+`AuthError.endpoint` fails the ticket test.
+
+`spec-146-phase-9-thread-backend.test.ts`: 22 → 27.
+
 #### What item 2 does NOT do, named rather than left to be discovered
 
 `ensureThreadBackendReady` is called from `launchSpawnedBuilder` and nowhere else. `afx
@@ -278,7 +324,7 @@ is the one running the program, so `/arch-save` cannot be exercised against it.
 
 | File | Tests |
 |---|---|
-| `spec-146-phase-9-thread-backend.test.ts` | 22 — items 1 and 2, the packaging guards, the spawn payload, the Node-20 WebSocket path, and refusal-vs-unreachable |
+| `spec-146-phase-9-thread-backend.test.ts` | 27 — items 1 and 2, the packaging guards, the spawn payload, the Node-20 WebSocket path, and all four connect-failure states pinned against each other |
 | `spec-146-phase-9-porch-engine.test.ts` | 7 — 4 added; the first turn, the role on it, the idle control, and `activeTurnId` |
 | `spec-146-phase-9-interrupt-side-effect.test.ts` | 2 — new; the deterministic half of the interrupt criterion, with its control |
 | `spec-146-phase-9-afx-parity.test.ts` | unchanged |
