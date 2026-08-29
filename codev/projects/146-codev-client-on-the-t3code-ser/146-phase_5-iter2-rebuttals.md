@@ -99,3 +99,34 @@ builder's process.
 - Every fix in this round mutation-verified, each killing only its own test.
 - Production sources restored and confirmed unmodified after each mutation.
 - Full suite via `porch done`: build 16.3 s, tests 211.8 s, both green.
+
+---
+
+## SILENT LANE FAILURES — the fourth, and the one that nearly cost a real finding
+
+Recorded next to **#168** because the pattern is now established rather than anecdotal.
+
+| # | Lane | Shape |
+|---|---|---|
+| 1 | codex | quota-exhausted, **exit 0**, no output file |
+| 2 | opencode | exploration only, **exit 0**, no verdict, no file |
+| 3 | codex | quota-exhausted again, **exit 0**, no file |
+| 4 | opencode | **exit 1**, empty output file |
+
+Every one reads as *"reviewed, no findings"* to anything that checks whether the round
+completed. `parseVerdict` returning `COMMENT` — non-blocking — for output containing no
+`VERDICT` line means a lane that never ran and a lane that approved are the same
+answer to porch.
+
+**The fourth one nearly cost a real finding.** That lane had discovered
+**zero-padded project ids** (`0087`, `0088`, `0092`, `0120`, `0124`) and the live
+`0120`/`120` collision across protocols — a case where digit-matching resolves to the
+**wrong** project with a *resolved* record. It survived only because the architect read
+the lane's log after it died. Nothing in the protocol would have surfaced it.
+
+That finding also proves the point the round was already making: **two lanes each found
+an id shape the other missed, and both shapes had been sitting in `codev/projects` the
+whole time.** Neither could have been missed by a fixture list generated from the
+directory. That is why the shape list is now read off disk and asserted, rather than
+typed — and why "a list you type is a claim; one you read is a fact" is the durable
+form of the rule, not "look harder next time".
