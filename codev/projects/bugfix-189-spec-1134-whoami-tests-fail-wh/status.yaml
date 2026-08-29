@@ -1,7 +1,7 @@
 id: bugfix-189
 title: spec-1134-whoami-tests-fail-wh
 protocol: bugfix
-phase: pr
+phase: verified
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -13,7 +13,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-29T16:21:50.787Z'
-updated_at: '2026-08-29T17:26:10.702Z'
+updated_at: '2026-08-29T17:26:17.276Z'
 pr_history:
   - phase: pr
     pr_number: 192
