@@ -261,6 +261,7 @@ describe('tower-routes', () => {
     mockGetTerminalManager.mockReturnValue({
       listSessions: mockListSessions.mockReturnValue([]),
       getSession: mockGetSession.mockReturnValue(null),
+      assertCanCreateSession: vi.fn(),
     });
     mockGetWorkspaceTerminalsEntry.mockReturnValue({
       architects: new Map(),
@@ -399,6 +400,67 @@ describe('tower-routes', () => {
       expect(statusCode()).toBe(200);
       const parsed = JSON.parse(body());
       expect(parsed.terminals).toEqual([{ id: 'term-1' }]);
+    });
+  });
+
+  describe('POST /api/terminals capacity ordering (Issue #174)', () => {
+    const persistentBody = {
+      command: '/bin/bash',
+      cwd: '/tmp/workspace',
+      persistent: true,
+      workspacePath: '/tmp/workspace',
+      type: 'builder',
+      roleId: '0174',
+    };
+
+    it('rejects at capacity before spawning a shellper', async () => {
+      mockParseJsonBody.mockResolvedValueOnce(persistentBody);
+      const createSession = vi.fn().mockRejectedValue(
+        new Error('Maximum 100 sessions reached; Top workspaces: /busy (100)'),
+      );
+      const manager = {
+        assertCanCreateSession: vi.fn(() => {
+          throw new Error('Maximum 100 sessions reached; Top workspaces: /busy (100)');
+        }),
+        createSession,
+      };
+      mockGetTerminalManager.mockReturnValue(manager);
+      const shellperCreate = vi.fn().mockRejectedValue(new Error('spawn should not run'));
+
+      const { res, body } = makeRes();
+      await handleRequest(makeReq('POST', '/api/terminals'), res, makeCtx({
+        getShellperManager: () => ({ createSession: shellperCreate } as any),
+      }));
+
+      expect(shellperCreate).not.toHaveBeenCalled();
+      expect(createSession).toHaveBeenCalledTimes(1); // fallback repeats the cap check
+      expect(JSON.parse(body()).message).toContain('Top workspaces: /busy (100)');
+    });
+
+    it('kills a shellper if the post-spawn adoption check fails', async () => {
+      mockParseJsonBody.mockResolvedValueOnce(persistentBody);
+      const manager = {
+        assertCanCreateSession: vi.fn(),
+        createSessionRaw: vi.fn(() => { throw new Error('Maximum 100 sessions reached'); }),
+        createSession: vi.fn().mockRejectedValue(new Error('Maximum 100 sessions reached')),
+        killSession: vi.fn(),
+      };
+      mockGetTerminalManager.mockReturnValue(manager);
+      const killSession = vi.fn().mockResolvedValue(undefined);
+      const shellperManager = {
+        createSession: vi.fn().mockResolvedValue({ waitForReplay: vi.fn().mockResolvedValue(Buffer.alloc(0)) }),
+        getSessionInfo: vi.fn().mockReturnValue({ pid: 4321, socketPath: '/tmp/session.sock', startTime: 1 }),
+        killSession,
+      };
+
+      const { res } = makeRes();
+      await handleRequest(makeReq('POST', '/api/terminals'), res, makeCtx({
+        getShellperManager: () => shellperManager as any,
+      }));
+
+      expect(shellperManager.createSession).toHaveBeenCalledTimes(1);
+      expect(killSession).toHaveBeenCalledWith(expect.any(String));
+      expect(manager.killSession).not.toHaveBeenCalled(); // raw adoption never registered
     });
   });
 

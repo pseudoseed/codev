@@ -588,8 +588,12 @@ export async function launchInstance(workspacePath: string): Promise<{ success: 
         // Try shellper first for persistent session with auto-restart
         let shellperCreated = false;
         if (_deps.shellperManager) {
+          let shellperSessionId: string | null = null;
+          let rawSessionId: string | null = null;
           try {
+            manager.assertCanCreateSession();
             const sessionId = crypto.randomUUID();
+            shellperSessionId = sessionId;
             // Issue #1149: if the resumed conversation fast-fails at runtime
             // (jsonl vanished after the bake, or corrupt), degrade to a fresh
             // launch instead of burning all 50 restarts on identical args.
@@ -639,6 +643,7 @@ export async function launchInstance(workspacePath: string): Promise<{ success: 
               command: cmd,
               args: cmdArgs,
             });
+            rawSessionId = session.id;
             const ptySession = manager.getSession(session.id);
             if (ptySession) {
               ptySession.attachShellper(client, replayData, shellperInfo.pid, sessionId);
@@ -697,6 +702,8 @@ export async function launchInstance(workspacePath: string): Promise<{ success: 
             shellperCreated = true;
             _deps.log('INFO', `Created shellper-backed architect session for workspace: ${workspacePath}`);
           } catch (shellperErr) {
+            if (shellperSessionId) await _deps.shellperManager.killSession(shellperSessionId);
+            if (rawSessionId) manager.killSession(rawSessionId);
             _deps.log('WARN', `Shellper creation failed for architect, falling back: ${(shellperErr as Error).message}`);
           }
         }
@@ -1118,8 +1125,11 @@ export async function addArchitect(
   let sessionId: string | null = null;
 
   if (_deps.shellperManager) {
+    let shellperSessionId: string | null = null;
+    let rawSessionId: string | null = null;
     try {
-      const shellperSessionId = crypto.randomUUID();
+      manager.assertCanCreateSession();
+      shellperSessionId = crypto.randomUUID();
       // Issue #1149: degrade a fast-failing resume to a fresh launch (see
       // matching block in launchInstance above).
       let crashLoopFallback;
@@ -1160,6 +1170,7 @@ export async function addArchitect(
       // Spec 1313: thread the harness command/args so the render-gate resolves
       // this sibling architect's profile directly (no `.builder-start.sh` backstop).
       const session = manager.createSessionRaw({ label: `Architect (${name})`, cwd: workspacePath, command: cmd, args: cmdArgs });
+      rawSessionId = session.id;
       const ptySession = manager.getSession(session.id);
       if (ptySession) {
         ptySession.attachShellper(client, replayData, shellperInfo.pid, shellperSessionId);
@@ -1212,6 +1223,8 @@ export async function addArchitect(
       sessionId = session.id;
       _deps.log('INFO', `Created shellper-backed architect '${name}' in workspace ${workspacePath}`);
     } catch (shellperErr) {
+      if (shellperSessionId) await _deps.shellperManager.killSession(shellperSessionId);
+      if (rawSessionId) manager.killSession(rawSessionId);
       _deps.log('WARN', `Shellper creation failed for architect '${name}', falling back: ${(shellperErr as Error).message}`);
     }
   }
@@ -1432,4 +1445,3 @@ export async function removeArchitect(
   _deps.log('INFO', `Removed architect '${name}' from workspace ${workspacePath}`);
   return { success: true };
 }
-
