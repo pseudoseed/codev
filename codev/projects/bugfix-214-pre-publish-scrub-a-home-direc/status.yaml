@@ -1,7 +1,7 @@
 id: bugfix-214
 title: pre-publish-scrub-a-home-direc
 protocol: bugfix
-phase: fix
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-29T19:58:48.696Z'
-updated_at: '2026-08-29T20:02:32.520Z'
+updated_at: '2026-08-29T20:18:21.119Z'
