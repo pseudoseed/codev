@@ -11,13 +11,13 @@
  * silently, the second throws. A server that was named and could not be reached must
  * never be spelled the same way as a server that was never named.
  */
-import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DispatchJournal } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
 import { createPorchThreadEngine } from './porch-thread-engine.js';
 import { installThreadSpawnFactory, setThreadEngine, tryGetThreadEngine } from './thread-runtime.js';
 import { logger } from './utils/logger.js';
+import { loadConfig } from '../lib/config.js';
 
 /**
  * How long a socket may sit connected-but-not-upgraded before it is called a failure.
@@ -81,18 +81,16 @@ export function readThreadBackendConfig(workspaceRoot: string): ThreadBackendCon
     };
   }
 
-  const configPath = join(workspaceRoot, '.codev', 'config.json');
-  if (!existsSync(configPath)) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(configPath, 'utf8'));
-  } catch (err) {
-    throw new Error(
-      `Cannot read thread backend configuration: ${configPath} is not valid JSON (${err instanceof Error ? err.message : String(err)})`,
-      { cause: err },
-    );
-  }
-  const threads = (parsed as { threads?: Record<string, unknown> } | null)?.threads;
+  // Through `loadConfig`, NOT a direct read of `.codev/config.json`. That loader merges five
+  // layers, and layer 5 is `.codev/config.local.json` — per-engineer and already gitignored.
+  // Reading the committed file directly meant an engineer who put `threads` in the local
+  // override got `not-configured`: "I could not see it" spelled exactly like "there is none".
+  // It also meant the only way to keep a token out of git was to gitignore the whole committed
+  // config, which carries the shell block teams reasonably commit.
+  //
+  // Malformed JSON still throws rather than reading as unconfigured — `readJsonFile` raises
+  // `Failed to parse <path>` — so that distinction survives the move.
+  const threads = loadConfig(workspaceRoot).threads;
   if (!threads) return null;
 
   const serverUrl = typeof threads.serverUrl === 'string' ? threads.serverUrl.trim() : '';
@@ -101,7 +99,9 @@ export function readThreadBackendConfig(workspaceRoot: string): ThreadBackendCon
   if (!serverUrl || !bootstrapToken) {
     // Half-configured is a mistake, not a decision to stay on PTY.
     throw new Error(
-      `Incomplete "threads" block in ${configPath}: both serverUrl and bootstrapToken are required (got serverUrl=${serverUrl ? 'set' : 'missing'}, bootstrapToken=${bootstrapToken ? 'set' : 'missing'})`,
+      `Incomplete "threads" config for ${workspaceRoot}: both serverUrl and bootstrapToken are required `
+      + `(got serverUrl=${serverUrl ? 'set' : 'missing'}, bootstrapToken=${bootstrapToken ? 'set' : 'missing'}). `
+      + `Checked .codev/config.json and .codev/config.local.json.`,
     );
   }
   return {

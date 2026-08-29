@@ -76,8 +76,17 @@ describe('Spec 146 Phase 9 — the engine is reachable in production (#179 item 
     const deps = workspaceDeps();
     expect(deps.length).toBeGreaterThan(0);
     for (const { name, path } of deps) {
-      expect({ name, version: pkg(`${path}/package.json`).version }).toEqual({ name, version: released });
-      expect({ name, private: pkg(`${path}/package.json`).private }).toEqual({ name, private: undefined });
+      const manifest = pkg(`${path}/package.json`);
+      expect({ name, version: manifest.version }).toEqual({ name, version: released });
+      expect({ name, private: manifest.private }).toEqual({ name, private: undefined });
+      // Every one of these ships its dist/ (gitignored) and points `exports.*.default` there,
+      // and release step 7 publishes them BEFORE @cluesmith/codev — so codev's own
+      // prepublishOnly build has not run yet. Without this, a clean checkout publishes a
+      // tarball containing `src` and no `dist`: the install succeeds and the first
+      // `afx spawn` dies on ERR_MODULE_NOT_FOUND. A dirty tree silently ships whatever
+      // happens to be sitting in dist/. npm publishes cannot be taken back.
+      expect({ name, prepublishOnly: manifest.scripts?.prepublishOnly })
+        .toEqual({ name, prepublishOnly: 'pnpm build' });
     }
   });
 
@@ -161,13 +170,53 @@ describe('Spec 146 Phase 9 — production spawn wiring (#179 item 2)', () => {
     expect(readThreadBackendConfig(workspace({ shell: {} }))).toBeNull();
   });
 
+  it('reads threads from .codev/config.local.json, the per-engineer gitignored layer', () => {
+    // The reason this goes through `loadConfig` instead of reading `.codev/config.json`
+    // directly. An engineer putting `threads` in the local override previously got
+    // `not-configured` — "I did not look there" spelled exactly like "there is none" — and the
+    // only way to keep a token out of git was to gitignore the committed config, which also
+    // carries the shell block teams reasonably commit.
+    dir = mkdtempSync(join(tmpdir(), 'phase9-local-'));
+    mkdirSync(join(dir, '.codev'), { recursive: true });
+    writeFileSync(join(dir, '.codev', 'config.json'), JSON.stringify({ shell: {} }));
+    writeFileSync(
+      join(dir, '.codev', 'config.local.json'),
+      JSON.stringify({ threads: { serverUrl: 'http://127.0.0.1:3799', bootstrapToken: 'local-tok' } }),
+    );
+
+    expect(readThreadBackendConfig(dir)).toMatchObject({
+      serverUrl: 'http://127.0.0.1:3799',
+      bootstrapToken: 'local-tok',
+    });
+  });
+
+  it('the committed config alone still works, and the local layer wins where both set it', () => {
+    dir = mkdtempSync(join(tmpdir(), 'phase9-layers-'));
+    mkdirSync(join(dir, '.codev'), { recursive: true });
+    writeFileSync(
+      join(dir, '.codev', 'config.json'),
+      JSON.stringify({ threads: { serverUrl: 'http://committed:1', bootstrapToken: 'committed' } }),
+    );
+    expect(readThreadBackendConfig(dir)).toMatchObject({ bootstrapToken: 'committed' });
+
+    writeFileSync(
+      join(dir, '.codev', 'config.local.json'),
+      JSON.stringify({ threads: { bootstrapToken: 'local' } }),
+    );
+    // Layer 5 beats layer 4, and the serverUrl the local file does not set is still inherited.
+    expect(readThreadBackendConfig(dir)).toMatchObject({
+      serverUrl: 'http://committed:1',
+      bootstrapToken: 'local',
+    });
+  });
+
   it('an unparseable config throws rather than reading as not-configured', () => {
     // A config file that cannot be parsed is "I could not tell", and returning null would
     // spell it the same way as "this workspace has no server", which is a decision.
     dir = mkdtempSync(join(tmpdir(), 'phase9-backend-'));
     mkdirSync(join(dir, '.codev'), { recursive: true });
     writeFileSync(join(dir, '.codev', 'config.json'), '{ not json');
-    expect(() => readThreadBackendConfig(dir!)).toThrow(/is not valid JSON/);
+    expect(() => readThreadBackendConfig(dir!)).toThrow(/Failed to parse/);
   });
 
   it('a half-configured threads block throws rather than silently staying on PTY', () => {

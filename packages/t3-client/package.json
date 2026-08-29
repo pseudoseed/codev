@@ -5,31 +5,31 @@
   "type": "module",
   "exports": {
     "./envelope": {
-      "types": "./src/envelope.ts",
+      "types": "./dist/envelope.d.ts",
       "default": "./dist/envelope.js"
     },
     "./client": {
-      "types": "./src/client.ts",
+      "types": "./dist/client.d.ts",
       "default": "./dist/client.js"
     },
     "./auth": {
-      "types": "./src/auth.ts",
+      "types": "./dist/auth.d.ts",
       "default": "./dist/auth.js"
     },
     "./resume": {
-      "types": "./src/resume.ts",
+      "types": "./dist/resume.d.ts",
       "default": "./dist/resume.js"
     },
     "./socket": {
-      "types": "./src/socket.ts",
+      "types": "./dist/socket.d.ts",
       "default": "./dist/socket.js"
     },
     "./checked": {
-      "types": "./src/checked.ts",
+      "types": "./dist/checked.d.ts",
       "default": "./dist/checked.js"
     },
     "./subscription": {
-      "types": "./src/subscription.ts",
+      "types": "./dist/subscription.d.ts",
       "default": "./dist/subscription.js"
     }
   },
@@ -39,7 +39,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
   },
   "devDependencies": {
     "typescript": "catalog:"

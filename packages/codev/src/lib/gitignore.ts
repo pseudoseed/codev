@@ -25,13 +25,6 @@ export const THREAD_KEEP_RULE = '!codev/state/*_thread.md';
 
 /**
  * Standard gitignore entries for codev projects
- *
- * `.codev/config.json` is per-machine setup, and since spec 146 phase 9 it can hold a
- * `threads.bootstrapToken` for a t3code server — a credential. This repo has ignored it by
- * hand since before that, but `codev init` / `codev adopt` never wrote the rule, so an
- * adopter that configured a server would commit the token. Only the file is ignored, not
- * `.codev/` — protocol and template overrides live under that directory and are meant to be
- * committed. Adding the rule does not untrack a file a project already tracks.
  */
 export const CODEV_GITIGNORE_ENTRIES = `# Codev
 .agent-farm/
@@ -39,7 +32,6 @@ export const CODEV_GITIGNORE_ENTRIES = `# Codev
 codev/.update-hashes.json
 .builders/
 .architect-role.md
-.codev/config.json
 ${STATE_IGNORE_RULE}
 ${THREAD_KEEP_RULE}
 `;
