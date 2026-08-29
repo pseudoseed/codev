@@ -13,7 +13,7 @@ import { join, resolve } from 'node:path';
 import { DispatchJournal } from '../../../../porch-driver/src/commands.js';
 import { TurnTracker } from '../../../../porch-driver/src/turn.js';
 import { createProject } from '../../../../porch-driver/src/thread.js';
-import { createPorchThreadEngine } from '../porch-thread-engine.js';
+import { createPorchThreadEngine } from './helpers/porch-thread-engine.js';
 
 const repoRoot = resolve(import.meta.dirname, '../../../../..');
 const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');

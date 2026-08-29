@@ -1,11 +1,11 @@
-import { DriverThread } from '../../../porch-driver/dist/thread.js';
+import { DriverThread } from '../../../../../porch-driver/dist/thread.js';
 import {
   DispatchJournal,
   type CommandDispatcher,
-} from '../../../porch-driver/dist/commands.js';
-import { TurnTracker } from '../../../porch-driver/dist/turn.js';
-import type { ThreadEngine, ThreadRecord } from './thread-runtime.js';
-import type { SpawnThreadFactory } from './db/thread-identity.js';
+} from '../../../../../porch-driver/dist/commands.js';
+import { TurnTracker } from '../../../../../porch-driver/dist/turn.js';
+import type { ThreadEngine, ThreadRecord } from '../../thread-runtime.js';
+import type { SpawnThreadFactory } from '../../db/thread-identity.js';
 
 export interface PorchThreadEngineOptions {
   readonly dispatcher: CommandDispatcher;
