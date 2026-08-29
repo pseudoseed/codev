@@ -184,7 +184,10 @@ describe('failure matrix signals are distinct', () => {
       // it carries a signal whose code equals the event type.
       PROTOCOL_STATE_SNAPSHOT: 'stream event type, not a failure signal',
       PROTOCOL_STATE_RECONCILED: 'stream event type; the repair is STREAM_PROJECTION_REPAIRED',
-      STATE_STREAM_WATCH_FAILED: 'a watcher could not be established; the stream says so and keeps its other watchers',
+      // STATE_STREAM_WATCH_FAILED was excluded here and that was my error, caught by
+      // a reviewer: a watcher that cannot be established IS operator-facing, because
+      // that root then depends entirely on the reconciliation backstop. It is now a
+      // matrix row with its own test, so it is no longer in this list.
       // Matched, never emitted: these are node/sqlite error codes dbSignal reads.
       SQLITE_BUSY: 'sqlite error code matched by dbSignal, not a code we emit',
       SQLITE_LOCKED: 'sqlite error code matched by dbSignal, not a code we emit',
@@ -549,7 +552,94 @@ describe('failure matrix', () => {
     expect(snapshot.identities).toEqual([]);
   });
 
-  it('a capability presented after revocation emits HUMAN_SESSION_REVOKED', () => {
+  // ISSUE #170 — a thread-backed architect keeps its `cmd`, and that is not a conflict.
+  //
+  // The detector counted a non-empty `cmd` as terminal-backed state, while Phase 8
+  // writes `cmd` for thread-backed architects on purpose: it is NOT NULL in the
+  // schema, it records how the architect was launched, and status rendering uses it.
+  // So every thread-backed architect reported IDENTITY_SHAPE_CONFLICT forever — two
+  // merged phases contradicting each other, latent only because no factory is
+  // registered yet.
+  //
+  // This is the direction that was BROKEN, so it is the direction that needs its own
+  // test: the honest sentinels are terminal_id NULL and pid/port 0, and a row with
+  // those is clean no matter what `cmd` says.
+  it('a thread-backed architect that kept its cmd is NOT a conflict', () => {
+    const root = tmp();
+    const database = db();
+    database.prepare(`
+      INSERT INTO architect (workspace_path, id, pid, port, cmd, terminal_id, thread_id)
+      VALUES (?, 'main', 0, 0, 'claude --resume', NULL, 'thread-arch-ok')
+    `).run(normalizeWorkspacePath(root));
+    const snapshot = readThreadRegistry(database, root, []);
+    expect(snapshot.signals.map((s) => s.code)).not.toContain('IDENTITY_SHAPE_CONFLICT');
+    // And it IS published, rather than being silently dropped as conflicted.
+    expect(snapshot.architects).toEqual({ main: 'thread-arch-ok' });
+  });
+
+  // The narrowed condition must still fire on what it exists for: a row genuinely
+  // half-migrated, carrying thread-backed and terminal-backed identity at once.
+  // Narrowing a detector is only safe if the case it was built for is pinned.
+  it('an architect row with a thread_id AND a terminal_id is still a conflict', () => {
+    const root = tmp();
+    const database = db();
+    database.prepare(`
+      INSERT INTO architect (workspace_path, id, pid, port, cmd, terminal_id, thread_id)
+      VALUES (?, 'main', 0, 0, 'claude --resume', 'term-arch', 'thread-arch-half')
+    `).run(normalizeWorkspacePath(root));
+    const snapshot = readThreadRegistry(database, root, []);
+    expect(snapshot.signals.map((s) => s.code)).toContain('IDENTITY_SHAPE_CONFLICT');
+    expect(snapshot.architects).toEqual({});
+  });
+
+  // NAMED FOR THE HUMAN SESSION, NOT FOR A CAPABILITY.
+  //
+  // It presents a revoked human-session credential, which is the only revokeable
+  // object phase 5 has. Capabilities are Phase 6's, and `CAPABILITY_REVOKED` will be
+  // its own code. Calling this "a capability presented after revocation" claimed
+  // coverage of a phase that has not been built — the same name-versus-path drift
+  // that produced the STATUS_UNREADABLE regression, here pointing at a future phase
+  // instead of a neighbouring function.
+  // A WATCHER THAT CANNOT BE ESTABLISHED SAYS SO.
+  //
+  // I had excluded this code from the matrix as "not operator-facing". A reviewer
+  // pushed back and was right: if `watch()` throws for a directory, that root's
+  // changes reach the client only through the 5s reconciliation backstop. The stream
+  // is DEGRADED, not broken — and degraded-but-silent is indistinguishable from
+  // healthy, which is the thing this whole matrix exists to prevent.
+  it('a watcher that cannot be established emits STATE_STREAM_WATCH_FAILED', () => {
+    const root = tmp();
+    writeStatus(root, '11', porchYaml('11'));
+    const events: AgentStateStreamEvent<{ phase: string }>[] = [];
+    const throwingWatch = (() => {
+      throw Object.assign(new Error('inotify limit reached'), { code: 'ENOSPC' });
+    }) as unknown as typeof import('node:fs').watch;
+
+    const subscription = watchAgentState({
+      workspacePath: root,
+      debounceMs: 5,
+      // No reconcile interval: this test is about the watch failure being announced,
+      // not about the backstop that follows it.
+      reconcileMs: 0,
+      watchImpl: throwingWatch,
+      snapshot: () => phaseSnapshot(root),
+      onEvent: (event) => events.push(event),
+    });
+    try {
+      const failed = events.filter((event) => event.type === 'STATE_STREAM_WATCH_FAILED');
+      expect(failed.length).toBeGreaterThan(0);
+      expect(failed[0]?.signal?.code).toBe(SIGNAL.STATE_STREAM_WATCH_FAILED);
+      // Names the directory it could not watch, and why.
+      expect(failed[0]?.signal?.message).toContain('inotify limit reached');
+      // The initial snapshot still arrives: a failed WATCHER is not a failed STREAM,
+      // and reporting it as one would be its own collapsed distinction.
+      expect(events.some((event) => event.type === 'PROTOCOL_STATE_SNAPSHOT')).toBe(true);
+    } finally {
+      subscription.close();
+    }
+  });
+
+  it('a revoked human-session credential is rejected as REVOKED, not as never-paired', () => {
     const sessions = new HumanPairedSessionRegistry();
     const database = db();
     initAgentRoutes({

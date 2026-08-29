@@ -22,16 +22,25 @@ once the cause lifts; that is not a repair.
 | Thread with no porch record | `THREAD_UNMANAGED` | Thread shown as **unmanaged**. | No |
 | Porch record whose thread is gone | `PORCH_THREAD_NO_LONGER_EXISTS` | Porch record kept; thread marked gone, not deleted. | No |
 | `global.db` locked | `GLOBAL_DB_LOCKED` | Identity maps unavailable. Empty maps are not "no architects". | No |
-| Capability presented after revocation | `HUMAN_SESSION_REVOKED` | Rejected as revoked, not as never-paired (`UNKNOWN` / `HUMAN_SESSION_REQUIRED`). Phase 5's revokeable object is the human-paired session Phase 6 issues against. Phase 6 must emit a distinct `CAPABILITY_REVOKED` rather than reuse this code. | No |
+| Revoked human-session credential presented | `HUMAN_SESSION_REVOKED` | Rejected as revoked, not as never-paired (`UNKNOWN` / `HUMAN_SESSION_REQUIRED`). Phase 5's revokeable object is the human-paired session Phase 6 issues against. Phase 6 must emit a distinct `CAPABILITY_REVOKED` rather than reuse this code. | No |
 | `status.yaml` vs thread disagreement | `THREAD_ID_DISAGREEMENT` | Both values shown; porch remains authoritative. Human resolves. | **Never** |
+| Watcher cannot be established on a root | `STATE_STREAM_WATCH_FAILED` | That root is announced as degraded: its changes now arrive only via the 5s reconciliation backstop. The initial snapshot still arrives — a failed watcher is not a failed stream. Not spelled as a healthy stream. | No — reported; the backstop covers delivery but the degradation stands |
 | Stream lagged `status.yaml` (watcher miss) | `STREAM_PROJECTION_REPAIRED` | Snapshot applied; event type is `PROTOCOL_STATE_RECONCILED`, not a plain snapshot. Repair is visible. Bounded schedule (5s). Does not claim the macOS `watch()` arming window is closed. | **Yes** — projection repaired from its source |
 
-## Codes the emitter produces beyond the twelve rows
+## Codes the emitter produces beyond the rows above
 
-The twelve rows above are the plan's required minimum. The service emits three
+The rows above cover the plan's required minimum plus `ROOT_MISSING`,
+`STATE_STREAM_WATCH_FAILED` and `STREAM_PROJECTION_REPAIRED`. The service emits three
 further codes, listed here because a matrix that omits them is a map with roads
-missing. `FAILURE_MATRIX_SIGNAL` holds twelve entries by design; a length check
-against it tests the constant, not the emitter, and cannot see these.
+missing.
+
+**No count is stated here on purpose.** An earlier version of this document and the
+test both carried one, and the test's number described the `FAILURE_MATRIX_SIGNAL`
+constant rather than the emitter — so it read as a completeness claim while codes it
+had never seen shipped past it. The guarantee now lives in
+`agent-failure-matrix.test.ts`, which scans the emitters directly and fails on any
+code that is neither a row here nor an explicitly justified exclusion. A number in
+prose cannot do that, and a number that drifts is worse than none.
 
 | Failure | Signal | Client renders | Auto-resolved |
 |---|---|---|---|

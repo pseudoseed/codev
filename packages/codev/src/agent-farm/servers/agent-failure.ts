@@ -19,6 +19,10 @@ export const FAILURE_MATRIX_SIGNAL = {
   HUMAN_SESSION_REVOKED: 'HUMAN_SESSION_REVOKED',
   THREAD_ID_DISAGREEMENT: 'THREAD_ID_DISAGREEMENT',
   STREAM_PROJECTION_REPAIRED: 'STREAM_PROJECTION_REPAIRED',
+  // A watcher could not be established on a directory. Operator-facing: that root's
+  // changes now reach the client only via the reconciliation backstop, so the stream
+  // is degraded rather than broken — and saying nothing would spell that as healthy.
+  STATE_STREAM_WATCH_FAILED: 'STATE_STREAM_WATCH_FAILED',
 } as const;
 
 export type FailureMatrixSignal =

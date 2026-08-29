@@ -125,8 +125,20 @@ export function readThreadRegistry(
   }
 
   for (const row of architects) {
+    // `cmd` IS NOT TERMINAL-BACKED STATE. Issue #170.
+    //
+    // `terminal_id`, `pid` and `port` are genuinely PTY-specific, and null/0/0 are
+    // honest sentinels for a thread-backed architect. `cmd` is not: it records how
+    // the architect was launched, which is meaningful either way, it is NOT NULL in
+    // the schema, and `status.ts` renders it. Phase 8 therefore writes `cmd` for
+    // thread-backed architects — correctly — and this detector then reported every
+    // one of them as IDENTITY_SHAPE_CONFLICT, forever.
+    //
+    // Two merged phases in direct contradiction, latent only because no factory is
+    // registered yet. The detector moves rather than the writer, because the writer
+    // is right about what `cmd` means.
     if (row.thread_id !== null && (
-      row.terminal_id !== null || row.pid !== 0 || row.port !== 0 || row.cmd !== ''
+      row.terminal_id !== null || row.pid !== 0 || row.port !== 0
     )) {
       signals.push({
         code: 'IDENTITY_SHAPE_CONFLICT',
