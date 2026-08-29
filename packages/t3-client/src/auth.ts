@@ -5,13 +5,13 @@
  *
  * In Phase 1 I invented `/api/auth/token` with an RFC-standard
  * `subject_token_type` because it looked like what an OAuth server would do, and
- * got a 404. The working flow was already on disk in
- * `codev/experiments/146-t3code-porch-proof/` and `/Users/chris/dev/t3code-spike/
- * spike.mjs`. t3code uses `POST /oauth/token`, form-encoded, with its own
+ * got a 404. The working flow was already committed, in
+ * `codev/experiments/146-t3code-porch-proof/`. t3code uses `POST /oauth/token`,
+ * form-encoded, with its own
  * `urn:t3:params:oauth:token-type:environment-bootstrap`, then
  * `POST /api/auth/websocket-ticket`.
  *
- * If these stop working, read the spike again before changing them.
+ * If these stop working, read that experiment again before changing them.
  *
  * SECURITY, from the spec's constraints:
  *  - the bootstrap token is single-use with a bounded TTL

@@ -1,0 +1,56 @@
+id: bugfix-214
+title: pre-publish-scrub-a-home-direc
+protocol: bugfix
+phase: pr
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: approved
+    requested_at: '2026-08-29T20:34:59.143Z'
+    request:
+      question: >-
+        Merge PR #215? Two CMAP lanes returned APPROVE; the other two could not review and are recorded as such, not as
+        approvals.
+      choices:
+        - label: 'Merge #215'
+          consequence: >-
+            Closes #214 and unblocks the publish condition. gh pr merge 215 --merge, no --delete-branch. Then porch
+            advances to verified and the worktree can be cleaned up.
+          recommended: true
+        - label: Wait for codex, then merge
+          consequence: >-
+            Codex quota resets around 15:40. Adds a third verdict on a diff two lanes already approved and delays the
+            Tower restart waiting behind this PR.
+        - label: Request changes
+          consequence: >-
+            Name what to change. The guard, both LICENSE files and the #209 correction stay unmerged, and the publish
+            condition stays open.
+      terminalExcerpt: |-
+        CMAP: claude=APPROVE (HIGH), opencode=APPROVE (HIGH)
+        gemini=SKIPPED (agy exit 1, quota) — lane reports LANE_DID_NOT_REVIEW: true
+        codex=NO REVIEW (usage limit; no output file, exit 0)
+
+        Full suite on the pushed tree: 342 files passed | 3 skipped
+        6796 tests passed | 51 skipped | 0 failed
+
+        Diff vs main: 16 files, 1202 insertions, 16 deletions
+          402 of those insertions are the two Apache-2.0 LICENSE texts
+          guard is 16 tests
+
+        Mutation-checked: reintroduced path fails (3 shipped copies); dist removed fails;
+        CI build step deleted fails; build step moved to an inserted job fails;
+        empty and private-only package dirs throw; absolute path in .map sources and
+        sourcesContent both fail.
+    approved_at: '2026-08-29T20:48:59.041Z'
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-29T19:58:48.696Z'
+updated_at: '2026-08-29T20:48:59.042Z'
+pr_history:
+  - phase: pr
+    pr_number: 215
+    branch: builder/bugfix-214
+    created_at: '2026-08-29T20:34:52.806Z'
+pr_ready_for_human: false

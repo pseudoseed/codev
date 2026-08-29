@@ -58,6 +58,11 @@
     "@types/node": "22.x",
     "typescript": "catalog:"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cluesmith/codev",
+    "directory": "packages/porch-driver"
+  },
   "license": "Apache-2.0",
   "dependencies": {
     "@cluesmith/t3-client": "workspace:*"
