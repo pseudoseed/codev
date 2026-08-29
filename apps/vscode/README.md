@@ -1,5 +1,10 @@
 # Codev for VS Code
 
+> [!WARNING]
+> **Unsupported.** This extension is no longer built, tested, packaged, or released by Codev.
+> Its source remains in the repository only to avoid recurring conflicts with active upstream
+> development. It depends on retired terminal APIs and is not expected to work.
+
 Bring Codev's Agent Farm into VS Code — monitor builders, open terminals, approve gates, run dev commands, and manage your development workflow without leaving the IDE.
 
 ## Features

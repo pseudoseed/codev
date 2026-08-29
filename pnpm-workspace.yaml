@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - apps/*
+  - '!apps/vscode'
 catalog:
   typescript: ^6.0.3
 onlyBuiltDependencies:

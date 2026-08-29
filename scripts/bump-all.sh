@@ -14,14 +14,8 @@
 # This script only rewrites the version field of each package.json — it does
 # NOT commit or tag (so no `--no-git-tag-version` passthrough is needed,
 # unlike `pnpm version` which auto-commits by default). It also does NOT
-# reformat the JSON: the version line is patched in place so hand-formatted
-# files (e.g. apps/vscode/package.json with compact view arrays) are
-# preserved byte-for-byte outside the version field. Stage, commit, and tag
-# yourself afterward.
-#
-# VS Code Marketplace rejects semver pre-release suffixes (e.g. 1.7.0-rc.1),
-# so apps/vscode is skipped when VERSION contains a '-'. The extension
-# catches up when an RC is promoted to a stable version.
+# reformat the JSON: the version line is patched in place. Stage, commit, and
+# tag yourself afterward.
 
 set -e
 
@@ -56,11 +50,6 @@ case "$INPUT" in
     ;;
 esac
 
-case "$VERSION" in
-  *-*) IS_PRERELEASE=1 ;;
-  *)   IS_PRERELEASE=0 ;;
-esac
-
 bump_file() {
   PKG_FILE="$1" VERSION="$VERSION" node -e '
     const fs = require("fs");
@@ -90,35 +79,3 @@ bump_file "package.json"
 for pkg in packages/codev packages/core packages/sdk packages/types packages/artifact-canvas; do
   bump_file "$pkg/package.json"
 done
-
-# vscode lives in its own script — version + CHANGELOG promotion + marketplace
-# constraints. Delegate to scripts/bump-vscode.sh, which is also callable on
-# its own when bumping the extension independently from a codev release.
-if [ "$IS_PRERELEASE" = "1" ]; then
-  echo "Skipping apps/vscode ($VERSION is a pre-release; VS Code Marketplace requires plain semver)"
-else
-  SCRIPT_DIR="$(dirname "$0")"
-  "$SCRIPT_DIR/bump-vscode.sh" "$VERSION"
-fi
-
-# Stream Deck plugin: package.json rides the lockstep, and the Elgato manifest
-# carries a four-part {version}.{build} that must move with it (pinned by
-# apps/streamdeck/src/__tests__/version-sync.test.ts). The Elgato Marketplace,
-# like VS Code's, takes plain numeric versions only — skip on pre-releases.
-if [ "$IS_PRERELEASE" = "1" ]; then
-  echo "Skipping apps/streamdeck ($VERSION is a pre-release; Elgato manifest Version is numeric-only)"
-else
-  bump_file "apps/streamdeck/package.json"
-  MANIFEST="apps/streamdeck/com.cluesmith.codev.sdPlugin/manifest.json" VERSION="$VERSION" node -e '
-    const fs = require("fs");
-    const p = process.env.MANIFEST;
-    const content = fs.readFileSync(p, "utf8");
-    const pattern = /^(  "Version"\s*:\s*")[^"]*(")/m;
-    if (!pattern.test(content)) {
-      console.error("Failed to find manifest Version field in " + p);
-      process.exit(1);
-    }
-    fs.writeFileSync(p, content.replace(pattern, `$1${process.env.VERSION}.0$2`));
-    console.log("Bumped streamdeck manifest → " + process.env.VERSION + ".0");
-  '
-fi
