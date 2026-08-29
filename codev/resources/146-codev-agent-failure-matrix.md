@@ -14,6 +14,7 @@ the cause lifts; that is not a repair.
 | `codev-agent` down | `CODEV_AGENT_UNREACHABLE` | Protocol state unavailable. Not an empty project list. | No |
 | `codev-agent` up, t3code down | `T3CODE_UNREACHABLE` | Porch state still shown; thread liveness unknown. Threads not dropped. | No |
 | t3code up, `codev-agent` down | `CODEV_AGENT_UNREACHABLE_T3CODE_LIVE` | Threads from t3code remain; protocol badges unavailable. Missing porch state is not "no projects". | No |
+| Artifact root gone (builder row outlives its worktree) | `ROOT_MISSING` | Root is missing, not an empty project list. | No |
 | `status.yaml` unreadable | `STATUS_UNREADABLE` | Named project marked unreadable, not missing. | No |
 | `status.yaml` malformed | `STATUS_MALFORMED` | Named project marked malformed, not missing. | No |
 | Thread with no porch record | `THREAD_UNMANAGED` | Thread shown as **unmanaged**. | No |

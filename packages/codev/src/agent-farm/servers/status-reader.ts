@@ -13,6 +13,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  statSync,
   type Dirent,
 } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -26,7 +27,8 @@ export type StatusReadSignalCode =
   | 'STATUS_NOT_FOUND'
   | 'STATUS_UNREADABLE'
   | 'STATUS_MALFORMED'
-  | 'STATUS_OUT_OF_SCOPE';
+  | 'STATUS_OUT_OF_SCOPE'
+  | 'ROOT_MISSING';
 
 export interface AgentStateSignal {
   readonly code: StatusReadSignalCode | string;
@@ -180,14 +182,31 @@ export function readScopedStatus(artifactRoot: string, statusPath: string): Stat
 /** Enumerate status files for one artifact root without crossing its boundary. */
 export function readStatusesFromArtifactRoot(artifactRoot: string): StatusReadResult[] {
   const root = resolve(artifactRoot);
+  try {
+    statSync(root);
+  } catch (error) {
+    const errno = error as NodeJS.ErrnoException;
+    if (errno.code === 'ENOENT') {
+      return [failure(
+        'ROOT_MISSING',
+        `Artifact root does not exist: ${root}`,
+        root,
+      )];
+    }
+    return [failure(
+      'STATUS_UNREADABLE',
+      `Artifact root cannot be read: ${errno.code ?? String(error)}`,
+      root,
+    )];
+  }
   const projectsRoot = join(root, 'codev', 'projects');
   let entries: Dirent[];
   try {
     entries = readdirSync(projectsRoot, { withFileTypes: true });
   } catch (error) {
     const errno = error as NodeJS.ErrnoException;
-    // A workspace with no porch projects is a real empty result.  An existing
-    // but unreadable projects directory is not.
+    // A live root with no porch projects is a real empty result. A missing
+    // root already returned ROOT_MISSING above; do not spell that as [].
     if (errno.code === 'ENOENT') return [];
     return [failure(
       'STATUS_UNREADABLE',

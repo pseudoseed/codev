@@ -19,7 +19,7 @@ import {
   shutdownAgentRoutes,
   HUMAN_SESSION_HEADER,
 } from '../agent-routes.js';
-import { readScopedStatus, readStatusesFromArtifactRoot } from '../status-reader.js';
+import { readScopedStatus, readStatusesFromArtifactRoot, readWorkspaceStatuses } from '../status-reader.js';
 import { readThreadRegistry } from '../thread-registry.js';
 import { watchAgentState, type AgentStateStreamEvent } from '../agent-state-stream.js';
 
@@ -111,10 +111,10 @@ afterEach(() => {
 });
 
 describe('failure matrix signals are distinct', () => {
-  it('names ten unique codes', () => {
+  it('names eleven unique codes', () => {
     const codes = Object.values(SIGNAL);
-    expect(codes).toHaveLength(10);
-    expect(new Set(codes).size).toBe(10);
+    expect(codes).toHaveLength(11);
+    expect(new Set(codes).size).toBe(11);
   });
 });
 
@@ -144,6 +144,23 @@ describe('failure matrix', () => {
     });
     expect(failure.code).toBe(SIGNAL.CODEV_AGENT_UNREACHABLE_T3CODE_LIVE);
     expect(failure.code).not.toBe(SIGNAL.CODEV_AGENT_UNREACHABLE);
+  });
+
+  it('a missing artifact root emits ROOT_MISSING, not an empty list', () => {
+    const existing = tmp();
+    expect(readStatusesFromArtifactRoot(existing)).toEqual([]);
+
+    const gone = join(existing, 'deleted-worktree');
+    const results = readStatusesFromArtifactRoot(gone);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.ok).toBe(false);
+    if (results[0]?.ok) return;
+    expect(results[0].signal.code).toBe(SIGNAL.ROOT_MISSING);
+    expect(results[0].signal.code).not.toBe(SIGNAL.STATUS_UNREADABLE);
+    expect(results[0].signal.code).not.toBe('STATUS_NOT_FOUND');
+
+    const viaWorkspace = readWorkspaceStatuses(existing, [gone]);
+    expect(viaWorkspace.some((result) => !result.ok && result.signal.code === SIGNAL.ROOT_MISSING)).toBe(true);
   });
 
   it('status.yaml unreadable emits STATUS_UNREADABLE', () => {

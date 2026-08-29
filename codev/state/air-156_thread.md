@@ -22,3 +22,10 @@ Mutated `THREAD_UNMANAGED` → `THREAD_HIDDEN`; that row's test failed; restored
 
 AIR LOC is the classifier plus the revoke distinction. Existing surface was not
 rewritten.
+
+## ROOT_MISSING
+
+Architect: `readStatusesFromArtifactRoot` returned [] on ENOENT for both a live
+root with no projects and a worktree that no longer exists. `statSync` the root
+first; missing root emits `ROOT_MISSING`. [] stays only for a root that exists
+and has no `codev/projects`. Collapse to [] fails the matrix test.
