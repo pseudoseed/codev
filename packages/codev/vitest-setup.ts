@@ -25,6 +25,15 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { realAgyOptIn } from './src/lib/test-env.js';
+import { scrubCodevNamespace } from './vitest-global-setup.js';
+
+// Builder sessions export CODEV_WORKTREE_ROOT / CODEV_BUILDER_ID /
+// CODEV_ARCHITECT_NAME. detectCurrentBuilderId prefers those over cwd (#47),
+// so tests that drive identity with process.chdir() see the runner's worktree
+// instead of the fixture (#189). Re-apply per file: globalSetup already
+// scrubbed the inherited env, but a leaky test in this worker must not
+// poison the next file. Sandbox pins below re-apply after the scrub.
+scrubCodevNamespace();
 
 /**
  * Stand-in for the Antigravity CLI: no network, no browser tab, no OAuth. It

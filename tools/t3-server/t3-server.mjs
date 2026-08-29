@@ -24,8 +24,10 @@
  */
 
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, openSync, closeSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import {
+  closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync,
+} from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -36,6 +38,7 @@ const t3Root = process.env.T3CODE_ROOT ?? '/Users/chris/dev/t3code';
 const runtimeDir = process.env.T3_HARNESS_DIR ?? join(here, '.runtime');
 const pidFile = join(runtimeDir, 'server.pid');
 const portFile = join(runtimeDir, 'server.port');
+const runtimeFile = join(runtimeDir, 'server-runtime.json');
 const port = Number(process.env.T3_HARNESS_PORT ?? 3799);
 
 const OK = 0;
@@ -95,7 +98,7 @@ function acquire() {
 
 // ------------------------------------------------------------------ verify
 
-function verify() {
+function verify(mismatchSignal = 'CHECKOUT_MISMATCH') {
   if (!existsSync(t3Root)) {
     die(UNDETERMINED, `No checkout at ${t3Root}; cannot verify. This is "unknown", not "fine".`);
   }
@@ -110,7 +113,7 @@ function verify() {
   if (head !== pin.commit) {
     die(
       MISMATCH,
-      `CHECKOUT MISMATCH\n` +
+      `${mismatchSignal}\n` +
         `  pin.json: ${pin.commit}\n` +
         `  checkout: ${head}\n` +
         `Any phase that tested against this was not testing the pinned contract.`,
@@ -137,6 +140,84 @@ function verify() {
 
 // ------------------------------------------------------------------ start / stop
 
+function parsedVersion(value) {
+  const match = /^(?:v)?(\d+)\.(\d+)\.(\d+)/.exec(value);
+  return match ? match.slice(1).map(Number) : null;
+}
+
+/** The checkout currently declares a caret range. Unknown syntax stays advisory/unknown. */
+function engineMatch(version, range) {
+  const actual = parsedVersion(version);
+  const wanted = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(range)?.slice(1).map(Number);
+  if (!actual || !wanted) return null;
+  const [major, minor, patch] = actual;
+  const [wantMajor, wantMinor, wantPatch] = wanted;
+  const atLeast = major > wantMajor ||
+    (major === wantMajor && (minor > wantMinor || (minor === wantMinor && patch >= wantPatch)));
+  const belowUpper = wantMajor > 0 ? major < wantMajor + 1
+    : wantMinor > 0 ? major === 0 && minor < wantMinor + 1
+      : major === 0 && minor === 0 && patch < wantPatch + 1;
+  return atLeast && belowUpper;
+}
+
+/** Resolve the server interpreter once, then invoke it by absolute path. */
+function serverRuntime() {
+  const requested = process.env.T3_NODE?.trim();
+  if (!requested) {
+    die(
+      UNDETERMINED,
+      'NO_INTERPRETER: could not check: T3_NODE is not set. The harness never inherits its server Node from PATH.',
+    );
+  }
+
+  let node;
+  try {
+    if (!isAbsolute(requested)) throw new Error('not absolute');
+    node = realpathSync(requested);
+  } catch {
+    die(
+      UNDETERMINED,
+      `NO_INTERPRETER: could not check: T3_NODE=${requested} is not an absolute path to an executable.`,
+    );
+  }
+
+  let version;
+  try {
+    version = execFileSync(node, ['--version'], { encoding: 'utf8' }).trim().replace(/^v/, '');
+  } catch {
+    die(UNDETERMINED, `NO_INTERPRETER: could not check: ${node} could not execute \`--version\`.`);
+  }
+
+  let packageJson;
+  const packagePath = join(t3Root, 'package.json');
+  try {
+    packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
+  } catch (error) {
+    die(
+      UNDETERMINED,
+      `CHECKOUT_UNAVAILABLE: could not check: cannot read t3code package metadata at ${packagePath}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const declaredEngine = packageJson.engines?.node ?? 'not declared';
+  const matchesDeclaredEngine = engineMatch(version, declaredEngine);
+  const npx = join(dirname(node), 'npx');
+  let npxCli;
+  try {
+    npxCli = realpathSync(npx);
+  } catch {
+    die(UNDETERMINED, `NO_INTERPRETER: could not check: ${node} has no sibling npx executable.`);
+  }
+
+  const info = { node, version, declaredEngine, matchesDeclaredEngine, npxCli };
+  if (matchesDeclaredEngine === false) {
+    say(
+      `ADVISORY: Node ${version} is outside t3code engines.node ${declaredEngine}; ` +
+        'continuing because server readiness, not the advisory range, is the gate.',
+    );
+  }
+  return info;
+}
 
 /**
  * Is this PID one of ours?
@@ -186,31 +267,6 @@ function readPid() {
 }
 
 /**
- * The t3 server needs `node:sqlite`, which is Node 22+.
- *
- * Checked BEFORE spawning, because the failure without this check is
- * unrecognisable: `npx t3 serve` inherits our Node, the server writes
- * `Error: No such built-in module: node:sqlite` into its log and exits, `start`
- * still prints "started pid N", and `ready` then spends 180 seconds waiting for
- * a process that has been dead the whole time before reporting that the server
- * "did not answer". Every word of that is true and all of it points at the
- * network. That happened, and it cost the run.
- */
-function assertNodeVersion() {
-  const major = Number(process.versions.node.split('.')[0]);
-  if (major < 22) {
-    die(
-      MISMATCH,
-      `Node ${process.versions.node} cannot run the t3 server: it requires \`node:sqlite\`, ` +
-        `which arrived in Node 22.\n` +
-        `  \`npx\` inherits this process's Node, so the server would start, fail on the missing\n` +
-        `  module, and exit before answering anything.\n` +
-        `  Re-run under Node 22, e.g. \`nvm use 22\`.`,
-    );
-  }
-}
-
-/**
  * Confirm the spawned server is still alive a moment after `spawn` returned.
  *
  * `spawn` succeeding means a process was created, not that it stayed. Reporting
@@ -218,7 +274,7 @@ function assertNodeVersion() {
  * result it never measured, which is the failure mode this whole harness exists
  * to avoid making.
  */
-function assertChildSurvived(pid) {
+function assertChildSurvived(pid, runtime) {
   const deadline = Date.now() + 3000;
   while (Date.now() < deadline) {
     try {
@@ -232,7 +288,8 @@ function assertChildSurvived(pid) {
         : '';
       die(
         MISMATCH,
-        `Server process ${pid} exited immediately after starting.\n` +
+        `SERVER_START_FAILED: t3@${pin.cliVersion} under Node ${runtime.version} ` +
+          `exited immediately after starting (pid ${pid}).\n` +
           (tail ? `  From its log:\n    ${tail.replace(/\n/g, '\n    ')}` : '  Its log records nothing.'),
       );
     }
@@ -242,7 +299,7 @@ function assertChildSurvived(pid) {
 
 function start() {
   verify();
-  assertNodeVersion();
+  const runtime = serverRuntime();
 
   const existing = readPid();
   if (existing) die(MISMATCH, `A harness server is already running (pid ${existing}). Run \`stop\` first.`);
@@ -269,22 +326,28 @@ function start() {
   // Loopback only. Spec 146's Security constraints make loopback the default and
   // exposing an interface an explicit action; a test harness never exposes one.
   const child = spawn(
-    'npx',
-    ['--yes', 't3@latest', 'serve', '--host', '127.0.0.1', '--port', String(port), '--base-dir', dataDir, t3Root],
-    { cwd: t3Root, detached: true, stdio: ['ignore', logFd, logFd] },
+    runtime.node,
+    [runtime.npxCli, '--yes', `t3@${pin.cliVersion}`, 'serve', '--host', '127.0.0.1', '--port', String(port), '--base-dir', dataDir, t3Root],
+    {
+      cwd: t3Root,
+      detached: true,
+      stdio: ['ignore', logFd, logFd],
+      // npm launches package bins through `#!/usr/bin/env node`. Put the chosen
+      // interpreter first so that final hop cannot fall back to the harness's Node.
+      env: { ...process.env, PATH: `${dirname(runtime.node)}:${process.env.PATH ?? ''}` },
+    },
   );
 
   closeSync(logFd);
   writeFileSync(pidFile, String(child.pid));
   writeFileSync(portFile, String(port));
+  writeFileSync(runtimeFile, `${JSON.stringify({ ...runtime, cliVersion: pin.cliVersion }, null, 2)}\n`);
   child.unref();
 
-  assertChildSurvived(child.pid);
+  assertChildSurvived(child.pid, runtime);
 
   say(`started pid ${child.pid}; log at ${log}`);
-  say(`NOTE: the published t3 CLI is used to serve the pinned checkout. If the CLI and the`);
-  say(`pinned commit diverge, that divergence is real and \`verify\` cannot see it — the`);
-  say(`checkout is pinned, the server binary is not.`);
+  say(`runtime: Node ${runtime.version}; pinned CLI: t3@${pin.cliVersion}`);
 }
 
 /**
@@ -302,6 +365,18 @@ async function waitReady(timeoutMs = 180_000) {
       if (response.status > 0) return true;
     } catch {
       /* not up yet */
+    }
+    if (!readPid()) {
+      pairingToken();
+      const log = join(runtimeDir, 'server.log');
+      const tail = existsSync(log)
+        ? readFileSync(log, 'utf8').split('\n').filter((line) => /error|fatal|cannot/i.test(line)).slice(-3).join('\n')
+        : '';
+      die(
+        MISMATCH,
+        `SERVER_START_FAILED: server process exited before answering.\n` +
+          (tail ? `  From its log:\n    ${tail.replace(/\n/g, '\n    ')}` : '  Its log records nothing.'),
+      );
     }
     await new Promise((r) => setTimeout(r, 2000));
   }
@@ -341,7 +416,8 @@ function pairingToken() {
 
 async function ready() {
   const up = await waitReady();
-  if (!up) die(MISMATCH, `Server did not answer on 127.0.0.1:${port} within the timeout.`);
+  if (!up) die(MISMATCH, `SERVER_START_FAILED: server did not answer on 127.0.0.1:${port} within the timeout.`);
+  verify('CHECKOUT_MOVED_DURING_RUN');
   const token = pairingToken();
   if (!token) die(UNDETERMINED, 'Server is answering but printed no pairing token; cannot authenticate.');
   say(`ready on 127.0.0.1:${port}; pairing token present`);
@@ -349,6 +425,7 @@ async function ready() {
 }
 
 function stop() {
+  rmSync(runtimeFile, { force: true });
   const pid = readPid();
   if (!pid) {
     // Still sweep the port: a previous run may have left a listener with no
@@ -406,6 +483,7 @@ function status() {
         checkout: head,
         matchesPin: matches,
         server: pid ? { pid, port: Number(readFileSync(portFile, 'utf8').trim()) } : null,
+        runtime: existsSync(runtimeFile) ? JSON.parse(readFileSync(runtimeFile, 'utf8')) : null,
       },
       null,
       2,
@@ -422,7 +500,8 @@ switch (command) {
   case 'ready': await ready(); break;
   case 'stop': stop(); break;
   case 'status': status(); break;
+  case 'runtime': console.log(JSON.stringify(serverRuntime(), null, 2)); break;
   default:
-    console.error('usage: t3-server.mjs <acquire|verify|start|ready|stop|status>');
+    console.error('usage: t3-server.mjs <acquire|verify|start|ready|stop|status|runtime>');
     process.exit(UNDETERMINED);
 }
