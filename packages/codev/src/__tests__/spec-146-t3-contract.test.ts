@@ -9,8 +9,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -227,7 +229,12 @@ describe('spec 146: the harness criterion that gates Phase 2', () => {
   });
 
   it('was run against the commit this repo pins', () => {
-    expect(evidence.pinnedCommit).toBe(readJson(join(t3Root, 'pin.json')).commit);
+    const pin = readJson(join(t3Root, 'pin.json'));
+    expect(evidence.pinnedCommit).toBe(pin.commit);
+    expect(evidence.pinnedCliVersion).toBe(pin.cliVersion);
+    for (const run of evidence.runs) {
+      expect(run.serverRuntime.cliVersion).toBe(pin.cliVersion);
+    }
   });
 
   it('passed every run', () => {
@@ -239,8 +246,8 @@ describe('spec 146: the harness criterion that gates Phase 2', () => {
    * tests that assert committed JSON, and it is a fair objection: nothing stops
    * the harness changing while the evidence stays green.
    *
-   * Executing the harness here would need Node 22 and a live server inside a
-   * Node 20 unit suite, which is the wrong place for it. What this CAN do is
+   * Executing the harness here would need an explicit server interpreter and a
+   * live checkout inside a unit suite, which is the wrong place for it. What this CAN do is
    * refuse to accept evidence older than the code it is evidence for.
    */
   it('is not older than the harness it describes', () => {
@@ -251,12 +258,12 @@ describe('spec 146: the harness criterion that gates Phase 2', () => {
       expect(
         evidenceAge,
         `${source} changed after the cold-start evidence was recorded — regenerate it with\n` +
-          `  nvm use 22 && node tools/t3-server/smoke.mjs --runs 2 > ` +
+          `  export T3_NODE=/absolute/path/to/node\n` +
+          `  "$T3_NODE" tools/t3-server/smoke.mjs --runs 2 > ` +
           `codev/research/146-harness-coldstart-evidence.json\n` +
           `rather than trusting a stale result. The redirection is part of the command: smoke.mjs ` +
           `prints to stdout and writes nothing, so running it without one re-runs the whole cold ` +
-          `start and leaves the evidence exactly as stale as it was. (Node 22 because the t3 ` +
-          `server needs node:sqlite.)`,
+          `start and leaves the evidence exactly as stale as it was.`,
       ).toBeGreaterThanOrEqual(sourceAge - 1000);
     }
   });
@@ -290,5 +297,44 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
     const src = readFileSync(join(repoRoot, 'tools', 't3-server', 't3-server.mjs'), 'utf8');
     expect(src).toMatch(/const UNDETERMINED = 3/);
     expect(src).toMatch(/die\(\s*UNDETERMINED/);
+  });
+
+  it('pins the server CLI next to the checkout and never resolves latest', () => {
+    const pin = readJson(join(t3Root, 'pin.json'));
+    const src = readFileSync(join(repoRoot, 'tools', 't3-server', 't3-server.mjs'), 'utf8');
+    expect(pin.cliVersion).toBe('0.0.36');
+    expect(src).toContain('`t3@${pin.cliVersion}`');
+    expect(src).not.toContain("'t3@latest'");
+  });
+
+  it('names interpreter, startup, and served-commit failures differently', () => {
+    const src = readFileSync(join(repoRoot, 'tools', 't3-server', 't3-server.mjs'), 'utf8');
+    for (const signal of ['NO_INTERPRETER', 'SERVER_START_FAILED', 'SERVER_COMMIT_MISMATCH']) {
+      expect(src).toContain(signal);
+    }
+  });
+
+  it('requires an explicit interpreter but treats engines.node as advisory', () => {
+    const checkout = mkdtempSync(join(tmpdir(), 't3-runtime-'));
+    writeFileSync(join(checkout, 'package.json'), JSON.stringify({ engines: { node: '^99.0.0' } }));
+    const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
+    try {
+      const noInterpreterEnv = { ...process.env, T3CODE_ROOT: checkout };
+      delete noInterpreterEnv.T3_NODE;
+      const missing = spawnSync(process.execPath, [harness, 'runtime'], {
+        encoding: 'utf8', env: noInterpreterEnv,
+      });
+      expect(missing.status).toBe(3);
+      expect(missing.stderr).toContain('NO_INTERPRETER: could not check:');
+
+      const explicit = spawnSync(process.execPath, [harness, 'runtime'], {
+        encoding: 'utf8', env: { ...process.env, T3CODE_ROOT: checkout, T3_NODE: process.execPath },
+      });
+      expect(explicit.status).toBe(0);
+      expect(JSON.parse(explicit.stdout).matchesDeclaredEngine).toBe(false);
+      expect(explicit.stderr).toContain('ADVISORY:');
+    } finally {
+      rmSync(checkout, { recursive: true, force: true });
+    }
   });
 });

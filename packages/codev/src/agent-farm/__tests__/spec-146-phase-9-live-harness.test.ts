@@ -2,14 +2,15 @@
  * Pinned-harness checks for Spec 146 Phase 9.
  *
  * The verify test does not start a server or create a thread. Live engine
- * exercise is the test whose name says so, and it skips when Node is below 22
- * or verify cannot run — "could not check", never a silent pass.
+ * exercise is the test whose name says so. The server uses T3_NODE explicitly;
+ * a missing interpreter or unverifiable checkout is an honestly named skip.
  */
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { WebSocket } from 'ws';
 import { DispatchJournal } from '../../../../porch-driver/src/commands.js';
 import { TurnTracker } from '../../../../porch-driver/src/turn.js';
 import { createProject } from '../../../../porch-driver/src/thread.js';
@@ -17,7 +18,6 @@ import { createPorchThreadEngine } from './helpers/porch-thread-engine.js';
 
 const repoRoot = resolve(import.meta.dirname, '../../../../..');
 const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
-const nodeMajor = Number(process.version.slice(1).split('.')[0]);
 
 function harnessStatus(): { ok: boolean; reason: string } {
   if (!existsSync(harness)) {
@@ -31,6 +31,17 @@ function harnessStatus(): { ok: boolean; reason: string } {
     if (errCode === 3) return { ok: false, reason: 'could not check: verify could not determine checkout' };
     if (errCode === 1) return { ok: false, reason: 'could not check: checkout does not match pin' };
     return { ok: false, reason: `could not check: verify failed (${err instanceof Error ? err.message : String(err)})` };
+  }
+}
+
+function runtimeStatus(): { ok: boolean; reason: string } {
+  try {
+    execFileSync(process.execPath, [harness, 'runtime'], { encoding: 'utf8', timeout: 15_000 });
+    return { ok: true, reason: 'interpreter resolved' };
+  } catch (err) {
+    const stderr = String((err as { stderr?: string }).stderr ?? '');
+    const signal = stderr.split('\n').find((line) => line.includes('NO_INTERPRETER'));
+    return { ok: false, reason: signal?.replace(/^\[t3-server\] /, '') ?? 'NO_INTERPRETER: could not check' };
   }
 }
 
@@ -48,18 +59,19 @@ describe('Spec 146 Phase 9 — pinned harness verify', () => {
 
 describe('Spec 146 Phase 9 — porch-driver engine against the pinned harness', () => {
   const status = harnessStatus();
-  const canRunLive = status.ok && nodeMajor >= 22;
+  const runtime = runtimeStatus();
+  const canRunLive = status.ok && runtime.ok;
 
   it.skipIf(!canRunLive)(
     'createPorchThreadEngine interrupt on the live server leaves SHOULD_NOT_FINISH absent',
     async () => {
-      execFileSync('node', [harness, 'stop'], { encoding: 'utf8', timeout: 30_000 });
-      execFileSync('node', [harness, 'start'], { encoding: 'utf8', timeout: 60_000 });
+      execFileSync(process.execPath, [harness, 'stop'], { encoding: 'utf8', timeout: 30_000 });
+      execFileSync(process.execPath, [harness, 'start'], { encoding: 'utf8', timeout: 60_000 });
       let readyOut = '';
       const deadline = Date.now() + 120_000;
       while (Date.now() < deadline) {
         try {
-          readyOut = execFileSync('node', [harness, 'ready'], { encoding: 'utf8', timeout: 20_000 });
+          readyOut = execFileSync(process.execPath, [harness, 'ready'], { encoding: 'utf8', timeout: 20_000 });
           break;
         } catch {
           await new Promise((r) => setTimeout(r, 2000));
@@ -123,9 +135,15 @@ describe('Spec 146 Phase 9 — porch-driver engine against the pinned harness', 
           threadId,
           `echo STARTED > "${started}"; sleep 30; echo SHOULD_NOT_FINISH > "${marker}"`,
         );
-        await new Promise((r) => setTimeout(r, 4000));
+        const startedDeadline = Date.now() + 30_000;
+        while (!existsSync(started) && Date.now() < startedDeadline) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
         if (!existsSync(started)) {
-          throw new Error('could not check: turn did not write STARTED — provider did not run the command');
+          throw new Error(
+            'COULD_NOT_TELL: START_TIMEOUT — turn did not write STARTED within 30000ms; ' +
+              'the interrupt criterion was not evaluated.',
+          );
         }
         await engine.interrupt(threadId);
         await new Promise((r) => setTimeout(r, 2000));
@@ -133,17 +151,22 @@ describe('Spec 146 Phase 9 — porch-driver engine against the pinned harness', 
         socket.close();
       } finally {
         rmSync(dir, { recursive: true, force: true });
-        execFileSync('node', [harness, 'stop'], { encoding: 'utf8', timeout: 30_000 });
+        execFileSync(process.execPath, [harness, 'stop'], { encoding: 'utf8', timeout: 30_000 });
       }
     },
     180_000,
   );
 
-  it.skipIf(canRunLive)('records why the live engine run could not check', () => {
-    if (nodeMajor < 22) {
-      expect(`could not check: Node ${process.version} is below 22`).toMatch(/^could not check:/);
+  it('records live readiness or the exact reason it could not check', () => {
+    if (!status.ok) {
+      expect(status.reason).toMatch(/^could not check:/);
       return;
     }
-    expect(status.reason).toMatch(/^could not check:/);
+    if (!runtime.ok) {
+      expect(runtime.reason).toMatch(/^NO_INTERPRETER: could not check:/);
+      return;
+    }
+    expect(status.reason).toBe('verified');
+    expect(runtime.reason).toBe('interpreter resolved');
   });
 });

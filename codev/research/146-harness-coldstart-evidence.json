@@ -1,28 +1,45 @@
 {
   "criterion": "Phase 1: harness brings up a live pinned server, twice, with a real dispatched command",
   "pinnedCommit": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
+  "pinnedCliVersion": "0.0.36",
   "runs": [
     {
       "run": 1,
-      "startedAt": "2026-08-28T19:20:45.736Z",
+      "startedAt": "2026-08-29T16:38:38.990Z",
+      "serverRuntime": {
+        "node": "/opt/homebrew/Cellar/node/26.4.0/bin/node",
+        "version": "26.4.0",
+        "declaredEngine": "^24.13.1",
+        "matchesDeclaredEngine": false,
+        "npxCli": "/opt/homebrew/lib/node_modules/npm/bin/npx-cli.js",
+        "cliVersion": "0.0.36"
+      },
       "pairingTokenPresent": true,
       "scopes": "orchestration:read orchestration:operate terminal:operate review:write relay:read",
       "dispatchExit": "Success",
       "dispatchSucceeded": true,
       "portFreeAfterStop": true,
       "ok": true,
-      "durationMs": 5758
+      "durationMs": 5988
     },
     {
       "run": 2,
-      "startedAt": "2026-08-28T19:20:51.494Z",
+      "startedAt": "2026-08-29T16:38:44.978Z",
+      "serverRuntime": {
+        "node": "/opt/homebrew/Cellar/node/26.4.0/bin/node",
+        "version": "26.4.0",
+        "declaredEngine": "^24.13.1",
+        "matchesDeclaredEngine": false,
+        "npxCli": "/opt/homebrew/lib/node_modules/npm/bin/npx-cli.js",
+        "cliVersion": "0.0.36"
+      },
       "pairingTokenPresent": true,
       "scopes": "orchestration:read orchestration:operate terminal:operate review:write relay:read",
       "dispatchExit": "Success",
       "dispatchSucceeded": true,
       "portFreeAfterStop": true,
       "ok": true,
-      "durationMs": 5729
+      "durationMs": 5965
     }
   ],
   "allRunsPassed": true,
