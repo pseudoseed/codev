@@ -205,10 +205,17 @@ describe('PtySession.attachShellper — gate-mirror geometry adoption (Issue #19
  * rather than defensive.
  */
 describe('render gate — a live turn is never handed a recovery keystroke (Issue #197 review)', () => {
-  /** Exactly what the delivery path does with a verdict, in two lines. */
+  /** Exactly what the delivery path does with a verdict. */
   function applyRecovery(session: PtySession, detail: string | undefined): void {
     const action = heldRecoveryAction(detail);
-    if (action) session.write(heldRecoveryKeystroke(action));
+    if (!action) return;
+    // Issue #196 made the recovery keystroke a PER-HARNESS fact, so it is resolved from
+    // the target's clear key rather than being a constant. These fakes stand for a
+    // `ctrl-c` harness (claude/codex), which is what the `\x03` assertions here encode;
+    // on opencode the same action yields Ctrl+U, and on an agent with no recorded clear
+    // key it yields null and nothing is written.
+    const key = heldRecoveryKeystroke(action, 'ctrl-c');
+    if (key) session.write(key);
   }
 
   it('POSITIVE CONTROL: the harness DOES record a keystroke when one is sent', () => {

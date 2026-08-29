@@ -433,3 +433,56 @@ it only conditions the existing `user-text` branch.
 
 A scripted check covering all twelve properties lives in the session scratchpad
 (`post-merge-203-check.sh`).
+
+## The #203 merge — resolved, and what the conflict actually was
+
+One conflict: `issue-92-stuck-hold-recovery.test.ts`. The other three shared files auto-merged.
+
+It was the row predicted before the merge. #203 deletes
+`['geometry-mismatch', 'escape-screen', '\x1b']`; this branch had **edited that same row** to
+carry a clear-key column. The table asserts `heldRecoveryAction(detail) === action`, so keeping
+this branch's side would not merely have reinstated an ESC into a live turn — **a passing test
+would have certified it as correct**. Every later reader would have had evidence it was intended,
+and anyone removing it would have had to argue with a green suite.
+
+Resolved to #203's shape with this branch's extra column, plus a comment recording that the
+row's **absence is load-bearing**: an absent row reads as an oversight, and only a comment
+distinguishes "nobody added this" from "removed for two independent reasons".
+
+Verified in the order *exists before passes*, because a test that vanishes in a merge passes
+vacuously and a green run cannot tell you it is gone:
+
+1. **Runtime** (`tsx`, not grep): `heldRecoveryAction('geometry-mismatch') === null`;
+   `user-text → cancel-draft`; `no-region-end → escape-screen`; `busy-indicator → null`.
+2. **Docblock read, not reconciled**: FUTILITY ("holds even for a provably idle agent") and
+   DANGER ("holds even if a keystroke could help"), each sufficient alone.
+3. The guard test still **exists** at `:50`.
+4. It **passes**.
+
+The 12-property check script was written *before* the merge and failed all eight of #203's
+properties on the pre-merge tree — which is how I know it detects absence rather than passing
+vacuously. All twelve pass after.
+
+### A repo-wide gap this exposed: tests are not typechecked
+
+`packages/codev/tsconfig.json` excludes `**/__tests__/**`. So a **call-arity error in a test is
+invisible to `tsc`** and surfaces only at runtime.
+
+That is how my `heldRecoveryKeystroke(action)` → `(action, clearDraft)` signature change silently
+broke #203's helper in `pty-session-geometry.test.ts`: `clearDraft` was `undefined`,
+`CLEAR_DRAFT_BYTES[undefined]` was `undefined`, and the fake session was written the string
+`undefined` instead of `\x03`.
+
+It also means "typecheck clean" — which I reported repeatedly this session — was **never checking
+test files at all**. Two contributing errors of my own: I filtered `tsc` output by filename
+patterns that did not match this file, and I had fixed `issue-92`'s callers by hand successfully,
+which made me believe the compiler was watching when I had simply been careful in the file I was
+already in.
+
+Since the compiler cannot enumerate callers here, grep must: every test-file caller of the four
+functions whose signatures changed was checked. Exactly one was stale.
+
+**#203's `POSITIVE CONTROL` test is what caught it** — the test whose own comment says it exists
+so the neighbouring `expect(writes).toEqual([])` assertions cannot pass on a harness that observes
+nothing. It caught a real break in the harness itself, which is precisely the case it was written
+for.
