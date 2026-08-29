@@ -1,10 +1,10 @@
 {
   "criterion": "Spec 146 success criterion 12b — the five delivery semantics",
   "gates": "Criterion 13 (mailbox deletion) depends on this. If any property fails, the mailbox stays.",
-  "ranAt": "2026-08-29T02:45:39.771Z",
+  "ranAt": "2026-08-29T03:50:40.355Z",
   "nodeVersion": "v22.22.2",
   "t3Version": "t3@0.0.35",
-  "clientCommit": "8d528b8c4f127054838f4306ab604d87392af91d",
+  "clientCommit": "3564a8c4a0dd116b9d5ddf21a48c7f3cf62d4896",
   "clientTreeDirty": false,
   "harness": "codex",
   "model": "gpt-5.6-luna",
@@ -44,7 +44,7 @@
       "stateMeaning": "Ran against a live pinned server and passed.",
       "sends": 2,
       "deliveries": 1,
-      "sharedCommandId": "b7212448-49b8-5180-afd6-b623450db0dd",
+      "sharedCommandId": "b747afba-2a3d-5865-b2f0-abe5bc46631f",
       "derivedFromKey": true,
       "note": "the same key derived the same commandId from two independent journals, and the server's log holds exactly one delivery"
     },

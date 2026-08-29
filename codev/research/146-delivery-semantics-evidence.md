@@ -190,3 +190,25 @@ chore.
   over the same file with an injected clock, not by killing and restarting a real
   process. Phase 3 used real `SIGKILL`s for its crash windows; this is weaker, and
   it is named here rather than left to be assumed.
+- **The projection race is closed in the unit-tested path and NOT demonstrated
+  live.** `isTurnActive` is fed by the event subscription, so between the server
+  accepting a `thread.turn.start` and the subscription projecting it, the flag still
+  reads false — and a drain that trusts it dispatches the next queued message into
+  the turn it just started. The queue takes an optional `expectTurn` so it can wait
+  on the turn its own dispatch began instead, and a unit test reproduces the
+  interleaving without it.
+
+  Wiring that to `TurnTracker.expectTurn` in this harness **did not work**: `settled`
+  resolves only after the turn is seen RUNNING, and for these message-started turns
+  it never resolved, so every message waited out the drain's bound and scenario 2
+  failed twice at 300 s. **Why it never resolves is not diagnosed**, and this
+  document does not imply otherwise. The harness therefore uses the settle poll that
+  is demonstrated, which preserves ORDER — never at risk, the queue is FIFO and
+  dispatches one at a time — while leaving NON-INTERLEAVING dependent on the
+  projection being current. Scenario 2 measures zero messages reaching the server
+  during the turn and has never observed an interleave, but it does not force the
+  lag, so it is not evidence that the race cannot occur.
+
+  Phase 14 wires the production path and should resolve this before relying on it.
+  Recorded as an open question rather than a closed one, because a partial answer
+  read as a complete one is the failure this project has a standing rule about.
