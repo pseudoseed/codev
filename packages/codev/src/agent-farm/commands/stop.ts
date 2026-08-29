@@ -9,6 +9,7 @@ import { loadState, clearRuntime, getArchitects } from '../state.js';
 import { logger } from '../utils/logger.js';
 import { getConfig } from '../utils/config.js';
 import { getTowerClient } from '../lib/tower-client.js';
+import { refuseUnsupportedThreadCommand } from '../thread-runtime.js';
 
 /**
  * Stop all agent farm processes
@@ -64,6 +65,7 @@ export async function stop(): Promise<void> {
   if (towerRunning) {
     // Bugfix #826: scoped by workspace_path.
     for (const architect of getArchitects(workspacePath)) {
+      refuseUnsupportedThreadCommand(architect);
       if (!architect.terminalId) continue;
       logger.info(`Stopping architect '${architect.name}'...`);
       try {
@@ -75,6 +77,7 @@ export async function stop(): Promise<void> {
 
   // Stop all builders
   for (const builder of state.builders) {
+    refuseUnsupportedThreadCommand(builder);
     if (towerRunning && builder.terminalId) {
       logger.info(`Stopping builder ${builder.id}...`);
       try {

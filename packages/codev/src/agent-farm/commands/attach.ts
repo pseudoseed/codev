@@ -20,6 +20,7 @@ import type { DbTerminalSession } from '../servers/tower-types.js';
 import { normalizeWorkspacePath } from '../servers/tower-utils.js';
 import { getGlobalDb } from '../db/index.js';
 import { findBuilderById, findBuilderByIssue } from '../lib/builder-lookup.js';
+import { refuseUnsupportedThreadCommand } from '../thread-runtime.js';
 import chalk from 'chalk';
 
 export interface AttachOptions {
@@ -56,6 +57,7 @@ async function displayBuilderList(): Promise<void> {
   logger.row(['──', '────', '────', '──────'], widths);
 
   for (const builder of builders) {
+    refuseUnsupportedThreadCommand(builder);
     const running = !!builder.terminalId;
     const statusText = running ? chalk.green(builder.status) : chalk.red('stopped');
     const typeColor = getTypeColor(builder.type);
@@ -272,6 +274,12 @@ export async function attach(options: AttachOptions): Promise<void> {
   if (!builder) {
     fatal('No builder specified. Use --project (-p) or --issue (-i).');
     return; // TypeScript doesn't know fatal() never returns
+  }
+
+  try {
+    refuseUnsupportedThreadCommand(builder);
+  } catch (err) {
+    fatal(err instanceof Error ? err.message : String(err));
   }
 
   // --browser: open Tower dashboard

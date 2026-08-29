@@ -39,6 +39,7 @@ describe('issue #47 builder message routing after cd', () => {
   const originalCwd = process.cwd();
   const originalBuilderId = process.env.CODEV_BUILDER_ID;
   const originalWorktreeRoot = process.env.CODEV_WORKTREE_ROOT;
+  const originalThreadId = process.env.CODEV_THREAD_ID;
   let temp: string;
   let worktree: string;
 
@@ -70,6 +71,8 @@ describe('issue #47 builder message routing after cd', () => {
     else process.env.CODEV_BUILDER_ID = originalBuilderId;
     if (originalWorktreeRoot === undefined) delete process.env.CODEV_WORKTREE_ROOT;
     else process.env.CODEV_WORKTREE_ROOT = originalWorktreeRoot;
+    if (originalThreadId === undefined) delete process.env.CODEV_THREAD_ID;
+    else process.env.CODEV_THREAD_ID = originalThreadId;
     rmSync(temp, { recursive: true, force: true });
   });
 
@@ -91,5 +94,17 @@ describe('issue #47 builder message routing after cd', () => {
     if (!isResolveError(result)) throw new Error('expected spoofing rejection');
     expect(result.code).toBe('NOT_FOUND');
     expect(result.message).toBe(addressSpoofingErrorMessage('builder-bugfix-47'));
+  });
+
+  it('detectCurrentBuilderId uses CODEV_THREAD_ID after cd, not cwd', () => {
+    const db = new Database(mocks.globalDbPath);
+    db.prepare(`UPDATE builders SET thread_id = 'thr-bugfix-47' WHERE id = 'builder-bugfix-47'`).run();
+    db.close();
+    delete process.env.CODEV_BUILDER_ID;
+    delete process.env.CODEV_WORKTREE_ROOT;
+    process.env.CODEV_THREAD_ID = 'thr-bugfix-47';
+    process.chdir(mocks.workspace);
+
+    expect(detectCurrentBuilderId()).toBe('builder-bugfix-47');
   });
 });

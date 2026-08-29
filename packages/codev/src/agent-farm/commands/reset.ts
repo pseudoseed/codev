@@ -19,6 +19,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync, statSync } from '
 import { TowerClient } from '../lib/tower-client.js';
 import { logger, fatal } from '../utils/logger.js';
 import { findBuilderById } from '../lib/builder-lookup.js';
+import { refuseUnsupportedThreadCommand } from '../thread-runtime.js';
 import { getConfig } from '../utils/index.js';
 import { loadConfig } from '../../lib/config.js';
 import { loadForgeConfig } from '../../lib/forge.js';
@@ -121,6 +122,12 @@ export async function refresh(options: ResetOptions): Promise<void> {
     modeOverride: options.mode,
     customHarnesses: userConfig?.harness as Record<string, CustomHarnessConfig> | undefined,
   });
+
+  try {
+    refuseUnsupportedThreadCommand(builder);
+  } catch (err) {
+    fatal(err instanceof Error ? err.message : String(err));
+  }
 
   const terminal: TerminalPort = buildTerminalPort(client, builder.terminalId, target, from, workspace);
 

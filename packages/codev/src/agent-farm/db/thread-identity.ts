@@ -52,6 +52,9 @@ export type SpawnThreadFactory = (input: {
   branch: string;
   harnessName?: string;
   model?: string;
+  prompt?: string;
+  launchScript?: string;
+  role?: 'builder' | 'architect';
 }) => Promise<string>;
 
 let spawnThreadFactory: SpawnThreadFactory | undefined;

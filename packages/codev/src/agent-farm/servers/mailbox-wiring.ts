@@ -26,7 +26,8 @@ import {
   type ContextFsPort,
 } from '../commands/reset/context.js';
 import { getGlobalDb } from '../db/index.js';
-import { getArchitectByName } from '../state.js';
+import { getArchitectByName, getBuilder } from '../state.js';
+import { THREAD_BACKED_UNSUPPORTED } from '../thread-runtime.js';
 import { formatBuilderMessage } from '../utils/message-format.js';
 import { supersede as supersedeMailbox, dismissHeldWithKey, NOTICE_SUPERSEDE_PREFIX } from '../db/mailbox.js';
 import path from 'node:path';
@@ -95,6 +96,15 @@ const NODE_FS_PORT: ContextFsPort = buildContextFsPort();
  * builder id) transparently drains its predecessor's held mail.
  */
 export function resolveLiveSessionForAgent(workspacePath: string, toAgent: string): PtySession | null {
+  try {
+    const builder = getBuilder(toAgent, workspacePath);
+    if (builder?.threadId) throw new Error(THREAD_BACKED_UNSUPPORTED);
+    const architect = getArchitectByName(workspacePath, toAgent);
+    if (architect?.threadId) throw new Error(THREAD_BACKED_UNSUPPORTED);
+  } catch (err) {
+    if (err instanceof Error && err.message === THREAD_BACKED_UNSUPPORTED) throw err;
+  }
+
   const entry = getWorkspaceTerminals().get(workspacePath);
   if (!entry) return null;
   const tid = entry.builders.get(toAgent) ?? entry.architects.get(toAgent) ?? entry.shells.get(toAgent);

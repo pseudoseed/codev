@@ -29,6 +29,7 @@ import type { SessionManager } from '../../terminal/session-manager.js';
 import type { PtySessionInfo } from '../../terminal/pty-session.js';
 import type { BuilderSpawnedPayload, DashboardState, ArchitectState, TowerVersionInfo } from '@cluesmith/codev-types';
 import { getBuilders, setArchitectByName } from '../state.js';
+import { deliverThreadTurn, threadIdForAgent } from '../thread-runtime.js';
 import { DEFAULT_COLS, defaultSessionOptions } from '../../terminal/index.js';
 import type { SSEClient, WorkspaceTerminals } from './tower-types.js';
 import type { TerminalManager } from '../../terminal/pty-manager.js';
@@ -1896,6 +1897,29 @@ async function handleSend(
     if (result.code === 'NOT_FOUND' && !escape && !interrupt) {
       const reg = resolveAgentInRegistry(to, workspace, from);
       if (!isResolveError(reg)) {
+        const threadId = threadIdForAgent(reg.workspacePath, reg.agent, reg.kind);
+        if (threadId) {
+          try {
+            await deliverThreadTurn(
+              threadId,
+              formatMessageForTarget(reg.kind === 'architect', from, message, raw),
+            );
+            sendJson(res, 200, {
+              ok: true,
+              threadId,
+              resolvedTo: reg.agent,
+              deferred: false,
+              delivered: true,
+              held: false,
+            });
+          } catch (err) {
+            sendJson(res, 500, {
+              error: 'THREAD_TURN_FAILED',
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+          return;
+        }
         holdAndRespond(
           res,
           ctx,
