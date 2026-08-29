@@ -2057,3 +2057,85 @@ a lock-wait. One cause does not change its own symptom.
 
 `pnpm-workspace.yaml` globs only `packages/*`, `apps/*`, `tools/*`, so the nested
 tree never polluted pnpm's resolution. Two independent mechanisms, one window.
+
+# Phase 4 — inherited 712 lines, three defects, all found by the live server
+
+## The provenance problem came first
+
+A duplicate process was started on this worktree (`afx workspace start` against the
+worktree instead of the main root) and wrote a full phase 4 implementation at
+18:41-18:45 while I was running. I did not write it. I first concluded it was my own
+work from a session I could not recall; the process-ancestry walk said otherwise —
+my process was 7 minutes old, the other was 8h47m — and the measurement won over the
+plausible story.
+
+Preserved it in `3d5f40382` with authorship stated as the duplicate's, not mine,
+before the architect killed the other process. The commit message records exactly
+what was and was not verified about those bytes: tsc clean against them, but the
+20/20 green predated the last write by 20 seconds and was **not** a receipt for what
+was committed. That caution was vindicated — the rewrite in those 20 seconds
+introduced a hang.
+
+## Then: read it rather than inherit it
+
+The architect's instruction was the right one — decide finished or mid-edit, and do
+not build on unread code because it happens to compile. Verdict: coherent design,
+fully documented, no half-refactors, and **three real defects**, none of which any
+unit test could have caught.
+
+### 1. The queue re-sent a failed message forever
+
+`#drain` caught a failed send, rejected the caller, and did not shift the item off.
+It sat at the head of a `while` loop, re-sent forever — a hot spin. The file's own
+comment said *"Loud, at the call site, and out of the queue."* The shift was missing.
+
+It presented as the test FILE hanging, not failing. And the existing test that
+asserts `depth === 0` after a failure **would** have caught it — but it sits after
+the test the spin was starving, so it never ran. **A test that cannot be reached is
+not coverage.**
+
+I also wasted cycles blaming the suite lock, including twice killing my own runs with
+a `pkill` buried in an unrelated command.
+
+### 2. The command did not exist
+
+`MESSAGE_METHOD` was `thread.message.send`. There is no `thread.message.*` in
+t3code's union. Twenty-one tests were green because every one injects a fake
+dispatcher that accepts any payload. **A fake dispatcher validates nothing about the
+contract.** Phase 3 learned exactly this on `modelSelection` and phase 4 unlearned it
+one phase later; `checkPayload(..., 'ok')` is back.
+
+### 3. The backlog stalled at one message
+
+Because a message IS `thread.turn.start`, the head of the queue starts a turn and the
+drain stopped on the turn *its own dispatch* had started. Live: exactly 5 of 10
+arrived, in order, nothing interleaved — and waiting 300 s never produced the rest.
+Not timing. A stalled queue. Fixed with `QueueTarget.awaitSettle`.
+
+**The unifying rule, and it is sharper than "tests share the premise":** every one of
+these hid behind a test double that was faithful to the shape of the thing and not to
+its behaviour. A dispatcher that accepts any payload cannot fail a contract. A
+dispatcher that never starts a turn cannot stall a queue. The doubles were not wrong
+about the interface; they were wrong about what the real thing DOES, and that is the
+part the assertions depended on.
+
+## Two smaller ones worth keeping
+
+- **The harness imports `dist`.** Two live runs after the fix reproduced the original
+  failure because I had not rebuilt. Building is part of running it.
+- **A fixed sleep is a measurement, and measurements expire.** Scenario 2's 3-second
+  wait was correct when a message was a bare message and wrong once it was a turn. It
+  reported the property broken while `duringTurn: 0` and `allQueued: true` in the same
+  record said it held.
+
+## Architect rulings recorded in the evidence doc
+
+- A message to a builder IS a turn start.
+- Three queued messages become three SEQUENTIAL turns, never one merged turn —
+  merging silently rewrites what the sender said.
+- **`afx send` now costs a real turn.** User-visible, for release notes.
+- `afx inbox` retires WITH the mailbox in phase 14, not repointed: its whole surface
+  manages a hold state that does not exist on this path.
+
+All five delivery properties are now demonstrated live, so criterion 12b holds and
+criterion 13 is not blocked.
