@@ -311,6 +311,7 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
   reconcile();
   if (reconcileMs > 0) {
     reconcileTimer = setInterval(reconcile, reconcileMs);
+    reconcileTimer.unref();
   }
 
   return {
