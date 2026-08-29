@@ -22,3 +22,14 @@ Scope: harness + one isolation test. Under BUGFIX ceiling.
 Scrub the whole `CODEV_*` namespace in `scrubCodevNamespace()` (vitest-global-setup.ts). Call from globalSetup (workers inherit it on Vitest 4) and from vitest-setup.ts (re-apply per file). Keep documented harness opt-ins. Do not touch detectCurrentBuilderId.
 
 Reach test in test-isolation.test.ts: fails when the scrub is not invoked and the runner has CODEV_WORKTREE_ROOT set; 66/66 pass across the three coupled files plus isolation with those vars set.
+
+porch done fix: build 13.7s, tests 188.1s.
+
+## PR
+
+PR #192 https://github.com/pseudoseed/codev/pull/192
+
+CMAP (all APPROVE, HIGH):
+- gemini: APPROVE
+- codex: APPROVE
+- claude: APPROVE (non-blocking: CI-vacuous wiring test; opt-in list duplicated from test-env.ts)
