@@ -87,19 +87,50 @@ own change with its own crash semantics, and slipping it into a phase whose subj
 is delivery ordering would be the worse call. Recorded here so it is a known
 deferral rather than an oversight.
 
-## Disputed
+## RETRACTED — the lane was right and my dispute was wrong
 
-### `status.yaml` says phase_3 while phase_4 is being reviewed — false positive
+**This section originally disputed the lane's finding. The dispute was wrong. It is
+kept here rather than deleted, because a rebuttal that quietly disappears teaches
+nobody anything.**
 
-One lane flagged this as a porch state inconsistency needing architect
-reconciliation. It is not one. `porch status 146` reports `CURRENT: phase_4 -
-Message delivery semantics`, with phase_3 marked complete. Porch advanced normally
-when phase_3 closed by force-advance.
+What I wrote: that `porch status 146` reports phase_4 current, so the lane had read
+a file instead of asking the tool that owns the state.
 
-The lane read a file rather than asking the tool, and `status.yaml` is written by
-porch at its own moments. Worth noting only because it is the same shape as a
-finding I would otherwise want a reviewer to make: **verify against the tool that
-owns the state, not the file it happens to write.**
+What is actually true: **there are two `status.yaml` files for project 146.**
+
+```
+.builders/spir-146/.builders/task-gBv6/codev/projects/146-.../status.yaml
+   current_plan_phase: phase_4   iteration: 2   phase_3 complete, phase_4 in_progress
+
+.builders/spir-146/codev/projects/146-.../status.yaml
+   current_plan_phase: phase_3   iteration: 3   phase_3 in_progress, phase_4 pending
+```
+
+The second is the real one. The first lives inside a **nested builder worktree**
+that should not exist, and porch — run from this worktree — resolves the project
+through it. So every `porch done` and `porch next` since that worktree appeared has
+been mutating the nested copy, including phase 3's force-advance into phase 4.
+
+My `porch status` and the architect's printed different phases against what looked
+like one file, and both were honest reads. Only one of us checked whether a second
+file existed.
+
+**The error in reasoning, which is the part worth keeping.** The lane reported a
+*state discrepancy*. I answered about *which tool it had used*, and asserted the
+tool that owns the state agreed with me — without ever checking whether there was
+more than one file for that tool to own. That is this phase's own rule, broken in
+an argument about the phase: **applying a fix where the bug was reported is not the
+same as applying it where the reason holds.** I broke it twice in one phase, once in
+`queue.ts` and once here.
+
+It also inverts the rule I reached for. "Verify against the tool, not the file" is
+sound advice and it was the wrong instrument: the tool reads the file, so when they
+disagree the answer is never "trust the tool", it is **"find out why there are two
+answers"**. A disagreement between two honest readers is evidence about the world,
+not a scoring problem between the readers.
+
+The protocol state is being reconciled through porch's own commands under the
+architect's direction. Nothing here is hand-edited.
 
 ## Evidence
 
