@@ -1,10 +1,10 @@
 {
   "criterion": "Spec 146 success criterion 12b — the five delivery semantics",
   "gates": "Criterion 13 (mailbox deletion) depends on this. If any property fails, the mailbox stays.",
-  "ranAt": "2026-08-29T02:06:11.930Z",
+  "ranAt": "2026-08-29T02:45:39.771Z",
   "nodeVersion": "v22.22.2",
   "t3Version": "t3@0.0.35",
-  "clientCommit": "e50d77f29adcb5b79cfe8a36779c9cdc386f3147",
+  "clientCommit": "8d528b8c4f127054838f4306ab604d87392af91d",
   "clientTreeDirty": false,
   "harness": "codex",
   "model": "gpt-5.6-luna",
@@ -44,7 +44,7 @@
       "stateMeaning": "Ran against a live pinned server and passed.",
       "sends": 2,
       "deliveries": 1,
-      "sharedCommandId": "9c2319eb-38f0-5041-8586-a836f11da954",
+      "sharedCommandId": "b7212448-49b8-5180-afd6-b623450db0dd",
       "derivedFromKey": true,
       "note": "the same key derived the same commandId from two independent journals, and the server's log holds exactly one delivery"
     },
@@ -54,7 +54,7 @@
       "stateMeaning": "Ran against a live pinned server and passed.",
       "raisedAtCallSite": true,
       "errorName": "NotConnectedError",
-      "elapsedMs": 12,
+      "elapsedMs": 13,
       "queueDepthAfter": 0,
       "silentlyQueued": false,
       "note": "the send threw at the call site within a bounded time and nothing was left holding the message — the mailbox's hold-and-retry is deliberately not reproduced"
