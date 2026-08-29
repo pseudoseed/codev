@@ -483,3 +483,38 @@ spir-146 measured the real cost — 2.3s quiet, 4.6s under four parallel disk wr
 correct and reported as failing. The 211.6s pass was the quiet case. The raised bound lands as
 its own small PR off `origin/main`; retrying `porch done` before then is waiting for luck
 against a bound below the cost.
+
+## Scratchpad inventory (kept for #202)
+
+**The deferral's premise needed correcting first.** The measurements were in this session's
+scratchpad under `/private/tmp/claude-501/…`, which is **outside** the worktree — so keeping
+the worktree would not have preserved them, and a `/tmp` reap or session end would have taken
+them regardless. Superseded: rather than preserving a private copy with a deadline, the durable subset is now
+**committed** to `codev/research/197-render-gate-geometry/` — greppable, and it survives
+everyone forgetting about it. The interim `.air-197-measurements/` copy has been removed.
+
+Selective, as asked: **four scripts and a README, no captured frames.** The four frames that
+matter are already committed as `opencode197-*` fixtures and every script reads them from
+there; `live-idle2` and `live-boot-draft` were redundant and left out. Contents:
+
+- `capture-opencode-frames.cjs` — drives a real opencode under node-pty and dumps raw frames
+  per state. The one worth reusing for ANY TUI whose profile needs measuring.
+- `geometry-matrix.mts` — the cols x rows verdict matrix. Produced the boundary showing the
+  busy proof is destroyed at `rows <= 28` or `cols 80`, which is what killed the ordering fix.
+- `height-sweep-all-profiles.mts` — claude/agy clean at every height, codex below 20, opencode
+  below 32. The number #202 needs.
+- `verify-no-keystroke.mts` — asserts on BYTES with no vitest and no suite lock. Carries a
+  positive control, without which the empty-writes assertion proves nothing.
+
+All four verified runnable from the committed location before being committed — a script
+nobody can run is not evidence. One doc claim was corrected in the process: I had written that
+the busy proof is destroyed on "any smaller mirror", and the matrix shows it survives at
+rows >= 31 for cols 90..120. The comment now carries the measured boundary instead.
+
+Nothing here is load-bearing: the four fixtures that matter are committed and merged. Its
+value is to #202, which is the direct continuation — widening the fact-based check past
+`bottomAnchor` means deciding what a mirror/PTY disagreement should mean for claude, codex and
+agy, and `rowsweep2.mts` already measures how those three behave. Re-deriving it costs a live
+opencode session and about twenty minutes.
+
+`_paths.mts` resolves the repo root via `git rev-parse`, so nothing is hardcoded.
