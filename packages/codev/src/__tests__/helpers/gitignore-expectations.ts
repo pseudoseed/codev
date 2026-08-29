@@ -10,7 +10,12 @@
  * The parser here is deliberately its own three lines rather than a reuse of the one inside
  * `gitignore.ts`. Deriving the expected value with the code under test would make the
  * assertion agree with the implementation by construction, including when the implementation
- * is wrong. What is being single-sourced is the *entry list*, not the parsing of it.
+ * is wrong.
+ *
+ * **Single-source the data, never the logic being tested.** That is the whole rule, and it is
+ * written here because the duplication it permits looks exactly like the duplication this
+ * file exists to remove — a later reader who deletes `entriesOf` in favour of importing
+ * `gitignore.ts`'s parser will make these five assertions unable to fail.
  */
 import { CODEV_GITIGNORE_ENTRIES } from '../../lib/gitignore.js';
 
