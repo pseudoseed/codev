@@ -188,7 +188,17 @@ function serverRuntime() {
     die(UNDETERMINED, `NO_INTERPRETER: could not check: ${node} could not execute \`--version\`.`);
   }
 
-  const packageJson = JSON.parse(readFileSync(join(t3Root, 'package.json'), 'utf8'));
+  let packageJson;
+  const packagePath = join(t3Root, 'package.json');
+  try {
+    packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
+  } catch (error) {
+    die(
+      UNDETERMINED,
+      `CHECKOUT_UNAVAILABLE: could not check: cannot read t3code package metadata at ${packagePath}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const declaredEngine = packageJson.engines?.node ?? 'not declared';
   const matchesDeclaredEngine = engineMatch(version, declaredEngine);
   const npx = join(dirname(node), 'npx');
@@ -407,7 +417,7 @@ function pairingToken() {
 async function ready() {
   const up = await waitReady();
   if (!up) die(MISMATCH, `SERVER_START_FAILED: server did not answer on 127.0.0.1:${port} within the timeout.`);
-  verify('SERVER_COMMIT_MISMATCH');
+  verify('CHECKOUT_MOVED_DURING_RUN');
   const token = pairingToken();
   if (!token) die(UNDETERMINED, 'Server is answering but printed no pairing token; cannot authenticate.');
   say(`ready on 127.0.0.1:${port}; pairing token present`);
@@ -415,6 +425,7 @@ async function ready() {
 }
 
 function stop() {
+  rmSync(runtimeFile, { force: true });
   const pid = readPid();
   if (!pid) {
     // Still sweep the port: a previous run may have left a listener with no

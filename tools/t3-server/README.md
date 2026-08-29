@@ -69,6 +69,21 @@ this checkout even though the declared range is `^24.13.1`. Server readiness is 
 `pin.json` records both the checkout commit and the exact published CLI version used to serve it.
 `start` invokes `t3@<that version>` rather than re-resolving `t3@latest` on every run.
 
+## Live test opt-in
+
+`T3_NODE` configures the harness; it does **not** opt the default unit suite into a real provider
+turn. The Phase 9 live test additionally requires `T3_LIVE=1`:
+
+```bash
+pnpm --filter @cluesmith/codev-types build
+pnpm --filter @cluesmith/t3-client build
+T3_NODE=/absolute/path/to/node T3_LIVE=1 pnpm --filter @cluesmith/codev exec vitest run \
+  src/agent-farm/__tests__/spec-146-phase-9-live-harness.test.ts
+```
+
+The build steps are required because the live block imports the packages' `dist` artifacts. A
+plain `pnpm test` never dispatches this paid provider turn, even when `T3_NODE` is configured.
+
 ## CI
 
 CI does not have this checkout. The rule is:

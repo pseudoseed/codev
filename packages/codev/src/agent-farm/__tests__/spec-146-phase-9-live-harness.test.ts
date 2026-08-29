@@ -2,8 +2,9 @@
  * Pinned-harness checks for Spec 146 Phase 9.
  *
  * The verify test does not start a server or create a thread. Live engine
- * exercise is the test whose name says so. The server uses T3_NODE explicitly;
- * a missing interpreter or unverifiable checkout is an honestly named skip.
+ * exercise is the test whose name says so. It requires T3_LIVE=1 in addition
+ * to T3_NODE, so a configured interpreter cannot make the default unit suite
+ * dispatch a paid provider turn. Missing prerequisites are honestly named.
  */
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -24,7 +25,7 @@ function harnessStatus(): { ok: boolean; reason: string } {
     return { ok: false, reason: `could not check: missing ${harness}` };
   }
   try {
-    execFileSync('node', [harness, 'verify'], { encoding: 'utf8', timeout: 15_000 });
+    execFileSync(process.execPath, [harness, 'verify'], { encoding: 'utf8', timeout: 15_000 });
     return { ok: true, reason: 'verified' };
   } catch (err) {
     const errCode = (err as { status?: number }).status;
@@ -40,8 +41,12 @@ function runtimeStatus(): { ok: boolean; reason: string } {
     return { ok: true, reason: 'interpreter resolved' };
   } catch (err) {
     const stderr = String((err as { stderr?: string }).stderr ?? '');
-    const signal = stderr.split('\n').find((line) => line.includes('NO_INTERPRETER'));
-    return { ok: false, reason: signal?.replace(/^\[t3-server\] /, '') ?? 'NO_INTERPRETER: could not check' };
+    const signal = stderr.split('\n').find((line) => /[A-Z_]+: could not check:/.test(line));
+    return {
+      ok: false,
+      reason: signal?.replace(/^\[t3-server\] /, '') ??
+        'RUNTIME_UNAVAILABLE: could not check: runtime command failed without a named signal',
+    };
   }
 }
 
@@ -60,10 +65,11 @@ describe('Spec 146 Phase 9 — pinned harness verify', () => {
 describe('Spec 146 Phase 9 — porch-driver engine against the pinned harness', () => {
   const status = harnessStatus();
   const runtime = runtimeStatus();
-  const canRunLive = status.ok && runtime.ok;
+  const liveOptIn = process.env.T3_LIVE === '1';
+  const canRunLive = status.ok && runtime.ok && liveOptIn;
 
   it.skipIf(!canRunLive)(
-    'createPorchThreadEngine interrupt on the live server leaves SHOULD_NOT_FINISH absent',
+    '[live: requires T3_LIVE=1 + T3_NODE] interrupt leaves SHOULD_NOT_FINISH absent',
     async () => {
       execFileSync(process.execPath, [harness, 'stop'], { encoding: 'utf8', timeout: 30_000 });
       execFileSync(process.execPath, [harness, 'start'], { encoding: 'utf8', timeout: 60_000 });
@@ -168,5 +174,6 @@ describe('Spec 146 Phase 9 — porch-driver engine against the pinned harness', 
     }
     expect(status.reason).toBe('verified');
     expect(runtime.reason).toBe('interpreter resolved');
+    if (!liveOptIn) expect(process.env.T3_LIVE).not.toBe('1');
   });
 });

@@ -302,21 +302,21 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
   it('pins the server CLI next to the checkout and never resolves latest', () => {
     const pin = readJson(join(t3Root, 'pin.json'));
     const src = readFileSync(join(repoRoot, 'tools', 't3-server', 't3-server.mjs'), 'utf8');
+    // Intentional tripwire: a pin bump must update and re-verify the recorded CLI.
     expect(pin.cliVersion).toBe('0.0.36');
     expect(src).toContain('`t3@${pin.cliVersion}`');
     expect(src).not.toContain("'t3@latest'");
   });
 
-  it('names interpreter, startup, and served-commit failures differently', () => {
+  it('names interpreter, startup, and checkout-movement failures differently', () => {
     const src = readFileSync(join(repoRoot, 'tools', 't3-server', 't3-server.mjs'), 'utf8');
-    for (const signal of ['NO_INTERPRETER', 'SERVER_START_FAILED', 'SERVER_COMMIT_MISMATCH']) {
+    for (const signal of ['NO_INTERPRETER', 'SERVER_START_FAILED', 'CHECKOUT_MOVED_DURING_RUN']) {
       expect(src).toContain(signal);
     }
   });
 
   it('requires an explicit interpreter but treats engines.node as advisory', () => {
     const checkout = mkdtempSync(join(tmpdir(), 't3-runtime-'));
-    writeFileSync(join(checkout, 'package.json'), JSON.stringify({ engines: { node: '^99.0.0' } }));
     const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
     try {
       const noInterpreterEnv = { ...process.env, T3CODE_ROOT: checkout };
@@ -327,6 +327,13 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
       expect(missing.status).toBe(3);
       expect(missing.stderr).toContain('NO_INTERPRETER: could not check:');
 
+      const incomplete = spawnSync(process.execPath, [harness, 'runtime'], {
+        encoding: 'utf8', env: { ...process.env, T3CODE_ROOT: checkout, T3_NODE: process.execPath },
+      });
+      expect(incomplete.status).toBe(3);
+      expect(incomplete.stderr).toContain('CHECKOUT_UNAVAILABLE: could not check:');
+
+      writeFileSync(join(checkout, 'package.json'), JSON.stringify({ engines: { node: '^99.0.0' } }));
       const explicit = spawnSync(process.execPath, [harness, 'runtime'], {
         encoding: 'utf8', env: { ...process.env, T3CODE_ROOT: checkout, T3_NODE: process.execPath },
       });
@@ -336,5 +343,14 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
     } finally {
       rmSync(checkout, { recursive: true, force: true });
     }
+  });
+
+  it('requires a second opt-in before the unit suite can dispatch a live provider turn', () => {
+    const src = readFileSync(
+      join(repoRoot, 'packages', 'codev', 'src', 'agent-farm', '__tests__', 'spec-146-phase-9-live-harness.test.ts'),
+      'utf8',
+    );
+    expect(src).toContain("process.env.T3_LIVE === '1'");
+    expect(src).toContain('status.ok && runtime.ok && liveOptIn');
   });
 });
