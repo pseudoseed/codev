@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chooseSpawnPath, setSpawnThreadFactory } from '../db/thread-identity.js';
 import { setThreadEngine, createMemoryThreadEngine } from '../thread-runtime.js';
-import { ensureThreadBackendReady, readThreadBackendConfig } from '../thread-backend.js';
+import { ensureThreadBackendReady, readThreadBackendConfig, webSocketCtor } from '../thread-backend.js';
 import { launchSpawnedBuilder } from '../commands/spawn.js';
 
 const repoRoot = resolve(import.meta.dirname, '../../../../..');
@@ -237,7 +237,13 @@ describe('Spec 146 Phase 9 — production spawn wiring (#179 item 2)', () => {
     // noticed, because the parity test asserted an in-memory `launched` boolean.
     //
     // A worktree spawn is the one form with no prompt by definition — its payload is
-    // the launch script — so either satisfies this.
+    // the launch script — so either satisfies the payload half.
+    //
+    // The role half has no exception, and that is the correction: the first version of this
+    // guard checked `prompt` OR `launchScript` only, which the worktree site satisfied with
+    // `launchScript` while silently passing no role at all. A guard that cannot fail for the
+    // one call site that differs is not guarding it. Every site loads a role and every site
+    // must forward it, whatever its payload.
     const src = readFileSync(
       join(repoRoot, 'packages/codev/src/agent-farm/commands/spawn.ts'),
       'utf8',
@@ -254,6 +260,8 @@ describe('Spec 146 Phase 9 — production spawn wiring (#179 item 2)', () => {
     for (const [index, call] of calls.entries()) {
       expect({ index, carriesPayload: /\n\s+(prompt[,:]|launchScript:)/.test(call) })
         .toEqual({ index, carriesPayload: true });
+      expect({ index, carriesRole: /\n\s+roleContent:/.test(call) })
+        .toEqual({ index, carriesRole: true });
     }
   });
 
@@ -266,5 +274,109 @@ describe('Spec 146 Phase 9 — production spawn wiring (#179 item 2)', () => {
     // ...and before the path decision, or it could never change the outcome.
     expect(src.indexOf('ensureThreadBackendReady(opts.workspaceRoot)'))
       .toBeLessThan(src.indexOf('const pathKind = chooseSpawnPath'));
+  });
+});
+
+describe('Spec 146 Phase 9 — connecting on the minimum supported Node (iter 3)', () => {
+  const globals = globalThis as { WebSocket?: unknown };
+  const platformWebSocket = globals.WebSocket;
+
+  afterEach(() => {
+    if (platformWebSocket === undefined) delete globals.WebSocket;
+    else globals.WebSocket = platformWebSocket;
+  });
+
+  it('the package supports a Node with no global WebSocket, so the code must not assume one', () => {
+    // The pin the runner cannot drift away from: it is about the DECLARED minimum, not the
+    // version this suite happens to run on. Node 20 has no global `WebSocket` and
+    // `engines.node` says 20 is supported, so constructing the global was a ReferenceError on
+    // a runtime we promise to work on — thrown AFTER the bootstrap token was exchanged, so a
+    // configured spawn burned its credential and then failed.
+    const manifest = pkg('packages/codev/package.json');
+    expect((manifest.engines as { node: string }).node).toMatch(/>=\s*20/);
+    expect((manifest.dependencies as Record<string, string>).ws).toBeTruthy();
+
+    const src = readFileSync(join(repoRoot, 'packages/codev/src/agent-farm/thread-backend.ts'), 'utf8');
+    expect(src).not.toMatch(/new WebSocket\(/);
+  });
+
+  it('resolves a usable constructor when there is no global WebSocket', async () => {
+    // The condition, forced, rather than waiting for a runtime that happens to lack it.
+    delete globals.WebSocket;
+    const ctor = await webSocketCtor();
+    expect(typeof ctor).toBe('function');
+    const proto = (ctor as unknown as { prototype: Record<string, unknown> }).prototype;
+    expect(typeof proto.addEventListener).toBe('function');
+    expect(typeof proto.send).toBe('function');
+    expect(typeof proto.close).toBe('function');
+  });
+
+  it('prefers the platform WebSocket where the runtime has one', async () => {
+    // A compatibility shim, not a switch to `ws` everywhere: a newer Node keeps its own.
+    class FakePlatformSocket {}
+    globals.WebSocket = FakePlatformSocket;
+    await expect(webSocketCtor()).resolves.toBe(FakePlatformSocket);
+  });
+});
+
+describe('Spec 146 Phase 9 — a refused credential is not an unreachable server (iter 3)', () => {
+  let server: { close(cb: () => void): void } | undefined;
+  let dir: string | undefined;
+
+  afterEach(async () => {
+    setThreadEngine(undefined);
+    setSpawnThreadFactory(undefined);
+    if (server) await new Promise<void>((res) => server!.close(() => res()));
+    server = undefined;
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  function workspaceAt(serverUrl: string): string {
+    dir = mkdtempSync(join(tmpdir(), 'phase9-credential-'));
+    mkdirSync(join(dir, '.codev'), { recursive: true });
+    writeFileSync(
+      join(dir, '.codev', 'config.json'),
+      JSON.stringify({ threads: { serverUrl, bootstrapToken: 'already-consumed' } }),
+    );
+    return dir;
+  }
+
+  async function messageFrom(promise: Promise<unknown>): Promise<string> {
+    try {
+      await promise;
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    throw new Error('expected ensureThreadBackendReady to throw, and it resolved');
+  }
+
+  it('a consumed one-time token reads as a refusal and names the cause', async () => {
+    // What a SECOND spawn sees. Every `afx` invocation is a fresh process and exchanges the
+    // token again; a pairing-issued token is one-time — `PairingGrantStore.consume` deletes
+    // the grant at `remainingUses <= 1` — so the next process gets this back. Calling it
+    // "could not be reached" would send the reader to check the network for a healthy server.
+    const http = await import('node:http');
+    const created = http.createServer((_req, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ _tag: 'UnknownBootstrapCredentialError' }));
+    });
+    server = created;
+    await new Promise<void>((res) => created.listen(0, '127.0.0.1', () => res()));
+    const { port } = created.address() as { port: number };
+
+    const message = await messageFrom(ensureThreadBackendReady(workspaceAt(`http://127.0.0.1:${port}`)));
+    expect(message).toMatch(/REFUSED the bootstrap token/);
+    expect(message).toMatch(/one-time token/);
+    expect(message).toMatch(/server is reachable/i);
+    expect(message).not.toMatch(/could not be reached/);
+  });
+
+  it('an unreachable server still reads as unreachable, not as a refusal', async () => {
+    // The control. Without it the assertion above would hold just as well if every failure
+    // were relabelled a refusal, which is the same defect pointing the other way.
+    const message = await messageFrom(ensureThreadBackendReady(workspaceAt('http://127.0.0.1:1')));
+    expect(message).toMatch(/could not be reached/);
+    expect(message).not.toMatch(/REFUSED/);
   });
 });

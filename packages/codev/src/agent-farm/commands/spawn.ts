@@ -867,6 +867,13 @@ async function spawnWorktree(options: SpawnOptions, config: Config, selection: A
     workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
     launchScript: scriptPath,
+    // A worktree spawn has no prompt — its payload is the launch script — but it DOES have a
+    // role, baked into that script above. The thread path has no script to bake it into, so
+    // without these it is the one spawn form that comes up with no role at all while the PTY
+    // form gets one. `DriverThread` holds a pending role and joins it onto whichever turn
+    // starts first, so forwarding it works even with no initial prompt.
+    roleContent: role?.content ?? null,
+    roleFilePath: role ? resolve(worktreePath, BUILDER_ROLE_FILE) : null,
     startPty: async () => {
       logger.info('Creating PTY terminal session for worktree...');
       const session = await createPtySession(

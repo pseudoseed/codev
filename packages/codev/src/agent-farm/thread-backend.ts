@@ -21,7 +21,27 @@ import { installThreadSpawnFactory, setThreadEngine, tryGetThreadEngine } from '
 export interface ThreadBackendConfig {
   /** Base URL of the t3code server, e.g. `http://127.0.0.1:3799`. */
   readonly serverUrl: string;
-  /** Bootstrap token exchanged for an access token at connect time. */
+  /**
+   * Bootstrap token exchanged for an access token at connect time.
+   *
+   * **It must be a credential that survives repeated exchange, and t3code has both kinds.**
+   * Every `afx` invocation is a fresh process with no session to reuse, so this token is
+   * exchanged again on every spawn. At the pinned t3code commit, `PairingGrantStore.consume`
+   * decrements `remainingUses` and DELETES the grant at `<= 1`, after which the next exchange
+   * returns `UnknownBootstrapCredentialError`. So:
+   *
+   * - A **pairing-issued** token (`issueOneTimeToken`) works for exactly one spawn and then
+   *   fails. Do not configure one here.
+   * - A **config-seeded desktop bootstrap token** (`desktopBootstrapToken`) is issued with
+   *   `remainingUses: "unbounded"`, deliberately, so it can be re-exchanged. That is the kind
+   *   this field requires.
+   *
+   * This is a documented constraint rather than a silent one, and the second exchange's
+   * failure is reported as a refusal rather than as an unreachable server — see
+   * `ensureThreadBackendReady`. Caching an access token across processes would remove the
+   * constraint, and is not done here: it means writing a credential to disk, which is a
+   * storage decision this phase's scope does not cover.
+   */
   readonly bootstrapToken: string;
   readonly workspaceRoot: string;
   readonly defaultHarness?: string;
@@ -80,6 +100,41 @@ export function readThreadBackendConfig(workspaceRoot: string): ThreadBackendCon
   };
 }
 
+/**
+ * The WebSocket constructor to use, which is NOT always the global one.
+ *
+ * `@cluesmith/codev` declares `engines.node: >=20.0.0`, and Node 20 has no global
+ * `WebSocket` — `typeof WebSocket` is `'undefined'` on 20.19.2. Constructing the global
+ * therefore threw `ReferenceError` on the project's own minimum supported runtime, after
+ * the bootstrap token had already been exchanged, so a configured spawn burned its
+ * credential and then failed. `ws` is already a runtime dependency of this package, so the
+ * fallback costs nothing.
+ *
+ * The global is preferred where it exists rather than always using `ws`, so newer runtimes
+ * keep the platform implementation and this stays a compatibility shim rather than a switch.
+ *
+ * Exported for the test that pins this to the minimum supported Node's CONDITION — no global
+ * `WebSocket` — rather than to whatever version the test runner happens to be.
+ */
+export async function webSocketCtor(): Promise<new (url: string) => WebSocket> {
+  const globalCtor = (globalThis as { WebSocket?: new (url: string) => WebSocket }).WebSocket;
+  if (typeof globalCtor === 'function') return globalCtor;
+  const ws = await import('ws');
+  return (ws.WebSocket ?? ws.default) as unknown as new (url: string) => WebSocket;
+}
+
+/**
+ * Did the server answer and refuse the credential, rather than being unreachable?
+ *
+ * `AuthError` is what `@cluesmith/t3-client/auth` throws when an auth endpoint returns a
+ * non-2xx — which means the server was reached, parsed the request, and said no. Matched by
+ * `name` rather than by `instanceof` because the class is loaded through a dynamic import and
+ * a second module instance would defeat the identity check.
+ */
+function isCredentialRefusal(err: unknown): boolean {
+  return err instanceof Error && err.name === 'AuthError';
+}
+
 /** Open an authenticated t3code WebSocket and wrap it as a porch-driver dispatcher. */
 async function connectDispatcher(config: ThreadBackendConfig): Promise<{ call: (m: string, p: unknown) => Promise<unknown> }> {
   const { T3Client } = await import('@cluesmith/t3-client/client');
@@ -88,7 +143,8 @@ async function connectDispatcher(config: ThreadBackendConfig): Promise<{ call: (
     clientLabel: 'codev-afx',
   });
   const ticket = await auth.issueWebSocketTicket(config.serverUrl, access.access_token);
-  const socket = new WebSocket(auth.webSocketUrl(config.serverUrl, ticket.ticket));
+  const WebSocketCtor = await webSocketCtor();
+  const socket = new WebSocketCtor(auth.webSocketUrl(config.serverUrl, ticket.ticket));
   await new Promise<void>((res, rej) => {
     socket.addEventListener('open', () => res(), { once: true });
     socket.addEventListener('error', () => rej(new Error(`t3code socket error connecting to ${config.serverUrl}`)), { once: true });
@@ -128,6 +184,16 @@ export async function ensureThreadBackendReady(
   try {
     dispatcher = await connectDispatcher(config);
   } catch (err) {
+    // A server that answered and REFUSED the credential is not a server that could not be
+    // reached, and the single most likely refusal here has a specific cause worth naming: a
+    // pairing-issued bootstrap token is one-time, and every `afx` process exchanges again.
+    // Reporting that as "could not be reached" would send the reader to check the network.
+    if (isCredentialRefusal(err)) {
+      throw new Error(
+        `Thread-backed spawns are configured for ${config.workspaceRoot} and the t3code server at ${config.serverUrl} answered, but REFUSED the bootstrap token (${err instanceof Error ? err.message : String(err)}). The server is reachable — the credential is not usable. Most likely it is a pairing-issued one-time token that a previous spawn already consumed: every afx invocation is a fresh process and exchanges the token again, so this field needs a credential that survives repeated exchange (a desktop bootstrap seed, issued unbounded).`,
+        { cause: err },
+      );
+    }
     throw new Error(
       `Thread-backed spawns are configured for ${config.workspaceRoot} but the t3code server at ${config.serverUrl} could not be reached: ${err instanceof Error ? err.message : String(err)}. Refusing to fall back to the PTY path — an unreachable server is not the same as an unconfigured one.`,
       { cause: err },

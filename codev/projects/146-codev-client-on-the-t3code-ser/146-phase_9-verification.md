@@ -107,6 +107,55 @@ with a recording dispatcher and `create({ prompt: 'MISSION', roleContent: 'ROLE'
 it. A `thread.turn.start` was dispatched and its `message.text` contained both. The three
 prompt-bearing call sites carry `prompt: builderPrompt` in `dist/agent-farm/commands/spawn.js`.
 
+#### Iteration 2 found the production path did not work at all — fixed here
+
+Two blocking findings from the codex lane, both verified against the tree and the pinned
+t3code checkout before acting on either, and both mine.
+
+**1. `thread-backend.ts` constructed the global `WebSocket`, which Node 20 does not have.**
+`packages/codev` declares `engines.node: ">=20.0.0"`; `node v20.19.2` reports
+`typeof WebSocket === 'undefined'` — and v20.19.2 is the runtime this workspace itself uses.
+So `ensureThreadBackendReady` threw `ReferenceError` on the project's own declared minimum,
+**after** the bootstrap token had already been exchanged: a configured spawn burned its
+credential and then failed. `ws@^8.18.0` was already a runtime dependency, so the fix costs
+nothing. `webSocketCtor()` prefers the platform global where it exists and falls back to `ws`,
+so this stays a compatibility shim rather than a switch.
+
+This is precisely the function this document had already recorded as deliberately uncovered
+("it opens a real WebSocket to a real server"). The uncovered function was broken.
+
+**2. The bootstrap token is exchanged in every fresh `afx` process, and not every token
+survives that.** Verified in `PairingGrantStore.ts` at the pin: `consume` decrements
+`remainingUses` and **deletes the grant at `<= 1`**, after which the next exchange returns
+`UnknownBootstrapCredentialError`.
+
+The nuance matters and the review did not state it: this is **not** true of all credentials.
+`issueOneTimeToken` — the pairing path — is one-time. A config-seeded `desktopBootstrapToken`
+is issued with `remainingUses: "unbounded"` **deliberately**, so it can be re-exchanged. So
+thread-backed spawning requires a desktop-bootstrap seed, and a pairing token works exactly
+once.
+
+That constraint is now stated where the token is read, on `ThreadBackendConfig.bootstrapToken`,
+and the failure is no longer mis-reported: a server that **answered and refused** is separated
+from a server that **could not be reached**, with the refusal naming the one-time cause. The
+old message sent a reader to check the network for a healthy server.
+
+Caching an access token across processes would remove the constraint entirely. It is not done
+here, and the reason is stated rather than left implicit: it means writing a credential to
+disk, which is a storage decision outside this phase's scope.
+
+**3. `spawnWorktree` dropped the role on the thread path** (claude, non-blocking). `spawn.ts`
+loads a role and bakes it into the PTY launch script, and it was the one `launchSpawnedBuilder`
+call site passing neither `roleContent` nor `roleFilePath` — so a thread-backed worktree spawn
+came up with no role while the PTY one had one. Fixed; `DriverThread` joins a pending role onto
+whichever turn starts first, so it works even with no initial prompt.
+
+**And the guard that could not catch it has been fixed too.** The call-site test matched
+`prompt` OR `launchScript`, and that site has `launchScript` — a guard written to prevent this
+exact class of defect, which could not fail for the one call site that differed from the others.
+It now also requires `roleContent:` at every site, which has no exception. Mutation-checked:
+removing the two lines from `spawnWorktree` fails it.
+
 #### What item 2 does NOT do, named rather than left to be discovered
 
 `ensureThreadBackendReady` is called from `launchSpawnedBuilder` and nowhere else. `afx
@@ -229,7 +278,7 @@ is the one running the program, so `/arch-save` cannot be exercised against it.
 
 | File | Tests |
 |---|---|
-| `spec-146-phase-9-thread-backend.test.ts` | 17 — new; items 1 and 2, the packaging guards, and the spawn payload |
+| `spec-146-phase-9-thread-backend.test.ts` | 22 — items 1 and 2, the packaging guards, the spawn payload, the Node-20 WebSocket path, and refusal-vs-unreachable |
 | `spec-146-phase-9-porch-engine.test.ts` | 7 — 4 added; the first turn, the role on it, the idle control, and `activeTurnId` |
 | `spec-146-phase-9-interrupt-side-effect.test.ts` | 2 — new; the deterministic half of the interrupt criterion, with its control |
 | `spec-146-phase-9-afx-parity.test.ts` | unchanged |
