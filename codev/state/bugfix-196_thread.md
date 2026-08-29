@@ -287,3 +287,33 @@ Filed to #200.
 
 Root cause of all of it on my side: **I ran the suite before building.** Porch's own check order
 is `regression_test, build, tests`; running by hand out of order is what hid it.
+
+
+## Mutation-verifying the two guards the architect asked for
+
+Both new tests were proved to fail when the thing they guard is broken, rather than asserted to
+work on inspection. Two one-line mutations, applied together:
+
+| mutation | what it models |
+|---|---|
+| `promptReadySequence`: `return [interrupt, clear]` (dedup removed) | claude/codex emit two `\x03` instead of one |
+| the legacy-boolean coercion: `false` → `'written'` instead of `'failed'` | a transient write failure latches as permanent |
+
+Result: **5 failed | 150 passed**, and the failures name exactly the right guards —
+
+```
+× writes EXACTLY one \x03 and no other control byte on claude
+× sends ONE byte to claude/codex, where Ctrl+C is both halves
+× is a single Ctrl+C on claude and codex — unchanged from before the fix
+× coerces a LEGACY boolean port: false stays RETRYABLE, never latched
+× identifies the agent from the launch command, full path and args included
+```
+
+Restored from pristine copies; `git diff` on `servers/` is empty, confirming the production
+files are byte-identical to the committed versions.
+
+One refinement on the ask: the request was "exactly one `\x03`, nothing before or after".
+"After" would depend on the 100 ms message-write scheduling, so anchoring there would have made
+the test timing-dependent. It asserts `written[0] === '\x03'` and then filters the *whole*
+exchange to control bytes and expects the set to be exactly `['\x03']` — the same guarantee
+without the flake.

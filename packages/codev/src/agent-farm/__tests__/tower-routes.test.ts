@@ -1992,6 +1992,24 @@ describe('tower-routes', () => {
         }
       });
 
+      it('writes EXACTLY one \\x03 and no other control byte on claude', async () => {
+        // The load-bearing claim of this change for the harnesses that were never broken:
+        // their behaviour does not change. Asserted as a byte comparison rather than
+        // inferred from a passing suite — a spurious ESC here would trade a bug nobody
+        // has for a bug everybody has.
+        const written = await interruptSessionRunning('claude');
+
+        // Nothing goes out before the interrupt.
+        expect(written[0]).toBe(CTRL_C);
+
+        // And across the WHOLE exchange exactly one control byte goes out: that \\x03.
+        // Not "at least one" — the dedup must not let a second byte ride along.
+        const controls = written.filter(
+          (byte) => byte === CTRL_C || byte === ESC || byte === CTRL_U,
+        );
+        expect(controls).toEqual([CTRL_C]);
+      });
+
       it('NEVER sends Ctrl+C to a session whose agent cannot be identified', async () => {
         // Fail-safe: an unresolvable command must not inherit claude's default, and gets
         // NO guessed clear key either — just the safe interrupt.

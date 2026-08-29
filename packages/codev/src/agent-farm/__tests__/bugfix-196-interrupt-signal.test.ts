@@ -412,7 +412,7 @@ describe('recovery phase records WHICH state a stuck screen is in', () => {
    * `outcome` and optionally emitting output (advancing the change token) as a real
    * keystroke would.
    */
-  function harness(result: HeldRecoveryResult, emitsOutput: boolean) {
+  function harness(result: HeldRecoveryResult | boolean, emitsOutput: boolean) {
     let now = 1_000;
     let bytesWritten = 0;
     const calls: HeldRecoveryInfo[] = [];
@@ -520,6 +520,35 @@ describe('recovery phase records WHICH state a stuck screen is in', () => {
     expect(calls).toHaveLength(1);
     // Nothing was written, so "it produced no output" is not a finding about this state.
     expect(logs.filter((l) => l.includes('RECOVERY INERT'))).toHaveLength(0);
+    drainer.stop();
+  });
+
+  it('coerces a LEGACY boolean port: true latches as written', async () => {
+    // recoverHeld's return widened from boolean to an outcome. A port still returning a
+    // bare boolean must not be misread — `true` meant "the byte reached a live PTY".
+    const { drainer, calls, advance } = harness(true, true);
+    await drainer.tick();
+    advance(10_000);
+    await drainer.tick();
+    expect(calls).toHaveLength(1);
+    expect(drainer.recoveryPhaseFor(WS, AGENT)).toBe('written');
+    drainer.stop();
+  });
+
+  it('coerces a LEGACY boolean port: false stays RETRYABLE, never latched', async () => {
+    // The subtle direction. `false` meant "the write did not land" — transient. Coercing it
+    // into a latching phase would turn a torn-down PTY into a permanent give-up, which is
+    // exactly the retryable-vs-latched distinction the four phases exist to preserve.
+    const { drainer, calls, advance } = harness(false, false);
+    await drainer.tick();
+    advance(10_000);
+    await drainer.tick();
+    expect(calls).toHaveLength(1);
+    expect(drainer.recoveryPhaseFor(WS, AGENT)).toBe('not-attempted');
+
+    advance(10_000);
+    await drainer.tick();
+    expect(calls).toHaveLength(2); // retried: `false` is not a verdict about the future
     drainer.stop();
   });
 
