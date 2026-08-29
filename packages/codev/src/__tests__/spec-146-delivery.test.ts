@@ -398,6 +398,45 @@ describe('spec 146 phase 4: queued while a turn is active', () => {
     }
   });
 
+  it('a turn signal that never arrives does not strand the backlog', async () => {
+    // `expectTurn().settled` resolves only after the turn was seen RUNNING. That
+    // latch is correct — it stops a thread-creation event reading as a finished turn
+    // — and it means a turn the subscription never projects as running leaves the
+    // promise pending forever.
+    //
+    // Waiting on it unbounded traded a sub-second race for a permanent stall, and
+    // only the live server showed it: the backlog stopped partway and 300 s never
+    // produced the rest, while every unit test passed because a fake expectation
+    // always resolves. So this test supplies the one thing the real world can and
+    // the fakes never did: a signal that does not come.
+    const dir = tempDir('queue-dead-signal');
+    try {
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      const dispatcher = recordingDispatcher();
+      const target = (): QueueTarget => ({
+        threadId: 't1',
+        isTurnActive: false,
+        // Never resolves, and never rejects.
+        expectTurn: () => ({ settled: new Promise<void>(() => {}) }),
+      });
+      // 20 ms bound so the test does not wait out the real one.
+      const queue = new ThreadMessageQueue(target, dispatcher, journal, 20);
+
+      await Promise.all([
+        queue.send(message('a', 'k-a')),
+        queue.send(message('b', 'k-b')),
+        queue.send(message('c', 'k-c')),
+      ]);
+      await queue.flush();
+
+      // All three delivered, in order, despite no turn ever being reported settled.
+      expect(dispatcher.texts).toEqual(['a', 'b', 'c']);
+      expect(queue.depth).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('tells a departed caller when its queued message later failed to send', async () => {
     // A caller holding `queued-by-porch` has already returned. If the later dispatch
     // fails, the rejection lands on `accepted(key)`, which that caller never has to

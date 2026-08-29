@@ -154,6 +154,12 @@ export class ThreadMessageQueue {
     private readonly target: () => QueueTarget,
     private readonly dispatcher: CommandDispatcher,
     private readonly journal: DispatchJournal,
+    /**
+     * How long the drain waits for a turn it started to be reported settled before
+     * falling back to the projection. Injected so a test can drive it without
+     * waiting out the real bound.
+     */
+    private readonly turnWaitTimeoutMs: number = 30_000,
   ) {}
 
   /** How many messages are waiting. Zero while idle. */
@@ -303,9 +309,28 @@ export class ThreadMessageQueue {
       // without waiting for the subscription to catch up.
       if (this.#pendingTurn) {
         const pending = this.#pendingTurn;
-        // A displaced or failed turn is not a delivery failure — the message went
-        // out. Clear it and fall through to the weaker guard below.
-        await pending.catch(() => {});
+        // BOUNDED, and this bound is load-bearing rather than defensive.
+        //
+        // `settled` resolves only after the turn was seen RUNNING — the latch that
+        // stops a thread-creation event being read as a finished turn. That latch
+        // is right, and it means a turn the subscription never projects as running
+        // leaves this promise pending forever. Waiting on it unbounded turned a
+        // sub-second race into a permanent stall: live, the backlog stopped partway
+        // and 300 s never produced the rest. The unit tests could not see it,
+        // because a fake expectation always resolves.
+        //
+        // So this waits for the signal it prefers and then stops waiting. The window
+        // being closed is the projection lag, which is milliseconds; anything past
+        // the bound is not that race, it is a signal that is not coming. After it,
+        // the loop falls through to `isTurnActive`/`awaitSettle` — weaker, but by
+        // then the projection has long since caught up.
+        await Promise.race([
+          pending.catch(() => {}),
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, this.turnWaitTimeoutMs);
+            timer.unref?.();
+          }),
+        ]);
         if (this.#pendingTurn === pending) this.#pendingTurn = null;
         continue;
       }
