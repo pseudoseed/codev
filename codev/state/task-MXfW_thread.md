@@ -29,3 +29,18 @@
   builder worktree. The test passed immediately in isolation (6/6). The integration branch already
   contains the bounded `rmSync(..., maxRetries: 20, retryDelay: 100)` fix from Phase 3, so this
   Phase 13 branch does not duplicate or conflict with that owned fix.
+
+## 2026-08-28 — Review correction
+
+- Ran the configured three-lane implementation review after code and tests. Gemini skipped without
+  reviewing because its headless command permission was unavailable. Claude approved with
+  non-blocking cleanup findings. Codex requested changes for three active release leftovers and
+  one inaccurate architecture sentence inherited from the parent branch context.
+- Opened every cited file. Removed the stale deleted-canary instruction, the standalone VS Code
+  Marketplace bump script, and VS Code release workflow text from both the working release notes
+  and its template. Corrected `arch.md` to describe the packages that exist on this branch, and
+  updated the hot-tier map entry (without adding a hot fact) so it routes readers to the retained
+  unsupported source accurately.
+- Strengthened the regression suite: it now requires the Stream Deck directory and VS Code bump
+  script to be absent and checks the active release surfaces for extension hooks. The revised
+  phase test passes 5/5.

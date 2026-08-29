@@ -28,5 +28,5 @@ and keeps the map in sync with arch.md's top-level sections. See codev/resources
 - Integration Points — crossing a subsystem or process boundary.
 - Monorepo Structure — adding a package or build wiring.
 - Technology Stack — choosing or upgrading a dependency.
-- VS Code Extension — changing sidebar views, commands, or keybindings.
+- VS Code Extension — touching the retained unsupported source or its retirement boundary.
 - Glossary — when a term is unfamiliar.

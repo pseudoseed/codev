@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,27 @@ afterAll(() => {
 });
 
 describe('extension retirement', () => {
+  it('deletes the Stream Deck source tree rather than merely excluding its package', () => {
+    expect(existsSync(join(workspaceRoot, 'apps/streamdeck'))).toBe(false);
+  });
+
+  it('removes both extensions from active release automation and instructions', () => {
+    expect(existsSync(join(workspaceRoot, 'scripts/bump-vscode.sh'))).toBe(false);
+
+    const releaseSurfaces = [
+      'scripts/bump-all.sh',
+      'codev/protocols/release/protocol.md',
+      'docs/releases/UNRELEASED.md',
+      'docs/releases/UNRELEASED.template.md',
+      '.github/workflows/test.yml',
+    ];
+
+    for (const path of releaseSurfaces) {
+      const content = readFileSync(join(workspaceRoot, path), 'utf8');
+      expect(content, path).not.toMatch(/apps\/vscode|streamdeck|bump-vscode|sdk-canary/i);
+    }
+  });
+
   it('keeps supported apps in the pnpm workspace and excludes the VS Code extension', () => {
     const members = JSON.parse(
       execFileSync('pnpm', ['list', '--recursive', '--depth', '-1', '--json'], {

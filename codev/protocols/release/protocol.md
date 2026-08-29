@@ -155,8 +155,6 @@ cd packages/codev && pnpm publish --no-git-checks            # stable → tag la
 cd packages/codev && pnpm publish --tag next --no-git-checks # RC → tag next
 ```
 
-**One-time, on the sdk's first npm publish:** enable the published-SDK canary's schedule — uncomment the `schedule:` block in `.github/workflows/sdk-canary.yml` (it ships `workflow_dispatch`-only because the canary has nothing to test against until `@cluesmith/codev-sdk` exists on the registry).
-
 **When to bump workspace dep versions:** unnecessary if step 4 used `pnpm bump-version` (lockstep already bumped core, sdk, and types). If you took the backport path and `packages/core/src/**`, `packages/sdk/src/**`, or `packages/types/src/**` changed since the last release, bump that package's version (`pnpm --filter @cluesmith/codev-core version patch`) before publishing — otherwise the publish step will skip it (existing version) and consumers will get the old code.
 
 **Verification:** the `Post-Release E2E Verification` GitHub Actions workflow (triggered automatically on release) installs the published tarball on macOS and Ubuntu. If it fails with E404 on a `@cluesmith/*` package, that workspace dep is missing from npm — publish it and re-run the workflow with `gh workflow run "Post-Release E2E Verification" -f version=X.Y.Z`.

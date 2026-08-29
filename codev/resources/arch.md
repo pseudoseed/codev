@@ -1189,7 +1189,11 @@ duplication: Tower's own reconnect backoff + WS close code live in a private
 copy at `packages/codev/src/agent-farm/lib/reconnect-backoff.ts` because the
 server must not import the client sdk.
 
-**Build order:** `pnpm build` from root builds artifact-canvas, the t3 client, the porch driver, and then `@cluesmith/codev`. The codev build first builds its graph-derived workspace-dependency closure via `pnpm --filter "@cluesmith/codev^..." build` (types, sdk, core, apps/web in topological order, then the dashboard copy — Issue #1352, replacing the drift-prone hand-list). `apps/vscode` is outside this graph.
+**Build order:** `pnpm build` from root builds artifact-canvas and then `@cluesmith/codev`.
+The codev build first builds its graph-derived workspace-dependency closure via
+`pnpm --filter "@cluesmith/codev^..." build` (types, sdk, core, apps/web and apps/v2 in
+topological order, then the dashboard copies — Issue #1352, replacing the drift-prone
+hand-list). `apps/vscode` is outside this graph.
 
 **Publishing:** `codev-core` and `codev-sdk` must be published to npm before `codev` (runtime dependencies).
 

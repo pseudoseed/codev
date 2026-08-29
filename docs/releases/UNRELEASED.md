@@ -8,20 +8,12 @@
   Edit UNRELEASED.md across the cycle (the working copy). NEVER edit this
   template directly — it's the cold-start structure, untouched between cycles.
 
-  Per-PR architect workflow (on the docs/vscode-changelog branch):
-    1. cd worktrees/changelog                       # no fetch / no rebase — branches diverge by design
-    2. Add the CHANGELOG entry to apps/vscode/CHANGELOG.md under [Unreleased]
-       (add the [Unreleased] heading if it's missing — post-release state removes it)
-    3. Add the matching release-notes entry to UNRELEASED.md under the right section:
+  Per-PR architect workflow:
+    1. Add the matching release-notes entry under the right section:
          substantive change → its own ## section
-         small vscode item  → Polish
-         non-vscode change  → Other fixes
-    4. Commit both files together; plain `git push` (fast-forward, no force)
-
-  Why no rebase, ever: main moves with code merges, docs/vscode-changelog moves
-  with changelog/release-notes entries — neither branch touches the other's
-  files, so they diverge by design and reconcile at release time via merge.
-  Rebasing rewrites commit hashes and forces force-pushes for zero real benefit.
+         small polish item  → Polish
+         other work         → Other fixes
+    2. Commit the release-note update with the implementing change when practical.
 
   At release time:
     1. Rename the title to `# vX.Y.Z <Codename>` and add `Released: YYYY-MM-DD`
@@ -35,13 +27,13 @@
 
 ## Polish
 
-<!-- Small vscode items as bullets:
+<!-- Small polish items as bullets:
        - **<Headline>** (#<issue>, PR #<pr>). <One short paragraph of context.>
      Move out to its own ## section if the entry grows past ~3 sentences. -->
 
 ## Other fixes (dashboard, porch, infrastructure)
 
-<!-- Non-vscode work that ships in the npm release. Same bullet shape as Polish. -->
+<!-- Other work that ships in the npm release. Same bullet shape as Polish. -->
 
 ## Breaking changes
 
@@ -53,8 +45,6 @@ None.
 npm install -g @cluesmith/codev@X.Y.Z
 afx tower stop && afx tower start
 ```
-
-The VS Code extension ships separately via the Marketplace — `Codev` extension by `cluesmith.codev`, version `X.Y.Z`.
 
 ## Contributors
 
