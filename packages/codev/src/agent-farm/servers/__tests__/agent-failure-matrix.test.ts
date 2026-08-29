@@ -222,9 +222,23 @@ describe('failure matrix signals are distinct', () => {
     // If a file is renamed away, fail rather than silently scanning less.
     for (const file of CODEV_AGENT_FILES) expect(present).toContain(file);
 
+    // THE GUARD ASSERTS ITS OWN REACH.
+    //
+    // This has now been narrower than its own comment three times — single-quotes
+    // only, keyed on `code:`, and (in porch's own checks) first-five-lines. Every
+    // one was the same mistake: encoding an assumption about the thing being
+    // scanned, and having no way to notice when the assumption stopped holding.
+    //
+    // Widening it a fourth time would not break that cycle. So it now measures
+    // itself: EVERY scanned file must yield at least one code. A file that goes
+    // quiet means the pattern has stopped matching that file's style, which is
+    // exactly how the last three narrowings hid — silently, with the guard green.
+    const perFile = new Map<string, number>();
+
     const emitted = new Set<string>();
     for (const file of CODEV_AGENT_FILES) {
       const source = readFileSync(join(serversDir, file), 'utf8');
+      const fileCodes = new Set<string>();
       // Single-quoted AND template literals. Matching only `'...'` let
       // PAIRING_PRINCIPAL_REFUSED ship unclassified from a `throw new Error(\`...\`)`
       // — the third time this guard has been narrower than its own comment claimed.
@@ -232,9 +246,17 @@ describe('failure matrix signals are distinct', () => {
       // does not care which quote, which key, or which statement introduces a code.
       for (const literal of source.matchAll(/['`]([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)/g)) {
         emitted.add(literal[1]);
+        fileCodes.add(literal[1]);
       }
+      perFile.set(file, fileCodes.size);
     }
 
+    // EVERY file must yield codes. A file that goes quiet means the pattern stopped
+    // matching its style — which is how all three previous narrowings hid.
+    for (const file of CODEV_AGENT_FILES) {
+      expect(perFile.get(file), `${file} yielded no codes; the collector has gone blind on it`)
+        .toBeGreaterThan(0);
+    }
     // The collector must not be silently empty — that would make this test vacuous.
     expect(emitted.size).toBeGreaterThan(15);
     // Anchors: one under `code:`, one under `signal:`, one a default parameter.
@@ -570,7 +592,20 @@ describe('failure matrix', () => {
   //
   // **Those tests passed because their fixtures shared the code's false premise.**
   // One project per worktree, exactly the shape that made the bug invisible. So
-  // these three use several, which is what production looks like.
+  // these use several, which is what production looks like.
+  //
+  // THE VERIFIED NUMBER, so a future fixture cannot quietly contradict it:
+  // counted 2026-08-29, `ls -d codev/projects/*/` gives **302** in a real builder
+  // worktree and 303 on main. Not "sometimes more than one" — never one, ever. The
+  // old `matches.length === 1` join could not succeed in production at any point in
+  // its life.
+  //
+  // **The rule, and it is more general than the bug:** when a fixture encodes a
+  // claim about production shape, verify the claim against a real instance once and
+  // put the number in the test. A comment said "a builder worktree normally owns one
+  // project" and every fixture was built to agree with it. Counting the directories
+  // takes one command and nobody ran it, because a fixture that agrees with the
+  // assumption it should be challenging never fails.
   it('a multi-project worktree with no thread_id is AMBIGUOUS, not unmanaged', () => {
     const root = tmp();
     const worktree = join(root, '.builders', 'air-9');

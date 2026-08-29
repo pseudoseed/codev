@@ -145,3 +145,50 @@ Not review, and not a green suite. Three things did:
 **Phase 6 note:** `CAPABILITY_REVOKED` must be its own code and its own test. Phase 5
 covers `HUMAN_SESSION_REVOKED` only, and instance 4 was this document's own row
 claiming otherwise.
+
+---
+
+## THE RULE WITH TEETH — a fixture that agrees with its own assumption
+
+Iteration 2 produced the phase's most consequential defect, and it is the general
+case of which name-versus-path drift is a special case.
+
+`statusForWorktree` resolved the builder→porch join only when a worktree held
+**exactly one** `status.yaml`. A real builder worktree in this repo holds **302**
+project directories; `main` holds 303. So the join did not fail *sometimes* — **it
+could never succeed in production at any point in its life.** Every thread-backed
+builder was reported `THREAD_UNMANAGED`, and `THREAD_ID_DISAGREEMENT` sat behind a
+record that was never resolved, making the phase's own reconciliation acceptance
+criterion **unreachable code**. It went to `main` green.
+
+The basis was a comment: *"A builder worktree normally owns one project."* Nothing
+checked it, and **every fixture was built to match it.**
+
+### The rule
+
+> **When a test fixture encodes a claim about production shape, verify the claim
+> against a real instance once, and put the number in the test.**
+
+"302 projects in a real worktree" is now written into
+`agent-failure-matrix.test.ts` beside the multi-project fixtures. It is a fact a
+future fixture cannot quietly contradict, where a prose assumption could.
+
+### Why this is the general case
+
+Name-versus-path drift hides an uncovered branch. **A fixture that shares the code's
+premise hides an entire impossible state.** The tests are not merely silent — they
+actively confirm the wrong model, which is worse, because a green suite built on the
+same assumption reads as evidence *for* it.
+
+Counting the directories in `.builders` is one command. Nobody ran it, because a
+fixture that agrees with the assumption it should be challenging never fails, and
+nothing in a passing suite ever suggests looking.
+
+### The guard now measures its own reach
+
+The emitter-scanning guard had been narrower than its own comment **three times** —
+single-quotes only, keyed on `code:`, and (in porch's `checks.ts`) first-five-lines.
+Widening it a fourth time would not have broken the cycle, so it now asserts that
+**every scanned file yields at least one code**. Re-narrowing the pattern now fails
+with `agent-routes.ts yielded no codes; the collector has gone blind on it`, naming
+the file. A guard that cannot state its own reach cannot tell you when it loses it.
