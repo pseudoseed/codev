@@ -69,7 +69,8 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
    * thread whose turn has not been named yet spelled the same way. Both promises are
    * followed rather than awaited: the caller asked to start a turn, not to wait for it.
    *
-   * The `activeTurnId === ` guards keep a late settle from clearing a NEWER turn's id.
+   * The `activeTurnId === current` guards keep a late settle from clearing a newer turn's
+   * id, and `finished` keeps a late `running` from resurrecting one that has already ended.
    */
   function track(record: ThreadRecord, started: { commandId: string; running: Promise<string>; settled: Promise<unknown> }): void {
     record.activeTurnId = started.commandId;
