@@ -188,3 +188,40 @@ committed byte stream is exactly as captured.
   every 15s and would have taken the lock in the gap between spir-146's runs, which is
   racing, not queueing. Nothing of mine ever held the lock; the one attempt timed out at
   ~120s without executing a test.
+
+---
+
+## PR #203 — opened as a DRAFT, deliberately
+
+https://github.com/pseudoseed/codev/pull/203
+
+Base merged from `origin/main` at `e845574fa` before opening — this branch was cut from a
+stale local `main` (`4aade761a`) and was missing #191 and #192, including #189's `CODEV_*`
+scrub and #192's 900s suite-lock wait. Clean merge, no conflicts, none in any file this PR
+touches. `tsc --noEmit` re-run against the new base: clean.
+
+### A thing I had backwards
+
+I was holding the PR closed because the full local suite had not run, treating "not fully
+verified" as a reason not to publish. The architect's correction: the defect is publishing
+without *saying* so. Opening a draft that states exactly what has and has not run is the
+opposite of the defect — and CI runs the full suite on GitHub's machines with **no dependence
+on port 13999 at all**, so it is an independent full-suite result, sooner, at no cost to
+spir-146 or bugfix-196. The local lock constrains porch's bookkeeping, not the truth of
+whether the suite passes. I had conflated the two.
+
+### Verification as published
+
+| check | status |
+|---|---|
+| `pnpm --filter @cluesmith/codev build` | green, exit 0 |
+| `tsc --noEmit` | clean, re-run post-merge |
+| render-gate + pty-session-geometry + pty-session-attach + shellper-client | 127 passed |
+| full `packages/codev` suite, locally | NOT RUN — lock yielded |
+
+Stated in the PR body as a table, not buried in prose.
+
+### Remaining
+
+Undraft once CI is green and the local suite has run. Lock order set by the architect:
+bugfix-196 first (120 failures across 23 files, cannot move at all), then air-197.
