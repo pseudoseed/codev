@@ -14,10 +14,10 @@ plan_phases:
     status: complete
   - id: phase_4
     title: Message delivery semantics
-    status: in_progress
+    status: complete
   - id: phase_5
     title: codev-agent protocol state service
-    status: pending
+    status: in_progress
   - id: phase_6
     title: Approval capability and threat model
     status: pending
@@ -48,7 +48,7 @@ plan_phases:
   - id: phase_15
     title: Terminal schema drop
     status: pending
-current_plan_phase: phase_4
+current_plan_phase: phase_5
 gates:
   spec-approval:
     status: approved
@@ -62,8 +62,8 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 3
-build_complete: true
+iteration: 1
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -249,7 +249,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/spir-146/codev/projects/146-codev-client-on-the-t3code-ser/146-phase_4-iter3-claude.txt
         stated: true
 started_at: '2026-08-28T15:56:27.086Z'
-updated_at: '2026-08-29T03:55:28.227Z'
+updated_at: '2026-08-29T03:55:30.189Z'
 context_refreshes:
   - boundary: enter:plan
     at: '2026-08-28T15:58:58.492Z'
@@ -263,6 +263,8 @@ context_refreshes:
   - boundary: plan-phase:phase_4
     at: '2026-08-29T02:20:21.485Z'
     acknowledged_at: '2026-08-29T02:21:44.300Z'
+  - boundary: plan-phase:phase_5
+    at: '2026-08-29T03:55:30.189Z'
 force_advanced:
   phase: phase_4
   iteration: 3
