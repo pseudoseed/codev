@@ -1,7 +1,7 @@
 id: '156'
 title: spec-146-phase-5-codev-agent-f
 protocol: air
-phase: implement
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-29T04:16:13.271Z'
-updated_at: '2026-08-29T04:16:13.271Z'
+updated_at: '2026-08-29T04:53:25.030Z'
