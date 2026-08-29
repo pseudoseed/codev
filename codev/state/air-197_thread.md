@@ -259,3 +259,100 @@ in a single afternoon.
 
 - CMAP verdicts (claude + opencode), running.
 - `porch check 197` / `porch done 197` once bugfix-196 clears the 13999 lock. Bookkeeping.
+
+---
+
+## The review round, and the retraction that mattered
+
+Integration review requested changes. Two blocking findings, and my first fix for the more
+serious one **did not work** - I said it did, then found otherwise before CI could.
+
+### Blocking 1: a new way to corrupt a live turn
+
+Both geometry checks ran before the `busy-indicator` check. `heldRecoveryAction` maps
+`geometry-mismatch` to `escape-screen` (an ESC) and deliberately maps `busy-indicator` to
+nothing, because it proves a live turn. So the change routed the exact screen that policy
+protects into the exact keystroke it withholds.
+
+The review credited the frame-based check with inheriting the safe pre-existing ordering.
+It had not: `resolveRegion` runs *after* the busy check and my check ran *before* it, so I
+had introduced the defect in **both** places, not one. Found by reading my own diff.
+
+**Reachability was disputed between lanes.** claude said reachable; opencode said not, because
+a resize only fails when the session is non-writable and those already hold as `no-live-pty`.
+Resolved from source, not by preference: the divergence is only ever *created* while
+non-writable, but writability **returns without a re-attach** via `startRestartWait` (#1264) -
+`exitCode` is set, the client and WebSocket clients survive, a resize in that window moves the
+mirror alone, and the respawned child's first byte clears `exitCode`. No `attachShellper`, so
+adoption never re-syncs. `_connected = true` appears at exactly one place, inside `connect()`,
+so every *other* recovery route requires a new client and therefore a re-attach.
+
+opencode reasoned about the instant. The bug lives in the interval.
+
+### The retraction
+
+I reported blocking 1 as closed by reordering. Then I ran my new test's assertions through
+`tsx` - no vitest, no lock - instead of waiting for CI, and the byte assertion failed: one ESC
+byte had gone to a live turn *after* my fix.
+
+Measured on the committed mid-turn capture:
+
+| mirror | verdict |
+|---|---|
+| 110x32 (capture geometry) | `busy-indicator` |
+| 110x24 | `geometry-mismatch` |
+| 80x32 | `geometry-mismatch` |
+| 80x24 | `geometry-mismatch` |
+
+On a smaller mirror the reflow carries opencode's interrupt-hint footer off-screen. **The
+liveness proof is read off the same frame whose geometry we have just declared untrustworthy.
+It is not outranked - it is destroyed.** Ordering can never fix this, so neither of the two
+options the review offered was viable as framed.
+
+### The actual fix, in two halves that are not separable
+
+1. `heldRecoveryAction` returns nothing for `geometry-mismatch`. Two **independent** grounds,
+   either sufficient: **futility** - no byte sent to the agent resizes Tower's mirror, so ESC
+   was a no-op dressed as a repair, true even for a provably idle agent; and **danger** - a
+   mismatched frame cannot prove the agent is idle, true even if a keystroke could help.
+2. `geometry-mismatch` joins `isClassifierStuck`. Without this, half 1 alone would have traded
+   an unsafe act for a **silent** starvation - the exact defect this whole issue is about,
+   introduced while fixing another one. Caught in my own change before shipping.
+
+### Also this round
+
+- `issue-92-stuck-hold-recovery.test.ts` had `geometry-mismatch` in its it.each table of
+  details WITH a bounded recovery action. Found by grepping for tests encoding the old
+  mapping, not by CI failing.
+- Two false claims in my own comments: "every harness" beside "scoped to bottomAnchor", and a
+  log line promising the mirror "realigns on next attach" - false for the restart path, which
+  is precisely the path that makes the check reachable.
+- PR body corrected: the earlier "neither changes a delivery outcome" was wrong, contradicted
+  by the README in the same diff (the cliff moves 31 to 32).
+
+## State at the second review round
+
+CI **fully green on HEAD `2181ef0bd`**, all 8 jobs, Unit Tests 3m01s - the full suite, on a
+machine with no dependence on the local lock.
+
+**Not settled, and must not be treated as settled.** Both review lanes saw the design where
+the fact-based check fired and `geometry-mismatch` still mapped to `escape-screen`. The
+central safety decision has changed since - no keystroke at all, plus escalation. A fresh
+claude lane is running on current HEAD against the delta. Green CI plus two stale approvals is
+not a pass: CI proves the tests I wrote agree with the code I wrote, and neither lane was
+asked whether removing the recovery action was right.
+
+**Do not merge until that verdict and the architect's read land.**
+
+Two open questions deliberately left for that lane to answer independently:
+1. Whether `geometry-mismatch` joining `isClassifierStuck` gives a USEFUL escalation or a
+   noisy one. It is permanent-until-resize, so it hits the streak threshold every time rather
+   than occasionally.
+2. Whether anything else in the recovery table has the same defect mine did - an action that
+   cannot fix the state it is mapped to. ESC cannot fix geometry; nobody has asked whether
+   `cancel-draft` can always fix `user-text`.
+
+Lock discipline held throughout: yielded to spir-146 and bugfix-196 all afternoon, never
+raced, never killed anything. The window-taker required two consecutive FREE polls 20s apart
+so it would not fire on a gap between another builder's runs, and it opened at 12:26:13 when
+spir-146 released for its merge.
