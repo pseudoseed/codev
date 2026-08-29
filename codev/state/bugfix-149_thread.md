@@ -122,3 +122,8 @@ CMAP running: gemini, codex, claude.
 
 The claude lane reviewing this PR ran under the fix it was reviewing — read-only tools — which is
 the change working on its own review round.
+
+**Ordering note for the record:** this PR's own CMAP round ran before the fix was installed, so
+the three lanes that approved it still had write access to the workspace. Unavoidable — the fix
+cannot be in effect for the review that approves it — but it makes these the last consult verdicts
+in this program produced under those conditions.
