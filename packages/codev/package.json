@@ -44,6 +44,8 @@
     "@cluesmith/codev-core": "workspace:*",
     "@cluesmith/codev-sdk": "workspace:*",
     "@cluesmith/codev-types": "workspace:*",
+    "@cluesmith/porch-driver": "workspace:*",
+    "@cluesmith/t3-client": "workspace:*",
     "@google/genai": "^1.0.0",
     "@openai/codex-sdk": "^0.146.0",
     "@xterm/addon-serialize": "^0.14.0",

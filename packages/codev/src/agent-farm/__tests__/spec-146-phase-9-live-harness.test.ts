@@ -123,11 +123,23 @@ describe('Spec 146 Phase 9 — porch-driver engine against the pinned harness', 
           threadId,
           `echo STARTED > "${started}"; sleep 30; echo SHOULD_NOT_FINISH > "${marker}"`,
         );
-        await new Promise((r) => setTimeout(r, 4000));
+        // POLL, never a fixed wait. Issue #179 item 5. A fixed wait cannot be right:
+        // too short and the provider has not started the command yet, so the test aborts
+        // as "could not check"; long enough for a real model turn and `sleep 30` has
+        // already elapsed, so SHOULD_NOT_FINISH is written before the interrupt fires and
+        // the test fails against a working interrupt. Both were observed. Poll for STARTED
+        // and interrupt the moment it lands, which is the only window the assertion is
+        // about.
+        const startedDeadline = Date.now() + 120_000;
+        while (!existsSync(started) && Date.now() < startedDeadline) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
         if (!existsSync(started)) {
           throw new Error('could not check: turn did not write STARTED — provider did not run the command');
         }
-        await engine.interrupt(threadId);
+        const settled = await engine.interrupt(threadId);
+        // Both halves of the criterion, in the order the plan states them.
+        expect(settled.activeTurnId).toBeNull();
         await new Promise((r) => setTimeout(r, 2000));
         expect(existsSync(marker)).toBe(false);
         socket.close();

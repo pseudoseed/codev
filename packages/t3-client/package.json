@@ -1,7 +1,6 @@
 {
   "name": "@cluesmith/t3-client",
   "version": "0.0.0",
-  "private": true,
   "description": "Spec 146: a client for t3code's RPC WebSocket. Speaks the layerJson envelope directly; no Effect. Its only dependency is @cluesmith/codev-types, which is itself dependency-free, for the vendored contract used to shape-check payloads.",
   "type": "module",
   "exports": {

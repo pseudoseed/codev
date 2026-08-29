@@ -35,6 +35,7 @@ import {
   allocateSpawnThread,
   chooseSpawnPath,
 } from '../db/thread-identity.js';
+import { ensureThreadBackendReady } from '../thread-backend.js';
 
 import { findStatusPath, getStatusPath, recordThreadId } from '../../commands/porch/state.js';
 import { DEFAULT_ARCHITECT_NAME } from '../utils/architect-name.js';
@@ -141,7 +142,17 @@ export async function launchSpawnedBuilder(opts: {
   prompt?: string;
   launchScript?: string;
   startPty: () => Promise<{ terminalId: string }>;
+  workspaceRoot?: string;
 }): Promise<{ terminalId?: string; threadId?: string }> {
+  // Issue #179 item 2: the production caller for installThreadSpawnFactory. Without
+  // it no factory is ever registered and chooseSpawnPath returns `pty` unconditionally,
+  // which made Phase 8's thread branch unreachable outside tests. A workspace with no
+  // t3code server configured is unchanged — this is opt-in, not a flag day — but a
+  // workspace that HAS one now actually takes the thread path.
+  //
+  // Skipped when the caller passes no workspaceRoot, which is how the unit tests drive
+  // this function with an injected factory and no server.
+  if (opts.workspaceRoot) await ensureThreadBackendReady(opts.workspaceRoot);
   const pathKind = chooseSpawnPath(opts.existing ?? undefined);
   if (pathKind === 'thread') {
     const threadId = opts.existing?.threadId ?? await allocateSpawnThread({
@@ -591,6 +602,7 @@ async function spawnSpec(options: SpawnOptions, config: Config, selection: Agent
   const identity = await launchSpawnedBuilder({
     existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
     builderId, worktreePath, branch: branchName,
+    workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
     startPty: () => startBuilderSession(
       config, builderId, worktreePath, effective.command,
@@ -674,6 +686,7 @@ async function spawnTask(options: SpawnOptions, config: Config, selection: Agent
   const identity = await launchSpawnedBuilder({
     existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
     builderId, worktreePath, branch: branchName,
+    workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
     startPty: () => startBuilderSession(
       config, builderId, worktreePath, effective.command,
@@ -743,6 +756,7 @@ async function spawnProtocol(options: SpawnOptions, config: Config, selection: A
   const identity = await launchSpawnedBuilder({
     existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
     builderId, worktreePath, branch: branchName,
+    workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
     startPty: () => startBuilderSession(
       config, builderId, worktreePath, effective.command,
@@ -830,6 +844,7 @@ async function spawnWorktree(options: SpawnOptions, config: Config, selection: A
   const identity = await launchSpawnedBuilder({
     existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
     builderId, worktreePath, branch: branchName,
+    workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
     launchScript: scriptPath,
     startPty: async () => {
@@ -1013,6 +1028,7 @@ async function spawnIssueDrivenBuilder(
   const identity = await launchSpawnedBuilder({
     existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
     builderId, worktreePath, branch: branchName,
+    workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
     startPty: () => startBuilderSession(
       config, builderId, worktreePath, effective.command,

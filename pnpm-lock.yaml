@@ -190,6 +190,12 @@ importers:
       '@cluesmith/codev-types':
         specifier: workspace:*
         version: link:../types
+      '@cluesmith/porch-driver':
+        specifier: workspace:*
+        version: link:../porch-driver
+      '@cluesmith/t3-client':
+        specifier: workspace:*
+        version: link:../t3-client
       '@google/genai':
         specifier: ^1.0.0
         version: 1.50.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
