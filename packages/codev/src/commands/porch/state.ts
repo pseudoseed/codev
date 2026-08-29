@@ -282,6 +282,25 @@ function findProjectInDir(projectsDir: string, projectId: string): string | null
 }
 
 /**
+ * Walk up from cwd until `codev/projects` exists. `cli()` used `process.cwd()`
+ * as the workspace root, so `porch done` from `packages/codev` reported
+ * "Project N not found" for a project that existed two levels up (#151).
+ *
+ * Looks for `codev/projects` specifically, not a child named `codev`, because
+ * walking from `packages/codev` would otherwise stop at `packages/` (air-1238).
+ */
+export function resolvePorchWorkspaceRoot(startDir: string = process.cwd()): string {
+  const start = path.resolve(startDir);
+  let current = start;
+  while (true) {
+    if (fs.existsSync(path.join(current, PROJECTS_DIR))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return start;
+    current = parent;
+  }
+}
+
+/**
  * Find status.yaml by project ID.
  * Searches .builders/ worktrees FIRST (active, up-to-date state),
  * then falls back to local codev/projects/ (main — may be stale after merge).
