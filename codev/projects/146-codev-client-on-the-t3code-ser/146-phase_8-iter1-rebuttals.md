@@ -1,139 +1,104 @@
-# Spec 146, Phase 8, iteration 1 — responses to the review
+# Phase 8, iteration 1 — rebuttals
 
-Verdicts: **codex REQUEST_CHANGES, claude COMMENT.** Nothing is disputed on the
-facts. Every finding from both lanes was checked against the file before being
-accepted, and all of them held.
+**Round shape: two reviewing lanes, one void.**
 
-Phase 8's code is not this branch's work: it landed off-band on `main` as PR #166
-(`2e95d21d9`) while this builder was in phase 7, and the architect's instruction
-for this phase is **verify, do not implement**. So the corrections below are to the
-verification document, its test coverage, and the issue tracker — not to merged
-production behaviour. Where a lane asked for a production change, the reason it was
-not made is stated rather than skipped.
+| Lane | Verdict | Artifact |
+|---|---|---|
+| `codex` | **REQUEST_CHANGES**, 3 findings | `146-phase_8-iter1-codex.txt` |
+| `opencode` (substitute, `xai/grok-4.6`) | **COMMENT**, 2 issues | `146-phase_8-iter1-opencode.txt` |
+| `claude` | **VOID** — wrote to the worktree, never reviewed | `146-phase_8-iter1-claude.txt` |
 
-## Accepted
+The `claude` lane wrote to the worktree and posted a public GitHub comment instead of
+reviewing, and never produced a verdict. Its artifact spells the void out rather than sitting
+empty, because an absent lane artifact and a rejected one are different things porch cannot
+otherwise tell apart (#168).
 
-### 1. The verification document claimed more than its evidence supported — codex
+**The opencode substitute took three attempts, and each failed differently.** Run 1 was killed
+externally at ~20s. Run 2 hit `OPENCODE_TIMEOUT_MS`, hardcoded at 360s with no flag, while
+still reading files — it had spent its budget re-reading a **truncated** prompt, which is the
+expensive path the truncation forces and the cap then guarantees it cannot finish. Filed as
+**#188**. Run 3 completed and returned COMMENT.
 
-Codex's three findings are the reason this document exists in its current form. The
-first draft read the tests as evidence for claims one step larger than they support,
-and marked three rows satisfied that are not:
+Recorded distinctly on purpose: **VOID** (ran, rejected), **TIMED_OUT** (ran, never concluded),
+**absent** (never ran), **COMMENT** (ran, concluded, non-blocking). None of the first three is
+an APPROVE and none may be recorded as one.
 
-- **Thread-backed spawn has no production caller.** `installThreadSpawnFactory`
-  (`agent-farm/thread-runtime.ts:97`) is called only from
-  `__tests__/spec-146-phase-9-afx-parity.test.ts`. With no factory registered,
-  `chooseSpawnPath` returns `pty` unconditionally, so the thread branch in
-  `launchSpawnedBuilder` (`agent-farm/commands/spawn.ts:145-156`) is unreachable in
-  production. Phase 8's own test injects a fake factory
-  (`spec-146-phase-8-thread-identity.test.ts:137`), which demonstrates the branch,
-  not the integration.
-- **The `cmd` sentinel is absent.** Covered in full below.
-- **Two acceptance criteria are simulated.** The migration tests build the pre-v21
-  shape from `PRE_V21_ARCHITECT` / `PRE_V21_BUILDERS` literals rather than a copy of
-  a real `global.db`, and stand in for "the previous release" by issuing SQL that
-  omits `thread_id`. That is an SQL-level additivity proof. It is not a real
-  database surviving, and the previous release is never run. The plan's integration
-  case — a thread-backed builder driven alongside a running PTY builder — is
-  likewise unrun, and **cannot** run until the first finding is fixed.
+**The two lanes agree.** Opencode independently reached the same conclusion as codex on
+findings 1 and 3 — "same as iter1, still checkable" — and independently confirmed finding 2 is
+resolved, naming the #170 sentinel shape and the five characterization tests. Two lanes on
+separate accounts converging on the same two unmet criteria is the strongest evidence in this
+round that they are real and not an artifact of one reviewer's reading.
 
-**Corrected** in `146-phase_8-verification.md`: the three rows are marked
-`NOT MET IN PRODUCTION` / not met in the deliverables table, and a **Not met**
-section states each with its file reference. The document now claims exactly what
-its evidence carries.
+**Phase 8 was verified, not implemented** — it merged off-band as PR #166 while this builder
+was in phase 7, on the architect's instruction to verify against the plan's criteria and
+advance. So these findings are answered against merged code plus my verification record, not
+against a change of mine.
 
-### 2. The sentinel row was one step generous — claude
+## Finding 1 — `installThreadSpawnFactory` has no production caller — ACCEPTED
 
-Claude sharpened codex's second finding, and the sharpening changes the count.
-`ArchitectState` (`agent-farm/types.ts:45-55`) has no `pid` and no `port` — it
-carries `name`, `cmd`, `startedAt`, `terminalId`, `threadId`, `sessionId`. So
-`architectWriteValues` writes `0`/`0` in **both** branches, exactly as it did before
-phase 8. `THREAD_ARCHITECT_SENTINEL` being `{pid: 0, port: 0}` is therefore not two
-of three sentinels implemented; it is a constant that changes nothing. `cmd` was the
-only one of the three that could have distinguished a thread-backed row, and it is
-passed through unchanged.
+Codex is right and it is checkable in one grep: the only callers of
+`installThreadSpawnFactory`, `setSpawnThreadFactory` and `setThreadEngine` outside
+`thread-identity.ts` itself are test files. With no factory registered, `chooseSpawnPath`
+returns `pty` unconditionally in production, so phase 8's spawn branch is unreachable outside
+a test that injects a fake.
 
-Zero of three, not two of three. **Corrected**: the row no longer says `PARTIAL`, it
-says which half is met (exclusivity, in production) and that no sentinel
-discriminates.
+This is already filed as **#179 item 2** against phase 9, where it is described as deliberate.
+What no issue said, and what this finding adds, is that it also **unmakes phase 8's own
+acceptance criterion** "a new spawn takes the thread path". That criterion is now recorded as
+NOT MET in `146-phase_8-verification.md` rather than ticked.
 
-**The `cmd` sentinel was deliberately not implemented here.** Codex asked for a test
-that rejects or normalizes a non-empty command on a thread-backed architect; that
-test would require changing merged production behaviour, and blanking `cmd` discards
-the command an architect restart reads. Nothing currently breaks — `NOT NULL` is
-satisfied either way, and discrimination runs off `thread_id`/`terminal_id`, which
-is exercised and works. Whether to blank it or amend the plan belongs with whoever
-wires the production engine, which is the same decision as finding 1.
+No code change. The fix is phase 10's premise problem, not a defect in the merged work.
 
-What *was* missing and is now supplied: **any test at all.** `architectWriteValues`
-and `THREAD_ARCHITECT_SENTINEL` had **zero** coverage — a grep for either name
-across the repo returned nothing. Added a four-test
-`Spec 146 Phase 8 — architect write values` block to
-`spec-146-phase-8-thread-identity.test.ts`:
+## Finding 2 — the `cmd` sentinel — ACCEPTED AS A FINDING, RESOLVED AGAINST THE PLAN
 
-- thread-backed row writes the pid/port sentinel, clears `terminal_id`;
-- terminal-backed row keeps `terminal_id`, clears `thread_id`;
-- an architect carrying both identities throws `DualIdentityError`;
-- a characterization test pinning `cmd` **un**blanked and pid/port identical across
-  both branches, commented as a divergence from the plan rather than as intended
-  behaviour.
+Codex is right on both halves: `architectWriteValues` returns `cmd: architect.cmd` where the
+plan specifies `cmd` `''`, and the function had **zero** test coverage. Both confirmed against
+the file before answering.
 
-The fourth is the one that matters for this finding: the gap can no longer close or
-widen silently, and a future reader meets the divergence in an assertion instead of
-inferring it from an absence. File now passes 21 tests, up from 17.
+The architect ruled on **#170** that the plan is wrong and the code is right. `pid`, `port`
+and `terminal_id` are genuinely PTY-specific and carry no meaning for a thread-backed row;
+`cmd` is *how the architect was launched* and an architect restart reads it, so blanking it
+discards live information.
 
-### 3. An unmet criterion living only in a project doc is untracked — claude
+Acted on:
 
-Correct by this project's own rule that issues are the source of truth. #179 recorded
-the root cause (item 2: `installThreadSpawnFactory` has no production caller) but
-named only phase 9's consequences.
+- The plan's phase_8 deliverable is amended to name two sentinels, not three, with the #170
+  rationale recorded inline — and it says plainly that the test is **added by the amendment**,
+  not inherited, because a plan claiming coverage that does not exist is the same defect this
+  spec has been cataloguing all along.
+- Five characterization tests added under `Spec 146 Phase 8 — architect sentinels (#170)`.
+- **Mutation-checked**: setting `cmd: ''` in `architectWriteValues` makes the first of them
+  fail. The test can fail, so it is holding something. A test that cannot fail reports coverage
+  that does not exist.
 
-**Filed** as a comment on #179
-(`github.com/pseudoseed/codev/issues/179#issuecomment-5463236855`), naming both
-phase-8 consequences: the unmet "a new spawn takes the thread path" criterion plus
-the two criteria blocked behind it, and the sentinel decision that needs to be made
-alongside the engine wiring. Both `Not met` entries in the verification document now
-point at it.
+## Finding 3 — two acceptance criteria are simulated, not exercised — ACCEPTED
 
-### 4. Citation ambiguity — claude
+Codex is right. The plan asks for the migration "against a copy of a **real** `global.db`" and
+for "the **previous** release" to open the restored database. The tests build the pre-v21 shape
+from `PRE_V21_ARCHITECT` / `PRE_V21_BUILDERS` string literals, and stand in for the previous
+release by issuing SQL that does not name `thread_id` **on the current handle**.
 
-The deliverables table used the bare name `state.ts` for two different files in
-adjacent rows. In a document whose entire product is a citation trail, that is a
-real defect. **Fixed**: `commands/porch/state.ts` and `agent-farm/state.ts` are now
-written out in full, and the `recordThreadId` line number corrected from 179 to 177.
+That proves the migration is additive at the SQL level, which is worth having. It does not
+prove a real database survives, and it does not run the previous release at all. The plan's
+integration case — a thread-backed builder driven alongside a running PTY builder — is likewise
+unrun, and cannot run until finding 1 is fixed.
 
-## Not accepted as a change here
+Recorded as NOT MET rather than ticked. This is the same discipline #179 applies to phase 9:
+a phase verified against a criterion nothing exercises is a tick with nothing behind it.
 
-Codex's third finding asks for the migration to run against a copy of a real
-`global.db` and for the previous release to open the restored database. Both are
-conceded as unmet above and are recorded as such. Neither is fixed in this phase:
-the first needs a real database that this worktree does not have and must not
-fabricate, and the second is circular with finding 1 — a previous release opening
-the migrated database proves the additive property, but the integration it is meant
-to guard (a thread-backed builder alongside a running PTY builder) cannot run at all
-while production has no factory. Fixing them in the wrong order would produce more
-simulation, not more evidence.
+## What changed in the tree this round
 
-## What is met, and the first draft undersold
+| Path | Why |
+|---|---|
+| `codev/plans/146-codev-client-on-t3code.md` | #170 amendment, `cmd` dropped from the sentinel set |
+| `packages/codev/src/agent-farm/__tests__/spec-146-phase-8-thread-identity.test.ts` | 5 characterization tests added; 17 → 22 |
+| `codev/projects/.../146-phase_8-verification.md` | findings 1 and 3 recorded NOT MET, finding 2 resolved |
 
-Worth stating because the corrections above are all in one direction. Claude checked
-the live write path independently: `assertExclusiveIdentity` and
-`architectWriteValues` are wired into `setArchitect` (`agent-farm/state.ts:132`),
-`setArchitectByName` (`:166`) and `upsertBuilder` (`:205`, `:210`) — so "a row
-carrying both a `terminal_id` and a `thread_id` is rejected" holds in production, not
-only in tests. `upsertBuilder` is stronger than the plan asked: it re-checks the
-*merged* result against the existing row, so an update that adds `thread_id` to a row
-already holding `terminal_id` is caught, which a `COALESCE`-only implementation would
-let through.
+Commits: `dd2a72873`, `a5722928b`. Every path above was recorded in the edit ledger **as it was
+written**, so the after-diff attributes by construction rather than by recollection — anything
+in the diff not in the ledger is a lane. On this round the two sets matched exactly.
 
-Both lanes also independently confirmed every citation in the document resolves —
-all 13 test line numbers land on the named `it(...)`, and `db/schema.ts:187,221`
-declares `thread_id` **last** in both tables with a comment saying why, which is the
-property the fresh-vs-migrated convergence test depends on.
-
-## Evidence
-
-- `spec-146-phase-8-thread-identity.test.ts`: **21 passed**, up from 17.
-- Build exit 0; full suite green in the phase-8 porch checks
-  (`✓ build`, `✓ tests`, 6,621 passed / 50 skipped / 0 failed).
-- No production source changed in this iteration. The diff is the verification
-  document, the phase-8 test file, and a comment on #179.
+The ledger replaced a live watcher that produced one true kill and one false one; the false
+one killed a clean lane because "the tree moved" stops attributing to anything once the builder
+is also working. The ledger does not have that failure mode: it is written as the edits happen,
+so it cannot be reconstructed wrongly afterwards.
