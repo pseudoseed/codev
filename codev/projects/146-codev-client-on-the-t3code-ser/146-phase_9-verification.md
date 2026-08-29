@@ -80,8 +80,11 @@ Fixed:
   and forwards both plus `prompt`.
 - All five call sites pass their prompt and role. The worktree spawn has no prompt by
   definition — its payload is the launch script — and already passed `launchScript`.
-- `.builder-role.md` is now `BUILDER_ROLE_FILE`, exported from `spawn-worktree.ts`, so both
-  paths write and name the same file rather than two spellings of it.
+- `.builder-role.md` is now `BUILDER_ROLE_FILE`, exported from `spawn-worktree.ts`, so the
+  two paths that must agree on it — the PTY writer and the thread's `roleFilePath` — name one
+  constant. Two other literals remain, in `utils/harness.ts` (opencode's `instructions` array)
+  and `commands/reset/reorient.ts`. They are not part of this agreement and were left alone;
+  this is not a finished consolidation and is not claimed as one.
 - `createPorchThreadEngine.create` forwards the role to `DriverThread.create`, and tracks the
   first turn like any other.
 
