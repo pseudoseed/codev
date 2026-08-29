@@ -228,10 +228,17 @@ describe('render gate — a live turn is never handed a recovery keystroke (Issu
 
     const verdict = await classifyAgentScreen(session, OPENCODE_PROFILE);
 
-    // The live turn outranks the geometry answer...
+    // NOTE what this frame does NOT say. At its 110x32 capture geometry it classifies
+    // `busy-indicator`; on this 80x24 mirror the reflow carries opencode's `esc interrupt`
+    // footer off-screen, so the busy proof is GONE and the same live turn reads
+    // `geometry-mismatch`. Ordering the busy check first cannot rescue this — the proof
+    // lives in the very frame whose geometry we distrust. That is why safety here rests on
+    // the recovery policy rather than on the classifier's ordering.
     expect(verdict.clean).toBe(false);
-    expect(verdict.detail).toBe('busy-indicator');
-    // ...and `busy-indicator` is the detail the policy refuses to act on.
+    expect(verdict.detail).toBe('geometry-mismatch');
+
+    // ...and `geometry-mismatch` yields no recovery action at all, so a live turn that the
+    // gate can no longer recognise as live is still never touched.
     expect(heldRecoveryAction(verdict.detail)).toBeNull();
 
     applyRecovery(session, verdict.detail);
@@ -243,10 +250,32 @@ describe('render gate — a live turn is never handed a recovery keystroke (Issu
     expect(writes.join('')).not.toContain('\x03');
   });
 
-  it('the geometry check still fires once the turn ends — the reorder narrows it, not disables it', async () => {
-    // Same divergence, an IDLE screen. Nothing proves a live turn now, so the mismatch is
-    // free to name the verdict. Without this, "busy wins" could be satisfied by a check that
-    // never runs at all.
+  it('the busy signal still outranks the geometry answer when it survives the frame', async () => {
+    // The ordering fix on its own terms: at the capture geometry the busy indicator IS on
+    // screen, and a live turn must be named as one rather than as a geometry problem.
+    const seed = readFileSync(`${FIXTURE_DIR}/opencode197-midturn.busy.txt`);
+    const session = makeSession();
+    session.attachShellper(
+      makeFakeClient({ cols: CAPTURE_COLS, rows: CAPTURE_ROWS }),
+      Buffer.alloc(0),
+      111,
+      undefined,
+      seed,
+    );
+
+    const verdict = await classifyAgentScreen(session, OPENCODE_PROFILE);
+    expect(verdict.detail).toBe('busy-indicator');
+    expect(heldRecoveryAction(verdict.detail)).toBeNull();
+
+    applyRecovery(session, verdict.detail);
+    expect(writes).toEqual([]);
+  });
+
+  it('an idle mismatched mirror also gets no keystroke — ESC cannot resize a mirror', async () => {
+    // Same divergence, an IDLE screen. The mismatch is free to name the verdict here, and it
+    // STILL earns no keystroke: the repair for a wrong-sized mirror is a realign, which is
+    // Tower's job, not a byte sent to the agent. `isClassifierStuck` lists the detail so this
+    // hold escalates to a human rather than starving silently.
     const seed = readFileSync(`${FIXTURE_DIR}/opencode197-idle.clean.txt`);
     const session = makeSession();
     session.attachShellper(
@@ -260,6 +289,9 @@ describe('render gate — a live turn is never handed a recovery keystroke (Issu
 
     const verdict = await classifyAgentScreen(session, OPENCODE_PROFILE);
     expect(verdict.detail).toBe('geometry-mismatch');
-    expect(heldRecoveryAction(verdict.detail)).toBe('escape-screen');
+    expect(heldRecoveryAction(verdict.detail)).toBeNull();
+
+    applyRecovery(session, verdict.detail);
+    expect(writes).toEqual([]);
   });
 });
