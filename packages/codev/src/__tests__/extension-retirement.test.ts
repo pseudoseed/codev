@@ -30,7 +30,7 @@ afterAll(() => {
 });
 
 describe('extension retirement', () => {
-  it.skip('deletes the Stream Deck source tree rather than merely excluding its package', () => {
+  it('deletes the Stream Deck source tree rather than merely excluding its package', () => {
     expect(existsSync(join(workspaceRoot, 'apps/streamdeck'))).toBe(false);
   });
 
