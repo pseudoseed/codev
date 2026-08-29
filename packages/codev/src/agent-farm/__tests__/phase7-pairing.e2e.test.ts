@@ -152,26 +152,86 @@ describe('Phase 7 pairing flow, live server', () => {
     expect(laptopRead.status).toBe(200);
   }, 30000);
 
-  // THE CARVE-OUT IS EXACTLY ONE ROUTE. Pairing redemption passes Tower's key
-  // check because a new device cannot have the key. If that carve-out were wider
-  // than one route it would be an unauthenticated hole in the protocol surface,
-  // so this asserts the neighbours are still refused keyless.
-  it('no other agent route is reachable without the host key', async () => {
+  // THE PREMISE OF THIS TEST INVERTED, and saying so is the point.
+  //
+  // It used to assert that every agent route except pairing needed the host key.
+  // That was true and it was the defect: a paired remote device holds a machine
+  // credential and nothing else, so the surface it had just been admitted to was
+  // unreachable. The whole prefix now delegates to `agent-auth.ts`.
+  //
+  // So what is asserted here is the other half — that the delegation is SCOPED.
+  // Tower's own routes must still demand the key, or the exemption widened past
+  // the surface it was written for.
+  it('agent routes are reachable without the host key, and Tower routes are not', async () => {
+    // Agent surface: reached, and refused by ITS OWN layer with its own signal.
     for (const [method, path] of [
       ['GET', `${AGENT_ROUTE_PREFIX}/session`],
       ['GET', `${AGENT_ROUTE_PREFIX}/workspaces/${encodeWorkspacePath(workspacePath!)}/state`],
       ['POST', `${AGENT_ROUTE_PREFIX}/approval-capabilities`],
-      ['POST', `${AGENT_ROUTE_PREFIX}/approval-nonces`],
       ['DELETE', `${AGENT_ROUTE_PREFIX}/machines/ipad`],
-      // A near-miss on the carve-out itself: same path, different method.
-      ['GET', `${AGENT_ROUTE_PREFIX}/pairing/redeem`],
     ] as const) {
       const response = await fetch(`${base()}${path}`, { method, headers: keylessHeaders() });
       const body = await response.text();
-      expect(response.status, `${method} ${path} was reachable without the host key`).toBe(401);
-      // Tower's own refusal, before codev-agent sees it.
-      expect(body, `${method} ${path} reached codev-agent without the host key`).toContain('Unauthorized');
+      expect(response.status, `${method} ${path}`).toBe(401);
+      // agent-auth's refusal, not Tower's bare "Unauthorized". If this said
+      // Unauthorized, the key would still be gating the surface.
+      expect(body, `${method} ${path} was refused by Tower, not by agent-auth`)
+        .toContain('MACHINE_CREDENTIAL_REQUIRED');
     }
+
+    // A path under the prefix that the table does not name is a 404 from
+    // agent-auth's dispatcher — reached, and serving nothing.
+    const unknown = await fetch(`${base()}${AGENT_ROUTE_PREFIX}/not-a-route`, {
+      headers: keylessHeaders(),
+    });
+    expect(unknown.status).toBe(404);
+    expect(await unknown.text()).toContain('AGENT_ROUTE_NOT_FOUND');
+
+    // TOWER'S OWN ROUTES ARE UNCHANGED. This is the assertion that fails if the
+    // exemption ever widens beyond the agent prefix.
+    for (const path of ['/api/status', '/api/instances', '/api/agent/v2/session']) {
+      const response = await fetch(`${base()}${path}`, { headers: keylessHeaders() });
+      expect(response.status, `${path} became keyless with the agent surface`).toBe(401);
+      expect(await response.text(), `${path} was not refused by Tower`).toContain('Unauthorized');
+    }
+  }, 20000);
+
+  // The flow the runbook actually describes, end to end, with the credential a
+  // paired device really holds and nothing else.
+  it('a paired device drives the surface with its machine credential alone', async () => {
+    const pairings = new PairingStore({ root: join(tower!.agentFarmDir, 'pairing') });
+    const token = pairings.issue();
+    const redeemed = await fetch(`${base()}${AGENT_ROUTE_PREFIX}/pairing/redeem`, {
+      method: 'POST',
+      headers: keylessHeaders({
+        'content-type': 'application/json',
+        'x-codev-pairing-token': token.token,
+      }),
+      body: JSON.stringify({ machine: 'remote-ipad' }),
+    });
+    expect(redeemed.status).toBe(201);
+    const credential = (await redeemed.json() as { credential: string }).credential;
+
+    const statePath =
+      `${AGENT_ROUTE_PREFIX}/workspaces/${encodeWorkspacePath(workspacePath!)}/state`;
+    const read = await fetch(`${base()}${statePath}`, {
+      headers: keylessHeaders({ 'x-codev-machine-credential': credential }),
+    });
+    expect(read.status).toBe(200);
+    expect((await read.json() as { schemaVersion: number }).schemaVersion).toBe(1);
+
+    // And the elevation boundary still holds for a device that has only paired:
+    // approving a gate needs a human session, which pairing does not grant.
+    const approve = await fetch(`${base()}${AGENT_ROUTE_PREFIX}/approval-capabilities`, {
+      method: 'POST',
+      headers: keylessHeaders({
+        'content-type': 'application/json',
+        'x-codev-machine-credential': credential,
+      }),
+      body: '{}',
+    });
+    expect(approve.status).toBe(401);
+    expect((await approve.json() as { signal: string }).signal).toBe('HUMAN_SESSION_REQUIRED');
   }, 20000);
 
   it('preflight advertises the machine-credential and pairing-token headers', async () => {

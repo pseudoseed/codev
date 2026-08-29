@@ -45,12 +45,23 @@ x-codev-pairing-token: <pairingId>.<secret>
 {"machine": "ipad"}
 ```
 
-This one request needs **no host key** — that is deliberate. A device being paired
-for the first time does not have the host's local key, and handing it one to pair
-would defeat the point of pairing. Redemption is the only route on the
-`/api/agent/v1/` surface that passes Tower's key check, and it is still
-authenticated: by the pairing token, which is single-use and expires in ten
-minutes. Every other route needs both the host key and a machine credential.
+**No request on this surface needs the host key.** The whole `/api/agent/v1/`
+prefix is exempt from Tower's shared local key and authenticates itself instead:
+every route requires a per-machine credential, and the approval routes require a
+human-paired session on top of it.
+
+That is deliberate, and it is the only arrangement that works. A device being
+paired for the first time does not have `~/.agent-farm/local-key`, and sending it
+over the wire to admit a device would hand every client an all-or-nothing secret
+that cannot be revoked for one machine without rotating it for all — which is the
+thing pairing exists to replace. Requiring both meant a device could pair and then
+reach nothing.
+
+**Exempt is not unauthenticated.** Redemption is authenticated by the pairing
+token: single-use, ten minutes. Every other route is authenticated by the machine
+credential. Tower's own routes (`/api/status`, `/api/instances`, everything
+outside this prefix) still require the key, and a test asserts that the exemption
+did not widen past the surface.
 
 The response carries the machine credential once. The host stores only a hash of
 it, so it cannot be recovered later — if the device loses it, issue a new pairing
@@ -85,10 +96,28 @@ tailscale serve --https=443 http://127.0.0.1:4100
 ```
 
 Then add the public origin to the allowlist, so the browser boundary matches the
-deployment:
+deployment. **This must be in the environment Tower is started with.** Tower reads
+it in its own process; exporting it in your shell after Tower is already running
+changes nothing, and the symptom is a browser that gets a CORS failure while the
+variable looks correctly set in the terminal you typed it in.
 
 ```bash
 export CODEV_TOWER_ALLOWED_ORIGINS=https://<host>.<tailnet>.ts.net
+afx tower restart          # Tower must be restarted to inherit it
+```
+
+Verify against the running process rather than the shell, because those are the
+two things that just disagreed:
+
+```bash
+# 1. the value Tower actually has
+ps eww -p "$(pgrep -f tower-server | head -1)" | tr ' ' '\n' | grep CODEV_TOWER_ALLOWED_ORIGINS
+
+# 2. an allowed origin is reflected, a disallowed one is not
+curl -si -X OPTIONS -H "Origin: https://<host>.<tailnet>.ts.net" \
+  http://127.0.0.1:4100/api/agent/v1/session | grep -i access-control-allow-origin
+curl -si -X OPTIONS -H "Origin: https://evil.example" \
+  http://127.0.0.1:4100/api/agent/v1/session | grep -i access-control-allow-origin   # expect nothing
 ```
 
 Tower needs no `BRIDGE_MODE` for this. Confirm the boot log says
@@ -153,7 +182,36 @@ lsof -nP -iTCP:4100 -sTCP:LISTEN   # want 127.0.0.1:4100, not *:4100
 
 ## Revoke one device
 
-Revocation is per machine and does not disturb any other:
+Revocation is per machine and does not disturb any other.
+
+**Today, revoke at the host.** The HTTP route below needs a human-paired session,
+and nothing mints one yet — `completePairing` has no production caller, because
+phase 6 left pairing completion an internal seam and the browser client that
+performs it arrives in a later phase. So the route exists, is authenticated, and
+is not yet reachable by a person. Saying otherwise here would be a runbook step
+that cannot be followed.
+
+```bash
+node --input-type=module -e "
+  const { MachineCredentialStore } = await import('@cluesmith/codev/dist/agent-farm/lib/machine-credentials.js');
+  console.log(new MachineCredentialStore().revoke(process.argv[1]) ? 'revoked' : 'nothing live to revoke');
+" -- '<machine>'
+```
+
+That revokes the machine credential only. **Revoke its approval capabilities in
+the same breath**, or a revoked device can still present a live capability to
+`porch approve`:
+
+```bash
+node --input-type=module -e "
+  const { ApprovalCapabilityStore } = await import('@cluesmith/codev/dist/agent-farm/lib/approval-capability.js');
+  console.log('capabilities revoked:', new ApprovalCapabilityStore().revokeMachine(process.argv[1]));
+" -- '<machine>'
+```
+
+**The HTTP route, for when the client lands.** It does both in one call, which is
+why it exists — an operator asked to remember two commands will eventually run
+one. No host key: this surface authenticates itself.
 
 ```
 DELETE /api/agent/v1/machines/<machine>

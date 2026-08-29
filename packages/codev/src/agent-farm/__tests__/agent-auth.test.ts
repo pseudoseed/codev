@@ -14,6 +14,7 @@ import { Readable } from 'node:stream';
 import type http from 'node:http';
 import Database from 'better-sqlite3';
 import { GLOBAL_SCHEMA } from '../db/schema.js';
+import { isCodevAgentRoute, isPublicRoute, CODEV_AGENT_SURFACE_PREFIX } from '../utils/server-utils.js';
 import {
   AGENT_ROUTES,
   AGENT_ROUTE_PREFIX,
@@ -278,6 +279,74 @@ describe('every codev-agent route is authenticated', () => {
     // Success is spelled as success: the refusal is gone AND real state came back.
     expect(allowed.statusCode).toBe(200);
     expect((JSON.parse(allowed.body) as { schemaVersion: number }).schemaVersion).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE DELEGATION: Tower's shared key comes off this surface, and off NOTHING else.
+//
+// A remote device pairs and receives a machine credential; it never receives the
+// host-local key, so leaving that key in front of the surface meant a paired
+// device could reach nothing. The exemption is therefore necessary — and an
+// exemption on an authentication boundary is exactly the kind of change that has
+// to be fenced by tests that fail when it widens.
+// ---------------------------------------------------------------------------
+
+describe('the shared-key exemption is scoped to the agent surface', () => {
+  it('delegates every path under the agent prefix, and nothing else', () => {
+    for (const pathname of [
+      `${AGENT_ROUTE_PREFIX}/session`,
+      `${AGENT_ROUTE_PREFIX}/pairing/redeem`,
+      `${AGENT_ROUTE_PREFIX}/workspaces/abc/state`,
+      `${AGENT_ROUTE_PREFIX}/workspaces/abc/stream`,
+      `${AGENT_ROUTE_PREFIX}/anything-the-table-does-not-name`,
+    ]) {
+      expect(isCodevAgentRoute(pathname), `${pathname} was not delegated`).toBe(true);
+    }
+
+    // THE TEST THAT MATTERS. Everything a near-miss could reach if the prefix
+    // check were sloppy — a prefix that forgot its trailing slash, a sibling
+    // version, a path that merely CONTAINS the prefix, and Tower's own routes.
+    for (const pathname of [
+      '/api/agent/v1',            // no trailing slash: not the surface
+      '/api/agent/v2/session',    // a sibling version is not covered by this one
+      '/api/agent/v11/session',   // the trailing slash is what stops this matching
+      '/api/agentv1/session',
+      '/api/agent',
+      '/evil/api/agent/v1/session',  // contains it, does not start with it
+      '/api/status',
+      '/api/instances',
+      '/api/workspaces/abc/activate',
+      '/workspace/abc/file',
+      '/api/tunnel/connect',
+    ]) {
+      expect(isCodevAgentRoute(pathname), `${pathname} became keyless with the agent surface`)
+        .toBe(false);
+    }
+  });
+
+  it('is not part of the public list — delegated is not unauthenticated', () => {
+    // `isPublicRoute` means "reachable with no authentication at all". Every agent
+    // route requires MORE than the shared key, so putting the prefix in that list
+    // would be the wrong claim even though the code path looks the same.
+    for (const method of ['GET', 'POST', 'DELETE'] as const) {
+      expect(isPublicRoute(method, `${AGENT_ROUTE_PREFIX}/session`)).toBe(false);
+      expect(isPublicRoute(method, `${AGENT_ROUTE_PREFIX}/pairing/redeem`)).toBe(false);
+    }
+  });
+
+  it('pins the prefix constant against drift', () => {
+    // Two modules name this surface: `agent-auth.ts` routes on it and
+    // `server-utils.ts` delegates on it. If they drift, the delegated set and the
+    // routed set stop being the same set, and the safety argument — "nothing under
+    // this prefix falls through to a keyed handler" — quietly stops holding.
+    expect(CODEV_AGENT_SURFACE_PREFIX).toBe(`${AGENT_ROUTE_PREFIX}/`);
+  });
+
+  it('every table entry is delegated, derived from the table', () => {
+    for (const route of AGENT_ROUTES) {
+      expect(isCodevAgentRoute(route.probe), `${route.id} is routed but not delegated`).toBe(true);
+    }
   });
 });
 
@@ -832,10 +901,38 @@ describe('remote-access runbook', () => {
     expect(text).toContain('never passes through the terminator');
   });
 
-  it('says the pairing route needs no host key, and why', () => {
+  it('describes the credential model the code actually implements', () => {
     const text = runbook();
-    expect(text).toContain('no host key');
+    // The runbook said "every other route needs both the host key and a machine
+    // credential" while the code required exactly that — and the result was a
+    // documented flow a paired device could not run. Both are now the same claim.
+    expect(text).toContain('No request on this surface needs the host key');
+    expect(text).toContain('Exempt is not unauthenticated');
     expect(text).toContain('single-use');
+    // And the scope, so a reader does not conclude the whole service is keyless.
+    expect(text).toContain('still require the key');
+  });
+
+  it('says CODEV_TOWER_ALLOWED_ORIGINS must be set before Tower starts', () => {
+    const text = runbook();
+    // Tower reads it in its own process. Exported after Tower is running it does
+    // nothing, and the symptom is a CORS failure while the variable looks right
+    // in the terminal it was typed in.
+    expect(text).toContain('must be in the environment Tower is started with');
+    expect(text).toContain('restarted to inherit it');
+    // A verification step against the PROCESS, not the shell.
+    expect(text).toContain('the value Tower actually has');
+  });
+
+  it('does not document a revocation nobody can perform yet', () => {
+    const text = runbook();
+    // `completePairing` has no production caller, so the HTTP revocation route
+    // cannot be reached by a person until the client phase lands. A runbook step
+    // that cannot be followed is worse than no step.
+    expect(text).toContain('Today, revoke at the host');
+    expect(text).toContain('has no production caller');
+    // And the host-side path covers BOTH stores, which the one HTTP call does.
+    expect(text).toContain('revokeMachine');
   });
 
   it('states the blast radius of one unparseable credential file', () => {
