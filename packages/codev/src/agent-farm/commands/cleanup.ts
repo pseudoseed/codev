@@ -21,7 +21,6 @@ import { resolveDefaultBranch } from '../../lib/default-branch.js';
 import {
   getThreadEngine,
   isThreadBacked,
-  tryGetThreadEngine,
 } from '../thread-runtime.js';
 
 /**
@@ -546,12 +545,9 @@ export async function cleanupThreadBackedBuilder(
 ): Promise<'removed' | 'refused-unmerged'> {
   if (!builder.threadId) throw new Error('cleanupThreadBackedBuilder requires threadId');
   const config = getConfig();
-  const record = tryGetThreadEngine()?.get(builder.threadId);
-  const merged = record
-    ? record.merged
-    : (builder.worktree ? await isWorktreeMerged(config.workspaceRoot, builder.worktree) : false);
+  const merged = builder.worktree ? await isWorktreeMerged(config.workspaceRoot, builder.worktree) : false;
   if (!merged && !force) return 'refused-unmerged';
-  const result = await getThreadEngine().removeWorktree(builder.threadId, { force: true });
+  const result = await getThreadEngine().removeWorktree(builder.threadId, { force: !!force });
   if (result === 'refused-unmerged') return result;
   removeBuilder(builder.id, config.workspaceRoot);
   return 'removed';

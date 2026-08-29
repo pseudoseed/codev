@@ -19,6 +19,7 @@ import {
   deliverAgentMailSerialized,
   MailboxDrainer,
   agentKey,
+  threadDeliverySession,
   type DeliveryPorts,
   type DeliverySession,
   type DeliveredBroadcast,
@@ -166,6 +167,18 @@ describe('deliverAgentMail (Spec 1313, Phase 4)', () => {
     const out = await deliverAgentMail(h.ports, db, '/ws/a', 'spir-1');
     expect(out).toEqual({ delivered: [], reason: null });
     expect(h.writes).toHaveLength(0);
+  });
+
+  it('thread transport skips the render gate and writes (Spec 146 phase 9)', async () => {
+    const h = harness();
+    h.setSession('spir-1', threadDeliverySession('thr-1'));
+    h.setProfile(null);
+    const row = enqueue();
+    const out = await deliverAgentMail(h.ports, db, '/ws/a', 'spir-1');
+
+    expect(out.delivered).toEqual([row.id]);
+    expect(h.writes).toEqual([{ formattedMessage: '[from architect] hi', noEnter: false }]);
+    expect(mailbox.getById(db, row.id)?.status).toBe('delivered');
   });
 
   it('clean gate → delivers the oldest held message, marks it delivered, broadcasts', async () => {

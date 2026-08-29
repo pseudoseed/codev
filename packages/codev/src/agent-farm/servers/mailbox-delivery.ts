@@ -78,6 +78,28 @@ export interface DeliverySession {
    */
   readonly writable: boolean;
   write(data: string): boolean;
+  /**
+   * Set when this transport is a t3code thread rather than a PTY.
+   * The delivery path skips the render gate and writes via `thread.turn.start`.
+   */
+  readonly threadId?: string;
+}
+
+export function isThreadDeliverySession(session: DeliverySession): boolean {
+  return typeof session.threadId === 'string' && session.threadId.length > 0;
+}
+
+export function threadDeliverySession(threadId: string): DeliverySession {
+  return {
+    bytesWritten: 0,
+    info: { cols: 0, rows: 0 },
+    command: '',
+    launchArgs: [],
+    cwd: '',
+    writable: true,
+    write: () => true,
+    threadId,
+  };
 }
 
 /** Broadcast frame for a delivered message (the dashboard/inbox message event). */
@@ -371,6 +393,30 @@ export async function deliverAgentMail(
 
   const session = ports.getSessionForAgent(workspacePath, toAgent);
   if (!session) return hold('no-live-pty');
+
+  if (isThreadDeliverySession(session)) {
+    const row = held[0];
+    const current = getById(db, row.id);
+    if (!current || current.status !== 'held') {
+      ports.onHeldStateChange();
+      return { delivered: [], reason: null };
+    }
+    let written = false;
+    try {
+      written = await ports.writeMessage(session, current.formatted_message, current.no_enter === 1);
+    } catch {
+      written = false;
+    }
+    if (!written) return hold('no-live-pty');
+    if (!markDelivered(db, row.id, ports.now())) {
+      ports.onHeldStateChange();
+      return { delivered: [], reason: null };
+    }
+    ports.broadcast(broadcastForRow(current, ports.now()));
+    ports.onHeldStateChange();
+    ports.log(`[mailbox] delivered ${row.id} → ${toAgent} @ ${path.basename(workspacePath)} (thread)`);
+    return { delivered: [row.id], reason: null };
+  }
 
   const profile = ports.resolveProfile(session);
   if (!profile) return hold('no-profile');

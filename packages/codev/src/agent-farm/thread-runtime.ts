@@ -82,10 +82,9 @@ export function createMemoryThreadEngine(): ThreadEngine {
     worktreePath(threadId) {
       return threads.get(threadId)?.worktreePath;
     },
-    async removeWorktree(threadId, opts) {
+    async removeWorktree(threadId) {
       const record = threads.get(threadId);
       if (!record) throw new Error(`Unknown thread ${threadId}`);
-      if (!record.merged && !opts?.force) return 'refused-unmerged';
       threads.delete(threadId);
       return 'removed';
     },

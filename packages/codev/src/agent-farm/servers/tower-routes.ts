@@ -29,7 +29,6 @@ import type { SessionManager } from '../../terminal/session-manager.js';
 import type { PtySessionInfo } from '../../terminal/pty-session.js';
 import type { BuilderSpawnedPayload, DashboardState, ArchitectState, TowerVersionInfo } from '@cluesmith/codev-types';
 import { getBuilders, setArchitectByName } from '../state.js';
-import { deliverThreadTurn, threadIdForAgent } from '../thread-runtime.js';
 import { DEFAULT_COLS, defaultSessionOptions } from '../../terminal/index.js';
 import type { SSEClient, WorkspaceTerminals } from './tower-types.js';
 import type { TerminalManager } from '../../terminal/pty-manager.js';
@@ -1897,47 +1896,47 @@ async function handleSend(
     if (result.code === 'NOT_FOUND' && !escape && !interrupt) {
       const reg = resolveAgentInRegistry(to, workspace, from);
       if (!isResolveError(reg)) {
-        const threadId = threadIdForAgent(reg.workspacePath, reg.agent, reg.kind);
-        if (threadId) {
-          try {
-            await deliverThreadTurn(
-              threadId,
-              formatMessageForTarget(reg.kind === 'architect', from, message, raw),
-            );
-            sendJson(res, 200, {
-              ok: true,
-              threadId,
-              resolvedTo: reg.agent,
-              deferred: false,
-              delivered: true,
-              held: false,
-            });
-          } catch (err) {
-            sendJson(res, 500, {
-              error: 'THREAD_TURN_FAILED',
-              message: err instanceof Error ? err.message : String(err),
-            });
-          }
+        const formattedMessage = formatMessageForTarget(reg.kind === 'architect', from, message, raw);
+        const row = enqueueMailbox(db, {
+          workspacePath: reg.workspacePath,
+          toAgent: reg.agent,
+          body: message,
+          formattedMessage,
+          fromAgent: from ?? null,
+          fromAgentName: fromName ?? null,
+          requestedTo: to,
+          fromWorkspace: senderWorkspace,
+          noEnter,
+          terminalId: null,
+        });
+        const ports = makeDeliveryPorts(ctx.log);
+        try {
+          await deliverAgentMailSerialized(ports, db, reg.workspacePath, reg.agent);
+        } catch (err) {
+          ctx.log('ERROR', `Delivery attempt errored for ${reg.agent} (row ${row.id.slice(0, 8)}... stays held): ${(err as Error).message}`);
+        }
+        const stored = getMailboxById(db, row.id);
+        if (stored?.status === 'delivered') {
+          sendJson(res, 200, {
+            ok: true,
+            resolvedTo: reg.agent,
+            deferred: false,
+            delivered: true,
+            held: false,
+            mailboxId: row.id,
+            reason: null,
+          });
           return;
         }
-        holdAndRespond(
-          res,
-          ctx,
-          {
-            workspacePath: reg.workspacePath,
-            toAgent: reg.agent,
-            body: message,
-            formattedMessage: formatMessageForTarget(reg.kind === 'architect', from, message, raw),
-            fromAgent: from ?? null,
-            // #47: identity, not just kind; and the target as TYPED, not as resolved.
-            fromAgentName: fromName ?? null,
-            requestedTo: to,
-            fromWorkspace: senderWorkspace,
-            noEnter,
-            terminalId: null,
-          },
-          'no-live-pty',
-        );
+        sendJson(res, 200, {
+          ok: true,
+          resolvedTo: reg.agent,
+          deferred: true,
+          delivered: false,
+          held: true,
+          reason: stored?.reason ?? 'no-live-pty',
+          mailboxId: row.id,
+        });
         return;
       }
       if (reg.code === 'AMBIGUOUS') {

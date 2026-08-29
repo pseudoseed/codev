@@ -35,7 +35,7 @@ import {
   allocateSpawnThread,
   chooseSpawnPath,
 } from '../db/thread-identity.js';
-import { installThreadSpawnFactory, tryGetThreadEngine } from '../thread-runtime.js';
+
 import { findStatusPath, getStatusPath, recordThreadId } from '../../commands/porch/state.js';
 import { DEFAULT_ARCHITECT_NAME } from '../utils/architect-name.js';
 
@@ -1140,7 +1140,6 @@ export function selectionForResume(
  * Spawn a new builder
  */
 export async function spawn(options: SpawnOptions): Promise<void> {
-  if (tryGetThreadEngine()) installThreadSpawnFactory();
   validateSpawnOptions(options);
 
   const config = getConfig();

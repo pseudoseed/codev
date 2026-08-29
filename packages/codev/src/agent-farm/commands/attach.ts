@@ -20,7 +20,7 @@ import type { DbTerminalSession } from '../servers/tower-types.js';
 import { normalizeWorkspacePath } from '../servers/tower-utils.js';
 import { getGlobalDb } from '../db/index.js';
 import { findBuilderById, findBuilderByIssue } from '../lib/builder-lookup.js';
-import { refuseUnsupportedThreadCommand } from '../thread-runtime.js';
+import { isAgentRunning, isThreadBacked, refuseUnsupportedThreadCommand, THREAD_BACKED_UNSUPPORTED } from '../thread-runtime.js';
 import chalk from 'chalk';
 
 export interface AttachOptions {
@@ -57,8 +57,16 @@ async function displayBuilderList(): Promise<void> {
   logger.row(['──', '────', '────', '──────'], widths);
 
   for (const builder of builders) {
-    refuseUnsupportedThreadCommand(builder);
-    const running = !!builder.terminalId;
+    if (isThreadBacked(builder)) {
+      logger.row([
+        builder.id,
+        builder.name.substring(0, 28),
+        getTypeColor(builder.type)(builder.type),
+        chalk.yellow(THREAD_BACKED_UNSUPPORTED),
+      ], widths);
+      continue;
+    }
+    const running = isAgentRunning(builder);
     const statusText = running ? chalk.green(builder.status) : chalk.red('stopped');
     const typeColor = getTypeColor(builder.type);
 

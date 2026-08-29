@@ -109,7 +109,7 @@ describe('Spec 146 Phase 9 — afx command parity against a thread-backed builde
     expect(engine.get(threadId)?.activeTurnId).toBeNull();
   });
 
-  it('cleanupThreadBackedBuilder refuses a thread-backed builder with unmerged work', async () => {
+  it('cleanupThreadBackedBuilder refuses when isWorktreeMerged is false', async () => {
     const engine = createMemoryThreadEngine();
     setThreadEngine(engine);
     const threadId = await engine.create({
@@ -120,14 +120,13 @@ describe('Spec 146 Phase 9 — afx command parity against a thread-backed builde
     expect(engine.get(threadId)).toBeDefined();
   });
 
-  it('cleanupThreadBackedBuilder removes a thread-backed builder once work is merged', async () => {
+  it('cleanupThreadBackedBuilder removes a thread-backed builder when force is set', async () => {
     const engine = createMemoryThreadEngine();
     setThreadEngine(engine);
     const threadId = await engine.create({
       builderId: 'air-173', worktreePath: '/tmp/missing-air-173', branch: 'builder/air-173',
     });
-    engine.get(threadId)!.merged = true;
-    const result = await cleanupThreadBackedBuilder(threadBuilder(threadId, '/tmp/missing-air-173'));
+    const result = await cleanupThreadBackedBuilder(threadBuilder(threadId, '/tmp/missing-air-173'), true);
     expect(result).toBe('removed');
     expect(engine.get(threadId)).toBeUndefined();
   });
@@ -160,14 +159,16 @@ describe('Spec 146 Phase 9 — thread-backed unsupported commands', () => {
     expect(() => refuseUnsupportedThreadCommand({ threadId: undefined })).not.toThrow();
   });
 
-  it('attach.ts source calls refuseUnsupportedThreadCommand before reading terminalId', () => {
+  it('attach.ts lists a thread-backed builder without throwing', () => {
     const src = readFileSync(resolve(import.meta.dirname, '../commands/attach.ts'), 'utf8');
-    expect(src).toMatch(/refuseUnsupportedThreadCommand\(builder\)[\s\S]*const running = !!builder\.terminalId/);
+    expect(src).toMatch(/if \(isThreadBacked\(builder\)\)/);
+    expect(src).not.toMatch(/for \(const builder of builders\) \{\s*refuseUnsupportedThreadCommand/);
   });
 
-  it('stop.ts source calls refuseUnsupportedThreadCommand before the terminalId kill', () => {
+  it('stop.ts continues past a thread-backed row instead of throwing', () => {
     const src = readFileSync(resolve(import.meta.dirname, '../commands/stop.ts'), 'utf8');
-    expect(src).toMatch(/refuseUnsupportedThreadCommand\(builder\)[\s\S]*builder\.terminalId/);
+    expect(src).toMatch(/if \(isThreadBacked\(builder\)\) \{\s*logger\.info/);
+    expect(src).not.toMatch(/for \(const builder of state\.builders\) \{\s*refuseUnsupportedThreadCommand/);
   });
 
   it('reset.ts source calls refuseUnsupportedThreadCommand before buildTerminalPort', () => {

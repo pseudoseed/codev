@@ -27,12 +27,14 @@ import {
 } from '../commands/reset/context.js';
 import { getGlobalDb } from '../db/index.js';
 import { getArchitectByName, getBuilder } from '../state.js';
-import { THREAD_BACKED_UNSUPPORTED } from '../thread-runtime.js';
+import { deliverThreadTurn } from '../thread-runtime.js';
 import { formatBuilderMessage } from '../utils/message-format.js';
 import { supersede as supersedeMailbox, dismissHeldWithKey, NOTICE_SUPERSEDE_PREFIX } from '../db/mailbox.js';
 import path from 'node:path';
 import {
   MailboxDrainer,
+  isThreadDeliverySession,
+  threadDeliverySession,
   type DeliveryPorts,
   type DeliverySession,
   type DeliveredBroadcast,
@@ -95,14 +97,14 @@ const NODE_FS_PORT: ContextFsPort = buildContextFsPort();
  * correct — and because rows address the AGENT, a respawned terminal (new id, same
  * builder id) transparently drains its predecessor's held mail.
  */
-export function resolveLiveSessionForAgent(workspacePath: string, toAgent: string): PtySession | null {
+export function resolveLiveSessionForAgent(workspacePath: string, toAgent: string): DeliverySession | null {
   try {
     const builder = getBuilder(toAgent, workspacePath);
-    if (builder?.threadId) throw new Error(THREAD_BACKED_UNSUPPORTED);
+    if (builder?.threadId) return threadDeliverySession(builder.threadId);
     const architect = getArchitectByName(workspacePath, toAgent);
-    if (architect?.threadId) throw new Error(THREAD_BACKED_UNSUPPORTED);
-  } catch (err) {
-    if (err instanceof Error && err.message === THREAD_BACKED_UNSUPPORTED) throw err;
+    if (architect?.threadId) return threadDeliverySession(architect.threadId);
+  } catch {
+    // Registry unreadable: fall through to the PTY map.
   }
 
   const entry = getWorkspaceTerminals().get(workspacePath);
@@ -211,7 +213,17 @@ export function makeDeliveryPorts(log: LogFn): DeliveryPorts {
     getSessionForAgent: (ws, agent) => resolveLiveSessionForAgent(ws, agent),
     resolveProfile: (session) => resolveProfileForSession(session),
     classify: (session, profile) => classifyAgentScreen(session, profile),
-    writeMessage: (session, msg, noEnter) => writeMessagePaced(session, msg, noEnter),
+    writeMessage: async (session, msg, noEnter) => {
+      if (isThreadDeliverySession(session) && session.threadId) {
+        try {
+          await deliverThreadTurn(session.threadId, msg);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      return writeMessagePaced(session, msg, noEnter);
+    },
     broadcast: (frame) => broadcastDelivered(frame),
     onHeldStateChange: () => broadcastHeldStateChange(),
     onEscalation: (info) => broadcastEscalation(info),
@@ -396,7 +408,8 @@ function broadcastEscalation(info: EscalationInfo): void {
  */
 function surfaceLiveness(info: LivenessInfo, log: LogFn): void {
   const session = resolveLiveSessionForAgent(info.workspacePath, info.toAgent);
-  const hasRecentOutput = session != null && Date.now() - session.lastDataAt <= LIVENESS_RECENT_OUTPUT_MS;
+  if (!session || isThreadDeliverySession(session)) return;
+  const hasRecentOutput = Date.now() - (session as PtySession).lastDataAt <= LIVENESS_RECENT_OUTPUT_MS;
   if (!hasRecentOutput) return; // dormant unknown session → no loud alarm (still in `afx inbox`)
   const where = `${info.toAgent} @ ${path.basename(info.workspacePath)}`;
   log(
@@ -419,7 +432,7 @@ function surfaceLiveness(info: LivenessInfo, log: LogFn): void {
  */
 function recoverHeld(info: HeldRecoveryInfo, log: LogFn): boolean {
   const session = resolveLiveSessionForAgent(info.workspacePath, info.toAgent);
-  if (!session) return false;
+  if (!session || isThreadDeliverySession(session)) return false;
   const control = heldRecoveryKeystroke(info.action);
   if (!session.write(control)) return false;
 
