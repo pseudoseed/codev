@@ -1978,3 +1978,40 @@ Two rules out of it, and the harness docstring now carries both: **it is not saf
 to run while anything else reads the tree, and it is not safe to interrupt.**
 Between those, "not safe to interrupt" is the one that nearly cost something,
 because the damage it leaves is silent and syntactically valid.
+
+## BLOCKED: porch's build check fails where the same build passes
+
+`porch done 146` fails 3/3 with `sh: tsdown: command not found` at 0.3–0.7 s,
+against `@cluesmith/codev-artifact-canvas`'s build script.
+
+The same command passes every way I can run it:
+
+- `npm run build` from zsh — 13 s, exit 0
+- `bash -lc`, `/bin/sh -c` — both pass
+- a node script replicating porch's spawn exactly (`npm` + `['run','build']`,
+  `shell: true`, `detached: true`, cwd the worktree, env `process.env` plus
+  `PROJECT_ID`/`PROJECT_TITLE`, read out of the installed
+  `dist/commands/porch/checks.js`) — passes
+
+Full suite green on the same tree: 6,376 passed, 48 skipped, 0 failed.
+
+**Falsified:** a dangling symlink (`packages/artifact-canvas/node_modules/.bin/tsdown`
+resolves in the worktree AND in main); cwd (main has tsdown too); the shell;
+`NODE_ENV=production`; Homebrew node 26 ahead of nvm on PATH; and
+`scripts/check-main-fresh.sh`, which takes 0.009 s and exits 0 on a non-main branch.
+
+**The timing is the only lead.** Two `porch done` runs earlier in this same session
+passed, at 17:22 and 17:38, with the same check. The failures start at ~17:59. The
+one unusual thing in that window is the phase-3 live harness, which runs under nvm
+node 22 and starts a pinned t3 server. I have not connected the two, and saying
+"it must be that" without a mechanism would be a guess.
+
+Escalated to the architect rather than worked around. **Not** editing
+`.codev/config.json`, not bypassing the check, and not running a speculative
+`pnpm install` in a worktree whose store is shared with the main checkout and any
+sibling builder — that is the kind of fix that would explain a much worse failure
+later.
+
+Iteration 3's work is complete and pushed regardless: both codex blocking findings
+and all four claude comments fixed, 82 tests, 41 mutation-checked, live evidence
+regenerated at `db6f3d384`.
