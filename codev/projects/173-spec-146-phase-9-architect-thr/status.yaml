@@ -1,7 +1,7 @@
 id: '173'
 title: spec-146-phase-9-architect-thr
 protocol: air
-phase: implement
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-29T07:02:32.234Z'
-updated_at: '2026-08-29T07:02:32.235Z'
+updated_at: '2026-08-29T08:11:30.297Z'
