@@ -183,12 +183,31 @@ export function resolveProfileForSession(session: DeliverySession): GateProfile 
  * shared {@link classifyBuffer} reads reflects every byte counted by the change token the
  * delivery path sampled — the property its gate→write TOCTOU relies on.
  */
-export async function classifyAgentScreen(session: DeliverySession, profile: GateProfile): Promise<GateVerdict> {
+export async function classifyAgentScreen(
+  session: DeliverySession,
+  profile: GateProfile,
+  /** Optional sink for the geometry-mismatch diagnostic; omitted by callers without one. */
+  log?: (message: string) => void,
+): Promise<GateVerdict> {
   const screen = (session as PtySession).gateScreen;
   if (!screen) return { clean: false, reason: 'busy', detail: 'no-composer-marker' };
   const { term, cols, rows } = await screen.read();
+  const verdict = classifyBuffer(term, cols, rows, profile);
 
-  // Geometry check by FACT, before any pixels are read (Issue #197).
+  // A proven-live turn OUTRANKS the geometry compare below (Issue #197 review).
+  //
+  // `busy-indicator` is the one detail `heldRecoveryAction` deliberately refuses to act on:
+  // it proves the agent is generating, so any recovery keystroke corrupts active work.
+  // `geometry-mismatch` maps to `escape-screen` — an ESC. Returning the geometry answer for
+  // a mid-turn screen would therefore route the exact screen that policy protects into the
+  // exact keystroke it withholds, trading a delivery failure for a corruption failure. The
+  // first version of this check ran before `classifyBuffer` and did precisely that.
+  //
+  // Both verdicts hold, so nothing is lost by yielding here: the mismatch is still real, and
+  // it will be reported the moment the turn ends and the busy indicator clears.
+  if (verdict.detail === 'busy-indicator') return verdict;
+
+  // Geometry check by FACT (Issue #197).
   //
   // The mirror and the agent's PTY are two grids that must agree, and when they don't every
   // row boundary the classifier reads is meaningless. `classifyBuffer` can only infer that
@@ -217,11 +236,17 @@ export async function classifyAgentScreen(session: DeliverySession, profile: Gat
   if (profile.bottomAnchor) {
     const ptyGeometry = (session as PtySession).shellperPtyGeometry;
     if (ptyGeometry && (ptyGeometry.cols !== cols || ptyGeometry.rows !== rows)) {
+      // Log BOTH geometries. The Issue #197 incident was diagnosed by curling Tower's live
+      // session API to compare them by hand; the next one should be readable from the log.
+      log?.(
+        `[gate] geometry-mismatch ${(session as PtySession).label}: mirror ${cols}x${rows} ` +
+        `vs pty ${ptyGeometry.cols}x${ptyGeometry.rows} — held; realigns on next attach`,
+      );
       return { clean: false, reason: 'busy', detail: 'geometry-mismatch' };
     }
   }
 
-  return classifyBuffer(term, cols, rows, profile);
+  return verdict;
 }
 
 /** Convert a delivered-message frame to the WebSocket bus shape and broadcast it. */
@@ -246,7 +271,7 @@ export function makeDeliveryPorts(log: LogFn): DeliveryPorts {
   return {
     getSessionForAgent: (ws, agent) => resolveLiveSessionForAgent(ws, agent),
     resolveProfile: (session) => resolveProfileForSession(session),
-    classify: (session, profile) => classifyAgentScreen(session, profile),
+    classify: (session, profile) => classifyAgentScreen(session, profile, (m) => log('INFO', m)),
     writeMessage: async (session, msg, noEnter) => {
       if (isThreadDeliverySession(session) && session.threadId) {
         try {

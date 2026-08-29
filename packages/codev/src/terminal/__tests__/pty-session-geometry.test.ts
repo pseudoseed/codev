@@ -21,7 +21,7 @@
  * A correctly-named hold would not have been a fix.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -29,6 +29,7 @@ import { PtySession, type PtySessionConfig } from '../pty-session.js';
 import type { IShellperClient } from '../shellper-client.js';
 import { classifyAgentScreen } from '../../agent-farm/servers/mailbox-wiring.js';
 import { OPENCODE_PROFILE } from '../../agent-farm/servers/gate-profiles.js';
+import { heldRecoveryAction, heldRecoveryKeystroke } from '../../agent-farm/servers/mailbox-hold-policy.js';
 
 const FIXTURE_DIR = fileURLToPath(
   new URL('../../agent-farm/__tests__/fixtures/gate', import.meta.url),
@@ -42,12 +43,22 @@ const CAPTURE_ROWS = 32;
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 
+/** Every byte the session wrote toward the agent, for the no-keystroke assertions. */
+const writes: string[] = [];
+
+beforeEach(() => {
+  writes.length = 0;
+});
+
 function makeFakeClient(geometry: { cols: number; rows: number } | null): IShellperClient {
   const emitter = new EventEmitter() as unknown as IShellperClient;
   Object.defineProperty(emitter, 'lastDataAt', { get: () => Date.now() });
   Object.defineProperty(emitter, 'connected', { get: () => true });
   Object.defineProperty(emitter, 'ptyGeometry', { get: () => geometry });
-  (emitter as { write: () => boolean }).write = () => true;
+  (emitter as { write: (d: string) => boolean }).write = (d: string) => {
+    writes.push(d);
+    return true;
+  };
   // Models the DROPPED app-side resize (#1198): the frame never reaches the shellper, so
   // `ptyGeometry` keeps the size the PTY is really at while `PtySession.resize` has already
   // moved the mirror. That divergence is the residual case attach-time adoption cannot fix.
@@ -158,5 +169,97 @@ describe('PtySession.attachShellper — gate-mirror geometry adoption (Issue #19
     const verdict = await classifyAgentScreen(session, OPENCODE_PROFILE);
     expect(verdict.clean).toBe(false);
     expect(verdict.detail).toBe('geometry-mismatch');
+  });
+});
+
+/**
+ * A mid-turn screen on a mismatched mirror must receive NO KEYSTROKE (Issue #197 review,
+ * blocking finding 1). Asserted on the BYTES the session wrote, not on a classification —
+ * a verdict is an opinion, a written byte is what reaches the agent.
+ *
+ * The defect this pins: `heldRecoveryAction` maps `geometry-mismatch` to `escape-screen`,
+ * i.e. an ESC, and deliberately maps `busy-indicator` to nothing at all because — in that
+ * file's own words — "it proves a live turn, so touching it would corrupt active work". The
+ * first version of this PR ran the geometry compare BEFORE reading any pixels, so a mid-turn
+ * screen on a mismatched mirror classified `geometry-mismatch` and was routed into exactly
+ * the keystroke the policy exists to withhold from it. A delivery failure traded for a
+ * corruption failure, which is the worse of the two.
+ *
+ * REACHABILITY, established from source rather than assumed — one reviewer argued this could
+ * not co-occur with a live turn, since a resize only fails when the session is not writable
+ * and those already hold as `no-live-pty`. That is true at the INSTANT the divergence is
+ * created, and false immediately afterwards. `PtySession` has a restart path
+ * (`startRestartWait`, #1264) that makes writability come BACK without a re-attach:
+ *
+ *   1. the child exits → `exitCode` is set → `status === 'exited'`, but the restart path
+ *      keeps the WebSocket clients AND the same connected `ShellperClient` (no
+ *      `cleanupShellper`);
+ *   2. a browser resize during that window moves `this.cols/rows` and the gate mirror, then
+ *      hits `status === 'running'` → false, returns without resizing the shellper. The
+ *      divergence now exists;
+ *   3. the respawned child emits a byte → `cancelCleanup` sets `exitCode = undefined` →
+ *      status is `'running'` on the still-connected client → `writable` is true again;
+ *   4. no `attachShellper` runs on that path, so geometry adoption never re-syncs it.
+ *
+ * A live turn on a divergent mirror is therefore reachable, and the ordering is load-bearing
+ * rather than defensive.
+ */
+describe('render gate — a live turn is never handed a recovery keystroke (Issue #197 review)', () => {
+  /** Exactly what the delivery path does with a verdict, in two lines. */
+  function applyRecovery(session: PtySession, detail: string | undefined): void {
+    const action = heldRecoveryAction(detail);
+    if (action) session.write(heldRecoveryKeystroke(action));
+  }
+
+
+  it('a mid-turn screen on a mismatched mirror writes NO bytes at all', async () => {
+    const seed = readFileSync(`${FIXTURE_DIR}/opencode197-midturn.busy.txt`);
+    const session = makeSession();
+    session.attachShellper(
+      makeFakeClient({ cols: CAPTURE_COLS, rows: CAPTURE_ROWS }),
+      Buffer.alloc(0),
+      111,
+      undefined,
+      seed,
+    );
+    // Create the divergence: the mirror moves, the fake's dropped resize leaves the PTY
+    // geometry where it was. This is step 2 of the reachability chain above.
+    session.resize(DEFAULT_COLS, DEFAULT_ROWS);
+
+    const verdict = await classifyAgentScreen(session, OPENCODE_PROFILE);
+
+    // The live turn outranks the geometry answer...
+    expect(verdict.clean).toBe(false);
+    expect(verdict.detail).toBe('busy-indicator');
+    // ...and `busy-indicator` is the detail the policy refuses to act on.
+    expect(heldRecoveryAction(verdict.detail)).toBeNull();
+
+    applyRecovery(session, verdict.detail);
+
+    // THE assertion: bytes, not opinions. Nothing reached the agent — in particular no ESC
+    // (\x1b, escape-screen) and no Ctrl+C (\x03, cancel-draft).
+    expect(writes).toEqual([]);
+    expect(writes.join('')).not.toContain('\x1b');
+    expect(writes.join('')).not.toContain('\x03');
+  });
+
+  it('the geometry check still fires once the turn ends — the reorder narrows it, not disables it', async () => {
+    // Same divergence, an IDLE screen. Nothing proves a live turn now, so the mismatch is
+    // free to name the verdict. Without this, "busy wins" could be satisfied by a check that
+    // never runs at all.
+    const seed = readFileSync(`${FIXTURE_DIR}/opencode197-idle.clean.txt`);
+    const session = makeSession();
+    session.attachShellper(
+      makeFakeClient({ cols: CAPTURE_COLS, rows: CAPTURE_ROWS }),
+      Buffer.alloc(0),
+      111,
+      undefined,
+      seed,
+    );
+    session.resize(DEFAULT_COLS, DEFAULT_ROWS);
+
+    const verdict = await classifyAgentScreen(session, OPENCODE_PROFILE);
+    expect(verdict.detail).toBe('geometry-mismatch');
+    expect(heldRecoveryAction(verdict.detail)).toBe('escape-screen');
   });
 });

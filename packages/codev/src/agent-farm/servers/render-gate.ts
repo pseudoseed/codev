@@ -211,13 +211,18 @@ export interface GateProfile {
      * healthy frame — fills with overlapping garbage. That is the signal: it is a
      * structural consequence of clamping, not a text match on the app's content.
      *
-     * This is MEASURED BEHAVIOUR, NOT A GUARANTEE. opencode 1.18.18 leaves row N-1 blank
-     * across every captured state (idle, draft, mid-turn, dialog, boot, both pickers), but
-     * nothing stops a future release from painting there. That is why it is declared
-     * per-profile rather than assumed for all bottom-anchored apps, and why the fixture
-     * suite classifies the committed captures: if opencode ever fills its last row, the
-     * idle fixture flips clean → busy and CI says so, instead of every send silently
-     * holding in production.
+     * This is MEASURED BEHAVIOUR, NOT A GUARANTEE, and the measurement has a stated extent:
+     * opencode 1.18.18 leaves row N-1 blank across every captured state (idle, draft,
+     * mid-turn, dialog, boot, both pickers) **at cols=110**, the width every committed
+     * capture was taken at. It was NOT measured across widths. If a future opencode lands
+     * its footer on the final row at some other width, every send to that builder holds
+     * permanently and does not self-heal — so the next person should know what was measured
+     * rather than infer that it was measured everywhere.
+     *
+     * That exposure is why the flag is declared per-profile rather than assumed for all
+     * bottom-anchored apps, and why the fixture suite classifies the committed captures: if
+     * opencode ever fills its last row at the captured width, the idle fixture flips
+     * clean → busy and CI says so, instead of every send silently holding in production.
      */
     finalRowAlwaysBlank?: boolean;
   };
@@ -258,10 +263,18 @@ export interface GateVerdict {
    * rather than scanning into status chrome; `busy-indicator` = the profile's
    * mid-turn signal is on screen; `no-idle-indicator` = the profile requires a
    * positive idle signal and it is absent (a boot screen, a dialog that hides the
-   * footer, or profile drift); `geometry-mismatch` = a composer row is a wrapped
-   * continuation, so the mirror's width disagrees with the width the app painted at and
-   * no row boundary is trustworthy; `user-text` = a draft or menu occupies the composer;
-   * `empty` = clean.
+   * footer, or profile drift); `geometry-mismatch` = the mirror's grid disagrees with the
+   * grid the app painted at, so no row boundary is trustworthy — raised from any of THREE
+   * sources, and this list is the one place they are enumerated together (Issue #197):
+   *   1. cols, by frame — a composer row is a wrapped continuation (`isWrapped`);
+   *   2. rows, by frame — a bottom-anchored profile's `finalRowAlwaysBlank` row is not
+   *      blank, so the app painted below the mirror's last row and the emulator clamped
+   *      those writes onto it;
+   *   3. either axis, by FACT — `classifyAgentScreen` compares the mirror's geometry
+   *      against the shellper's reported PTY geometry. Not inferred from the frame, and
+   *      the only one of the three that survives a mirror both narrower AND shorter,
+   *      where re-wrapping destroys both frame signals.
+   * `user-text` = a draft or menu occupies the composer; `empty` = clean.
    */
   detail:
     | 'no-composer-marker'
@@ -534,7 +547,25 @@ export function classifyBuffer(
   const buf = term.buffer.active;
   const lines = screenLines(term, rows);
 
-  // ROWS-direction geometry check (Issue #197), before every other signal.
+  // A profile-declared mid-turn signal settles the verdict before any composer logic:
+  // an app whose composer looks the same idle and mid-turn (opencode) would otherwise
+  // read as an empty prompt while it is generating.
+  //
+  // This MUST stay ahead of the geometry check below (Issue #197 review). `busy-indicator`
+  // is the one detail `heldRecoveryAction` deliberately refuses to act on — it proves a live
+  // turn, so any recovery keystroke would corrupt active work — while `geometry-mismatch`
+  // maps to `escape-screen`, an ESC. Letting a geometry verdict outrank a proven-live turn
+  // would route exactly the screen the policy protects into exactly the keystroke it
+  // withholds, trading a delivery failure for a corruption failure. Both verdicts hold; only
+  // one of them is safe to act on, so the safe-to-act-on one must never win by accident.
+  if (profile.busyIndicatorPattern) {
+    const pattern = profile.busyIndicatorPattern;
+    if (lines.some((line) => pattern.test(line))) {
+      return { clean: false, reason: 'busy', detail: 'busy-indicator' };
+    }
+  }
+
+  // ROWS-direction geometry check (Issue #197).
   //
   // The cols-direction check further down catches a mirror NARROWER than the app. This
   // catches a mirror SHORTER than it, which for a bottom-anchored composer is the more
@@ -543,26 +574,15 @@ export function classifyBuffer(
   // `no-composer-marker` — which reads as "this app has no composer", i.e. profile drift,
   // and is how Issue #197 came to be filed as a glyph-drift bug. It was a geometry bug.
   //
-  // Ordered FIRST deliberately. When the mirror's height disagrees with the app's, every
-  // row boundary on the screen is untrustworthy, so no other signal read off this frame
-  // deserves to name the verdict — same reasoning the cols check already documents. The
-  // outcome is a hold either way; what changes is that the reason points at the mirror
-  // instead of at the profile.
+  // Ordered after the busy check (see above) and before region resolution: when the mirror's
+  // height disagrees with the app's, every row boundary is untrustworthy, so no *composer*
+  // signal read off this frame deserves to name the verdict. The outcome is a hold either
+  // way; what changes is that the reason points at the mirror instead of at the profile.
   //
   // See `finalRowAlwaysBlank` for why a non-blank final row is the signal, and for the
   // measured-not-guaranteed caveat. `screenLines` already trimEnd()s, so `=== ''` is exact.
   if (profile.bottomAnchor?.finalRowAlwaysBlank && rows > 0 && lines[rows - 1] !== '') {
     return { clean: false, reason: 'busy', detail: 'geometry-mismatch' };
-  }
-
-  // A profile-declared mid-turn signal settles the verdict before any composer logic:
-  // an app whose composer looks the same idle and mid-turn (opencode) would otherwise
-  // read as an empty prompt while it is generating.
-  if (profile.busyIndicatorPattern) {
-    const pattern = profile.busyIndicatorPattern;
-    if (lines.some((line) => pattern.test(line))) {
-      return { clean: false, reason: 'busy', detail: 'busy-indicator' };
-    }
   }
 
   const region = resolveRegion(lines, profile);
