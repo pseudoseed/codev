@@ -85,6 +85,7 @@ function makeDeps(overrides: Partial<InstanceDeps> = {}): InstanceDeps {
       killSession: vi.fn(),
       createSession: vi.fn(),
       createSessionRaw: vi.fn(),
+      assertCanCreateSession: vi.fn(),
       listSessions: vi.fn().mockReturnValue([]),
     }),
     shellperManager: null,

@@ -62,16 +62,28 @@ describe('spawn render-gate-profile preflight (Issue #4)', () => {
     // The two positive-harness cases can reach the real Tower and create a
     // detached shellper. Kill it (killTerminal waits for process exit) before
     // removing its cwd; deleting the tree first orphaned two shellpers per run.
-    for (const builder of getBuilders(ws)) {
-      if (builder.terminalId) {
-        await expect(getTowerClient().killTerminal(builder.terminalId)).resolves.toBe(true);
+    try {
+      let cleanupError: unknown;
+      for (const builder of getBuilders(ws)) {
+        // `false` means Tower already observed the terminal exit; either way
+        // there is no live managed session left to wait for.
+        try {
+          if (builder.terminalId) await getTowerClient().killTerminal(builder.terminalId);
+        } catch (err) {
+          cleanupError ??= err;
+        } finally {
+          removeBuilder(builder.id, ws);
+        }
       }
-      removeBuilder(builder.id, ws);
+      if (cleanupError) throw cleanupError;
+    } finally {
+      // Never contaminate later tests with a temp cwd/HOME if cleanup itself
+      // reports an error.
+      process.chdir(originalCwd);
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      rmSync(ws, { recursive: true, force: true });
     }
-    process.chdir(originalCwd);
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
-    rmSync(ws, { recursive: true, force: true });
   });
 
   function writeBuilderCommand(builder: string): void {

@@ -61,7 +61,9 @@ export class TerminalManager {
         try {
           process.kill(pid, 0);
           return true;
-        } catch {
+        } catch (err) {
+          // EPERM means the process exists but this uid cannot signal it.
+          if ((err as NodeJS.ErrnoException).code === 'EPERM') return true;
           return false;
         }
       }),
@@ -75,9 +77,9 @@ export class TerminalManager {
    * same check as a concurrency backstop after the asynchronous spawn.
    */
   assertCanCreateSession(): void {
-    if (this.sessions.size < this.config.maxSessions) return;
+    if (this.activeSessionCount() < this.config.maxSessions) return;
     this.reconcileDeadSessions();
-    if (this.sessions.size < this.config.maxSessions) return;
+    if (this.activeSessionCount() < this.config.maxSessions) return;
 
     const owners = this.config.sessionOwnerSummary();
     const suffix = owners ? `; ${owners}` : '';
@@ -92,11 +94,22 @@ export class TerminalManager {
     let reaped = 0;
     for (const [id, session] of this.sessions) {
       const pid = session.pid;
-      if (session.status !== 'exited' && (pid <= 0 || this.config.processExists(pid))) continue;
+      // Exited sessions are deliberately retained for 30 seconds so status
+      // queries can observe them; they do not consume active capacity.
+      if (session.status === 'exited' || pid <= 0 || this.config.processExists(pid)) continue;
+      try { session.kill(); } catch { /* backing process is already gone */ }
       this.sessions.delete(id);
       reaped++;
     }
     return reaped;
+  }
+
+  private activeSessionCount(): number {
+    let active = 0;
+    for (const session of this.sessions.values()) {
+      if (session.status === 'running') active++;
+    }
+    return active;
   }
 
   /** Create a new PTY session. */

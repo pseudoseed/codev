@@ -261,6 +261,7 @@ describe('tower-routes', () => {
     mockGetTerminalManager.mockReturnValue({
       listSessions: mockListSessions.mockReturnValue([]),
       getSession: mockGetSession.mockReturnValue(null),
+      assertCanCreateSession: vi.fn(),
     });
     mockGetWorkspaceTerminalsEntry.mockReturnValue({
       architects: new Map(),
