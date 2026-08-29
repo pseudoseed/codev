@@ -1,0 +1,398 @@
+{
+  "range": "2026-06-01",
+  "total": 55,
+  "counts": {
+    "unclassifiable": 1,
+    "baseline": 1,
+    "source-only": 32,
+    "consumed-change-undecidable": 18,
+    "non-breaking": 3
+  },
+  "rows": [
+    {
+      "sha": "a04c09a190ac78e23ca63971067ff0fc2417bcca",
+      "date": "2026-06-02",
+      "subject": "Use HttpApi for Environment APIs & standardize authn/authz (#2858)",
+      "verdict": "unclassifiable",
+      "detail": "TypeError: Cannot read properties of undefined (reading 'encoding') |     at file:///Users/chris/dev/codev-1455/.builders/spir-146/node_modules/.pnpm/effect@4.0.0-beta.103/node_modules/effect/dist/SchemaAST.js:2757:11 |     at file:///Users/chris/dev/codev-1455/.builders/spir-146/node_modules/.pnpm/effect@4.0.0-beta.103/node_modules/effect/dist/Function.js:562:20 |     at mapOrSame (file:///Users/chris/dev/codev-1455/.builders/spir-146/node_modules/.pnpm/effect@4.0.0-beta.103/node_modules/effect/dist/SchemaAST.js:2590:16)"
+    },
+    {
+      "sha": "5ae77c0d63ece1a3e3fa5a70bc7717aa7c342756",
+      "date": "2026-06-04",
+      "subject": "feat(relay): Add managed relay tunnels and APN service (#2837)",
+      "verdict": "baseline",
+      "detail": ""
+    },
+    {
+      "sha": "38ea6d483ebf0a8c76f7105824f79489871057e5",
+      "date": "2026-06-09",
+      "subject": "feat(grok): add Grok CLI provider via ACP (#2809)",
+      "verdict": "source-only",
+      "detail": "model.ts"
+    },
+    {
+      "sha": "52c77c1ec4c1c2c2c27b917baaec91d050d0a737",
+      "date": "2026-05-03",
+      "subject": "feat(preview): in-app browser preview panel",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "52a24c890265967aa31fa03c4339210022ac403d",
+      "date": "2026-06-18",
+      "subject": "Add origin-based worktree bootstrap option (#3157)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "d2c0a6a48f50f319815a8cf5501f9e2e9b8ca617",
+      "date": "2026-06-19",
+      "subject": "Add diff scope switching and provider update settings (#3169)",
+      "verdict": "source-only",
+      "detail": "git.ts"
+    },
+    {
+      "sha": "335e0b59ea8a1bbc381402d1fbea268e05095f74",
+      "date": "2026-06-19",
+      "subject": "Fix PR creation from origin-based worktrees (#3218)",
+      "verdict": "non-breaking",
+      "detail": "vcs.createWorktree: non-breaking"
+    },
+    {
+      "sha": "731b1a67acb454da7a52491ab08db39c57036699",
+      "date": "2026-06-20",
+      "subject": "[codex] structure VCS process errors (#3408)",
+      "verdict": "source-only",
+      "detail": "vcs.ts"
+    },
+    {
+      "sha": "4238a0e769c9f149d4083968823298ace1e2bd0b",
+      "date": "2026-06-20",
+      "subject": "[codex] Enrich Git VCS driver errors (#3253)",
+      "verdict": "source-only",
+      "detail": "git.ts"
+    },
+    {
+      "sha": "630df6b986f6e254d3c564da639de5b7b52fe95d",
+      "date": "2026-06-20",
+      "subject": "[codex] Enrich source-control errors (#3248)",
+      "verdict": "source-only",
+      "detail": "sourceControl.ts"
+    },
+    {
+      "sha": "c637dfc454342c156dbe61ee8513f5e0ac0c4691",
+      "date": "2026-06-20",
+      "subject": "[codex] enrich Git workflow errors (#3241)",
+      "verdict": "source-only",
+      "detail": "git.ts"
+    },
+    {
+      "sha": "5edf7c56bafeeaf4d5af1a63f010dde45e6652dd",
+      "date": "2026-06-20",
+      "subject": "[codex] Preserve PR materialization failure chains (#3443)",
+      "verdict": "source-only",
+      "detail": "git.ts"
+    },
+    {
+      "sha": "3c246f56b477e0d7c39f92cfc0a69ca3f6debd4b",
+      "date": "2026-06-20",
+      "subject": "[codex] Structure VCS process boundary errors (#3476)",
+      "verdict": "source-only",
+      "detail": "vcs.ts"
+    },
+    {
+      "sha": "9d66b104feb761cff07c305d570610112bb5c8dc",
+      "date": "2026-06-30",
+      "subject": "Add Claude Sonnet 5 as the default Claude model (#3620)",
+      "verdict": "source-only",
+      "detail": "model.ts"
+    },
+    {
+      "sha": "482d56233dc3c27f614c843e0f6cc02b3f648a5f",
+      "date": "2026-07-05",
+      "subject": "Load thread snapshots over HTTP before live sync (#3719)",
+      "verdict": "non-breaking",
+      "detail": "orchestration.subscribeThread: non-breaking"
+    },
+    {
+      "sha": "3201e00ad4f59cc287517e61a19b069b497c16d2",
+      "date": "2026-07-09",
+      "subject": "[codex] Preserve worktree metadata during branch sync (#3822)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "2640e6dcfcb6a5ba2f01f20295ce8bacd2fdb05e",
+      "date": "2026-07-20",
+      "subject": "fix(client): use lightweight connection probe (#4137)",
+      "verdict": "source-only",
+      "detail": "environment.ts"
+    },
+    {
+      "sha": "8e3467fe60c49ee739b278229156108032b72e25",
+      "date": "2026-07-20",
+      "subject": "Synchronize mobile threads with authoritative shell snapshots (#4163)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.subscribeThread: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "62cf4617594c2a0d8c9c5dc4bbc2012d0ead802d",
+      "date": "2026-07-21",
+      "subject": "fix: better defaults — Claude 1M context, Codex gpt-5.6, worktrees from origin main (#4240)",
+      "verdict": "source-only",
+      "detail": "model.ts"
+    },
+    {
+      "sha": "32c6012dabdbd0eb178b25ea4225d889ec8f6475",
+      "date": "2026-07-22",
+      "subject": "Sidebar v2 beta: flat thread list with a server-backed settled lifecycle (#4026)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here); orchestration.subscribeThread: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "ab4a88386d5227706fadc4feb045dfb3e7fe6e1d",
+      "date": "2026-07-22",
+      "subject": "Add remote server updates and standalone service management (#4286)",
+      "verdict": "source-only",
+      "detail": "environment.ts"
+    },
+    {
+      "sha": "fbd77420f27c1322d49726dd927861b8b5903494",
+      "date": "2026-07-23",
+      "subject": "feat: add \"Auto\" runtime mode — AI-reviewed approvals for Codex and Claude (#4272)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here); orchestration.subscribeThread: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "202e5609ffb294bc0aa86c08ce1d3751de567226",
+      "date": "2026-07-23",
+      "subject": "feat(sidebar-v2): thread snoozing (#4311)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here); orchestration.subscribeThread: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "41a430a88e8dde9c428f59d54dd328aa6a66a8fd",
+      "date": "2026-07-24",
+      "subject": "Add Claude Opus 5 model (#4472)",
+      "verdict": "source-only",
+      "detail": "model.ts"
+    },
+    {
+      "sha": "10bca3f44e1be6a874438fe80badbad45cd00279",
+      "date": "2026-07-27",
+      "subject": "feat: add configurable source control writing settings (#4204)",
+      "verdict": "source-only",
+      "detail": "model.ts"
+    },
+    {
+      "sha": "38a6e3ce65b1d4fa58788faa96ff9410a8c26ffe",
+      "date": "2026-07-29",
+      "subject": "Fix Git ref refresh resource storms (#4727)",
+      "verdict": "source-only",
+      "detail": "git.ts"
+    },
+    {
+      "sha": "5fcdefd057751eb511de9e61142ef797f142059b",
+      "date": "2026-07-28",
+      "subject": "perf(server): trim stale context-window rows and drop dead replay RPC (#4791)",
+      "verdict": "source-only",
+      "detail": "orchestration.ts"
+    },
+    {
+      "sha": "49c0d96edf280f1fe6750a83161a3a2cff0f25ef",
+      "date": "2026-07-29",
+      "subject": "Reduce idle work and disk churn with native resource diagnostics (#2679)",
+      "verdict": "source-only",
+      "detail": "baseSchemas.ts"
+    },
+    {
+      "sha": "5c9358acaa34f8619513bba1e6821f0fdec27f74",
+      "date": "2026-07-30",
+      "subject": "feat(web): regenerate thread titles from sidebar (#4810)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here); orchestration.subscribeThread: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "197d3487116372ca2f16661f57d4e869fc3cb6c0",
+      "date": "2026-07-30",
+      "subject": "fix(web): show server update progress through reconnect (#4903)",
+      "verdict": "source-only",
+      "detail": "environment.ts"
+    },
+    {
+      "sha": "4b71a2ae2ffbbb7b6936051552094b71364cefd4",
+      "date": "2026-07-30",
+      "subject": "feat(search): find threads by conversation content (#4959)",
+      "verdict": "non-breaking",
+      "detail": "orchestration.searchThreads: non-breaking"
+    },
+    {
+      "sha": "df78cda8bf9c0971300e1bf35251774d9fbc833a",
+      "date": "2026-07-31",
+      "subject": "fix(contracts): decode growing config unions forward-compatibly (#5055)",
+      "verdict": "source-only",
+      "detail": "baseSchemas.ts"
+    },
+    {
+      "sha": "d3037064e61a9f059eafbd4f9869679779bd2a7c",
+      "date": "2026-08-01",
+      "subject": "fix(server): make remote updates rollback-safe (#5181)",
+      "verdict": "source-only",
+      "detail": "environment.ts"
+    },
+    {
+      "sha": "2b1d4fecb859b9a68f4853b8c4c5857ffe9d448d",
+      "date": "2026-08-04",
+      "subject": "Upgrade Effect to beta.103 (#5331)",
+      "verdict": "source-only",
+      "detail": "orchestration.ts"
+    },
+    {
+      "sha": "d7950ac153c6fdd788ef63699a5d061243bb4997",
+      "date": "2026-08-04",
+      "subject": "fix(server): generate durable thread titles (#5357)",
+      "verdict": "source-only",
+      "detail": "model.ts"
+    },
+    {
+      "sha": "da6e1a96782594cab3a6925f441731a65be57c11",
+      "date": "2026-08-04",
+      "subject": "feat(sidebar-v2): thread pinning for sidebar v2 (#5312)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here); orchestration.subscribeThread: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "a2ca89aa10f13a2222e08afd98c66285121d5ba2",
+      "date": "2026-08-06",
+      "subject": "feat: native subagent & workflow observability (#5219)",
+      "verdict": "source-only",
+      "detail": "orchestration.ts"
+    },
+    {
+      "sha": "6b73b3defe1dfb365de3b7bbb97ca56a26b50a43",
+      "date": "2026-08-06",
+      "subject": "feat: paginate thread loading with user-anchored turn windows (#5493)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.subscribeThread: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "a8cd2ad2ebb32ad789e8e0ecd2fc713c2edc38f4",
+      "date": "2026-08-07",
+      "subject": "fix(web): plans stop hijacking the UI, fold into chat instead (#5558)",
+      "verdict": "source-only",
+      "detail": "orchestration.ts"
+    },
+    {
+      "sha": "5661c6116c9d6e9e93e59cf067fc02dd3303ceef",
+      "date": "2026-08-07",
+      "subject": "feat(web): drag pinned threads into your own order (#5581)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here); orchestration.subscribeThread: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "5bb8c0366447b1bb94c0ac41f2d4cd06730ffb94",
+      "date": "2026-08-08",
+      "subject": "fix(server): settle no longer leaves monitors and dev servers running (#5774)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "6dbffa022d9e44091d0edc496181011e3acfb695",
+      "date": "2026-08-08",
+      "subject": "feat: pick worktree or current checkout per project (#5766)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here); orchestration.subscribeThread: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "076e9048dc57ab09b3692def050e12d690a1b027",
+      "date": "2026-08-09",
+      "subject": "feat(web): project icons can be chosen manually (#5775)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here); orchestration.subscribeThread: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "cad2c93616a7c25110670c151a816d5c68341bd4",
+      "date": "2026-08-10",
+      "subject": "feat: multi-provider pull requests page with in-app reviews (#4849)",
+      "verdict": "source-only",
+      "detail": "environment.ts, git.ts"
+    },
+    {
+      "sha": "b28f9bf0a1bd562623c027c5ed80b5ca50395b28",
+      "date": "2026-08-12",
+      "subject": "feat(web): pull request surfaces — filters & qualifiers, all-server listing, update branch, reactions, in-place editing, smarter diffs (#6039)",
+      "verdict": "source-only",
+      "detail": "vcs.ts"
+    },
+    {
+      "sha": "baaeda305c60933e5e573b30807ecfc3a0871a80",
+      "date": "2026-08-14",
+      "subject": "fix: avoid stale Live Activities when publishing is disabled (#6325)",
+      "verdict": "source-only",
+      "detail": "environment.ts"
+    },
+    {
+      "sha": "34a12bc33f5fba02b0b398e7dff35ca041a87dc7",
+      "date": "2026-08-15",
+      "subject": "fix(web): reject unsupported composer image types at attach time (#6574)",
+      "verdict": "source-only",
+      "detail": "orchestration.ts"
+    },
+    {
+      "sha": "f21b47e52d988839a4e488d9fa98344891a69b7f",
+      "date": "2026-08-18",
+      "subject": "fix(threads): a merged PR settles its thread only once (#7454)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "vcs.status: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "8824f8f24f8b81fd6aed6f228a57a1d4013d01d9",
+      "date": "2026-08-20",
+      "subject": "fix(web): retry failed thread bootstraps with a fresh id (#7664)",
+      "verdict": "source-only",
+      "detail": "orchestration.ts"
+    },
+    {
+      "sha": "11f051373e79b38fa16f3ec1af825f5164907c1b",
+      "date": "2026-08-21",
+      "subject": "feat(analytics): threads and turns now know which client started them (#7774)",
+      "verdict": "source-only",
+      "detail": "auth.ts, baseSchemas.ts, orchestration.ts"
+    },
+    {
+      "sha": "f70eeeeb06d6d96f292be7eef1ed8948103e68dc",
+      "date": "2026-08-23",
+      "subject": "fix(clients): move settled pinned threads into the settled section (#7969)",
+      "verdict": "source-only",
+      "detail": "orchestration.ts"
+    },
+    {
+      "sha": "7c6163c67aa122fa7c13466536c012888db102c6",
+      "date": "2026-08-24",
+      "subject": "fix(codex): show app access approval prompts (#8058)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here); orchestration.subscribeThread: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "e9f50c3efcb02a199042364ead292e164274e716",
+      "date": "2026-08-24",
+      "subject": "feat(web): upload image attachments before sending (#8048)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "3c75eb1132bb5d67cfa95ac6271ef68959f986c1",
+      "date": "2026-08-24",
+      "subject": "feat: link pull requests to threads (#8160)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here); orchestration.subscribeThread: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "bce680926d38915f3590242c0d1a4309e7ca1b9a",
+      "date": "2026-08-24",
+      "subject": "feat(mobile): track device models and OS versions (#8169)",
+      "verdict": "source-only",
+      "detail": "auth.ts"
+    }
+  ]
+}

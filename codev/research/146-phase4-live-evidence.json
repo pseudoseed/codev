@@ -1,0 +1,69 @@
+{
+  "criterion": "Spec 146 success criterion 12b — the five delivery semantics",
+  "gates": "Criterion 13 (mailbox deletion) depends on this. If any property fails, the mailbox stays.",
+  "ranAt": "2026-08-29T02:45:39.771Z",
+  "nodeVersion": "v22.22.2",
+  "t3Version": "t3@0.0.35",
+  "clientCommit": "8d528b8c4f127054838f4306ab604d87392af91d",
+  "clientTreeDirty": false,
+  "harness": "codex",
+  "model": "gpt-5.6-luna",
+  "scenarios": [
+    {
+      "scenario": "1: messages to one builder are delivered in the order sent",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "sent": 10,
+      "arrived": 10,
+      "order": "exact",
+      "comparedAgainst": "the server's own event log, in sequence order",
+      "note": "ten concurrent sends arrived in send order, checked against the server event log"
+    },
+    {
+      "scenario": "2: a message sent during an active turn is queued and delivered on settle",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "queuedDuringTurn": 10,
+      "reachedServerDuringTurn": 0,
+      "arrivedAfterSettle": 10,
+      "order": "exact",
+      "note": "ten messages sent during a live turn reached the server ZERO times before settle, then arrived in order — none lost, none interleaved"
+    },
+    {
+      "scenario": "3: the acknowledgement means the server accepted it durably",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "receiptKind": "accepted-by-server",
+      "verifiedOver": "a second connection replaying the thread from sequence 0",
+      "claimsAgentRead": false,
+      "note": "the receipt names server acceptance and nothing else; the message is in the server's log as read back by a connection that did not send it"
+    },
+    {
+      "scenario": "4: a retry under the same idempotency key delivers once",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "sends": 2,
+      "deliveries": 1,
+      "sharedCommandId": "b7212448-49b8-5180-afd6-b623450db0dd",
+      "derivedFromKey": true,
+      "note": "the same key derived the same commandId from two independent journals, and the server's log holds exactly one delivery"
+    },
+    {
+      "scenario": "5: with the server unreachable, a send fails loudly at the call site",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "raisedAtCallSite": true,
+      "errorName": "NotConnectedError",
+      "elapsedMs": 13,
+      "queueDepthAfter": 0,
+      "silentlyQueued": false,
+      "note": "the send threw at the call site within a bounded time and nothing was left holding the message — the mailbox's hold-and-retry is deliberately not reproduced"
+    }
+  ],
+  "limits": {
+    "scope": "One thread against one freshly created server. These scenarios establish the five delivery semantics of success criterion 12b and nothing beyond them.",
+    "scheduled": "Durable scheduled delivery is covered by unit tests against a real on-disk store with an injected clock, NOT here: the property is \"a pre-due message survives a restart\", and demonstrating it live would mean holding a server for the length of a real delay. The store is the same fsynced append-only shape as the dispatch journal, which IS exercised live in Phase 3 scenarios E and F.",
+    "ordering": "Ordering is checked against the server's own event log in sequence order, not against the order the client believes it sent. A client-side list would pass against a queue that reordered on the wire.",
+    "readReceipts": "No scenario claims the AGENT read anything. Criterion 12b is about the server accepting durably, and the receipt type is named so that the stronger claim cannot be made by accident."
+  }
+}
