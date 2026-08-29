@@ -32,7 +32,8 @@ node tools/t3-server/t3-server.mjs stop
 ```
 
 Environment: `T3CODE_ROOT` (default `/Users/chris/dev/t3code`), `T3_HARNESS_PORT` (default 3799),
-`T3_HARNESS_DIR` (default `tools/t3-server/.runtime`).
+`T3_HARNESS_DIR` (default `tools/t3-server/.runtime`), and required `T3_NODE` (the Node binary used
+for the server).
 
 Binds loopback only. Spec 146's Security constraints make loopback the default and exposing an
 interface an explicit act; a test harness never exposes one.
@@ -44,33 +45,44 @@ is that it comes up twice from cold, and a test refuses the evidence once `t3-se
 `smoke.mjs` is newer than it.
 
 ```bash
-nvm use 22
-node tools/t3-server/smoke.mjs --runs 2 > codev/research/146-harness-coldstart-evidence.json
+export T3_NODE=/absolute/path/to/node
+"$T3_NODE" tools/t3-server/smoke.mjs --runs 2 \
+  > codev/research/146-harness-coldstart-evidence.json
 ```
 
 **The redirection is part of the command.** `smoke.mjs` prints to stdout and writes nothing, so
 running it without one re-does the entire cold start and leaves the evidence exactly as stale as
-it was — a slow no-op that looks like work. Node 22 because the server needs `node:sqlite`.
+it was — a slow no-op that looks like work.
 
-## Node 22 is required, and `start` checks it
+## The server interpreter is explicit
 
-`npx` inherits the Node that invoked it, so the server runs on whatever version you are on.
-Below 22 it fails on `node:sqlite` and exits. `start` refuses before spawning rather than
-letting `ready` spend its full 180-second timeout reporting that the server "did not answer" —
-true, and pointing at the network instead of at the version.
+`start` never inherits the test process's Node from `PATH`. `T3_NODE` is resolved once and that
+absolute interpreter launches the pinned CLI. The checkout's `engines.node` range is recorded and
+an out-of-range interpreter produces an advisory, not a skip: Node 26 has been measured serving
+this checkout even though the declared range is `^24.13.1`. Server readiness is the gate.
 
 `start` also confirms the child is still alive after `spawn` and surfaces its log's error lines.
 `spawn` succeeding means a process was created, not that it stayed.
 
-## What this harness does NOT pin
+## The CLI is pinned too
 
-**The server binary.** `start` runs the published `t3` CLI against the pinned checkout. The
-checkout is pinned; the CLI is not. If the two diverge, `verify` cannot see it — it only knows
-about the source tree.
+`pin.json` records both the checkout commit and the exact published CLI version used to serve it.
+`start` invokes `t3@<that version>` rather than re-resolving `t3@latest` on every run.
 
-This is stated here rather than left to be discovered because it is the harness's real limitation.
-Closing it means either building the server from the pinned tree, or pinning the CLI version in
-`pin.json` too. Neither is done in Phase 1, and no later phase should assume otherwise.
+## Live test opt-in
+
+`T3_NODE` configures the harness; it does **not** opt the default unit suite into a real provider
+turn. The Phase 9 live test additionally requires `T3_LIVE=1`:
+
+```bash
+pnpm --filter @cluesmith/codev-types build
+pnpm --filter @cluesmith/t3-client build
+T3_NODE=/absolute/path/to/node T3_LIVE=1 pnpm --filter @cluesmith/codev exec vitest run \
+  src/agent-farm/__tests__/spec-146-phase-9-live-harness.test.ts
+```
+
+The build steps are required because the live block imports the packages' `dist` artifacts. A
+plain `pnpm test` never dispatches this paid provider turn, even when `T3_NODE` is configured.
 
 ## CI
 
