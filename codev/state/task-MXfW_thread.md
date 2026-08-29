@@ -50,3 +50,9 @@
   preserving the durable multi-artifact verification lesson. Added a direct regression assertion
   that the deleted SDK canary workflow stays absent, and documented the resulting published-SDK
   coverage gap in cold `arch.md`. The phase suite remains 5/5.
+- Review round 3 (the final review round): Gemini skipped, Codex approved without findings, and
+  Claude found one active-context defect after confirming all prior blockers were resolved. The
+  issue taxonomy still invited agents to file new `area/streamdeck` work against a deleted path and
+  presented VS Code as a supported area. Removed the retired Stream Deck area and narrowed VS Code
+  to retained-source/upstream-merge maintenance in both `CLAUDE.md` and `AGENTS.md`; verified the
+  twins remain byte-identical.
