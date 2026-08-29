@@ -96,20 +96,24 @@ function dbSignal(error: unknown): AgentStateSignal {
  * **THE PROTOCOLS GENUINELY DIFFER, and no single parse covers both.** Verified by
  * reading real `status.yaml` files on 2026-08-29:
  *
- * | builder id    | porch `id:`   |
- * |---------------|---------------|
- * | `spir-146`    | `'146'`       |
- * | `air-173`     | `'173'`       |
- * | `bugfix-102`  | `bugfix-102`  |
+ * | `builders.id`          | porch `id:`         | matched by      |
+ * |------------------------|---------------------|-----------------|
+ * | `builder-spir-146`     | `'146'`             | trailing digits |
+ * | `builder-air-173`      | `'173'`             | trailing digits |
+ * | `builder-bugfix-1137`  | `bugfix-1137`       | stripped id     |
+ * | `builder-task-nhnj`    | `builder-task-nhnj` | **raw** id      |
  *
- * So numbered protocols use the trailing digits and bugfix uses the **whole**
- * builder id. An earlier version of this function took only the trailing digits and
- * named `bugfix-174` as a worked example of the rule holding — it does not, and the
- * claim was written into a comment as settled without opening one of the three files
- * that would have refuted it. Reading them takes one command.
+ * **All 12 real `builders.id` rows carry the `builder-` prefix**, so the strip is the
+ * only path that resolves a normal builder — and the raw form must still be tried
+ * FIRST, because `codev/projects/builder-task-nhnj-task-NHnJ` is named for the
+ * prefixed id. Stripping first loses it.
  *
- * Task builders (`task-uxln`) match neither and fall through to the thread join,
- * which is correct rather than a gap.
+ * Every one of these four shapes was found by reading the two real stores. Three
+ * earlier versions of this comment each asserted a rule that one of them refutes,
+ * written as settled without opening the files. Two review lanes then each found a
+ * shape the other missed — both had been sitting in `codev/projects` the whole time.
+ * The test now generates its shape list from disk for that reason: a list you type is
+ * a claim, one you read is a fact.
  *
  * **This association is deliberately independent of `thread_id`.** Matching on the
  * thread only resolves when the two stores AGREE, which makes disagreement between
@@ -120,14 +124,26 @@ function dbSignal(error: unknown): AgentStateSignal {
  * There is no `project_id` column to use instead; these conventions are the available
  * association, so they are parsed here in one place rather than assumed at call sites.
  */
-function projectIdCandidates(builderId: string): string[] {
-  // A `builder-` prefix appears in branch names; strip it defensively so an id that
-  // arrives in that form still resolves.
+function projectIdCandidates(builderId: string): { readonly exact: string[]; readonly digits?: string } {
+  // THE STRIP IS LOAD-BEARING, NOT DEFENSIVE. All 12 rows in `builders.id` carry the
+  // prefix — `builder-spir-146`, `builder-air-173` — and `row.id` is exactly what
+  // this function receives, so the stripped form is the only path that resolves for
+  // a normal builder. The earlier comment called it defensive without querying the
+  // table.
+  //
+  // But the RAW id has to be tried first, because a project can legitimately be
+  // named for the prefixed id: `codev/projects/builder-task-nhnj-task-NHnJ` has
+  // `id: builder-task-nhnj`. Stripping first loses it.
   const bare = builderId.replace(/^builder-/, '');
-  const candidates = [bare];
+  const exact = builderId === bare ? [bare] : [builderId, bare];
+
+  // Task builders take their identity from the id itself, never from digits: their
+  // suffix is a random short id (`task-nhnj`) that can be all-digits by chance, and
+  // matching a project by it would be a coincidence rather than an association.
+  if (/(^|-)task-/.test(bare)) return { exact };
+
   const digits = /-(\d+)$/.exec(bare);
-  if (digits) candidates.push(digits[1]);
-  return candidates;
+  return digits ? { exact, digits: digits[1] } : { exact };
 }
 
 function statusForWorktree(
@@ -139,11 +155,47 @@ function statusForWorktree(
   const canonical = normalizeWorkspacePath(worktree);
   const matches = successful.filter((status) => normalizeWorkspacePath(status.artifactRoot) === canonical);
 
-  // IDENTITY FIRST, because it survives the two stores disagreeing. Most specific
-  // form first: the whole id (bugfix), then the trailing digits (spir, air).
-  for (const projectId of projectIdCandidates(builderId)) {
+  // IDENTITY FIRST, because it survives the two stores disagreeing. Exact forms
+  // before digits: raw id, then `builder-`-stripped, then the trailing digits.
+  const { exact, digits } = projectIdCandidates(builderId);
+  for (const projectId of exact) {
     const byProject = matches.filter((status) => status.projectId === projectId);
     if (byProject.length === 1) return { status: byProject[0], candidates: matches.length };
+  }
+
+  // DIGITS ONLY WHEN THEY CANNOT MEAN TWO THINGS.
+  //
+  // Project ids are not all unpadded: '0087', '0088', '0092', '0120' and '0124' all
+  // exist, and `0120` (spir) coexists with `120` (air) right now. So a digit match
+  // can name the wrong project across protocols — and it would do so with a RESOLVED
+  // record, which is a confident wrong answer rather than an ambiguous one. That is
+  // strictly worse than not resolving, exactly as a wrong diagnosis is worse than a
+  // missing one.
+  //
+  // So a digit candidate is used only when no other record in this worktree is
+  // numerically equal to it. A collision falls through to PORCH_JOIN_AMBIGUOUS,
+  // which is the honest answer: we know it is one of these and not which.
+  if (digits !== undefined) {
+    // An EXACT textual match is the better evidence and is used when present —
+    // otherwise the existence of `0120` would stop the legitimate `120` builder
+    // resolving, trading a rare wrong answer for a common missing one.
+    const exactDigits = matches.filter((status) => status.projectId === digits);
+    if (exactDigits.length === 1) return { status: exactDigits[0], candidates: matches.length };
+
+    // No exact match, but something numerically equal: that is a guess across the
+    // padding boundary, and it would resolve WRONG rather than not at all. Refuse.
+    const numerically = matches.filter(
+      (status) => /^\d+$/.test(status.projectId) && Number(status.projectId) === Number(digits),
+    );
+    if (numerically.length === 1) {
+      // KNOWN LIMIT, stated rather than silently accepted: if a builder id ever drops
+      // a project's zero padding (`spir-120` for project `0120`), the exact branch
+      // above resolves it to `120` instead, which is a confident wrong answer. No
+      // such builder exists in the 12 real rows, so this is not designed around — but
+      // it is the case to check first if a builder is ever seen joined to the wrong
+      // project.
+      return { candidates: matches.length };
+    }
   }
 
   // Then the thread, for ids that do not carry a project (and once Phase 8 writes it).

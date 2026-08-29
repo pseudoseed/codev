@@ -661,6 +661,77 @@ describe('failure matrix', () => {
     expect(signal?.message).toContain('thread-db-31');
   });
 
+  // THE PADDING COLLISION IS REAL: 0120 (spir) and 120 (air) both exist on disk.
+  it('a padded and an unpadded project with the same number both resolve to themselves', () => {
+    for (const [builderId, expected] of [['builder-spir-120', '120'], ['builder-spir-0120', '0120']] as const) {
+      const root = tmp();
+      const worktree = join(root, '.builders', builderId);
+      mkdirSync(worktree, { recursive: true });
+      writeStatus(worktree, '120', porchYaml('120', 'thread_id: thread-porch'));
+      writeStatus(worktree, '0120', porchYaml('0120', 'thread_id: thread-porch'));
+      const database = db();
+      insertBuilder(database, { workspace: root, id: builderId, worktree, threadId: 'thread-db' });
+
+      const snapshot = readThreadRegistry(database, root, readStatusesFromArtifactRoot(worktree));
+      // The exact digits win; the numerically-equal neighbour does not steal it.
+      expect(snapshot.identities[0]?.porch?.projectId).toBe(expected);
+    }
+  });
+
+  // THE SHAPE LIST IS READ OFF DISK, NOT TYPED.
+  //
+  // Two review lanes each found an id shape the other missed — a project named for a
+  // `builder-`-prefixed id, and zero-padded ids with a live `0120`/`120` collision.
+  // **Both were sitting in `codev/projects` the whole time.** Neither could have been
+  // missed by a list generated from the directory, and both were missed by lists I
+  // typed. A fixture list you write is a claim; one you read off the real store is a
+  // fact.
+  //
+  // So this classifies every real project id and fails on any shape the resolver was
+  // not built for. A new shape appearing on disk is what breaks it — which is the
+  // only mechanism that does not depend on someone remembering to look.
+  it('every porch id shape on disk is one the resolver handles', () => {
+    const projectsDir = join(dirname(fileURLToPath(import.meta.url)), '../../../../../..', 'codev', 'projects');
+    let entries: string[];
+    try {
+      entries = readdirSync(projectsDir);
+    } catch {
+      // Not running inside the repo (packaged install). Skipping is honest; silently
+      // passing a completeness claim would not be.
+      expect(true).toBe(true);
+      return;
+    }
+
+    const ids: string[] = [];
+    for (const entry of entries) {
+      try {
+        const body = readFileSync(join(projectsDir, entry, 'status.yaml'), 'utf8');
+        const match = /^id:\s*'?([^'\n]+)'?\s*$/m.exec(body);
+        if (match) ids.push(match[1].trim());
+      } catch {
+        // A project directory without a readable status.yaml is not an id shape.
+      }
+    }
+
+    // The scan must not be vacuous — that is how a completeness claim goes hollow.
+    expect(ids.length).toBeGreaterThan(50);
+
+    const SHAPES: Array<[string, RegExp]> = [
+      ['unpadded numeric', /^\d+$/],
+      ['protocol-prefixed', /^[a-z]+-\d+$/],
+      ['builder-prefixed', /^builder-[a-z0-9-]+$/],
+    ];
+    const unhandled = [...new Set(ids)].filter((id) => !SHAPES.some(([, re]) => re.test(id))).sort();
+    expect(unhandled, `porch id shapes the resolver was not built for: ${unhandled.join(', ')}`).toEqual([]);
+
+    // The collision that makes digit-matching unsafe is real, not hypothetical. If it
+    // ever stops being real, the guard against it should be re-justified, not assumed.
+    const padded = ids.filter((id) => /^0\d+$/.test(id));
+    expect(padded.length).toBeGreaterThan(0);
+    expect(ids).toContain('0120');
+    expect(ids).toContain('120');
+  });
+
   // A WRONG DIAGNOSIS IS WORSE THAN A MISSING ONE.
   //
   // PORCH_RECORD_UNMAPPED used to say "has no global.db identity row". A row can
@@ -700,18 +771,25 @@ describe('failure matrix', () => {
   // So the shapes are fixtures now, with the date. A future change cannot quietly
   // assume one rule without this failing.
   it.each([
-    ['spir-146', '146'],
-    ['air-173', '173'],
-    ['bugfix-102', 'bugfix-102'],
+    // Prefixed, because `builders.id` is prefixed in all 12 real rows.
+    ['builder-spir-146', '146'],
+    ['builder-air-173', '173'],
+    ['builder-bugfix-102', 'bugfix-102'],
+    // A project named for the PREFIXED id — real: builder-task-nhnj-task-NHnJ.
+    ['builder-task-nhnj', 'builder-task-nhnj'],
   ])('builder %s resolves porch project %s in a multi-project worktree', (builderId, projectId) => {
     const root = tmp();
     const worktree = join(root, '.builders', builderId);
     mkdirSync(worktree, { recursive: true });
-    // Several projects, including a decoy whose id is the digits the whole-id
-    // protocols must NOT be confused with.
     writeStatus(worktree, projectId, porchYaml(projectId, 'thread_id: thread-porch'));
-    writeStatus(worktree, 'decoy-1', porchYaml('decoy-1'));
-    writeStatus(worktree, 'decoy-2', porchYaml('decoy-2'));
+    // REAL DECOYS, from a collision that exists on disk: bugfix-799 and 799 are both
+    // projects. The previous decoys were `decoy-1`/`decoy-2` under a comment claiming
+    // they were "the digits the whole-id protocols must not be confused with" — they
+    // were not, no record with the colliding id was written, and the fixture passed
+    // under both correct and digits-first ordering. A guard that cannot fail is not a
+    // guard, and the comment asserting otherwise was the worse half.
+    if (projectId !== '799') writeStatus(worktree, '799', porchYaml('799'));
+    if (projectId !== 'bugfix-799') writeStatus(worktree, 'bugfix-799', porchYaml('bugfix-799'));
     const database = db();
     insertBuilder(database, { workspace: root, id: builderId, worktree, threadId: 'thread-db' });
 
