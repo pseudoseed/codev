@@ -21,9 +21,11 @@ import { writeMessagePaced } from './message-write.js';
 import { classifyBuffer, type GateProfile, type GateVerdict } from './render-gate.js';
 import { resolveProfile } from './gate-profiles.js';
 import {
+  clearDraftKeyForHarness,
   detectHarnessFromCommand,
   interruptSignalForHarness,
-  INTERRUPT_BYTES,
+  CLEAR_DRAFT_BYTES,
+  type ClearDraftKey,
   type InterruptSignal,
 } from '../utils/harness.js';
 import {
@@ -43,6 +45,7 @@ import {
   threadDeliverySession,
   type DeliveryPorts,
   type DeliverySession,
+  type HeldRecoveryResult,
   type DeliveredBroadcast,
   type EscalationInfo,
   type LivenessInfo,
@@ -208,12 +211,13 @@ export function interruptSignalForSession(session: DeliverySession): InterruptSi
   return interruptSignalForHarness(resolveHarnessForSession(session));
 }
 
+
 /**
- * The wire byte that safely interrupts THIS session's agent (Issue #196). Every
- * interrupt write site reads this instead of spelling a control byte itself.
+ * The keystroke that clears a leftover draft in THIS session's composer, or `'none'`
+ * when the agent is unidentified or has no known safe clear (Issue #196).
  */
-export function interruptByteForSession(session: DeliverySession): string {
-  return INTERRUPT_BYTES[interruptSignalForSession(session)];
+export function clearDraftKeyForSession(session: DeliverySession): ClearDraftKey {
+  return clearDraftKeyForHarness(resolveHarnessForSession(session));
 }
 
 /**
@@ -489,7 +493,8 @@ export function writeHeldRecovery(
   session: DeliverySession,
   action: HeldRecoveryAction,
 ): string | null {
-  const control = heldRecoveryKeystroke(action, interruptSignalForSession(session));
+  const control = heldRecoveryKeystroke(action, clearDraftKeyForSession(session));
+  if (control === null) return null; // no safe byte for this agent — write nothing
   return session.write(control) ? control : null;
 }
 
@@ -498,18 +503,47 @@ export function writeHeldRecovery(
  * stable for the starvation window (#92). This sends only a control byte; the held
  * message remains in SQLite and still requires a later render-gate CLEAN verdict.
  */
-function recoverHeld(info: HeldRecoveryInfo, log: LogFn): boolean {
+function recoverHeld(info: HeldRecoveryInfo, log: LogFn): HeldRecoveryResult {
   const session = resolveLiveSessionForAgent(info.workspacePath, info.toAgent);
-  if (!session || isThreadDeliverySession(session)) return false;
-  const written = writeHeldRecovery(session, info.action);
-  if (written === null) return false;
-
+  if (!session || isThreadDeliverySession(session)) return { outcome: 'failed' };
   const where = `${info.toAgent} @ ${path.basename(info.workspacePath)}`;
+
+  // Issue #196: no byte is recorded as safe for this agent, so there is nothing to try.
+  // Say so ONCE and latch (`true`) so the drainer stops re-attempting: a recovery that
+  // CANNOT succeed must not be spelled the same as one that has not succeeded yet, and
+  // it must not spin silently. The row stays in `afx inbox` and needs a human at the pane.
+  if (heldRecoveryKeystroke(info.action, clearDraftKeyForSession(session)) === null) {
+    const agent = resolveHarnessForSession(session) ?? 'an unidentified agent';
+    log(
+      'WARN',
+      `[mailbox] UNRECOVERABLE HOLD: ${where} stuck (${info.detail}) for ${Math.round(info.stableMs / 1000)}s and cannot be auto-repaired — ` +
+        `no keystroke is recorded as safe for ${agent}. Its mail will not deliver until someone clears the pane.`,
+    );
+    mailboxBroadcaster?.({
+      type: 'notification',
+      title: 'Mailbox: hold cannot be auto-recovered',
+      body: `${where} — delivery is STUCK (${info.detail}) and Tower has no safe keystroke for ${agent}, so it will not guess one. Clear the composer by hand; the message is still held.`,
+      workspace: info.workspacePath,
+    });
+    return { outcome: 'unrecoverable' };
+  }
+
+  // A rejected write is TRANSIENT (a torn-down PTY), not unrecoverable: report `failed` so
+  // the drainer re-attempts on a later pass rather than latching.
+  const written = writeHeldRecovery(session, info.action);
+  if (written === null) return { outcome: 'failed' };
+
+  // The keystroke's human label travels back with the outcome so the drainer's
+  // `written-inert` log line can name the byte that was tried (Issue #196, residual 1)
+  // without re-deriving per-harness facts on that side.
+  const keystroke = info.action !== 'cancel-draft'
+    ? 'ESC'
+    : written === CLEAR_DRAFT_BYTES['ctrl-c'] ? 'Ctrl+C' : 'Ctrl+U';
   const recovery = info.action !== 'cancel-draft'
     ? 'ESC to repaint/end the unreadable screen'
-    : written === INTERRUPT_BYTES['ctrl-c']
+    : written === CLEAR_DRAFT_BYTES['ctrl-c']
       ? 'Ctrl+C to clear abandoned text'
-      : 'ESC (this agent quits on Ctrl+C, so the draft may survive — inspect the pane)';
+      : 'Ctrl+U to clear the composer line (this agent quits on Ctrl+C)';
   log(
     'WARN',
     `[mailbox] AUTO-RECOVERY: ${where} remained STUCK (${info.detail}) for ${Math.round(info.stableMs / 1000)}s; sent ${recovery}`,
@@ -520,7 +554,7 @@ function recoverHeld(info: HeldRecoveryInfo, log: LogFn): boolean {
     body: `${where} — delivery was STUCK (${info.detail}); Tower sent ${recovery}. The message will deliver only after the gate verifies a clean prompt.`,
     workspace: info.workspacePath,
   });
-  return true;
+  return { outcome: 'written', keystroke };
 }
 
 // The single backstop drainer instance (replaces the retired SendBuffer). Created

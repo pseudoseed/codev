@@ -47,6 +47,31 @@ export const INTERRUPT_BYTES: Record<InterruptSignal, string> = {
   'ctrl-c': '\x03',
 };
 
+/**
+ * What keystroke CLEARS leftover text from a given agent's composer (Issue #196).
+ *
+ * A different question from {@link InterruptSignal}, and deliberately a separate fact:
+ * ending a turn and clearing a draft are different intents, and on opencode they need
+ * different bytes. `'none'` means no byte is known to clear this app's composer without
+ * risking something worse — the recovery then declines and says so, rather than writing
+ * a guess.
+ *
+ * Read out of the shipped opencode 1.18.18 binary's default keybind table:
+ *   app_exit:                   "ctrl+c,ctrl+d,<leader>q"
+ *   input_clear:                "ctrl+c"
+ *   input_delete_to_line_start: "ctrl+u"
+ * Ctrl+C is bound to BOTH `app_exit` and `input_clear` — that overlap is the whole bug,
+ * and it is in opencode's own config, not in ours. `ctrl+u` is bound to exactly one
+ * action in the entire table, so it clears the line and can quit nothing.
+ */
+export type ClearDraftKey = 'ctrl-c' | 'ctrl-u' | 'none';
+
+/** The wire byte for each clear key. `'none'` has none, by construction. */
+export const CLEAR_DRAFT_BYTES: Record<Exclude<ClearDraftKey, 'none'>, string> = {
+  'ctrl-c': '\x03',
+  'ctrl-u': '\x15',
+};
+
 export interface HarnessProvider {
   /**
    * The signal that safely interrupts a turn on this harness (Issue #196).
@@ -56,6 +81,16 @@ export interface HarnessProvider {
    * this bug would come back. See {@link InterruptSignal}.
    */
   interruptSignal: InterruptSignal;
+
+  /**
+   * The keystroke that clears leftover text from this harness's composer (Issue #196),
+   * or `'none'` when no byte is known to do it safely. See {@link ClearDraftKey}.
+   *
+   * REQUIRED for the same reason as {@link HarnessProvider.interruptSignal}: the #92
+   * auto-recovery writes this byte with no operator in the loop, so an omitted entry
+   * must be a compile error rather than a default.
+   */
+  clearDraftKey: ClearDraftKey;
   /**
    * For Node spawn() call sites (architect.ts, tower-utils.ts).
    * Returns CLI args and env vars to inject the role.
@@ -232,6 +267,13 @@ export interface CustomHarnessConfig {
   interruptSignal?: InterruptSignal;
 
   /**
+   * Optional: what keystroke clears this harness's composer (Issue #196).
+   * Omitting it means `'none'` — the recovery declines loudly rather than guessing a
+   * byte at a third-party TUI.
+   */
+  clearDraftKey?: ClearDraftKey;
+
+  /**
    * Optional binary/command that runs this harness, for a per-spawn
    * `--harness <name>` (Issue #2). Without it a per-spawn selection falls back
    * to the workspace's configured builder command (when that command already is
@@ -245,8 +287,10 @@ export interface CustomHarnessConfig {
 // =============================================================================
 
 export const CLAUDE_HARNESS: HarnessProvider = {
-  // Verified: Claude Code reads Ctrl+C as "end this turn" and keeps the process.
+  // Verified: Claude Code reads Ctrl+C as "end this turn" and keeps the process,
+  // and the same byte clears a leftover composer line.
   interruptSignal: 'ctrl-c',
+  clearDraftKey: 'ctrl-c',
   // Spec 1273: `/clear` empties the conversation while leaving the process — and
   // therefore the --append-system-prompt role below — intact. That is what makes
   // an in-session reset possible here and nowhere else today.
@@ -292,8 +336,10 @@ export const CLAUDE_HARNESS: HarnessProvider = {
 };
 
 export const CODEX_HARNESS: HarnessProvider = {
-  // Verified: codex-cli reads Ctrl+C as "end this turn" and keeps the process.
+  // Verified: codex-cli reads Ctrl+C as "end this turn" and keeps the process,
+  // and the same byte clears a leftover composer line.
   interruptSignal: 'ctrl-c',
+  clearDraftKey: 'ctrl-c',
   buildRoleInjection: (_content, filePath) => ({
     args: ['-c', `model_instructions_file=${filePath}`],
     env: {},
@@ -309,9 +355,13 @@ export const CODEX_HARNESS: HarnessProvider = {
 };
 
 export const OPENCODE_HARNESS: HarnessProvider = {
-  // Issue #196: opencode QUITS on Ctrl+C. Its own busy footer advertises the
-  // right gesture -- `esc interrupt` -- which is what OPENCODE_PROFILE matches on.
+  // Issue #196, both read out of opencode 1.18.18's default keybind table:
+  //   session_interrupt: "escape"     -> ends the turn (its busy footer says so too)
+  //   app_exit:          "ctrl+c,..."  } Ctrl+C is BOTH, which is why it can quit
+  //   input_clear:       "ctrl+c"     }
+  //   input_delete_to_line_start: "ctrl+u"  -> the only ctrl+u binding in the table
   interruptSignal: 'esc',
+  clearDraftKey: 'ctrl-u',
   buildRoleInjection: () => {
     throw new Error(
       'OpenCode is only supported as a builder shell, not as an architect shell. ' +
@@ -501,6 +551,9 @@ export function buildCustomHarnessProvider(config: CustomHarnessConfig): Harness
     // Fail-safe default (Issue #196): an undeclared custom harness gets ESC, not
     // the byte that can quit it.
     interruptSignal: config.interruptSignal ?? 'esc',
+    // And no draft-clearing byte at all until one is declared: at an unknown TUI a
+    // guessed control byte is how this bug was written in the first place.
+    clearDraftKey: config.clearDraftKey ?? 'none',
     buildRoleInjection: (content, filePath) => ({
       args: config.roleArgs.map(arg => expandTemplateVars(arg, content, filePath)),
       env: Object.fromEntries(
@@ -581,6 +634,13 @@ export function validateCustomHarnessConfig(name: string, config: unknown): Cust
       && obj.interruptSignal !== 'esc' && obj.interruptSignal !== 'ctrl-c') {
     throw new Error(
       `Harness "${name}": "interruptSignal" must be "esc" or "ctrl-c" if provided, got ${JSON.stringify(obj.interruptSignal)}`,
+    );
+  }
+
+  if (obj.clearDraftKey !== undefined
+      && obj.clearDraftKey !== 'ctrl-c' && obj.clearDraftKey !== 'ctrl-u' && obj.clearDraftKey !== 'none') {
+    throw new Error(
+      `Harness "${name}": "clearDraftKey" must be "ctrl-c", "ctrl-u" or "none" if provided, got ${JSON.stringify(obj.clearDraftKey)}`,
     );
   }
 
@@ -692,6 +752,28 @@ export function interruptByteForHarness(
   customHarnesses?: Record<string, CustomHarnessConfig>,
 ): string {
   return INTERRUPT_BYTES[interruptSignalForHarness(harnessName, customHarnesses)];
+}
+
+/**
+ * The keystroke that clears a leftover draft on `harnessName`, fail-safe (Issue #196).
+ *
+ * Unknown, retired and custom-undeclared harnesses resolve to `'none'`: no byte is
+ * written at all, and the caller reports the hold as unrecoverable rather than guessing.
+ */
+export function clearDraftKeyForHarness(
+  harnessName: string | undefined | null,
+  customHarnesses?: Record<string, CustomHarnessConfig>,
+): ClearDraftKey {
+  if (!harnessName) return 'none';
+
+  const builtin = getBuiltinHarness(harnessName);
+  if (builtin) return builtin.clearDraftKey;
+
+  if (customHarnesses && Object.prototype.hasOwnProperty.call(customHarnesses, harnessName)) {
+    return customHarnesses[harnessName].clearDraftKey ?? 'none';
+  }
+
+  return 'none';
 }
 
 // =============================================================================

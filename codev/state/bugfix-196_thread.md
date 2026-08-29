@@ -123,3 +123,86 @@ Test 3 is the coverage guard: every entry in `BUILTIN_HARNESSES`, and every gate
 harness, must carry a signal. Deliberately resolved through `getBuiltinHarness` rather than
 `interruptSignalForHarness` — the latter fails safe to `esc`, which would make a missing entry
 look present.
+
+## FIX round 2 (2026-08-29) — the question the architect would not ship past
+
+The architect asked, before accepting the fix: on opencode, what actually clears a draft?
+ESC ends a turn; it does not clear typed text. If nothing clears it, `cancel-draft` is
+unrecoverable on opencode and must say so rather than retrying a keystroke that cannot work.
+
+### Answered from the shipped binary
+
+`/opt/homebrew/Cellar/opencode/1.18.18/bin/opencode` — the exact version the gate profiles
+were measured against — carries its default keybind table in the bundle. Read out of it:
+
+```
+leader:                     "ctrl+x"
+app_exit:                   "ctrl+c,ctrl+d,<leader>q"
+input_clear:                "ctrl+c"
+input_delete_to_line_start: "ctrl+u"
+session_interrupt:          "escape"
+```
+
+**Ctrl+C is bound to both `app_exit` and `input_clear`.** That overlap is the root cause, and
+it is in opencode's own defaults, not in ours — which is why the byte looks like a draft-clear
+right up until the composer is empty and it quits instead. Grepping every default binding
+containing `ctrl+u` returns exactly one: `input_delete_to_line_start`. It can quit nothing.
+
+### What changed
+
+`clearDraftKey` is a second **required** per-harness fact beside `interruptSignal`.
+claude/codex `ctrl-c`; opencode `ctrl-u` (`\x15`); unknown/retired/custom-undeclared `none`.
+
+Clearing a draft and ending a turn are different intents and no longer share a table entry.
+Round 1 conflated them; that was wrong, and it only looked right because one byte happens to
+do both on two of the three harnesses.
+
+`heldRecoveryKeystroke` returns `string | null`. `'none'` yields null, **nothing is written**,
+and `recoverHeld` logs `UNRECOVERABLE HOLD` with its own notification naming the agent, then
+latches so it cannot spin. A rejected PTY write is `failed` and stays retryable — transient and
+unrecoverable are now different facts too.
+
+### The answer was in between the two branches offered
+
+Neither "a byte clears it" nor "nothing does". `ctrl+u` deletes to line **start**, so it clears
+the common single-line leftover draft and cannot clear a multi-row one.
+
+### Residual 1 — recorded, not fixed
+
+A `ctrl+u` on an already-empty line emits no output, so the drainer's change token does not
+move and the attempt latches inert. The architect's instruction: do not fix it, but do not let
+it collapse into one boolean either, because residual 2's fix has to branch on it.
+
+`recoveryState.attempted: boolean` became `phase: RecoveryPhase`:
+
+| phase | meaning |
+|---|---|
+| `not-attempted` | window has not elapsed; will fire |
+| `written` | keystroke went out and the screen then changed |
+| `written-inert` | keystroke went out and the screen did **not** change at all |
+| `unrecoverable` | no safe byte exists; the screen was never touched |
+
+`written-inert` is derived by sampling the output token at the moment the keystroke goes out
+and comparing on the next pass, so it means exactly one thing. `DeliveryPorts.recoverHeld` now
+returns `HeldRecoveryOutcome` (`'written' | 'unrecoverable' | 'failed'`) instead of a boolean
+that was covering two different facts; a legacy boolean still reads as written/failed, so no
+other implementer changed. Behaviour is unchanged — this is bookkeeping.
+
+`MailboxDrainer.recoveryPhaseFor(workspacePath, toAgent)` exposes it read-only. Without an
+accessor the phase is private and unassertable, and would have rotted into a comment.
+
+### Residual 2 — filed by the architect as its own issue
+
+`mailbox-delivery`'s liveness telemetry deliberately excludes `user-text` ("a human
+legitimately at the line — must not false-alarm"). So a `user-text` hold that recovery fails to
+clear starves with **no alarm on any harness**, not just opencode. The `UNRECOVERABLE HOLD`
+notice covers only the no-byte case; attempted-and-did-not-work is still silent. Closing it
+needs a second-stage escalation in the drainer's streak state machine and revisits #92's
+`user-text` exclusion — beyond a bugfix ceiling.
+
+### Verification
+
+Regression proven both directions: reintroducing the hardcoded `\x03` at all three write sites
+fails exactly 6 tests; restoring the fix goes green. Typecheck clean on every touched file
+(the pre-existing `TowerClient` errors are an unbuilt-dependency artifact, in files untouched
+here). 35/35 on the new file, 148/148 across the three targeted files.

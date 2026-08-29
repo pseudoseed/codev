@@ -25,14 +25,18 @@ describe('#92 stuck mailbox hold recovery', () => {
   });
   afterEach(() => db.close());
 
+  // The keystroke is now per-harness (#196): `cancel-draft` clears with Ctrl+C on a
+  // ctrl-c harness but Ctrl+U on opencode, which quits on Ctrl+C. `escape-screen` is
+  // ESC everywhere. These rows carry the clear key the harness table would supply.
   it.each([
-    ['user-text', 'cancel-draft', '\x03'],
-    ['no-region-end', 'escape-screen', '\x1b'],
-    ['no-composer-marker', 'escape-screen', '\x1b'],
-    ['geometry-mismatch', 'escape-screen', '\x1b'],
-  ] as const)('%s has a bounded recovery action', (detail, action, key) => {
+    ['user-text', 'cancel-draft', 'ctrl-c', '\x03'],
+    ['user-text', 'cancel-draft', 'ctrl-u', '\x15'],
+    ['no-region-end', 'escape-screen', 'ctrl-c', '\x1b'],
+    ['no-composer-marker', 'escape-screen', 'ctrl-c', '\x1b'],
+    ['geometry-mismatch', 'escape-screen', 'ctrl-u', '\x1b'],
+  ] as const)('%s has a bounded recovery action', (detail, action, clearKey, key) => {
     expect(heldRecoveryAction(detail)).toBe(action);
-    expect(heldRecoveryKeystroke(action)).toBe(key);
+    expect(heldRecoveryKeystroke(action, clearKey)).toBe(key);
   });
 
   it.each(['busy-indicator', 'no-idle-indicator', null] as const)(
@@ -67,7 +71,7 @@ describe('#92 stuck mailbox hold recovery', () => {
       onLiveness: () => undefined,
       recoverHeld: (info) => {
         recoveries.push(info);
-        session.write(heldRecoveryKeystroke(info.action));
+        session.write(heldRecoveryKeystroke(info.action, 'ctrl-c')!);
         // Model the app repaint caused by ESC. The drainer may not bypass the gate:
         // output changes first, and only the NEXT pass can classify and deliver.
         bytesWritten++;

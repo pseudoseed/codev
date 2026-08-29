@@ -188,13 +188,61 @@ export interface DeliveryPorts {
   clearHeldOwnerNotice?(workspacePath: string, toAgent: string): void;
   /**
    * Send one bounded recovery keystroke after the same terminally-stuck verdict has
-   * remained stable for the recovery window (#92). Returns true only when the byte
-   * reached a live PTY. Delivery itself still waits for a later clean gate.
+   * remained stable for the recovery window (#92). Delivery itself still waits for a
+   * later clean gate.
+   *
+   * Returns WHICH outcome occurred, not merely whether to stop trying (Issue #196) —
+   * `'unrecoverable'` and `'written'` both latch, but they are different facts and the
+   * drainer records them separately. A legacy boolean is still accepted and read as
+   * `'written'` / `'failed'`.
    */
-  recoverHeld?(info: HeldRecoveryInfo): boolean;
+  recoverHeld?(info: HeldRecoveryInfo): HeldRecoveryResult | HeldRecoveryOutcome | boolean;
   log(message: string): void;
   now(): number;
 }
+
+/**
+ * What one recovery attempt actually did (Issue #196).
+ *
+ * - `'written'`       — a byte recorded as safe for this agent reached a live PTY.
+ * - `'unrecoverable'` — no byte is recorded as safe for this agent, so NOTHING was written
+ *                       and nothing ever will be. Latches like `'written'`, but it is a
+ *                       different fact: the screen was never touched.
+ * - `'failed'`        — the write was rejected (a torn-down PTY). Transient; stays retryable.
+ */
+export type HeldRecoveryOutcome = 'written' | 'unrecoverable' | 'failed';
+
+/**
+ * A recovery outcome plus the human label of the keystroke that was sent (`'Ctrl+U'`,
+ * `'ESC'`, …), so a log line can name the byte that was tried without the drainer
+ * re-deriving per-harness facts it has no business knowing. `keystroke` is absent when
+ * nothing was written.
+ */
+export interface HeldRecoveryResult {
+  outcome: HeldRecoveryOutcome;
+  keystroke?: string;
+}
+
+/**
+ * How far recovery has got for one stuck screen (Issue #196, residual 1).
+ *
+ * Recorded rather than collapsed into a boolean because the states need different fixes
+ * and a later reader cannot tell them apart otherwise:
+ *
+ * - `'not-attempted'`      — the window has not elapsed yet. Will fire.
+ * - `'written'`            — a keystroke went out and the screen then changed. Normal path.
+ * - `'written-inert'`      — a keystroke went out and the screen did NOT change at all: the
+ *                            byte was accepted and did nothing. Reachable today on opencode,
+ *                            whose clear key (`ctrl+u`) deletes to line START, so a MULTI-ROW
+ *                            draft is not cleared and a second press on an already-empty line
+ *                            emits no output. This is `attempted-and-did-not-work`, which is
+ *                            NOT the same as `never-attempted` and NOT the same as
+ *                            `'unrecoverable'`. Nothing acts on it yet — surfacing it needs a
+ *                            second-stage escalation and revisits #92's deliberate `user-text`
+ *                            exclusion from the liveness alarm, which is its own issue.
+ * - `'unrecoverable'`      — no safe byte exists for this agent; the screen was never touched.
+ */
+export type RecoveryPhase = 'not-attempted' | 'written' | 'written-inert' | 'unrecoverable';
 
 /**
  * Metadata for a starving agent whose owner should be alarmed (Spec 1313 round 3, change 3).
@@ -624,7 +672,17 @@ export class MailboxDrainer {
     session: DeliverySession;
     token: string;
     since: number;
-    attempted: boolean;
+    /**
+     * How far recovery has got for THIS screen (Issue #196). Replaces a bare `attempted`
+     * boolean, which spelled `never-attempted`, `attempted-and-it-worked` and
+     * `attempted-and-nothing-changed` the same way. `tokenAtAttempt` is the output token
+     * sampled at the moment the keystroke went out, so a later pass can tell whether the
+     * screen moved at all.
+     */
+    phase: RecoveryPhase;
+    tokenAtAttempt?: string;
+    /** Human label of the keystroke that was sent, for the `written-inert` log line. */
+    keystrokeAtAttempt?: string;
   }>();
   // Spec 1313 round 3 (change 3): agents for which an owner starvation notice has already been
   // raised this Tower lifetime — so the notice fires ONCE per episode, not once per tick. An
@@ -863,6 +921,20 @@ export class MailboxDrainer {
   }
 
   /**
+   * The recorded {@link RecoveryPhase} for one agent's currently-stuck screen, or `null`
+   * when nothing is stuck (Issue #196, residual 1).
+   *
+   * Read-only bookkeeping, exposed rather than left private because the states it
+   * distinguishes — never attempted, attempted and the screen moved, attempted and the
+   * screen did not move at all, no safe byte exists — are what a fix for the silent
+   * `user-text` starvation has to branch on. Collapsed into a boolean they are
+   * unrecoverable facts, and whoever picks that up would have to rediscover them.
+   */
+  recoveryPhaseFor(workspacePath: string, toAgent: string): RecoveryPhase | null {
+    return this.recoveryState.get(`${workspacePath}\0${toAgent}`)?.phase ?? null;
+  }
+
+  /**
    * Update the per-agent liveness streak from a delivery outcome (Phase 7 surfaces
    * it): a delivered or empty pass clears the streak; a held pass grows it. Shared by
    * the backstop {@link tick} and the fast {@link scheduleDrain} trigger so both feed
@@ -904,17 +976,47 @@ export class MailboxDrainer {
             session,
             token,
             since: now,
-            attempted: false,
+            phase: 'not-attempted',
           });
-        } else if (!current.attempted && now - current.since >= this.recoveryMs) {
-          const attempted = this.ports?.recoverHeld?.({
+        } else if (current.phase === 'not-attempted' && now - current.since >= this.recoveryMs) {
+          const result = this.ports?.recoverHeld?.({
             workspacePath,
             toAgent,
             detail: outcome.detail,
             action,
             stableMs: now - current.since,
           });
-          if (attempted) current.attempted = true;
+          // A legacy boolean port reads as written/failed; `'failed'` leaves the phase at
+          // `'not-attempted'` so a transient write rejection stays retryable.
+          const resolved: HeldRecoveryOutcome =
+            result === true ? 'written'
+            : result === false || result === undefined ? 'failed'
+            : typeof result === 'string' ? result
+            : result.outcome;
+          if (resolved !== 'failed') {
+            current.phase = resolved === 'unrecoverable' ? 'unrecoverable' : 'written';
+            current.tokenAtAttempt = token;
+            current.keystrokeAtAttempt =
+              typeof result === 'object' ? result.keystroke : undefined;
+          }
+        } else if (current.phase === 'written' && current.tokenAtAttempt === token) {
+          // Issue #196, residual 1: the keystroke went out and the screen produced NO output —
+          // it was accepted and did nothing (opencode's `ctrl+u` on a multi-row draft clears
+          // only the last line, and a second press on an empty line emits nothing). Record it
+          // as its own state, and SAY SO — until #198 lands this is the only signal an operator
+          // gets, because the liveness alarm below deliberately excludes `user-text`.
+          //
+          // A log line and nothing else, on purpose: no broadcast, no escalation, no change to
+          // the streak machine. Whether this deserves an alarm is a decision about #92's
+          // `user-text` exclusion and belongs to #198 — which this line also serves, by making
+          // it possible to count how often written-inert actually fires before anyone picks an
+          // escalation window.
+          current.phase = 'written-inert';
+          this.ports?.log(
+            `[mailbox] RECOVERY INERT: ${toAgent} @ ${path.basename(workspacePath)} — sent ` +
+              `${current.keystrokeAtAttempt ?? 'a recovery keystroke'} for a stuck ${outcome.detail} screen ` +
+              `and it produced no output at all; the hold persists and nothing further will be attempted (#198)`,
+          );
         }
       }
     }
