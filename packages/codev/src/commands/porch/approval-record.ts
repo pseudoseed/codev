@@ -83,12 +83,16 @@ export function resolveApprovalAuthorization(input: ApprovalAuthorizationInput):
   const presentation = input.env[CAPABILITY_ENV_VAR]?.trim();
 
   if (!presentation) {
-    if (attribution.kind === 'agent-session') {
+    // Only a BUILDER session is refused. An architect session is attributed and
+    // recorded but allowed, because issuance is reachable only through the
+    // client and refusing architects would leave no working approval path at
+    // all. The threat model states that as a residual, not as a control.
+    if (attribution.kind === 'builder-session') {
       return {
         authorized: false,
         code: APPROVAL_SIGNAL.APPROVAL_CAPABILITY_REQUIRED,
         message:
-          `this approval is attributable to an agent session (${attribution.evidence}) ` +
+          `this approval is attributable to a builder session (${attribution.evidence}) ` +
           `and presented no approval capability in ${CAPABILITY_ENV_VAR}`,
       };
     }
@@ -111,6 +115,9 @@ export function resolveApprovalAuthorization(input: ApprovalAuthorizationInput):
   const consumption = input.nonces.consume(input.env[NONCE_ENV_VAR]?.trim(), {
     projectId: input.projectId,
     gateName: input.gateName,
+    // Bound to the capability that just verified, so a nonce minted for one
+    // capability cannot authorize an approval presented with another.
+    capabilityId: verification.capabilityId ?? '',
   });
   if (!consumption.accepted) {
     return { authorized: false, code: consumption.code, message: consumption.message };

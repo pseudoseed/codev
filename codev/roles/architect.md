@@ -30,14 +30,17 @@ Commands and flags live in the `afx` skill — check it rather than guessing.
 ## Gates
 
 The builder stops and waits. Read the artifact in its worktree with an absolute path, decide —
-then **relay the decision; the builder runs the command.**
+then **approve from the workspace root and tell the builder it happened.**
 
 ```bash
-afx send <id> "Spec approved by the human. Run porch approve and continue to plan."
+porch approve <id> <gate> --a-human-explicitly-approved-this   # from the workspace root
+afx send <id> "Spec approved by the human — gate is approved. Continue to plan."
 ```
 
-You do not run `porch approve` on the builder's behalf. The gate is the human's decision, you
-are the channel that carries it, and the builder executes against its own porch state. Approval
+`porch approve` refuses a call whose cwd is inside a `.builders/` worktree, so **the builder can
+no longer run it for you**, and neither can you from inside its worktree. `findStatusPath`
+searches `.builders/*`, so the workspace root reaches the builder's project without a subshell.
+The gate is still the human's decision and you are still the channel that carries it. Approval
 the builder never hears about is approval that didn't happen.
 
 The command requires `--a-human-explicitly-approved-this`. **That flag is not load-bearing** and

@@ -29,7 +29,17 @@
  */
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { hostname, homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 
@@ -57,6 +67,7 @@ export const APPROVAL_SIGNAL = {
   APPROVAL_NONCE_REPLAYED: 'APPROVAL_NONCE_REPLAYED',
   APPROVAL_NONCE_EXPIRED: 'APPROVAL_NONCE_EXPIRED',
   APPROVAL_NONCE_SCOPE_MISMATCH: 'APPROVAL_NONCE_SCOPE_MISMATCH',
+  APPROVAL_NONCE_CAPABILITY_MISMATCH: 'APPROVAL_NONCE_CAPABILITY_MISMATCH',
   APPROVAL_ISSUANCE_REFUSED_AGENT: 'APPROVAL_ISSUANCE_REFUSED_AGENT',
   APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION: 'APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION',
 } as const;
@@ -135,9 +146,56 @@ function readJsonFile<T>(path: string, fallback: T): T {
 
 function writeJsonFile(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.tmp`;
+  // The temp name carries the pid and a random suffix. A FIXED `${path}.tmp`
+  // is a collision between two concurrent writers, and the rename would then
+  // publish whichever half-written file won.
+  const tmp = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, path);
+}
+
+/** How long to keep trying for the lock before giving up. */
+const LOCK_TIMEOUT_MS = 2_000;
+const LOCK_STALE_MS = 30_000;
+
+/**
+ * Run a read-modify-write under an exclusive lock.
+ *
+ * Single-use MEANS single-use, and read-modify-write without a lock does not
+ * deliver it: two concurrent `porch approve` processes could each read the same
+ * unconsumed nonce and both succeed, and a concurrent issue could drop a
+ * revocation tombstone. `wx` is the atomic primitive — the create fails if the
+ * lock exists — so this does not depend on a check-then-act.
+ */
+function withLock<T>(path: string, operation: () => T): T {
+  const lockPath = `${path}.lock`;
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  for (;;) {
+    try {
+      closeSync(openSync(lockPath, 'wx', 0o600));
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      // A lock left behind by a killed process must not wedge approvals
+      // forever. Anything older than the stale window is reclaimed.
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
+          rmSync(lockPath, { force: true });
+          continue;
+        }
+      } catch { /* the holder released it between the two calls; retry */ }
+      if (Date.now() >= deadline) {
+        throw new Error(`APPROVAL_STORE_LOCKED: could not acquire ${lockPath} within ${LOCK_TIMEOUT_MS}ms`);
+      }
+      // Busy-wait: these critical sections are two file operations long.
+    }
+  }
+  try {
+    return operation();
+  } finally {
+    rmSync(lockPath, { force: true });
+  }
 }
 
 /**
@@ -189,7 +247,7 @@ export class ApprovalCapabilityStore {
       issuedAt: new Date(now).toISOString(),
       expiresAt: new Date(now + lifetime).toISOString(),
     };
-    this.#write([...this.#read(), record]);
+    withLock(this.#path, () => this.#write([...this.#read(), record]));
     return {
       capabilityId: id,
       sessionId: record.sessionId,
@@ -249,11 +307,18 @@ export class ApprovalCapabilityStore {
         machine: record.machine,
       };
     }
-    if (this.#now() >= Date.parse(record.expiresAt)) {
+    // `Date.parse` returns NaN on a corrupted record, and `now >= NaN` is false —
+    // which would skip the expiry branch and fall through to the secret
+    // comparison, treating an unreadable expiry as "not expired". An expiry that
+    // cannot be read is not an expiry that has not passed.
+    const expiresAt = Date.parse(record.expiresAt);
+    if (!Number.isFinite(expiresAt) || this.#now() >= expiresAt) {
       return {
         authorized: false,
         code: APPROVAL_SIGNAL.APPROVAL_CAPABILITY_EXPIRED,
-        message: `capability ${capabilityId} expired at ${record.expiresAt}`,
+        message: Number.isFinite(expiresAt)
+          ? `capability ${capabilityId} expired at ${record.expiresAt}`
+          : `capability ${capabilityId} carries an unreadable expiry (${record.expiresAt})`,
         capabilityId,
         machine: record.machine,
       };
@@ -278,12 +343,14 @@ export class ApprovalCapabilityStore {
 
   /** Revoke one capability. Returns false when there was nothing to revoke. */
   revoke(capabilityId: string): boolean {
-    const capabilities = this.#read();
-    const target = capabilities.find((entry) => entry.id === capabilityId && !entry.revokedAt);
-    if (!target) return false;
-    target.revokedAt = new Date(this.#now()).toISOString();
-    this.#write(capabilities);
-    return true;
+    return withLock(this.#path, () => {
+      const capabilities = this.#read();
+      const target = capabilities.find((entry) => entry.id === capabilityId && !entry.revokedAt);
+      if (!target) return false;
+      target.revokedAt = new Date(this.#now()).toISOString();
+      this.#write(capabilities);
+      return true;
+    });
   }
 
   /**
@@ -292,17 +359,19 @@ export class ApprovalCapabilityStore {
    * the property `revoking one machine leaves another working` depends on.
    */
   revokeMachine(machine: string): number {
-    const capabilities = this.#read();
-    const revokedAt = new Date(this.#now()).toISOString();
-    let revoked = 0;
-    for (const entry of capabilities) {
-      if (entry.machine === machine && !entry.revokedAt) {
-        entry.revokedAt = revokedAt;
-        revoked += 1;
+    return withLock(this.#path, () => {
+      const capabilities = this.#read();
+      const revokedAt = new Date(this.#now()).toISOString();
+      let revoked = 0;
+      for (const entry of capabilities) {
+        if (entry.machine === machine && !entry.revokedAt) {
+          entry.revokedAt = revokedAt;
+          revoked += 1;
+        }
       }
-    }
-    if (revoked > 0) this.#write(capabilities);
-    return revoked;
+      if (revoked > 0) this.#write(capabilities);
+      return revoked;
+    });
   }
 
   /** Raw file bytes, for tests that assert no secret was persisted. */
@@ -359,7 +428,7 @@ export class ApprovalNonceStore {
 
   mint(options: { projectId: string; gateName: string; capabilityId: string }): string {
     const nonce = randomUUID();
-    this.#write([
+    withLock(this.#path, () => this.#write([
       ...this.#read(),
       {
         nonce,
@@ -368,13 +437,13 @@ export class ApprovalNonceStore {
         capabilityId: options.capabilityId,
         createdAt: this.#now(),
       },
-    ]);
+    ]));
     return nonce;
   }
 
   consume(
     nonce: string | undefined,
-    scope: { projectId: string; gateName: string },
+    scope: { projectId: string; gateName: string; capabilityId: string },
   ): NonceConsumption {
     if (nonce === undefined || nonce.length === 0) {
       return {
@@ -383,6 +452,16 @@ export class ApprovalNonceStore {
         message: 'no approval nonce was presented',
       };
     }
+    // The whole read → decide → write sequence is inside the lock. Deciding
+    // outside it and writing inside would let two processes both observe the
+    // same unconsumed nonce, which is precisely the single-use guarantee.
+    return withLock(this.#path, () => this.#consumeLocked(nonce, scope));
+  }
+
+  #consumeLocked(
+    nonce: string,
+    scope: { projectId: string; gateName: string; capabilityId: string },
+  ): NonceConsumption {
     const nonces = this.#read();
     const entry = nonces.find((candidate) => candidate.nonce === nonce);
     if (!entry) {
@@ -415,6 +494,17 @@ export class ApprovalNonceStore {
         message: `approval nonce is bound to ${entry.projectId}/${entry.gateName}, not ${scope.projectId}/${scope.gateName}`,
       };
     }
+    // The capability binding was STORED and never checked, which made it a claim
+    // rather than a constraint: a nonce minted for capability A would authorize
+    // an approval presented with capability B. A stored field nothing enforces
+    // is the defect this phase is meant to be watching for.
+    if (entry.capabilityId !== scope.capabilityId) {
+      return {
+        accepted: false,
+        code: APPROVAL_SIGNAL.APPROVAL_NONCE_CAPABILITY_MISMATCH,
+        message: `approval nonce was minted for capability ${entry.capabilityId}, not ${scope.capabilityId}`,
+      };
+    }
     entry.consumedAt = this.#now();
     this.#write(nonces);
     return {
@@ -428,17 +518,26 @@ export class ApprovalNonceStore {
 /**
  * WHO IS ASKING — and what this actually reads.
  *
- * Every signal below is something the calling process could remove from itself.
- * `CODEV_BUILDER_ID` and `CODEV_WORKTREE_ROOT` are exported by the launch script
- * `buildWorktreeLaunchScript` writes (`commands/spawn-worktree.ts`), so they are
- * present in a builder's environment; a builder can `unset` them. The cwd rule is
- * likewise defeated by `cd`. This is attribution, not authentication, and the
- * threat model records that in those words.
+ * Every signal below is something the calling process could remove from itself,
+ * and none of them is more reliable than the process that carries it.
  *
- * What it is good for: the shell-in-a-worktree self-approval path, which is the
- * path the spec names as the actual threat and the one the flag never touched.
+ * - `CODEV_WORKTREE_ROOT` / `CODEV_BUILDER_ID` are written into the env block by
+ *   `startBuilderSession` (`commands/spawn-worktree.ts`). **They are not present
+ *   in every live builder**: this was checked against a real `.builder-start.sh`
+ *   on 2026-08-29 and that one, spawned by the globally installed package rather
+ *   than this tree, carried no `export` lines at all. So the env rule is a bonus,
+ *   not the mechanism.
+ * - The cwd rule is the one that fires in practice, and `cd` defeats it.
+ * - `CODEV_ARCHITECT_NAME` is set in an architect terminal — **and inherited by
+ *   everything an architect spawns**, this builder's own shell included. So it
+ *   attributes "an architect session or a descendant of one", never "an
+ *   architect". It is checked last for that reason: builder evidence wins.
+ *
+ * This is attribution, not authentication. The threat model records it in those
+ * words, and an architect session is attributed but still ALLOWED — refusing it
+ * would leave no working approval path until the client exists.
  */
-export type ApprovalCallerKind = 'agent-session' | 'unattributed';
+export type ApprovalCallerKind = 'builder-session' | 'architect-session' | 'unattributed';
 
 export interface ApprovalCallerAttribution {
   readonly kind: ApprovalCallerKind;
@@ -466,7 +565,7 @@ export function attributeApprovalCaller(input: {
   if (declaredWorktree && isInside(declaredWorktree, input.artifactRoot)) {
     const builderId = input.env.CODEV_BUILDER_ID?.trim();
     return {
-      kind: 'agent-session',
+      kind: 'builder-session',
       evidence: `CODEV_WORKTREE_ROOT contains the artifact root${builderId ? ` (CODEV_BUILDER_ID=${builderId})` : ''}`,
     };
   }
@@ -476,11 +575,25 @@ export function attributeApprovalCaller(input: {
   // required the target to be the caller's own worktree.
   if (isBuilderWorktreePath(input.cwd)) {
     return {
-      kind: 'agent-session',
+      kind: 'builder-session',
       evidence: `cwd ${resolve(input.cwd)} is inside a builder worktree`,
     };
   }
-  return { kind: 'unattributed', evidence: 'no builder or architect session evidence in the environment or cwd' };
+  // Checked last, and named for exactly what it proves. An earlier version of
+  // this function returned "no builder or architect session evidence" while
+  // reading nothing about architects at all — a message claiming a check that
+  // did not exist, in the string an operator reads out of status.yaml.
+  const architectName = input.env.CODEV_ARCHITECT_NAME?.trim();
+  if (architectName) {
+    return {
+      kind: 'architect-session',
+      evidence: `CODEV_ARCHITECT_NAME=${architectName} (an architect session or a process it spawned)`,
+    };
+  }
+  return {
+    kind: 'unattributed',
+    evidence: 'no builder worktree in the cwd or environment, and no CODEV_ARCHITECT_NAME',
+  };
 }
 
 export interface IssuanceRequest {

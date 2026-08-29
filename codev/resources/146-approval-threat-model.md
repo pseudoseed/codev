@@ -68,10 +68,22 @@ capability id, machine, issuing session id, issue time and expiry. The secret is
 exactly once, to the client that completed pairing, and is never written by the host in any
 form.
 
-This is the property that survives the adversary above. A builder that reads
+This defeats **reading**. A builder that reads
 `~/.agent-farm/approval/capabilities.json` — which it can, being the same user — obtains a
 hash it cannot present. A test asserts this by taking the verifier straight out of the
 persisted file, presenting it, and requiring the refusal.
+
+**It does not defeat writing, and the same adversary writes.** The store is parsed with
+`JSON.parse` and carries no signature, HMAC or ownership check, so a same-uid builder can
+append a record of its own — `{ id, verifier: sha256(<a secret it chose>), machine, expiresAt }`
+— and then present that secret. It can mint itself a nonce row the same way.
+
+**There is no local mitigation and this document is not going to imply one.** Any key that
+would authenticate the file has to be readable by `codev-agent`, which runs as the same user
+as the builder, so the builder can read it too. Signing the file moves the problem; it does
+not solve it. The honest statement is the one in the module header: what a capability adds is
+not a wall, it is evidence of which credential and which human session performed an approval.
+A forged record is still a record, and it is still in the artifact.
 
 The store is outside every workspace and outside `.env`, and a test asserts that too.
 
@@ -102,6 +114,17 @@ same way as "no".
 Past the TTL the entry is swept and a replay is genuinely indistinguishable from an unknown
 nonce; in that window the answer is `APPROVAL_NONCE_UNKNOWN`, which is the honest one,
 because the record no longer exists.
+
+The nonce is also bound to **the capability that presents it**. That field was stored and not
+checked in the first cut of this phase, which made it a claim rather than a constraint: a
+nonce minted for capability A would authorize an approval presented with capability B.
+
+Single-use is enforced across processes by an exclusive lock (`open(…, 'wx')`) held across the
+whole read-decide-write sequence, because a read-modify-write without one lets two concurrent
+`porch approve` processes each observe the same unconsumed nonce. A lock older than 30 seconds
+is reclaimed, so a killed process cannot wedge approvals permanently. The tests exercise the
+lock being held and being reclaimed; they do **not** run two processes, and are named so they
+cannot be read as a concurrency proof.
 
 Approval nonces are a **separate store** from `lib/nonce-store.ts`, which holds OAuth tunnel
 registration state. Sharing them would let a tunnel nonce authorize a gate. A test asserts
@@ -135,21 +158,35 @@ from one with it; closing that path is not in this phase's scope.
 
 ## Who is asking, and the limits of the answer
 
-`attributeApprovalCaller` reads three things, and every one of them is a **self-declaration
+`attributeApprovalCaller` reads four things and returns one of three kinds —
+`builder-session`, `architect-session`, `unattributed`. Every signal is a **self-declaration
 the calling process can remove from itself**:
 
-1. `CODEV_WORKTREE_ROOT` — exported into every builder's shell by the launch script
-   `buildWorktreeLaunchScript` generates. If it contains the artifact root, the caller is
-   attributed to an agent session.
-2. `CODEV_BUILDER_ID` — same origin; recorded as evidence.
+1. `CODEV_WORKTREE_ROOT` — written into the env block by `startBuilderSession`. If it contains
+   the artifact root, the caller is attributed to a builder session. **This is not present in
+   every live builder**: checked on 2026-08-29 against a real `.builder-start.sh`, spawned by
+   the globally installed package rather than this tree, which carried no `export` lines at
+   all. The env rule is a bonus; the cwd rule is what fires in practice.
+2. `CODEV_BUILDER_ID` — same origin, same caveat; recorded as evidence.
 3. The **caller's** cwd, when it sits inside a builder worktree
    (`<workspace>/.builders/<id>`) — whichever project it is approving. Keying this on the
    target's worktree instead would let a builder approve a *different* builder's gate, which
    is still an agent approving a gate.
+4. `CODEV_ARCHITECT_NAME`, checked **last** — an architect session is attributed as its own
+   kind and **still allowed**, because issuance is reachable only through the client and
+   refusing architects would leave no working approval path at all. It is checked last because
+   the variable is **inherited by everything an architect spawns**, this builder's own shell
+   included, so it attributes "an architect session or a descendant of one", never "an
+   architect". Builder evidence wins, and a test asserts that ordering.
 
-**This is attribution, not authentication.** A process that clears both variables *and*
-leaves the worktree is not attributed. A test asserts that limit explicitly, so it cannot be
-quietly forgotten.
+**This is attribution, not authentication.** A process that clears every variable *and* leaves
+the worktree is not attributed. A test asserts that limit explicitly, so it cannot be quietly
+forgotten.
+
+An earlier cut of this function returned the evidence string "no builder or architect session
+evidence in the environment or cwd" while reading nothing about architects at all. That string
+is what an operator reads out of `status.yaml`, so it was a claim about a check that did not
+run — the same class of defect this phase was written to watch for, found by the architect.
 
 ## What this does not stop
 
@@ -166,15 +203,30 @@ Stated plainly, because a threat model that only lists wins is a marketing docum
   This is how an architect at the workspace root approves a gate today, and it is not a
   control. It is recorded rather than silent precisely so that the weaker state is visible in
   the artifact instead of reading as a verified human approval.
-- **Same-user file access is not defeated**, only routed around. The verifier split means
-  reading the store yields nothing presentable; it does not mean the store is unreadable.
+- **A same-uid process can forge a capability record** by appending to the store, because the
+  store has no integrity protection and no local mechanism could give it one. See *Storage*.
+  The verifier split defeats reading, not writing.
+- **`flag-only` is the only practical human approval path until the client exists.** Issuance
+  is reachable only over the `codev-agent` HTTP route with a paired session, and the client
+  that would hold one arrives in a later phase. Until then every real approval is `flag-only`,
+  and an agent that clears its environment and leaves the worktree can take that path. This is
+  a deliberate interim state, recorded here rather than discovered later.
 - **A builder that daemonizes or otherwise sheds its environment** defeats the attribution
   layer. It does not defeat the verifier property, which is the boundary that carries weight.
 
 ## Where the boundary actually is
 
-The verifier-not-credential property, plus issuance gated on a human-paired session, is the
-part of this design that holds against an adversary that reads everything on the machine.
+The verifier-not-credential property, plus issuance gated on a human-paired session, removes
+the **replay** of a legitimately issued credential by anything that can read the machine. It
+does not survive a same-uid writer, and the *Storage* section says so.
+
+So the boundary is smaller than a boundary. What this phase actually delivers is that porch is
+no longer the instrument of a self-approval, and that an approval which went through porch
+carries evidence of which capability and which human session made it — where before, every
+approval looked identical and none of them proved anything.
+
 Everything else — the declared-principal refusal, the environment and cwd attribution — is
-defence in depth, and is described that way here because describing it as more is what got
-the previous two revisions falsified.
+defence in depth, and is described that way here because describing it as more is what got the
+previous two revisions falsified. A reviewer falsified the read-only framing of the paragraph
+above for exactly the same reason, which is the third time on this document; the lesson is
+that a claim survives only as far as the verb in it.

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -95,6 +95,24 @@ describe('expiry and revocation', () => {
     expect(verdict.code).toBe(APPROVAL_SIGNAL.APPROVAL_CAPABILITY_EXPIRED);
   });
 
+  // AN EXPIRY THAT CANNOT BE READ IS NOT AN EXPIRY THAT HAS NOT PASSED.
+  // `now >= NaN` is false, so a corrupted timestamp used to skip the expiry
+  // branch entirely and fall through to the secret comparison.
+  it('a record with an unreadable expiry is refused as expired, not accepted', () => {
+    const capabilities = store();
+    const issued = capabilities.issue({ sessionId: 'human-session-1' });
+    const file = JSON.parse(readFileSync(capabilities.path, 'utf8')) as {
+      capabilities: Array<{ expiresAt: string }>;
+    };
+    file.capabilities[0].expiresAt = 'not-a-timestamp';
+    writeFileSync(capabilities.path, JSON.stringify(file));
+
+    const verdict = capabilities.verify(issued.presentation);
+    expect(verdict.authorized).toBe(false);
+    expect(verdict.code).toBe(APPROVAL_SIGNAL.APPROVAL_CAPABILITY_EXPIRED);
+    expect(verdict.message).toContain('unreadable expiry');
+  });
+
   // THE ISOLATION PROPERTY, driven through one shared store because that is where
   // it could actually break. Two separate stores would pass whatever the code did.
   it('revoking one machine leaves another machine approving', () => {
@@ -140,25 +158,39 @@ describe('approval nonces', () => {
     const nonces = new ApprovalNonceStore({ root });
     const nonce = nonces.mint({ projectId: '146', gateName: 'plan-approval', capabilityId: 'cap-1' });
 
-    expect(nonces.consume(nonce, { projectId: '146', gateName: 'plan-approval' }).accepted).toBe(true);
+    expect(nonces.consume(nonce, { projectId: '146', gateName: 'plan-approval', capabilityId: 'cap-1' }).accepted).toBe(true);
 
-    const replay = nonces.consume(nonce, { projectId: '146', gateName: 'plan-approval' });
+    const replay = nonces.consume(nonce, { projectId: '146', gateName: 'plan-approval', capabilityId: 'cap-1' });
     expect(replay.accepted).toBe(false);
     // The whole point of the tombstone: a replay is not spelled the same way as
     // a nonce this host never minted.
     expect(replay.code).toBe(APPROVAL_SIGNAL.APPROVAL_NONCE_REPLAYED);
-    expect(nonces.consume('never-minted', { projectId: '146', gateName: 'plan-approval' }).code)
+    expect(nonces.consume('never-minted', { projectId: '146', gateName: 'plan-approval', capabilityId: 'cap-1' }).code)
       .toBe(APPROVAL_SIGNAL.APPROVAL_NONCE_UNKNOWN);
   });
 
   it('a nonce is bound to its project and gate', () => {
     const nonces = new ApprovalNonceStore({ root });
     const nonce = nonces.mint({ projectId: '146', gateName: 'plan-approval', capabilityId: 'cap-1' });
-    const wrongGate = nonces.consume(nonce, { projectId: '146', gateName: 'pr' });
+    const wrongGate = nonces.consume(nonce, { projectId: '146', gateName: 'pr', capabilityId: 'cap-1' });
     expect(wrongGate.accepted).toBe(false);
     expect(wrongGate.code).toBe(APPROVAL_SIGNAL.APPROVAL_NONCE_SCOPE_MISMATCH);
     // The mismatch must not have consumed it — the bound gate still works.
-    expect(nonces.consume(nonce, { projectId: '146', gateName: 'plan-approval' }).accepted).toBe(true);
+    expect(nonces.consume(nonce, { projectId: '146', gateName: 'plan-approval', capabilityId: 'cap-1' }).accepted).toBe(true);
+  });
+
+  // A STORED FIELD NOTHING ENFORCES IS A CLAIM, NOT A CONSTRAINT. `capabilityId`
+  // was persisted on every nonce and never compared, so a nonce minted for one
+  // capability authorized an approval presented with another.
+  it('a nonce minted for one capability does not authorize another', () => {
+    const nonces = new ApprovalNonceStore({ root });
+    const nonce = nonces.mint({ projectId: '146', gateName: 'pr', capabilityId: 'cap-A' });
+    const wrong = nonces.consume(nonce, { projectId: '146', gateName: 'pr', capabilityId: 'cap-B' });
+    expect(wrong.accepted).toBe(false);
+    expect(wrong.code).toBe(APPROVAL_SIGNAL.APPROVAL_NONCE_CAPABILITY_MISMATCH);
+    // The refusal did not consume it: the capability it WAS minted for still works.
+    expect(nonces.consume(nonce, { projectId: '146', gateName: 'pr', capabilityId: 'cap-A' }).accepted)
+      .toBe(true);
   });
 
   it('a nonce older than its lifetime is refused', () => {
@@ -166,7 +198,7 @@ describe('approval nonces', () => {
     const nonces = new ApprovalNonceStore({ root, now: () => clock });
     const nonce = nonces.mint({ projectId: '146', gateName: 'pr', capabilityId: 'cap-1' });
     clock += 6 * 60 * 1000;
-    const verdict = nonces.consume(nonce, { projectId: '146', gateName: 'pr' });
+    const verdict = nonces.consume(nonce, { projectId: '146', gateName: 'pr', capabilityId: 'cap-1' });
     expect(verdict.accepted).toBe(false);
     // Past the TTL the entry is swept, so the honest answer is that this host does
     // not know the nonce — not that it expired, which would claim a record we no
@@ -182,12 +214,45 @@ describe('approval nonces', () => {
     const tunnelNonce = createPendingRegistration('laptop', 'https://example.invalid');
 
     expect(consumePendingRegistration(approvalNonce)).toBeNull();
-    expect(nonces.consume(tunnelNonce, { projectId: '146', gateName: 'pr' }).code)
+    expect(nonces.consume(tunnelNonce, { projectId: '146', gateName: 'pr', capabilityId: 'cap-1' }).code)
       .toBe(APPROVAL_SIGNAL.APPROVAL_NONCE_UNKNOWN);
     // Both stores still hold their own entry, so the two lookups above failed
     // because the stores are separate rather than because either was empty.
     expect(consumePendingRegistration(tunnelNonce)).not.toBeNull();
-    expect(nonces.consume(approvalNonce, { projectId: '146', gateName: 'pr' }).accepted).toBe(true);
+    expect(nonces.consume(approvalNonce, { projectId: '146', gateName: 'pr', capabilityId: 'cap-1' }).accepted).toBe(true);
+  });
+});
+
+describe('the store serializes its read-modify-write', () => {
+  // NAMED FOR WHAT IT ACTUALLY EXERCISES. This does not run two processes, so it
+  // is not a concurrency test and must not be read as one. It asserts the lock is
+  // genuinely taken: with the lock file held, a consume cannot proceed.
+  it('a held lock blocks a consume rather than letting it through', () => {
+    const nonces = new ApprovalNonceStore({ root });
+    const nonce = nonces.mint({ projectId: '146', gateName: 'pr', capabilityId: 'cap-1' });
+    const lockPath = join(root, 'approval-nonces.json.lock');
+    writeFileSync(lockPath, '');
+    try {
+      expect(() => nonces.consume(nonce, { projectId: '146', gateName: 'pr', capabilityId: 'cap-1' }))
+        .toThrow(/APPROVAL_STORE_LOCKED/);
+    } finally {
+      rmSync(lockPath, { force: true });
+    }
+    // Released, and the nonce was never consumed by the blocked attempt.
+    expect(nonces.consume(nonce, { projectId: '146', gateName: 'pr', capabilityId: 'cap-1' }).accepted)
+      .toBe(true);
+  });
+
+  // A lock left by a killed process must not wedge approvals forever.
+  it('reclaims a lock older than the stale window', () => {
+    const nonces = new ApprovalNonceStore({ root });
+    const nonce = nonces.mint({ projectId: '146', gateName: 'pr', capabilityId: 'cap-1' });
+    const lockPath = join(root, 'approval-nonces.json.lock');
+    writeFileSync(lockPath, '');
+    const ancient = new Date(Date.now() - 60_000);
+    utimesSync(lockPath, ancient, ancient);
+    expect(nonces.consume(nonce, { projectId: '146', gateName: 'pr', capabilityId: 'cap-1' }).accepted)
+      .toBe(true);
   });
 });
 
@@ -235,7 +300,7 @@ describe('caller attribution reads the environment the launch script writes', ()
       cwd: '/somewhere/else',
       artifactRoot: '/repo/.builders/spir-146',
     });
-    expect(attribution.kind).toBe('agent-session');
+    expect(attribution.kind).toBe('builder-session');
     expect(attribution.evidence).toContain('spir-146');
   });
 
@@ -245,7 +310,7 @@ describe('caller attribution reads the environment the launch script writes', ()
       cwd: '/repo/.builders/spir-146/packages',
       artifactRoot: '/repo/.builders/spir-146',
     });
-    expect(attribution.kind).toBe('agent-session');
+    expect(attribution.kind).toBe('builder-session');
   });
 
   // A builder approving ANOTHER builder's gate is still an agent approving a
@@ -257,7 +322,7 @@ describe('caller attribution reads the environment the launch script writes', ()
       cwd: '/repo/.builders/spir-146',
       artifactRoot: '/repo/.builders/air-173',
     });
-    expect(attribution.kind).toBe('agent-session');
+    expect(attribution.kind).toBe('builder-session');
   });
 
   // THE LIMIT, ASSERTED RATHER THAN ONLY DOCUMENTED. A process that clears both
@@ -272,12 +337,42 @@ describe('caller attribution reads the environment the launch script writes', ()
     expect(attribution.kind).toBe('unattributed');
   });
 
-  it('does not attribute an architect at the workspace root approving a worktree gate', () => {
+  // THE EVIDENCE STRING MUST NOT CLAIM A CHECK THAT DOES NOT RUN. The earlier
+  // version returned "no builder or architect session evidence" while reading
+  // nothing about architects, and CODEV_ARCHITECT_NAME is set in every architect
+  // terminal. It is now read, attributed as its own kind, and still allowed.
+  it('attributes an architect at the workspace root, and still allows it', () => {
     const attribution = attributeApprovalCaller({
       env: { CODEV_ARCHITECT_NAME: 'main' },
       cwd: '/repo',
       artifactRoot: '/repo/.builders/spir-146',
     });
+    expect(attribution.kind).toBe('architect-session');
+    expect(attribution.evidence).toContain('CODEV_ARCHITECT_NAME=main');
+  });
+
+  // Builder evidence wins. CODEV_ARCHITECT_NAME is INHERITED by processes an
+  // architect spawns — this builder's own shell carries it — so checking it
+  // first would label a builder an architect.
+  it('prefers builder evidence over an inherited CODEV_ARCHITECT_NAME', () => {
+    const attribution = attributeApprovalCaller({
+      env: { CODEV_ARCHITECT_NAME: 'main', CODEV_BUILDER_ID: 'spir-146' },
+      cwd: '/repo/.builders/spir-146',
+      artifactRoot: '/repo/.builders/spir-146',
+    });
+    expect(attribution.kind).toBe('builder-session');
+  });
+
+  it('reports unattributed only when it read every signal and found none', () => {
+    const attribution = attributeApprovalCaller({
+      env: {},
+      cwd: '/repo',
+      artifactRoot: '/repo/codev/projects/146-x',
+    });
     expect(attribution.kind).toBe('unattributed');
+    // The message names what was checked. A message naming a check the function
+    // does not run is the defect this assertion exists to catch.
+    expect(attribution.evidence).toContain('CODEV_ARCHITECT_NAME');
+    expect(attribution.evidence).toContain('cwd');
   });
 });

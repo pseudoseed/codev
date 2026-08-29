@@ -67,9 +67,10 @@ say so, **stop**, and wait.
 
 Never treat a porch gate as approved without an explicit human decision — a gate message is a notification to the human, not authorization.
 
-Approval reaches you as a message from the architect. Then *you* run
-`porch approve <id> <gate>`; the architect does not run it for you. Defer to your protocol's phase
-prompts on who types `porch approve`.
+Approval reaches you as a message from the architect, who runs `porch approve` from the workspace
+root. **You do not run it.** `porch approve` refuses any call whose cwd is inside a `.builders/`
+worktree that presents no approval capability, so running it yourself exits 1 — by design, since
+the flag it used to enforce was a string an agent could type.
 
 ## Deliverables
 

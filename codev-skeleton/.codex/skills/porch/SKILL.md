@@ -42,8 +42,10 @@ Gates are human-only approval checkpoints. The `--a-human-explicitly-approved-th
 **required**, but it is a typed confirmation of intent, **not a control** — it only ever checked
 that a string appeared in argv, and any agent with a shell can type it. What authorizes an
 approval is the approval capability in `$CODEV_APPROVAL_CAPABILITY`, issued only to a
-human-paired client session. `porch approve` refuses a call it can attribute to a builder or
-architect session that presents no capability.
+human-paired client session. `porch approve` refuses a call it attributes to a **builder**
+session presenting no capability. An **architect** session is attributed too but still allowed
+and recorded as `authorization: flag-only`, because issuance is only reachable through the
+client — refusing architects would leave no working approval path at all.
 
 | Gate | Protocol | When |
 |------|----------|------|
@@ -71,7 +73,10 @@ porch pending                  # List all gates waiting for approval
 - **Never edit `status.yaml` directly** — porch manages all state
 - Builders signal completion with `porch done`, not `porch approve`
 - `porch run` is for strict mode only — soft mode builders follow the protocol document manually
-- When running `porch approve` from the architect, use a subshell if you need worktree context: `(cd /path/to/worktree && porch approve ...)`
+- **Run `porch approve` from the workspace root, never from inside a builder worktree.**
+  `findStatusPath` searches `.builders/*`, so the workspace root reaches a worktree project
+  without a subshell. A `(cd /path/to/worktree && porch approve ...)` recipe now exits 1: a cwd
+  inside `.builders/` is attributed to a builder session and refused without a capability.
 
 ## State storage
 
