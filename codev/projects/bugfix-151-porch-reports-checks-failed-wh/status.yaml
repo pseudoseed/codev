@@ -1,7 +1,7 @@
 id: bugfix-151
 title: porch-reports-checks-failed-wh
 protocol: bugfix
-phase: pr
+phase: verified
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -13,7 +13,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-29T14:49:56.811Z'
-updated_at: '2026-08-29T15:33:25.468Z'
+updated_at: '2026-08-29T15:33:31.028Z'
 pr_history:
   - phase: pr
     pr_number: 186
