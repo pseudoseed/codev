@@ -16,10 +16,43 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chooseSpawnPath, setSpawnThreadFactory } from '../db/thread-identity.js';
 import { setThreadEngine, createMemoryThreadEngine } from '../thread-runtime.js';
-import { ensureThreadBackendReady, readThreadBackendConfig, webSocketCtor } from '../thread-backend.js';
+import {
+  ensureThreadBackendReady,
+  readThreadBackendConfig,
+  webSocketCtor,
+  classifyConnectFailure,
+} from '../thread-backend.js';
 import { launchSpawnedBuilder } from '../commands/spawn.js';
 
 const repoRoot = resolve(import.meta.dirname, '../../../../..');
+
+/**
+ * This file's connect tests drive `ensureThreadBackendReady` for real, so they need
+ * `@cluesmith/t3-client`'s entry point — which resolves to `./dist/client.js`, a build
+ * output that is gitignored.
+ *
+ * Asserted BY NAME, once, before any test runs. Without this the missing artifact arrives
+ * as eight connect tests disagreeing about which failure state they got, which sends the
+ * reader into `classifyConnectFailure` — a function that is working correctly. That is
+ * issue #200's fourth part: a test that depends on a build artifact with nothing asserting
+ * the artifact exists, so the failure presents as something else entirely.
+ *
+ * Deliberately NOT a `skipIf`. A skip is how the packed-imports test stayed invisible to CI
+ * for its entire life: a green suite absorbs an honest "could not check" exactly as
+ * completely as it absorbs a pass. Fail loudly, immediately, and name the remedy.
+ *
+ * A suite-wide declared build prerequisite would make this redundant and it should be
+ * deleted if that lands.
+ */
+const T3_CLIENT_DIST = resolve(repoRoot, 'packages/t3-client/dist/client.js');
+if (!existsSync(T3_CLIENT_DIST)) {
+  throw new Error(
+    `spec-146-phase-9-thread-backend.test.ts requires packages/t3-client to be built: `
+    + `${T3_CLIENT_DIST} does not exist. Its connect tests import @cluesmith/t3-client/client, `
+    + `which resolves into that gitignored dist/. Run the workspace build (\`pnpm -w run build\`) `
+    + `and re-run. This is a missing build artifact, not a failure of the code under test.`,
+  );
+}
 const pkg = (rel: string) => JSON.parse(readFileSync(join(repoRoot, rel), 'utf8'));
 
 describe('Spec 146 Phase 9 — the engine is reachable in production (#179 item 1)', () => {
@@ -109,6 +142,35 @@ describe('Spec 146 Phase 9 — the engine is reachable in production (#179 item 
       for (const line of stagingLines) {
         expect({ name, staged: line.includes(`${path}/package.json`) }).toEqual({ name, staged: true });
       }
+    }
+  });
+
+  it('CI builds and install-verifies every one of them', () => {
+    // The site the manifest guard did not know about, and the one that caught a gap
+    // predating this branch: CI built porch-driver in one job, t3-client in NEITHER, so it
+    // was building a package whose own dependency it never built. That stayed invisible
+    // while nothing imported t3-client at test time.
+    //
+    // Seven enumeration sites now carry this dependency set — bump, publish, two release
+    // `git add` lines, four local-install lists, the CI build steps, and verify-install's
+    // argv. That is well past what anyone holds in their head, which is the argument for
+    // reading them rather than remembering them.
+    const workflow = readFileSync(join(repoRoot, '.github/workflows/test.yml'), 'utf8');
+    const verifyLine = workflow
+      .split('\n')
+      .find((l) => l.includes('verify-install.mjs'));
+    expect(verifyLine, 'the install-verification step must exist to be checked').toBeDefined();
+
+    for (const { name, path } of workspaceDeps()) {
+      // Built somewhere in CI, or its dist/ — a gitignored build output every one of these
+      // points `exports.*.default` into — simply does not exist in any job.
+      expect({ name, built: workflow.includes(`working-directory: ${path}`) })
+        .toEqual({ name, built: true });
+      // And packed into the tarball set that `npm install -g` is verified against, or npm
+      // resolves it from the registry mid-verification.
+      const dir = path.replace(/^packages\//, '');
+      expect({ name, installVerified: verifyLine!.includes(`../${dir}/`) || verifyLine!.includes('cluesmith-codev-*.tgz') && dir === 'codev' })
+        .toEqual({ name, installVerified: true });
     }
   });
 
@@ -533,7 +595,17 @@ describe('Spec 146 Phase 9 — four connect failures, four sentences (iter 3 fix
     expect(message).not.toMatch(/REFUSED|ACCEPTED|never completed/);
   });
 
-  it('the four messages are mutually exclusive — no state reads as another', async () => {
+  it('a missing client module is a local fault, not an unreachable server', async () => {
+    // The fifth state, and it was folded into `unreachable` until CI surfaced it: the
+    // t3-client entry point resolves to `./dist/client.js`, a build output, and CI never
+    // built that package. Reporting "could not be reached" sent the reader to check a
+    // network for a server nothing had contacted.
+    const missing = new Error("Cannot find module '@cluesmith/t3-client/client'") as Error & { code: string };
+    missing.code = 'ERR_MODULE_NOT_FOUND';
+    expect(classifyConnectFailure(missing)).toBe('client-missing');
+  });
+
+  it('the five messages are mutually exclusive — no state reads as another', async () => {
     // The point of the set. Each assertion above says what its own state looks like; only
     // comparing them proves none of the four is spelled like another, which is the whole claim.
     const refusedUrl = await stub(() => ({ status: 400, body: { _tag: 'UnknownBootstrapCredentialError' } }));
@@ -547,6 +619,8 @@ describe('Spec 146 Phase 9 — four connect failures, four sentences (iter 3 fix
       token: /REFUSED the bootstrap token/.test(m),
       unreachable: /could not be reached/.test(m),
       hung: /never completed the/.test(m),
+      clientMissing: /could not be loaded/.test(m),
+      ticket: /refused to issue a WebSocket ticket/.test(m),
     }));
     // Every message matches exactly one signature, and no two match the same one.
     for (const sig of signatures) {

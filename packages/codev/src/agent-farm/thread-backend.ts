@@ -137,7 +137,12 @@ export async function webSocketCtor(): Promise<new (url: string) => WebSocket> {
 }
 
 /** How far the connection got before it failed. Each value gets its own sentence. */
-type ConnectFailure = 'token-refused' | 'ticket-refused' | 'never-completed' | 'unreachable';
+type ConnectFailure =
+  | 'client-missing'
+  | 'token-refused'
+  | 'ticket-refused'
+  | 'never-completed'
+  | 'unreachable';
 
 /** Thrown when the socket opens its TCP connection and then never completes the upgrade. */
 class SocketUpgradeTimeout extends Error {
@@ -160,7 +165,14 @@ class SocketUpgradeTimeout extends Error {
  * Matched by `name` and `endpoint` rather than by `instanceof` because the class is loaded
  * through a dynamic import and a second module instance would defeat the identity check.
  */
-function classifyConnectFailure(err: unknown): ConnectFailure {
+export function classifyConnectFailure(err: unknown): ConnectFailure {
+  // The t3-client entry point failing to load is a LOCAL INSTALLATION fault, not a
+  // statement about the server — and it was folded into 'unreachable' until CI surfaced
+  // it, which sent the reader to check a network for a server that was never contacted.
+  // A PR whose thesis is one sentence per state cannot silently carry a fifth in another's.
+  if (err instanceof Error && (err as { code?: string }).code === 'ERR_MODULE_NOT_FOUND') {
+    return 'client-missing';
+  }
   if (err instanceof Error && err.name === 'SocketUpgradeTimeout') return 'never-completed';
   if (err instanceof Error && err.name === 'AuthError') {
     const endpoint = (err as { endpoint?: unknown }).endpoint;
@@ -248,6 +260,10 @@ export async function ensureThreadBackendReady(
     const detail = err instanceof Error ? err.message : String(err);
     const preamble = `Thread-backed spawns are configured for ${config.workspaceRoot}`;
     const messages: Record<ConnectFailure, string> = {
+      'client-missing':
+        `${preamble}, but the @cluesmith/t3-client module could not be loaded (${detail}). Nothing was sent to `
+        + `${config.serverUrl} — this is a local installation fault, not a statement about the server. The package `
+        + `ships its dist/ as a build output: run the workspace build, or reinstall if this is a packaged install.`,
       'token-refused':
         `${preamble} and the t3code server at ${config.serverUrl} answered, but REFUSED the bootstrap token (${detail}). `
         + `The server is reachable — the credential is not usable. Most likely it is a pairing-issued one-time token that a `

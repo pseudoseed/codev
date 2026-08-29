@@ -52,6 +52,14 @@ jobs:
         working-directory: packages/artifact-canvas
         run: pnpm build && pnpm build:smoke
 
+      # t3-client first: porch-driver depends on it, and CI previously built the
+      # dependent without its dependency, so packages/t3-client/dist never existed
+      # in any job. Anything importing @cluesmith/t3-client/* at test time resolved
+      # to a missing ./dist/*.js.
+      - name: Build t3-client package
+        working-directory: packages/t3-client
+        run: pnpm build
+
       - name: Build porch-driver package
         working-directory: packages/porch-driver
         run: pnpm build
@@ -250,6 +258,14 @@ jobs:
         working-directory: packages/types
         run: pnpm build
 
+      - name: Build t3-client package
+        working-directory: packages/t3-client
+        run: pnpm build
+
+      - name: Build porch-driver package
+        working-directory: packages/porch-driver
+        run: pnpm build
+
       - name: Build package
         working-directory: packages/codev
         run: pnpm build
@@ -266,13 +282,21 @@ jobs:
         working-directory: packages/types
         run: pnpm pack
 
+      - name: Pack t3-client tarball
+        working-directory: packages/t3-client
+        run: pnpm pack
+
+      - name: Pack porch-driver tarball
+        working-directory: packages/porch-driver
+        run: pnpm pack
+
       - name: Pack tarball
         working-directory: packages/codev
         run: pnpm pack
 
       - name: Verify install from tarball
         working-directory: packages/codev
-        run: node scripts/verify-install.mjs cluesmith-codev-*.tgz ../core/cluesmith-codev-core-*.tgz ../sdk/cluesmith-codev-sdk-*.tgz ../types/cluesmith-codev-types-*.tgz
+        run: node scripts/verify-install.mjs cluesmith-codev-*.tgz ../core/cluesmith-codev-core-*.tgz ../sdk/cluesmith-codev-sdk-*.tgz ../types/cluesmith-codev-types-*.tgz ../t3-client/cluesmith-t3-client-*.tgz ../porch-driver/cluesmith-porch-driver-*.tgz
 
   v2-playwright:
     name: v2 Playwright

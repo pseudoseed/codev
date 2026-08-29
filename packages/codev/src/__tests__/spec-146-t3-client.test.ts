@@ -1809,17 +1809,27 @@ describe('spec 146 phase 2: the package is loadable the way a consumer loads it'
       'the root build must build t3-client, or its dist exists only by accident',
     ).toContain('@cluesmith/t3-client build');
 
+    // BOTH `types` and `default` point into dist, which is a build output. Assert the
+    // SOURCE each is compiled from rather than the artifact itself, so this test stays
+    // meaningful in a clean checkout.
+    //
+    // `types` used to point at `./src/*.ts` and was checked literally, which happened to
+    // satisfy that property. Repointing it at `./dist/*.d.ts` — correct for a published
+    // package, since consumers should typecheck declarations rather than our source —
+    // silently turned this into an assertion that a build had run, and it went red in the
+    // one environment it exists to protect. A test that only passes because the
+    // environment got richer has stopped testing what it was written to test.
+    const sourceFor = (target: string) =>
+      target.replace(/^\.\/dist\//, './src/').replace(/\.d\.ts$/, '.ts').replace(/\.js$/, '.ts');
+
     for (const [subpath, target] of Object.entries(manifest.exports)) {
-      const typesPath = join(pkgDir, target.types);
-      expect(existsSync(typesPath), `${subpath} types target ${target.types} is missing`).toBe(true);
-      // `default` points into dist, which is a build output — assert the SOURCE
-      // it is compiled from exists rather than requiring a build to have run,
-      // so this test is meaningful in a clean checkout too.
-      const source = target.default.replace(/^\.\/dist\//, './src/').replace(/\.js$/, '.ts');
-      expect(
-        existsSync(join(pkgDir, source)),
-        `${subpath} default ${target.default} has no source at ${source}`,
-      ).toBe(true);
+      for (const [field, value] of [['types', target.types], ['default', target.default]] as const) {
+        const source = sourceFor(value);
+        expect(
+          existsSync(join(pkgDir, source)),
+          `${subpath} ${field} ${value} has no source at ${source}`,
+        ).toBe(true);
+      }
     }
   });
 });
