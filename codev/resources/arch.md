@@ -15,7 +15,7 @@ Codev is a Human-Agent Software Development Operating System. This repository se
 - **Agent Farm**: Start with the Architecture Overview diagram in this document, then `packages/codev/src/agent-farm/`
 - **Client SDK**: `packages/sdk/` — TowerClient, workspace encoding, EscapeBuffer, ReconnectPolicy, SSE (environment-agnostic; every client's path to Tower)
 - **Server Runtime**: `packages/core/` — local-key issuance, homedir-derived paths (server-side only)
-- **VS Code Extension**: `apps/vscode/` — thin client over Tower API
+- **Retained VS Code source (unsupported)**: `apps/vscode/` — excluded from the workspace build and npm package
 - **Dashboard**: `apps/web/` — React SPA served by Tower
 - **v2 site**: `apps/v2/` — live hierarchy at `/v2/`; types from `@cluesmith/codev-types`, no SDK behaviour
 - **Consult Tool**: See `packages/codev/src/commands/consult/` and `codev/roles/consultant.md`
@@ -116,12 +116,12 @@ This section provides comprehensive documentation of how the Agent Farm (`afx`) 
 
 ### Architecture Overview
 
-Agent Farm orchestrates multiple AI agents working in parallel on a codebase. Two clients connect to the same Tower server:
+Agent Farm orchestrates multiple AI agents working in parallel on a codebase. The browser dashboard is the supported Tower client. The VS Code source shown beside it is retained only to reduce upstream merge conflicts; it is unsupported, unbuilt, and unshipped:
 
 ```
 ┌─────────────────────────────┐  ┌─────────────────────────────┐
-│  Browser Dashboard          │  │  VS Code Extension          │
-│  (React SPA on Tower :4100) │  │  (apps/vscode)              │
+│  Browser Dashboard          │  │  Retained VS Code source    │
+│  (React SPA on Tower :4100) │  │  (unsupported / unbuilt)    │
 │                             │  │                             │
 │  xterm.js terminals         │  │  Pseudoterminal ↔ WS        │
 │  Work View (React)          │  │  Sidebar TreeViews          │
@@ -166,8 +166,8 @@ Agent Farm orchestrates multiple AI agents working in parallel on a codebase. Tw
 5. **Git Worktrees**: Isolated working directories for each Builder
 6. **SQLite Databases**: State persistence (local and global)
 
-**Data Flow** (both clients use the same Tower API):
-1. User opens browser dashboard at `http://localhost:4100` or VS Code auto-connects on workspace open
+**Data Flow**:
+1. User opens the browser dashboard at `http://localhost:4100`
 2. Client subscribes to SSE at `/api/events` for real-time push notifications
 3. Client fetches workspace state via `/api/overview` and `/workspace/:encoded/api/state`
 4. Terminals connect via WebSocket to `/workspace/:encoded/ws/terminal/<id>` (binary protocol: `0x00` control, `0x01` data)
@@ -366,7 +366,7 @@ A workspace can host more than one architect terminal. Each architect has a stab
 - Left-pane architect tab strip (`ArchitectTabStrip.tsx`) shows one tab per architect. `main`'s tab is non-closable; sibling tabs render a close button that triggers a confirmation modal (informational list of in-flight builders; remove proceeds regardless per OQ-A). Phase 4 of Spec 786.
 - Spec 786 / Issue #764: when only one architect is registered (N=1), the tab label is the literal `'Architect'` rather than the internal `'main'` identifier. When N>1, labels use the architect name. The `architectName` property carries identity for deep-link/persistence regardless of label.
 
-**VSCode extension (Spec 786 Phase 6 + Spec 823 Phase 4)**:
+**Retained VS Code source (unsupported; Spec 786 Phase 6 + Spec 823 Phase 4)**:
 - The Workspace sidebar has an expandable "Architects" tree section (replacing the pre-786 singleton "Open Architect" row). One child per architect. Click → opens that architect's terminal.
 - `terminal-manager.ts` keys terminal slots by architect name (`architect:${name}`), not the pre-786 singleton `'architect'`. Each architect gets its own VSCode terminal.
 - Right-click context menu on a sibling entry → "Remove Architect" (gated on `viewItem == workspace-architect-sibling`; `main` uses `'workspace-architect-main'` and gets no remove option).
@@ -1122,10 +1122,9 @@ const CONFIG = {
 - **React 19 + Vite 6**: Dashboard SPA at `apps/web/` (standalone workspace member)
 - **xterm.js**: Terminal emulator in the browser dashboard (with `customGlyphs: true` for Unicode)
 
-### VS Code Extension
-- **VS Code Extension API**: TreeViews, Pseudoterminal, StatusBar, Commands, Decorations
-- **esbuild**: Bundles extension + codev-sdk into single `dist/extension.js`
-- **ws**: WebSocket client for terminal binary protocol
+### Retained VS Code source
+- `apps/vscode` remains only to reduce recurring conflicts with active upstream development.
+- It is unsupported and excluded from workspace discovery, builds, tests, releases, and packaging.
 
 ### Testing Framework
 - **Vitest**: Unit and integration tests (`packages/codev/src/__tests__/`)
@@ -1148,8 +1147,9 @@ const CONFIG = {
 
 ## Monorepo Structure
 
-The repository uses pnpm workspaces (`packages/*` + `apps/*`). Shared libraries
-live in `packages/`; end-user client surfaces live in `apps/`:
+The repository uses pnpm workspaces (`packages/*` + `apps/*`), with `apps/vscode`
+explicitly negated. Shared libraries live in `packages/`; supported end-user client surfaces
+live in `apps/`. The retained VS Code source is not a workspace member:
 
 | Package | npm Name | Purpose |
 |---------|----------|---------|
@@ -1161,8 +1161,7 @@ live in `packages/`; end-user client surfaces live in `apps/`:
 | `packages/artifact-canvas` | `@cluesmith/codev-artifact-canvas` | Reusable React surface for rendering/reviewing Codev markdown artifacts |
 | `apps/web` | `@cluesmith/codev-web` | React dashboard SPA (built into codev package) |
 | `apps/v2` | `@cluesmith/codev-v2` | Live hierarchy at `/v2/`. Types from `@cluesmith/codev-types` only — no SDK behaviour. Built into `packages/codev/v2-dist` |
-| `apps/vscode` | `codev-vscode` (Marketplace: `cluesmith.codev-vscode`) | VS Code extension |
-| `apps/streamdeck` | `@cluesmith/codev-streamdeck` (private; Elgato plugin UUID `com.cluesmith.codev`) | Stream Deck plugin — outside-in controller: overview reads + SSE + command-relay verbs via the sdk's `controller`/`node` subpaths. Imported from codev-integrations under #1347; packs on demand into a `.sdPlugin` Marketplace bundle (not yet Marketplace-distributed — initial Maker Console submission is a tracked follow-up), versioned in workspace lockstep (manifest `Version` = package version + build segment, pinned by a version-sync test) |
+| `apps/vscode` | `codev-vscode` | Retained unsupported source; excluded from pnpm workspace discovery and npm packaging |
 
 **Dependency graph:**
 ```
@@ -1171,15 +1170,14 @@ codev-types (wire contracts; the ONLY package imported by both sides)
 codev-core (server: key issuance,   codev-sdk (client: TowerClient, SSE,
   homedir paths)                      EscapeBuffer, pure helpers)
      ↓                                    ↓
-codev (CLI + Tower)                vscode (extension)     dashboard (React SPA)
-  imports core + sdk                 imports sdk            imports sdk
-  imports types (dev)                imports types (dev)    imports types (dev)
+codev (CLI + Tower)                dashboard (React SPA)
+  imports core + sdk                 imports sdk
+  imports types (dev)                imports types (dev)
 
 v2 site (apps/v2)
   imports types only — own fetch, own SSE reader, own reconnect
 
-streamdeck (Elgato plugin)
-  imports sdk only (controller + node subpaths; own import-boundary test)
+vscode (retained unsupported source; outside the workspace/package)
 ```
 
 **Isolation invariant (issue #1189):** `codev-core` and `codev-sdk` never import
@@ -1191,69 +1189,30 @@ duplication: Tower's own reconnect backoff + WS close code live in a private
 copy at `packages/codev/src/agent-farm/lib/reconnect-backoff.ts` because the
 server must not import the client sdk.
 
-**Build order:** `pnpm build` from root builds artifact-canvas (consumed by the VS Code extension; zero workspace deps, so no ordering hazard) and then `@cluesmith/codev`, whose own build script first builds its graph-derived workspace-dependency closure via `pnpm --filter "@cluesmith/codev^..." build` (types, sdk, core, apps/web in topological order, then the dashboard copy — Issue #1352, replacing the drift-prone hand-list). The closure guarantees `types/dist` exists, which the VS Code extension's esbuild bundle needs: it resolves the package's runtime `exports.default` (`./dist/index.js`), and a missing `types/dist` breaks the extension build even though tsc and vite resolve it from source via `exports.types` (`./src/index.ts`).
+**Build order:** `pnpm build` from root builds artifact-canvas and then `@cluesmith/codev`.
+The codev build first builds its graph-derived workspace-dependency closure via
+`pnpm --filter "@cluesmith/codev^..." build` (types, sdk, core, apps/web and apps/v2 in
+topological order, then the dashboard copies — Issue #1352, replacing the drift-prone
+hand-list). `apps/vscode` is outside this graph.
 
 **Publishing:** `codev-core` and `codev-sdk` must be published to npm before `codev` (runtime dependencies).
 
-**Published-SDK canary:** with every sdk consumer now on `workspace:*`, nothing in normal CI exercises the *published* npm artifact. `.github/workflows/sdk-canary.yml` rebuilds `apps/streamdeck` against `@cluesmith/codev-sdk@latest` from the registry (types, tests, bundle, validate) — manual-only until the sdk's first npm publish; enable its weekly cron after that release (#1347, mitigation from #1189).
+**Published-SDK coverage:** retiring the Stream Deck plugin also retired the repository's only
+canary against the already-published `@cluesmith/codev-sdk`. Normal CI resolves the sdk from the
+workspace, so it does not exercise the registry artifact; external-consumer fidelity currently
+has no automated in-repo check.
 
-**Per-package build tools:** most packages compile with plain `tsc`; `apps/web` uses Vite; `apps/vscode` uses esbuild; `packages/artifact-canvas` produces its dual-format (CJS + ESM) library via **tsdown** (Rolldown-powered, the maintained successor to tsup — migrated in Issue #1187). tsdown emits per-format filenames (`index.mjs`/`index.d.mts` for ESM, `index.cjs`/`index.d.cts` for CJS), so the package's `exports` map uses nested `import`/`require` conditions each pointing at their matching declaration file.
+**Per-package build tools:** most packages compile with plain `tsc`; `apps/web` uses Vite; `packages/artifact-canvas` produces its dual-format (CJS + ESM) library via **tsdown** (Rolldown-powered, the maintained successor to tsup — migrated in Issue #1187). tsdown emits per-format filenames (`index.mjs`/`index.d.mts` for ESM, `index.cjs`/`index.d.cts` for CJS), so the package's `exports` map uses nested `import`/`require` conditions each pointing at their matching declaration file.
 
 ## VS Code Extension
 
-The VS Code extension (`apps/vscode`) is a thin client over Tower's existing API. It adds VS Code-specific UI on top of `TowerClient` from `@cluesmith/codev-sdk` — no Tower logic is reimplemented.
+`apps/vscode` is retained source, not a supported Codev surface. It is explicitly excluded from
+pnpm workspace discovery and from the root npm package, and Codev no longer builds, tests, or
+releases it. The code remains only because upstream `cluesmith/codev` continues to develop this
+tree heavily; keeping it avoids a recurring delete/modify conflict on every upstream merge.
 
-### Architecture
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                    VS Code Extension                          │
-│                                                               │
-│  ConnectionManager (singleton)                                │
-│  ├── TowerClient (from @cluesmith/codev-sdk)                 │
-│  ├── AuthWrapper (SecretStorage + readLocalKey)               │
-│  ├── WorkspaceDetector (opened folder must contain           │
-│  │                      .codev/ or codev/; no ancestor walk) │
-│  ├── SSEClient (real-time state updates)                      │
-│  └── TowerStarter (auto-start as detached daemon)             │
-│                                                               │
-│  UI Layer                                                     │
-│  ├── Sidebar: 7 TreeView sections (overview + team + status)  │
-│  ├── Panel: codevPanel container (#812) for wide-short views  │
-│  ├── Terminals: Pseudoterminal ↔ WebSocket binary protocol    │
-│  ├── Status Bar: builder count + blocked gates                │
-│  ├── Commands: spawn, send, approve, cleanup, tunnel, cron    │
-│  └── Review: snippet + Decorations API highlighting           │
-│                                                               │
-│  esbuild → dist/extension.js (bundles codev-sdk inline)      │
-└──────────────┬───────────────────────────────────────────────┘
-               │ HTTP + WebSocket + SSE (localhost:4100)
-┌──────────────▼───────────────────────────────────────────────┐
-│                    Tower Server                               │
-│              (unchanged — same API as browser dashboard)      │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### Key Design Decisions
-
-- **Thin client**: All state stays in Tower/shellper. Extension is a viewport, not a second orchestrator.
-- **TowerClient reuse**: Extension imports `TowerClient` from `codev-sdk` — same class the CLI composes. No duplicate REST/auth/encoding logic. The extension injects its own auth (SecretStorage-cached reader over `@cluesmith/codev-sdk/node`).
-- **TerminalLocation.Editor**: Terminals open directly in editor area via `ViewColumn.One` (architect) and `ViewColumn.Two` (builders). Uses stable VS Code API, not the undocumented `moveIntoEditor` command.
-- **Subpath exports**: `codev-sdk` uses subpath exports (`./tower-client`, `./escape-buffer`, etc.); its environment-agnostic graph is Node-builtin-free by CI-enforced test, so nothing can leak into the dashboard's Vite build or a Metro bundle.
-- **Injectable auth**: `TowerClient` accepts a `getAuthKey` callback. CLI uses `ensureLocalKey()` (creates key if missing). Extension uses `readLocalKey()` + `SecretStorage` (never creates keys).
-- **Editor-tab webviews (#920)**: Richer-than-TreeView surfaces use `vscode.window.createWebviewPanel` (editor area), not a sidebar `WebviewView`. Pattern: the panel is a thin view that posts debounced criteria to the extension host; **filtering/sorting runs host-side** in vscode-free pure helpers (`views/backlog-filter.ts`, vitest-tested) so logic stays testable and sensitive data (e.g. issue bodies) never crosses into the webview — only display rows do. HTML/CSS/JS live in a sibling `*.template.ts` (no esbuild asset-copy step); theming is **CSS variables only** (`--vscode-*`) so dark/light/high-contrast render natively; CSP is nonce'd. First instance: the "Search Backlog" panel (`webviews/backlog-search-panel.ts`), fed by the dedicated `issue-search` forge concept → `GET /api/issue-search` (kept separate from `issue-list` so `/api/overview` stays body-free).
-- **Panel view container (#812)**: The extension contributes view containers to **two** locations — `activitybar.codev` (the 7-section sidebar) and `panel.codevPanel` (bottom panel, wide-short geometry). The panel exists as scaffolding for views whose shape suits a wide layout (timelines, rosters, tables); migrations are tracked separately (#813/#814/#815). Panel views are plain `TreeDataProvider`s, identical in kind to sidebar providers — VS Code lets the same view types live in either location. A `codev.panelContainerEmpty` context key gates a placeholder view that hides once real views register — **#921's `codev.dev` is the first such view, so the panel now ships non-empty** (the key is seeded `false`). VS Code gives no control over panel-tab *position* (it lands last, in the `…` overflow), so the extension does a one-time, globalState-guarded reveal (`workbench.view.extension.codevPanel`) on first activation for discoverability.
-- **Codev Dev surface (#921)**: The single `afx dev` PTY gets two complementary surfaces, both driven off the one `TerminalManager.onDidChangeDevTerminals` event (single source of truth, so chip and tab never drift on start/stop/swap): a `codev.dev` panel `TreeDataProvider` (first real `codevPanel` tenant — status header of target / live-ticking uptime / best-effort port, plus title-bar Stop / Restart / Switch-Target / Show-Hide-sidebar actions gated by a `codev.devRunning` key) and an always-visible **status-bar chip** (`StatusBarItem`, left, priority 99) shown only while a dev runs, clicking through to the tab. The native `Codev: <name> (dev)` terminal stays as the output surface (coexist) — the new tab is a status/control surface, not an output mirror, so there is no second PTY/xterm re-plumbing. Uptime needs a start time `listDevTerminals()` doesn't carry, so `TerminalManager` keeps a `builderId → startedAt` map. Pure formatters (`views/dev-format.ts`: uptime, port-from-config) are vitest-tested.
-- **Startup CLI preflight (#791)**: On `activate()` the extension verifies the `codev` CLI is installed and at least its own `package.json` version (`codev --version`, resolved like `resolveAfxPath`, cached per session, 400ms-bounded, fire-and-forget so activation never blocks). Missing → `Get started with Codev` walkthrough; outdated → upgrade notification; either dismissed → CLI-dependent commands no-op with one "run setup" toast. Commands register through two helpers — `reg` (unguarded) and `regCli` (guarded) — so the registrar name *is* the guard policy (no separate list). Preflight also sets the `codev.cliReady` context key, which drives the walkthrough's Verify-step completion. Lives in `src/preflight/` (`preflight-core.ts` pure + unit-tested, `preflight.ts` vscode glue).
-- **Markdown Preview / artifact-canvas host integration (#859)**: The first integration of the shared `@cluesmith/codev-artifact-canvas` React surface into a host. A read-only `CustomTextEditor` (`codev.markdownPreview`, `priority: "option"` so it never replaces the default `.md` editor; selector scoped to `**/codev/{specs,plans,reviews}/**/*.md`) renders an artifact and lets a reviewer add comments by hovering a block and clicking `+`. It is the extension's **first bundled React webview**: a *second* esbuild entry (`esbuild.js`, browser/IIFE, bundles react/react-dom/the canvas + emits `markdown-preview.css`), type-checked by a dedicated `tsconfig.webview.json` (DOM libs) since the host `tsconfig.json` excludes the browser dir. Host↔webview bridge (`markdown-preview/preview-provider.ts`, HTML in a sibling `preview-template.ts` per #920; the two `postMessage` directions are a named protocol in `markdown-preview/messages.ts`, `HostToWebviewMessage` / `WebviewToHostMessage`, shared by both ends so they can't drift — #1107): the host posts **raw** document text + parsed markers; the webview mounts `<ArtifactCanvas>`; the reviewer's `+`/Enter opens an **inline composer rendered in-flow below the block** (`overlays/CommentComposer.tsx`, portalled into a placeholder there — #1107 replaced the old center-top `showInputBox`); on submit `onAddComment(line, text)` → host `WorkspaceEdit` → the round-trip goes through the file text. (Host-side inbound `postMessage` data is untrusted, so the host still validates payload fields at runtime despite the named type.) **Cross-cutting invariants this established**: (1) the on-disk REVIEW-marker convention (`<!-- REVIEW(@author): text -->`, a marker annotates the nearest non-marker line above it) lives in `@cluesmith/codev-sdk/review-markers` so every host (vscode now, dashboard later) writes/parses identical bytes — the editor Comments-API path (`comments/plan-review.ts`) shares it. (2) The canvas renderer runs markdown-it with **`html: true` + DOMPurify as the sole guard** (#1042 amends spec-945 D7: safe static HTML renders, scripts/handlers/`javascript:` stripped, document JS never executes) and **strips full-line HTML comments before block parsing** with a cleaned→original line map (#1036), so markers never render as text and never split a multi-line block while `data-line` stays accurate.
-- **Full-row "+" affordance — row-scoped geometry contract (#1343)**: The canvas's add-comment affordance follows the GitHub-diff pattern: every top-level block is a full-width row carrying its own **block-local leading space** (`--codev-canvas-gutter` padding on `.codev-artifact-canvas-body > [data-line]`; there is no canvas-level gutter), and the "+" renders **inside the hovered row's own DOM** (a single wrapper node moved between rows, React portal into it), positioned only against that row — pointer-line tracked in tall blocks, first-line centered on keyboard focus. This replaced the #863 canvas-anchored overlay and deleted the #1236 grace/pin damping outright (with trigger and target coincident, instant re-anchor and immediate dismiss are correct). **Contract**: affordance geometry must stay row-scoped — no `offsetTop`-against-the-canvas positioning, no canvas-level gutters — because #1380's multi-column mode relies on rows carrying their gutter and affordance through CSS column fragmentation (block padding fragments; absolutely-positioned canvas geometry does not). Known v1 limitation: a horizontally-scrolled wide table carries its "+" with the scroll (`pre` is immune — its scroll container is the inner `code`, so the row box holding the "+" never scrolls).
-- **Horizontal reading mode — mode semantics live in the canvas package (#1380)**: `<ArtifactCanvas>` owns the reading mode end-to-end (vocabulary, coercion of untrusted values to `vertical`, the toggle, CSS multicol mechanics via `.codev-canvas-mode-horizontal` on the root scoping `column-width`/`column-fill: auto` onto the body, wheel remap, column paging, fragment-aware "+" placement in flow coordinates, progress readout, minimap suppression). Hosts have exactly two jobs (spec 1380 Constraint 3): a **height context** (a `height: 100%` chain; an unbounded embed self-bounds to `100vh`) and **per-user persistence** via `initialReadingMode`/`onReadingModeChange` (VS Code: `globalState` behind `sanitizeReadingMode`; dev page: `localStorage`). The VS Code webview **bootstraps the persisted mode inside the initial HTML** (`data-reading-mode` on `#root`) because the canvas mounts before the first host message — a later message cannot initialize it; only `WebviewToHostMessage` gained a member (`readingModeChange`). Renderer invariant from the same project (#1396): **fence rows carry `data-line` on the `pre`** (matching `code_block`), with `tabindex` retained on the inner `code` because it is the fence's scroll container — `pre[data-line]` selectors are meaningful again, and fences are two tab stops by design. Fragmentation protection is enforced with descendant selectors plus height caps derived from the JS-published `--codev-canvas-column-height`, because Chromium fragments-and-overflows a protected block taller than the column rather than honoring `break-inside: avoid`. Real-browser regression suite: `packages/artifact-canvas/playwright/` (own `@playwright/test` devDep, vite `examples/` webServer, `canvas-browser` CI job). **Vertical-mode scroll container (#1501)**: in vertical reading mode the **host page** (the document scrolling element) is the vertical scroller, NOT the canvas body — the body only becomes a scroll container in horizontal mode (`overflow-x: auto`). `viewportStartLine` already encodes this (it measures block visibility against the window top, not the body rect), and the `viewport-down`/`viewport-up` command (the Stream Deck Scroll dial on a canvas) pans that document scroller. A host that puts the canvas inside its own `overflow` scroller would break `viewportStartLine` too, so this is a single shared host contract, not a per-command assumption.
-- **Review-comment edit + preview-side delete — line+content identity (#1055)**: Extends the #859 review-marker surfaces to a full edit (both surfaces) + preview-delete tool **without any on-disk format change** (a stable-ID "format v2" was explicitly deferred to #1131). The identity a surface uses to locate one marker is its **physical file line** (`markerLine`), surfaced by `parseReviewMarkers` (the parser's own loop index) so a stack of comments on one block — which all share the annotated `line` — is individually addressable. `@cluesmith/codev-sdk/review-markers` owns the shared mechanics: `matchesExpectedMarker(lineText, author, bodyPrefix)` is an **optimistic-concurrency check** (author + whitespace-normalized body-prefix) and `rewriteReviewMarkerBody` re-serializes a marker's body while reading the author *off the existing line* (an edit can never reassign authorship). Every mutating write verifies first: the preview host (`markdown-preview/preview-provider.ts`, message types `editComment`/`deleteComment`) re-reads the line at `markerLine` and, on mismatch (the file changed between click and write), **refuses the write, re-pushes the document, and surfaces an info toast** rather than corrupting a different marker — the preview auto-refreshes anyway, so a race fails loudly. The canvas exposes optional `onEditComment`/`onDeleteComment` props (a read-only host renders plain cards) and per-card edit/delete affordances built as imperative DOM with inline stroke SVGs (host-agnostic — the webview can't assume VS Code's codicon font); a delegated body click routes them by `data-marker-line`. The editor Comments-API path (`comments/plan-review.ts`) gained an edit action (`ReviewComment` class carrying its parent thread; `startEditReviewComment` flips `mode` to `Editing` and **reassigns `thread.comments`** since VS Code only re-renders on reassignment; `saveEditReviewComment` rewrites via the same core helper). Multi-line bodies still collapse to one line at write time (`serializeReviewMarker` normalizes whitespace) — inherent to the single-line marker, deferred to #1131.
-- **Builders diff-review: navigation + active-file sync (#1060/#1066)**: The "current builder/file" in a diff review is **derived from the active editor, not stored**. The diff-inject registry (`diff-inject-codelens.ts`) maps each right-side worktree fsPath → `{ builderId, relPath, hunks }`; because a worktree-absolute path is unique per builder, two builders that changed the same relative path stay distinct. Everything keys off `getDiffInjectEntry(activeEditor.fsPath)`: cross-file keyboard nav (`codev.diffNextFile`/`diffPreviousFile`, #1060) and the Builders-tree active-file reveal (#1066). Navigation walks **one builder's** changed-file list (it never crosses builders) in the **visible tree order** — depth-first via `flattenTreeOrder(buildFilePathTree(...))` in tree-view mode, raw git `--name-status` order in flat mode — and **wraps** at both ends (`computeNavTarget` modulo) to match VSCode's built-in hunk navigation, which also wraps. The reveal (#1066, Explorer-style, gated by `codev.buildersAutoReveal`) requires two pieces of TreeView groundwork: file rows carry a stable `<builderId>::<relPath>` id and `BuildersProvider.getParent` reconstructs the full chain (file → compacted folder(s) → builder → group), since `reveal` matches by id and walks parents while the subtree is still collapsed. It fires on **both** the active-editor change AND the diff-inject registry change, because a programmatic diff open registers its entry *after* the editor activates (same dual-trigger the lens context-key sync uses).
-- **Agents view + group-by axes (#1104)**: The sidebar's primary work view is **Agents** (view id `codev.agents`, formerly `codev.builders` — only the user-facing id/label changed; internal symbols like `BuildersProvider` and the `codev.buildersGroupBy` setting keep their names). It groups in-flight builders by **exactly one of three axes** (`stage` | `area` | `architect`), each a `BuilderGrouping` strategy in `views/builder-grouping.ts`; `architect` groups by `spawnedByArchitect` (null folds into `main`, matching the affinity router) and a childless architect produces no group, so the work view shows owners-of-work while the *full* roster stays in Workspace > Architects. The axis is a single toolbar button (see the no-`toggled` lesson). The architect roster the Add-Architect flow needs rides on **`/api/overview` as `architects: ArchitectState[]`** (additive wire field), built by a shared `liveArchitects(entry, manager)` helper in `tower-routes.ts` reused by the `/api/state` dashboard-state path so the two payloads can't drift — `liveArchitects` (running-session set, from `terminal_sessions`) is distinct from state.ts's `getArchitects` (persisted `architect` table). `Codev: Add Architect` is conversational: it resolves `main` from that roster and routes a request via `sendMessage('architect:main', …)` rather than creating the architect directly.
-- **IDE-mode dual activation + layer model (#1144)**: One extension artifact ships through two channels, the marketplace vsix (guest mode) and the same files baked into the Codev IDE fork as a built-in (IDE mode), with the split made at **runtime** via `vscode.env.appName === CODEV_IDE_APP_NAME` (`src/ide-mode.ts`; the constant is a **cross-repo contract** with the fork's product.json `nameLong` and the only place the string is spelled; a user-installed marketplace copy shadowing the built-in is safe because detection is appName-based, not channel-based). `activationEvents` includes `onStartupFinished`, so `activate()` runs in **every window of every install**; which side effects may fire is decided by a pure activation-tier model: `full` (a codev workspace is open), `ide-empty` (IDE with no codev workspace: Tower-level surfaces + empty-window onboarding), `dormant` (guest with no codev workspace: **provably inert**, meaning no Tower auto-start, no preflight, no status bar, no focus steal, no state writes; commands/providers still register so palette invocations degrade gracefully). `activationPolicy(tier)` is the unit-tested switchboard; the five gated side effects live in `extension.ts`. Three context keys drive the UI: `codev.ideMode`; `codev.hasWorkspace` (**codev-workspace-presence**: the opened folder itself contains `codev/`/`.codev/` or the `codev.workspacePath` override points at one; deliberately NOT bare folder-presence, and detection deliberately does **no ancestor walk**, so a codev-enabled home directory cannot leak into every window under it); and `codev.stateKnown` (set first-thing in `activate()`; unset context keys evaluate *false*, so `viewsWelcome`/`when` clauses gate on it to avoid asserting wrong states during the workbench-restore-to-activation gap, and a `!codev.stateKnown` "Loading Codev…" welcome covers the pre-provider window). Workspace-bound views carry `when: codev.hasWorkspace`; the Agents view is the ungated anchor carrying per-quadrant welcome content. The IDE empty-window onboarding (container focus, one-time globalState-gated first-run toast + the #791 walkthrough) is **runtime code by hard constraint**: extension-contributed `configurationDefaults` register asynchronously and race first render (fork-verified, roughly 1-in-3 leak), so nothing first-launch-visible may ride on them.
-- **Builder review-comment queue (#1037)**: The builder diff carries two feedback surfaces that **never merge state**: #789's fire-and-forget forward-to-PTY injection, and a structured per-builder comment queue. Queued comments persist in `.builders/<id>/.codev/pending-comments.json` (worktree-local, so the queue survives reloads, cannot mix across builders, and dies with `afx cleanup`; the file is git-invisible via a managed block the extension appends to the repo's shared `$GIT_COMMON_DIR/info/exclude`, whose `.builder-*` family glob also silences spawn scaffolding files). `ReviewQueueStore` (`review-queue/store.ts`) is the single owner of those files — every surface (inline `codev-builder-review` comment threads, the status-bar `Submit Review (N)` counter, the submit/discard commands) reads through it and reacts to its `onDidChangeQueue` event; cross-window sync rides a debounced FileSystemWatcher with own-write echo suppression. Which surface the diff codelens offers is `codev.diffCodelensMode` (`forward` default preserves #789; the context menu always offers both). `Submit Review` packages the queue into one markdown message and types it into the builder PTY wrapped in bracketed-paste escapes (raw `\n` on the PTY would submit the prompt), deliberately without Enter — the human reviews and sends. The store's read + event API is the seam #1049's contextual panel modes will render from.
-- **Running-Tower version probe (#983)**: A second preflight dimension catches the case the CLI check structurally can't — an `npm install -g` upgrade that updated the on-disk binary but left **Tower running stale in-memory code**. Tower exposes read-only `GET /api/version` (`{ version, startedAt }`, wire type `TowerVersionInfo` in `codev-types`, served from `RouteContext` so it reports the *running* process's version, not the disk binary; unauthenticated like `/health`). On each `connected` transition the extension probes it (`TowerClient.getVersion()`, returning the raw `{ status }` so the preflight distinguishes a 404 "Tower too old to report" from an unreachable Tower). Divergence fires **only on `running < installedCLI`** — the case a restart actually fixes; running-vs-extension is left to #791 (a restart can't load code that isn't installed). The toast offers a `Restart Tower` action (`afx tower stop && afx tower start`, local host only — safe to self-invoke because #991 scoped `afx tower stop` to the listening process; remote hosts get informational wording). The two async inputs (installed-CLI version, running-Tower version) are reconciled against the startup race by re-probing once the CLI check resolves. Decision/wording logic is pure + unit-tested in `preflight-core.ts` (`decideTowerStatus`, `towerDivergenceMessage`).
+The retained implementation still targets Tower's retired terminal APIs and is not expected to
+work. Its README carries the same warning. Delete it only after upstream stops developing it.
 
 ## Repository Dual Nature
 
@@ -1333,7 +1292,7 @@ codev/                                  # Project root (pnpm monorepo)
 │   └── src/                           # React 19 + Vite 6 + xterm.js + Recharts
 ├── apps/v2/                            # @cluesmith/codev-v2 (live hierarchy at /v2/; types only)
 │   └── src/                           # React 19 + Vite 6; reducer over GET /v2/events
-├── apps/vscode/                        # VS Code extension (Marketplace: cluesmith.codev-vscode; end-user surface)
+├── apps/vscode/                        # Retained unsupported source; not built or packaged
 │   └── src/
 │       ├── extension.ts               # Activation, command/view registration
 │       ├── connection-manager.ts      # Singleton wrapping TowerClient
@@ -2157,44 +2116,6 @@ the lease — delivery is fire-and-forget and proves nothing about the host stil
 The command vocabulary lives in `@cluesmith/codev-types` (`canvas-command.ts`) as a closed union;
 Tower, the sdk and the canvas package each keep a local `satisfies`-bound copy of any runtime list
 because codev-types is type-only for all three.
-
-### Stream Deck ↔ VSCode shared-selection coherence (Spec 1410)
-
-The deck is a remote and VSCode is the screen, bound by **one shared selection**. Two surfaces have
-*different* anchors, and keeping them equal is the invariant future deck/vscode work must preserve:
-
-- **Row 1/Row 2 keys** act on the deck's shared cursor (`selectedBuilder()`); the **review dials**
-  act on VSCode's *focused* editor / MRU canvas. They stay the same builder because (a) a Row 1 press
-  is *select + open* in one gesture, and (b) focusing a builder artifact fires the **`builder-active`
-  activity hook** → deep link → the deck's `syncToBuilder`. Spec 1410 extends that back-sync to a
-  focused **canvas** (`preview-provider.ts`, resolving the owner by worktree-path prefix), not only a
-  diff (`announceActiveBuilderFromEditor`) — so canvas focus moves the deck selection too. The hook is
-  personal-config (`~/.codev/config.json`, `activityHooks`), so the VSCode→deck direction is opt-in.
-- **Review feedback is mode-neutral at the deck, mode-routed in VSCode.** A diff-dial press relays
-  `feedback-file`/`feedback-hunk`/`feedback-selection`; VSCode forwards immediately or enqueues per the
-  `codev.diffCodelensMode` workspace setting, and `send-queue` flushes. **All queue mutations go through
-  `ReviewQueueStore`** (the single source of truth, Spec 1037) — never a parallel path — so every surface
-  reflects deck-driven changes. Tower only *reads* the queue file to project the count.
-- **Overview wire (`OverviewData`)** carries `queuedFeedback: Record<builderId, count>` (a per-builder
-  **map**, never a scalar — the deck badge and #1049's Attention rollup both index it) and
-  `feedbackMode: 'forward' | 'queue'` (per-workspace scalar, read from `.vscode/settings.json`,
-  single-folder-workspace only, defaults to `forward`).
-- **Open Architect Terminal key (Spec 1463)** — a Row-2 key that opens an architect's terminal via
-  `open-architect-terminal` (relay → `codev.openArchitectTerminal`). Two PI modes: `builder` (default,
-  the selected builder's `spawnedByArchitect`; inert when none) and `main`. **The deck delegates the
-  `main`-else-first resolution policy to VSCode** (which already special-cases the literal `'main'` in
-  `openArchitectTerminal`), so it fires a name and never consumes `OverviewData.architects` (the
-  live-architect view) — one policy, one home. Two accepted residuals follow from the fire-and-forget
-  relay: in `main` mode when `main` is absent VSCode opens the first live architect while the face still
-  reads `Main`; and a live registration behind a dead PTY resolves fine. The face renders the resolved
-  architect name (the safeguard shown before a press), and because `resolve()` is shared by the
-  press path and the render path, that safeguard is **structural** — face and action can't drift,
-  there is one resolution. The lesson for the next key: **avoiding** the live-architect dependency
-  (fire a name, delegate policy to VSCode) beat handling it — the registry failure modes are simply
-  not this key's problem. Don't reach for `OverviewData.architects`. Paired-renamed with the builder key
-  (`Open Builder Terminal` / `Open Architect Terminal`); **the Elgato UUID is the stable identity**, so
-  renaming `Name`/face never orphans an already-placed key. Prerequisite: #1406 (spawn mis-attribution)
-  can make `builder` mode summon the wrong architect until fixed.
 
 ### Internal Dependencies
 - **Git**: Version control, worktrees for builder isolation
