@@ -793,12 +793,22 @@ export class TowerClient {
       fromWorkspace?: string;
       raw?: boolean;
       noEnter?: boolean;
+      /**
+       * Bypass the render gate: ready the target's prompt, then write the message.
+       *
+       * Issue #196: "ready the prompt" is two things — end any running turn AND clear an
+       * abandoned composer — and the keystrokes that do them are PER-HARNESS facts, not a
+       * fixed byte. Ctrl+C (`\x03`) does both on claude/codex and shells; on opencode it
+       * QUITS, so there the pair is ESC then Ctrl+U. Tower resolves them from the target
+       * session and reports what it wrote in {@link interruptKeys}.
+       */
       interrupt?: boolean;
       /**
        * Spec 1273: deliver the message as a bare ESC keystroke (`\x1b`) written
        * straight to the PTY — no formatting, no send-buffer deferral. This is the
        * verified mid-turn recovery: ESC ends the running turn so queued messages
-       * can process. Distinct from `interrupt`, which sends Ctrl+C (`\x03`).
+       * can process. Distinct from `interrupt`, which ALSO clears the composer and
+       * whose bytes are resolved per harness (#196) rather than being a fixed Ctrl+C.
        */
       escape?: boolean;
       /**

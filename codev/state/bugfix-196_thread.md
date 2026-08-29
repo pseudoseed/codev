@@ -486,3 +486,76 @@ functions whose signatures changed was checked. Exactly one was stale.
 so the neighbouring `expect(writes).toEqual([])` assertions cannot pass on a harness that observes
 nothing. It caught a real break in the harness itself, which is precisely the case it was written
 for.
+
+---
+
+## PR-gate review round: the architect's consolidated CMAP, and the five items
+
+### The CMAP was ARCHITECT-RUN, and that was a ruling, not a shortcut
+
+I raised a conflict rather than resolving it myself. Porch's PR prompt names three lanes —
+gemini, codex, claude — and requires three concrete verdicts. Two of those returned nothing on
+2026-08-29: **codex quota-exhausted account-wide**, **agy/gemini rate-limited**. The architect
+had already changed `.codev/config.json` to `porch.consultation.models: ['claude','opencode']`
+for that reason.
+
+The ruling: the architect's own lanes ARE the CMAP for this gate, run on the resolved tree
+`6b8081a5a` and posted at PR #205 comment 5464362460. **Two live lanes: claude (COMMENT, HIGH)
+and opencode (REQUEST_CHANGES, HIGH). codex and gemini produced NO verdict, and a silence is not
+an approval (#20).** That is what I report — two honest verdicts, not three claimed ones.
+
+My own `claude` lane attempt earlier had also failed, on project auto-detection: it enumerated
+every project in the repo instead of resolving `bugfix-196`. Recorded as a failed lane, never as
+a verdict.
+
+### The five items, and which one was a defect
+
+**1. `heldRemedy(..., canAutoClear = true)` — the only defect in the round.** The parameter
+defaulted to *promising* an automatic clearing keystroke. A caller that omits it re-arms #190 in
+prose: the operator is told to wait for a repair that will not arrive. The default failed
+**toward** the false claim, in the function written to stop making it.
+
+Fixed by making it REQUIRED, not by flipping the default to `false` — `false` is safe but still
+silent, and the point is that every call site has to answer the question out loud.
+
+That lever has a hole worth naming: `tsc` catches an omitted argument in production source but
+**not in tests**, because this package's tsconfig excludes the `__tests__` directories (the same
+gap that let my `heldRecoveryKeystroke` signature change silently break #203's positive control,
+documented above). So the guard is doubled: an arity assertion, `heldRemedy.length === 3`.
+Re-adding a default drops it to 2, which is the only runtime-visible trace it leaves.
+
+**2. `inbox.ts` still printed the original lie** — `(Ctrl+C first, which clears the line)` — on
+the one screen an operator reads at the exact moment this bug's symptom occurs. That file was not
+in the PR. It now names the resolved keystrokes and says outright that opencode QUITS on Ctrl+C.
+`status.ts`'s internal comment carried the same claim and got the same correction.
+
+**3. Stale internal comments on the paths this PR rewrote.** Every operator-facing surface had
+been swept; the comments on the two rewritten paths had not. Corrected: `tower-routes.ts`
+(the `handleDelayedSend` docblock, the delayed-interrupt timer, the immediate-path lock
+comment — the settle is `controlsDone + 100`, not a flat 100 ms), `tower-client.ts`'s
+`escape`/`interrupt` JSDoc, `types.ts`'s `interrupt?:`, and both copies of the claim that
+`geometry-mismatch` maps to `escape-screen` (`render-gate.ts` and `classifyAgentScreen`) — false
+since #197 removed that mapping.
+
+The last one needed more than deleting a sentence. The ordering argument in those comments was
+*built on* that mapping. The real reason the busy check must run first is that a geometry
+mismatch **destroys** the liveness proof rather than outranking it: the reflow carries opencode's
+`esc interrupt` footer off-screen, so the same live turn reclassifies. The comments now carry
+that argument instead of the dead one.
+
+**4. The resolution order is now in `arch.md`.** `basename → .builder-start.sh → shell`, under
+Agent Farm Internals, with a cross-reference from the mailbox-first section. Both lanes raised it
+independently. opencode's sharper case is the one I would not have written down on my own: **if
+the launch script is MISSING, a bash-wrapped opencode builder is classified as a shell and gets
+Ctrl+C — without anyone reordering anything.** So a pruned worktree or a renamed script is a
+safety question, not a cosmetic one.
+
+**5.** Three follow-ups (the `/api/send` response type into `codev-types`, a grep test for
+literal control bytes outside `utils/harness.ts`, `recoveryPhaseFor`'s consumer) are the
+architect's to file, not mine to fix here.
+
+### Verification for this round
+
+Build green. 3 new tests on `heldRemedy`'s two branches and its arity. Locally: 383 across the
+ten affected agent-farm/terminal files, plus 106 across the 9 sdk files including the #1189
+boundary suites. No behaviour changed except `heldRemedy`'s signature — items 2-4 are text.

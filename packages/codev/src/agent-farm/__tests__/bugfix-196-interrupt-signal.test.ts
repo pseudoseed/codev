@@ -40,6 +40,7 @@ import {
   writeHeldRecovery,
   clearDraftKeyForSession,
   promptReadySequence,
+  heldRemedy,
 } from '../servers/mailbox-wiring.js';
 import {
   MailboxDrainer,
@@ -803,5 +804,40 @@ describe('writeControlSequence', () => {
     const { writes, session } = recorder();
     expect(writeControlSequence(session, [])).toBe(0);
     expect(writes).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// heldRemedy's `canAutoClear` must be stated, never assumed
+// ---------------------------------------------------------------------------
+
+describe('heldRemedy never defaults to promising a keystroke (#190 re-armed)', () => {
+  it('takes canAutoClear as a REQUIRED third parameter', () => {
+    // Function.length counts parameters before the first defaulted one. A default of
+    // `true` — the shape this test exists to prevent — would drop it to 2 and fail
+    // here, which is the only runtime-visible trace a re-added default leaves.
+    //
+    // `tsc` catches an omitted argument in production source, but NOT here: this
+    // package's tsconfig excludes `**/__tests__/**`, so test files are never
+    // typechecked. That is exactly why this assertion is on arity rather than left
+    // to the compiler.
+    expect(heldRemedy.length).toBe(3);
+  });
+
+  it('promises the automatic clearing keystroke only when one can be sent', () => {
+    const can = heldRemedy('builder-x', 'user-text', true);
+    expect(can).toContain('Tower sends one automatic clearing keystroke');
+  });
+
+  it('says outright that no repair is coming when no keystroke is recorded', () => {
+    // #190's shape: an operator told to wait for a keystroke that will never arrive
+    // waits forever, because nothing else reports the promise was empty.
+    const cannot = heldRemedy('builder-x', 'user-text', false);
+    expect(cannot).toContain('NO clearing keystroke recorded');
+    expect(cannot).toContain('needs a human');
+    expect(cannot).not.toContain('Tower sends one automatic clearing keystroke');
+    // It must still name the command that works — refusing the false promise is not
+    // a reason to leave the operator with no remedy at all.
+    expect(cannot).toContain('afx send builder-x --interrupt');
   });
 });

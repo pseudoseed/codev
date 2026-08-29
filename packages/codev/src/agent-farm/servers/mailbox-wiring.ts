@@ -296,10 +296,16 @@ export async function classifyAgentScreen(
   //
   // `busy-indicator` is the one detail `heldRecoveryAction` deliberately refuses to act on:
   // it proves the agent is generating, so any recovery keystroke corrupts active work.
-  // `geometry-mismatch` maps to `escape-screen` — an ESC. Returning the geometry answer for
-  // a mid-turn screen would therefore route the exact screen that policy protects into the
-  // exact keystroke it withholds, trading a delivery failure for a corruption failure. The
-  // first version of this check ran before `classifyBuffer` and did precisely that.
+  //
+  // NOTE the argument no longer runs through `geometry-mismatch`'s recovery action: #197
+  // removed that mapping outright, so a geometry verdict now yields no keystroke at all.
+  // What survives, and is the real reason for the ordering, is that the geometry answer is
+  // read off a frame whose row boundaries are untrustworthy, while `busy-indicator` is a
+  // POSITIVE proof of a live turn read off that same frame. The mismatch destroys the proof
+  // rather than outranking it (a reflow can carry opencode's `esc interrupt` footer
+  // off-screen, and the same live turn then classifies `geometry-mismatch`), so the check
+  // that can still assert something true has to run first. The first version of this check
+  // ran before `classifyBuffer` and lost that proof every time.
   //
   // Both verdicts hold, so nothing is lost by yielding here: the mismatch is still real, and
   // it will be reported the moment the turn ends and the busy indicator clears.
@@ -454,6 +460,18 @@ function canAutoClearFor(workspacePath: string, toAgent: string): boolean {
  * will never arrive is the same defect this function was written to remove — a remedy
  * naming something that does not happen.
  *
+ * It is deliberately REQUIRED, with no default. A default of `true` fails toward the
+ * false claim: a future caller that omits it re-arms #190 in prose, silently, and the
+ * promise is exactly the one this function exists to stop making. A default of `false`
+ * would be safe but silent in the other direction. Requiring it makes an omission a
+ * compile error in production source, so every call site has to answer out loud.
+ *
+ * That lever does NOT reach test files: this package's tsconfig excludes the
+ * `__tests__` directories, so a call-arity error there is invisible to `tsc`. A test in
+ * `bugfix-196-interrupt-signal.test.ts` asserts `heldRemedy.length === 3` for that
+ * reason: re-adding a default drops the arity to 2, which is the only runtime-visible
+ * trace it leaves.
+ *
  * `user-text` gets the clearing command. `busy-indicator` is an agent mid-turn:
  * clearing there would corrupt a live turn, and the answer is to wait.
  * `geometry-mismatch` (Issue #197) is the third shape: nothing is wrong with the
@@ -466,7 +484,7 @@ function canAutoClearFor(workspacePath: string, toAgent: string): boolean {
  * That is why removing geometry-mismatch's recovery action degraded gracefully here
  * instead of promising an ESC that would never fire; do not replace it with a list.
  */
-export function heldRemedy(toAgent: string, detail: string | null, canAutoClear = true): string {
+export function heldRemedy(toAgent: string, detail: string | null, canAutoClear: boolean): string {
   const inspect = `Inspect with 'afx inbox'.`;
 
   if (detail === 'user-text') {

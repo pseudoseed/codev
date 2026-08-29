@@ -1698,11 +1698,13 @@ interface DelayedSendParams {
  * The body is NEVER written from here. A normal delayed send is delivered by the gated
  * backstop drainer once `not_before` passes (≤ one 1.5 s tick after due — the delay is a lower
  * bound). A delayed `--interrupt` (change 2 reshape) additionally keeps a small in-memory timer
- * that fires ONLY the Ctrl+C at due time (guarded by `isStillLive` + a re-fetched writable
- * session, inside the submission lock); the ^C ends the turn and the body then delivers through
- * the SAME gate every send uses — nothing is marked delivered here, so a #1198 dropped write or
- * a shutdown during the wait can never falsely report delivery or double-deliver. A restart
- * during the wait loses only the ^C nudge, never the message.
+ * that fires ONLY the prompt-ready keystrokes at due time (guarded by `isStillLive` + a
+ * re-fetched writable session, inside the submission lock). Issue #196: those keystrokes are
+ * resolved per harness by `promptReadySequence`, never a hardcoded byte — Ctrl+C on claude/codex
+ * and shells, ESC then Ctrl+U on opencode, which QUITS on Ctrl+C. They ready the prompt, and the
+ * body then delivers through the SAME gate every send uses — nothing is marked delivered here,
+ * so a #1198 dropped write or a shutdown during the wait can never falsely report delivery or
+ * double-deliver. A restart during the wait loses only the nudge, never the message.
  */
 function handleDelayedSend(
   res: http.ServerResponse,
@@ -1767,16 +1769,17 @@ function handleDelayedSend(
   ctx.broadcastNotification({ type: 'overview-changed', title: 'Held mail changed', body: 'scheduled' });
 
   if (interrupt) {
-    // Change 2 reshape: an in-memory timer that fires ONLY the Ctrl+C at due time. It writes
-    // no message body and marks nothing delivered — the body delivers through the gated
-    // drainer after the ^C ends the turn. Everything the ^C depends on — `isStillLive`
+    // Change 2 reshape: an in-memory timer that fires ONLY the prompt-ready keystrokes at due
+    // time (#196: resolved per harness by `promptReadySequence`, never a hardcoded `\x03`). It
+    // writes no message body and marks nothing delivered — the body delivers through the gated
+    // drainer once those keystrokes have readied the prompt. Everything they depend on — `isStillLive`
     // (delayed-send.ts's generation guard), the session's existence, and its writability — is
     // re-checked INSIDE the submission lock, right before the write, so a shutdown OR a session
     // teardown/respawn during the lock-wait writes nothing (invariant 2; the directive's
     // preferred shape). Diagnostics arg falls back to toAgent when the target has no terminal
     // id yet.
     scheduleDelayedSend(deliverAfter, terminalId ?? toAgent, (isStillLive) => {
-      if (!isStillLive()) return; // shutdown before/at due → drop the ^C nudge (body survives)
+      if (!isStillLive()) return; // shutdown before/at due → drop the nudge (body survives)
       if (terminalId) {
         let fired = false;
         let sent: string[] = [];
@@ -1784,7 +1787,7 @@ function handleDelayedSend(
           // Re-check EVERYTHING inside the lock: the queued submission can acquire the lock only
           // AFTER a shutdown or a session teardown/respawn that landed while it waited behind an
           // in-flight write. Re-fetch the session and re-check live + writable here; bail with no
-          // ^C otherwise (the body still delivers via the gate).
+          // keystrokes otherwise (the body still delivers via the gate).
           if (!isStillLive()) return 0;
           const live = getTerminalManager().getSession(terminalId);
           if (!live || !live.writable) return 0;
@@ -2077,9 +2080,10 @@ async function handleSend(
   // immediate-path block — a delayed send is resolved + persisted at request time and does
   // not fall through here.
 
-  // Spec 1313: `interrupt` is the explicit human bypass. Ctrl+C, then deliver
-  // WITHOUT the render-gate (the operator is looking at this terminal). A row is
-  // still persisted and marked delivered for audit parity — every send is a row.
+  // Spec 1313: `interrupt` is the explicit human bypass. The prompt-ready keystrokes for
+  // this harness (#196 — NOT a fixed Ctrl+C), then deliver WITHOUT the render-gate (the
+  // operator is looking at this terminal). A row is still persisted and marked delivered
+  // for audit parity — every send is a row.
   if (interrupt) {
     const row = enqueueMailbox(db, {
       workspacePath: result.workspacePath,
@@ -2107,13 +2111,16 @@ async function handleSend(
     // preferred over double-delivering it; `--interrupt` is the explicit human gate-bypass anyway.
     markMailboxDelivered(db, row.id);
     // Deliver the interrupt as ONE atomic critical section under the Spec 1273 per-terminal
-    // submission lock (CMAP round 1 — Gemini/Codex/Claude): the Ctrl+C, its 100 ms settle, and
-    // the message write all occur inside a single lock acquisition. Previously the \x03 + the
-    // settle sat OUTSIDE the lock, so a concurrent submission to the same terminal could land
-    // its Ctrl+C inside another submission's text→Enter window (killing that composer) or run
-    // during the 100 ms gap. `writeMessageToSession(..., 100)` schedules the text 100 ms after
-    // the ^C (the settle) and returns the completion offset, so the lock is held until the
-    // whole interrupt is on the wire; uncontended, it runs at once.
+    // submission lock (CMAP round 1 — Gemini/Codex/Claude): the prompt-ready keystrokes, their
+    // 100 ms settle, and the message write all occur inside a single lock acquisition.
+    // Previously the control byte + the settle sat OUTSIDE the lock, so a concurrent submission
+    // to the same terminal could land its keystrokes inside another submission's text→Enter
+    // window (killing that composer) or run during the 100 ms gap. `writeMessageToSession(...,
+    // controlsDone + 100)` schedules the text 100 ms after the LAST control byte (#196: a
+    // multi-byte harness settles between its own bytes first, so the offset is measured from
+    // when the sequence finished, not from a flat 100 ms after the first byte) and returns the
+    // completion offset, so the lock is held until the whole interrupt is on the wire;
+    // uncontended, it runs at once.
     //   Scope of the guarantee: this serializes interrupt against interrupt/escape — the only
     //   /api/send writers that take this per-terminal lock. It does NOT serialize against a
     //   concurrent mailbox/backstop delivery (which writes through the per-AGENT serializer, a

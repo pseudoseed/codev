@@ -99,7 +99,7 @@ describe('#21: the two situations that arrived as one word', () => {
 
 describe('#21: the alert names a remedy that works', () => {
   it('an abandoned draft gets the command that actually clears a composer', () => {
-    const text = heldRemedy('builder-x', 'user-text');
+    const text = heldRemedy('builder-x', 'user-text', true);
 
     expect(text).toContain('afx send builder-x --interrupt');
     expect(text).toContain('Ctrl+C');
@@ -108,7 +108,7 @@ describe('#21: the alert names a remedy that works', () => {
   it('and says outright that the old remedy does not clear typed text', () => {
     // The line that cost five manual interventions. Someone who has been running
     // `afx interrupt` needs to be told why it changed nothing.
-    const text = heldRemedy('builder-x', 'user-text');
+    const text = heldRemedy('builder-x', 'user-text', true);
 
     expect(text).toContain("'afx interrupt' sends ESC, which does not");
   });
@@ -116,7 +116,7 @@ describe('#21: the alert names a remedy that works', () => {
   it('a live turn is told to WAIT, not to clear anything', () => {
     // The opposite situation. Clearing here corrupts a turn in progress, so the
     // remedy for the other case must not be offered.
-    const text = heldRemedy('builder-x', 'busy-indicator');
+    const text = heldRemedy('builder-x', 'busy-indicator', true);
 
     expect(text).toContain('MID-TURN');
     expect(text).toContain('Do not clear');
@@ -124,7 +124,7 @@ describe('#21: the alert names a remedy that works', () => {
   });
 
   it('an unrecognized screen says so instead of guessing a remedy', () => {
-    const text = heldRemedy('builder-x', 'no-composer-marker');
+    const text = heldRemedy('builder-x', 'no-composer-marker', true);
 
     expect(text).toContain('screen problem');
     expect(text).toContain('no-composer-marker');
@@ -134,7 +134,7 @@ describe('#21: the alert names a remedy that works', () => {
   });
 
   it('a row with no recorded detail gets the same honest non-answer', () => {
-    const text = heldRemedy('builder-x', null);
+    const text = heldRemedy('builder-x', null, true);
 
     expect(text).toContain('could not read a ready prompt');
     expect(text).not.toContain('--interrupt "');
@@ -142,9 +142,9 @@ describe('#21: the alert names a remedy that works', () => {
 
   it('the three remedies are actually different advice', () => {
     const texts = [
-      heldRemedy('b', 'user-text'),
-      heldRemedy('b', 'busy-indicator'),
-      heldRemedy('b', null),
+      heldRemedy('b', 'user-text', true),
+      heldRemedy('b', 'busy-indicator', true),
+      heldRemedy('b', null, true),
     ];
 
     expect(new Set(texts).size).toBe(3);

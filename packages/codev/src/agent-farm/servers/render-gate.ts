@@ -553,11 +553,16 @@ export function classifyBuffer(
   //
   // This MUST stay ahead of the geometry check below (Issue #197 review). `busy-indicator`
   // is the one detail `heldRecoveryAction` deliberately refuses to act on — it proves a live
-  // turn, so any recovery keystroke would corrupt active work — while `geometry-mismatch`
-  // maps to `escape-screen`, an ESC. Letting a geometry verdict outrank a proven-live turn
-  // would route exactly the screen the policy protects into exactly the keystroke it
-  // withholds, trading a delivery failure for a corruption failure. Both verdicts hold; only
-  // one of them is safe to act on, so the safe-to-act-on one must never win by accident.
+  // turn, so any recovery keystroke would corrupt active work.
+  //
+  // The ordering argument does NOT rest on where `geometry-mismatch` routes. It no longer
+  // maps to `escape-screen` at all (#197 removed that: a keystroke cannot resize Tower's
+  // mirror, and the frame that would prove the agent idle is the same frame whose geometry
+  // was just declared untrustworthy). The reason the busy check stays first is that a
+  // geometry verdict, arriving from an unreadable frame, must never displace a POSITIVE
+  // proof of a live turn read off that same frame — the proof is destroyed by the reflow,
+  // not merely outranked, so the check that can still assert something true has to run
+  // while it can. Both verdicts hold delivery either way; only one of them names the truth.
   if (profile.busyIndicatorPattern) {
     const pattern = profile.busyIndicatorPattern;
     if (lines.some((line) => pattern.test(line))) {
