@@ -72,8 +72,12 @@ function dbSignal(error: unknown): AgentStateSignal {
  *
  * **"A worktree owns one project" was false, and it was load-bearing.** The previous
  * version returned a match only when exactly one `status.yaml` lived under the
- * worktree. Real worktrees carry the whole `codev/projects/` tree — 289 of them in
- * this repository — so the join never resolved, every thread-backed builder was
+ * worktree. Real worktrees carry the whole `codev/projects/` tree: counted
+ * 2026-08-29, **302 project directories, 289 of them holding a `status.yaml`**, and
+ * 303 directories on `main`. (An earlier version of this comment said "289 of them"
+ * where the test said 302 — two real measurements of different things, written as
+ * though they were one. Both numbers are stated now, with what each counts.)
+ * So the join never resolved, every thread-backed builder was
  * reported `THREAD_UNMANAGED`, and `THREAD_ID_DISAGREEMENT` could not fire at all
  * because it sits behind a resolved record. The phase's own reconciliation criterion
  * was therefore unreachable in production while its tests passed on single-project
@@ -86,23 +90,53 @@ function dbSignal(error: unknown): AgentStateSignal {
  * guess. Same word, two different situations, which is the failure this phase exists
  * to prevent.
  */
+/**
+ * The porch project a builder id names, or undefined if it names none.
+ *
+ * Builder ids are `<protocol>-<projectId>` — `spir-146`, `air-173`, `bugfix-174` —
+ * and `status.yaml` carries the same `id`. Task builders (`task-uxln`) have no
+ * project, and returning undefined for them is correct rather than a gap.
+ *
+ * **This association is deliberately independent of `thread_id`.** Matching on the
+ * thread only resolves when the two stores AGREE, which makes disagreement between
+ * them structurally undetectable — and reporting that disagreement is one of this
+ * phase's acceptance criteria. Identity has to come from something that is still
+ * true when the two stores differ.
+ *
+ * There is no `project_id` column to use instead; the id convention is the available
+ * association, so it is parsed here in one place rather than assumed at the call
+ * site.
+ */
+function projectIdFromBuilderId(builderId: string): string | undefined {
+  const match = /-(\d+)$/.exec(builderId);
+  return match ? match[1] : undefined;
+}
+
 function statusForWorktree(
   successful: readonly PorchStatusProjection[],
   worktree: string,
+  builderId: string,
   threadId: string,
 ): { readonly status?: PorchStatusProjection; readonly candidates: number } {
   const canonical = normalizeWorkspacePath(worktree);
   const matches = successful.filter((status) => normalizeWorkspacePath(status.artifactRoot) === canonical);
 
-  // THE DESIGNED JOIN. Unambiguous whatever else the worktree contains.
+  // IDENTITY FIRST, because it survives the two stores disagreeing.
+  const projectId = projectIdFromBuilderId(builderId);
+  if (projectId !== undefined) {
+    const byProject = matches.filter((status) => status.projectId === projectId);
+    if (byProject.length === 1) return { status: byProject[0], candidates: matches.length };
+  }
+
+  // Then the thread, for ids that do not carry a project (and once Phase 8 writes it).
   const byThread = matches.filter((status) => status.threadId === threadId);
   if (byThread.length === 1) return { status: byThread[0], candidates: matches.length };
 
   // The single-project case still resolves, for worktrees that really do hold one.
   if (matches.length === 1) return { status: matches[0], candidates: 1 };
 
-  // Zero, or several with no `thread_id` to choose between them. No record is
-  // invented, and the caller is told which of the two it is.
+  // Zero, or several with nothing to choose between them. No record is invented, and
+  // the caller is told which of the two it is.
   return { candidates: matches.length };
 }
 
@@ -212,7 +246,7 @@ export function readThreadRegistry(
     if (row.thread_id === null) continue;
     builderMap[row.id] = row.thread_id;
     consumed.add(row.thread_id);
-    const resolved = statusForWorktree(statuses, row.worktree, row.thread_id);
+    const resolved = statusForWorktree(statuses, row.worktree, row.id, row.thread_id);
     const porch = resolved.status;
     const management = porch ? 'managed' : 'unmanaged';
     identities.push({
@@ -276,11 +310,17 @@ export function readThreadRegistry(
     if (porch.threadId === undefined) continue;
     const matching = identities.find((identity) => identity.porch?.statusPath === porch.statusPath);
     if (!matching) {
+      // "has no global.db identity row" WAS A FALSE DIAGNOSIS, not merely a vague
+      // one. A row can exist and name a different thread, and telling an operator
+      // the row is missing sends them to create one instead of reconciling two that
+      // disagree. The message now states what is actually known — this record joined
+      // to no identity — and leaves why to the signals that can tell.
       signals.push({
         code: live && !live.has(porch.threadId) ? 'PORCH_THREAD_NO_LONGER_EXISTS' : 'PORCH_RECORD_UNMAPPED',
         message: live && !live.has(porch.threadId)
           ? `Porch record ${porch.projectId} names thread ${porch.threadId}, which t3code did not return`
-          : `Porch record ${porch.projectId} names thread ${porch.threadId} but has no global.db identity row`,
+          : `Porch record ${porch.projectId} names thread ${porch.threadId} and joined to no identity; ` +
+            `a global.db row may be absent, or may exist naming a different thread`,
         source: porch.statusPath,
         projectId: porch.projectId,
         threadId: porch.threadId,

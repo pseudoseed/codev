@@ -622,29 +622,82 @@ describe('failure matrix', () => {
     expect(codes).not.toContain(SIGNAL.THREAD_UNMANAGED);
   });
 
-  it('a multi-project worktree resolves by thread_id, and disagreement then fires', () => {
+  // THE ACCEPTANCE CRITERION, IN THE SHAPE PRODUCTION ACTUALLY HAS.
+  //
+  // My first attempt at this test was named "disagreement then fires" and never
+  // asserted the disagreement signal — it checked `management === 'managed'` and set
+  // status.yaml's thread_id to MATCH the database, so there was no disagreement to
+  // detect. A reviewer caught both. That is the name-versus-assertion drift for the
+  // fourth time in this phase, mine again, in the fix for the previous one.
+  //
+  // It also exposed a real hole: keying the join on thread_id resolves only when the
+  // two stores AGREE, which makes disagreement structurally undetectable in a
+  // multi-project worktree. Identity now comes from the builder id, which stays true
+  // while the stores differ.
+  it('a multi-project worktree reports THREAD_ID_DISAGREEMENT when the stores differ', () => {
     const root = tmp();
-    const worktree = join(root, '.builders', 'air-10');
+    // Builder id `air-31` names project 31, independently of any thread.
+    const worktree = join(root, '.builders', 'air-31');
     mkdirSync(worktree, { recursive: true });
-    // Several projects, and exactly one names this thread — the Phase 8 join.
     writeStatus(worktree, '30', porchYaml('30'));
     writeStatus(worktree, '31', porchYaml('31', 'thread_id: thread-porch-31'));
     writeStatus(worktree, '32', porchYaml('32'));
     const database = db();
-    insertBuilder(database, { workspace: root, id: 'air-10', worktree, threadId: 'thread-porch-31' });
+    // The database says a DIFFERENT thread from status.yaml. This is the disagreement.
+    insertBuilder(database, { workspace: root, id: 'air-31', worktree, threadId: 'thread-db-31' });
 
-    const resolved = readThreadRegistry(database, root, readStatusesFromArtifactRoot(worktree));
-    expect(resolved.signals.map((s) => s.code)).not.toContain('PORCH_JOIN_AMBIGUOUS');
-    expect(resolved.identities[0]?.management).toBe('managed');
-    expect(resolved.identities[0]?.porch?.projectId).toBe('31');
+    const snapshot = readThreadRegistry(database, root, readStatusesFromArtifactRoot(worktree));
+    const codes = snapshot.signals.map((s) => s.code);
 
-    // And now the criterion that could never fire: the two stores disagree.
-    const disagreeing = db();
-    insertBuilder(disagreeing, { workspace: root, id: 'air-10', worktree, threadId: 'thread-db-other' });
-    writeStatus(worktree, '31', porchYaml('31', 'thread_id: thread-db-other\nx: 1'));
-    const statuses = readStatusesFromArtifactRoot(worktree);
-    const second = readThreadRegistry(disagreeing, root, statuses);
-    expect(second.identities[0]?.management).toBe('managed');
+    expect(codes).toContain(SIGNAL.THREAD_ID_DISAGREEMENT);
+    // Not ambiguous and not unmanaged: the record IS identified, it simply disagrees.
+    expect(codes).not.toContain('PORCH_JOIN_AMBIGUOUS');
+    expect(codes).not.toContain(SIGNAL.THREAD_UNMANAGED);
+    expect(snapshot.identities[0]?.porch?.projectId).toBe('31');
+
+    // Both values are reported, so a human can see which is which.
+    const signal = snapshot.signals.find((s) => s.code === SIGNAL.THREAD_ID_DISAGREEMENT);
+    expect(signal?.message).toContain('thread-porch-31');
+    expect(signal?.message).toContain('thread-db-31');
+  });
+
+  // A WRONG DIAGNOSIS IS WORSE THAN A MISSING ONE.
+  //
+  // PORCH_RECORD_UNMAPPED used to say "has no global.db identity row". A row can
+  // exist and name a different thread, and that sentence sends an operator to create
+  // a row instead of reconciling two that disagree — confidently, in the wrong
+  // direction. This phase's rule is that signals must not overstate what they know,
+  // and a message is part of the signal.
+  it('PORCH_RECORD_UNMAPPED does not claim the identity row is absent', () => {
+    const root = tmp();
+    const worktree = join(root, '.builders', 'air-50');
+    mkdirSync(worktree, { recursive: true });
+    // A porch record naming a thread, with no builder row at all for it.
+    writeStatus(worktree, '50', porchYaml('50', 'thread_id: thread-50'));
+    const database = db();
+
+    const snapshot = readThreadRegistry(database, root, readStatusesFromArtifactRoot(worktree));
+    const signal = snapshot.signals.find((s) => s.code === 'PORCH_RECORD_UNMAPPED');
+    expect(signal).toBeDefined();
+    // States what is known...
+    expect(signal?.message).toContain('joined to no identity');
+    // ...and does not assert the stronger thing it cannot see.
+    expect(signal?.message).not.toContain('has no global.db identity row');
+  });
+
+  it('a multi-project worktree still resolves by thread_id when the id carries no project', () => {
+    const root = tmp();
+    // `task-uxln` names no project, so the thread is the only association left.
+    const worktree = join(root, '.builders', 'task-uxln');
+    mkdirSync(worktree, { recursive: true });
+    writeStatus(worktree, '40', porchYaml('40'));
+    writeStatus(worktree, '41', porchYaml('41', 'thread_id: thread-41'));
+    const database = db();
+    insertBuilder(database, { workspace: root, id: 'task-uxln', worktree, threadId: 'thread-41' });
+
+    const snapshot = readThreadRegistry(database, root, readStatusesFromArtifactRoot(worktree));
+    expect(snapshot.signals.map((s) => s.code)).not.toContain('PORCH_JOIN_AMBIGUOUS');
+    expect(snapshot.identities[0]?.porch?.projectId).toBe('41');
   });
 
   // ISSUE #170 — a thread-backed architect keeps its `cmd`, and that is not a conflict.
