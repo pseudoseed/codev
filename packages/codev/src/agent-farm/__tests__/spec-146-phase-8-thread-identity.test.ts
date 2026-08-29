@@ -64,8 +64,21 @@ const PRE_V21_BUILDERS = `
   );
 `;
 
+type TableInfoRow = {
+  cid: number;
+  name: string;
+  type: string;
+  notnull: number;
+  dflt_value: unknown;
+  pk: number;
+};
+
+function tableInfo(db: Database.Database, table: string): TableInfoRow[] {
+  return db.prepare(`PRAGMA table_info(${table})`).all() as TableInfoRow[];
+}
+
 function columnOrder(db: Database.Database, table: string): string[] {
-  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((c) => c.name);
+  return tableInfo(db, table).map((c) => c.name);
 }
 
 function baseState(overrides: Partial<ProjectState> = {}): ProjectState {
@@ -255,14 +268,14 @@ describe('Spec 146 Phase 8 — v21 migration, backup, restore, convergence', () 
     db.close();
   });
 
-  it('fresh GLOBAL_SCHEMA and a migrated database have identical column order', () => {
+  it('fresh GLOBAL_SCHEMA and a migrated database have identical schemas', () => {
     const db = openPreV21();
     applyThreadIdentityMigration(db, dbPath);
     const freshPath = resolve(dir, 'fresh.db');
     const fresh = new Database(freshPath);
     fresh.exec(GLOBAL_SCHEMA);
-    expect(columnOrder(db, 'architect')).toEqual(columnOrder(fresh, 'architect'));
-    expect(columnOrder(db, 'builders')).toEqual(columnOrder(fresh, 'builders'));
+    expect(tableInfo(db, 'architect')).toEqual(tableInfo(fresh, 'architect'));
+    expect(tableInfo(db, 'builders')).toEqual(tableInfo(fresh, 'builders'));
     fresh.close();
     db.close();
   });
