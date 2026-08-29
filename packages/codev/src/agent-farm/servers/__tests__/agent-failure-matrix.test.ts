@@ -168,27 +168,70 @@ describe('failure matrix signals are distinct', () => {
       GLOBAL_DB_UNREADABLE: 'non-lock db failure; distinct from GLOBAL_DB_LOCKED and tested',
       PORCH_RECORD_UNMAPPED: 'no identity row; distinct from PORCH_THREAD_NO_LONGER_EXISTS and tested',
       IDENTITY_SHAPE_CONFLICT: 'a row carrying both ids; Phase 8 owns its criterion',
-      // tower-messages.ts is the pre-existing terminal surface, not codev-agent.
-      AMBIGUOUS: 'tower-messages routing, outside the codev-agent surface',
-      NOT_FOUND: 'tower-messages routing, outside the codev-agent surface',
-      NO_CONTEXT: 'tower-messages routing, outside the codev-agent surface',
+      // HTTP-level responses from agent-routes.ts. These answer "your request was
+      // wrong or too early", not "a service or file failed" — the matrix is about
+      // the latter, which is what an operator diagnoses. Named here rather than
+      // left invisible, which is what the previous collector did to them.
+      CODEV_AGENT_STARTING: '503 while starting; a retry succeeds, distinct from UNREACHABLE',
+      AGENT_ROUTE_NOT_FOUND: '404 for an unknown route; a client bug, not a failure mode',
+      WORKSPACE_PATH_INVALID: '400 for an undecodable workspace path; malformed request',
+      WORKSPACE_NOT_REGISTERED: '404 for a path this host does not serve; not a failure',
+      HUMAN_SESSION_REQUIRED: 'no session presented; distinct from REVOKED, which is a matrix row',
+      HUMAN_SESSION_RECOGNISED: 'the SUCCESS case, not a failure at all',
+      PAIRING_ID_REQUIRED: 'argument validation thrown by completePairing',
+      PAIRING_LIFETIME_INVALID: 'argument validation thrown by completePairing',
+      // Stream event types, not signal codes. STATE_STREAM_WATCH_FAILED is both —
+      // it carries a signal whose code equals the event type.
+      PROTOCOL_STATE_SNAPSHOT: 'stream event type, not a failure signal',
+      PROTOCOL_STATE_RECONCILED: 'stream event type; the repair is STREAM_PROJECTION_REPAIRED',
+      STATE_STREAM_WATCH_FAILED: 'a watcher could not be established; the stream says so and keeps its other watchers',
+      // Matched, never emitted: these are node/sqlite error codes dbSignal reads.
+      SQLITE_BUSY: 'sqlite error code matched by dbSignal, not a code we emit',
+      SQLITE_LOCKED: 'sqlite error code matched by dbSignal, not a code we emit',
     };
 
+    // FIELD-AGNOSTIC ON PURPOSE, AND THE PREVIOUS VERSION WAS NOT.
+    //
+    // The first version of this collector matched `code:` and `failure('X')`, on the
+    // assumption that emitted codes always appear under a `code` key. That
+    // assumption was never checked, and it was wrong: `agent-routes.ts` emits under
+    // `signal:` and `agent-state-stream.ts` emits one as a DEFAULT PARAMETER
+    // (`code = 'STATE_STREAM_WATCH_FAILED'`). Six codes were invisible, so a test
+    // written to catch "claims coverage it does not have" had exactly that flaw.
+    // Two reviewers found it independently.
+    //
+    // Keying on the field name is the defect. This matches any SCREAMING_SNAKE
+    // string literal, so a new emission under a new key name cannot hide. It
+    // over-collects — SQLITE_BUSY and the stream's event types are not signals —
+    // and over-collecting is the safe direction: the cost is one classification
+    // line, versus a code shipping unnoticed.
+    const CODEV_AGENT_FILES = [
+      'agent-routes.ts',
+      'agent-state-stream.ts',
+      'agent-failure.ts',
+      'status-reader.ts',
+      'thread-registry.ts',
+    ];
     const serversDir = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const present = readdirSync(serversDir);
+    // If a file is renamed away, fail rather than silently scanning less.
+    for (const file of CODEV_AGENT_FILES) expect(present).toContain(file);
+
     const emitted = new Set<string>();
-    for (const file of readdirSync(serversDir).filter((name) => name.endsWith('.ts'))) {
+    for (const file of CODEV_AGENT_FILES) {
       const source = readFileSync(join(serversDir, file), 'utf8');
-      // `code:` expressions (including both arms of a ternary) and `failure('X')`.
-      for (const match of source.matchAll(/(?:code:\s*([^,\n]+)|failure\(\s*('[A-Z][A-Z0-9_]{3,}'))/g)) {
-        const expression = match[1] ?? match[2] ?? '';
-        for (const literal of expression.matchAll(/'([A-Z][A-Z0-9_]{3,})'/g)) {
-          emitted.add(literal[1]);
-        }
+      for (const literal of source.matchAll(/'([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)'/g)) {
+        emitted.add(literal[1]);
       }
     }
 
-    // The emitter must not be silently empty — that would make this test vacuous.
-    expect(emitted.size).toBeGreaterThan(10);
+    // The collector must not be silently empty — that would make this test vacuous.
+    expect(emitted.size).toBeGreaterThan(15);
+    // Anchors: one under `code:`, one under `signal:`, one a default parameter.
+    // If the collector stops seeing any of these shapes, this test says so.
+    expect(emitted).toContain('THREAD_UNMANAGED');
+    expect(emitted).toContain('WORKSPACE_NOT_REGISTERED');
+    expect(emitted).toContain('STATE_STREAM_WATCH_FAILED');
 
     const matrix = new Set<string>(Object.values(SIGNAL));
     const unclassified = [...emitted].filter((code) => !matrix.has(code) && !(code in NON_MATRIX)).sort();
@@ -306,6 +349,8 @@ describe('failure matrix', () => {
         // as a syntax failure.
         expect(result.signal.code).not.toBe(SIGNAL.STATUS_MALFORMED);
         expect(result.signal.code).not.toBe('STATUS_NOT_FOUND');
+        // Names the file it could not read, so the operator knows which one.
+        expect(result.signal.source).toBe(statusPath);
       } finally {
         chmodSync(statusPath, 0o644);
       }
@@ -331,31 +376,6 @@ describe('failure matrix', () => {
         expect(results).not.toEqual([]);
       } finally {
         chmodSync(projects, 0o755);
-      }
-    },
-  );
-
-  // The chmod-the-directory test above exercises readdirSync in
-  // readStatusesFromArtifactRoot, which is a neighbouring path. This one makes
-  // the FILE unreadable so readScopedStatus's own EACCES branch is the subject.
-  // Deleting that branch must turn this red; without it an unreadable file
-  // reports as MALFORMED, telling an operator "corrupt" for a permissions fault.
-  it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
-    'an unreadable status.yaml FILE emits STATUS_UNREADABLE, not STATUS_MALFORMED',
-    () => {
-      const root = tmp();
-      const statusPath = writeStatus(root, '10', porchYaml('10'));
-      chmodSync(statusPath, 0o000);
-      try {
-        const result = readScopedStatus(root, statusPath);
-        expect(result.ok).toBe(false);
-        if (result.ok) return;
-        expect(result.signal.code).toBe(SIGNAL.STATUS_UNREADABLE);
-        expect(result.signal.code).not.toBe(SIGNAL.STATUS_MALFORMED);
-        expect(result.signal.code).not.toBe('STATUS_NOT_FOUND');
-        expect(result.signal.source).toBe(statusPath);
-      } finally {
-        chmodSync(statusPath, 0o644);
       }
     },
   );
@@ -499,6 +519,33 @@ describe('failure matrix', () => {
     expect(codes).toContain('IDENTITY_SHAPE_CONFLICT');
     // The conflicted row must not be published as a usable join either way.
     expect(snapshot.builders).toEqual({});
+    expect(snapshot.identities).toEqual([]);
+  });
+
+  // THE ARCHITECT BRANCH IS A SEPARATE CONDITION AND NEEDS ITS OWN TEST.
+  //
+  // The builder check above is `thread_id && terminal_id`. The architect check is
+  // wider — `thread_id && (terminal_id || pid !== 0 || port !== 0 || cmd !== '')` —
+  // so a thread-backed architect that still carries a pid, a port or a command is a
+  // conflict even with no terminal_id. Only the builder branch was covered, and the
+  // architect branch could be deleted with the suite green.
+  //
+  // It matters beyond coverage bookkeeping: **Phase 8's thread-backed architects are
+  // exactly this shape** unless they zero those columns, so the branch that catches
+  // a half-migrated row is the one nothing was testing.
+  it('an architect row with a thread_id but a live pid emits IDENTITY_SHAPE_CONFLICT', () => {
+    const root = tmp();
+    const database = db();
+    // No terminal_id at all — the builder-shaped check would not fire here.
+    database.prepare(`
+      INSERT INTO architect (workspace_path, id, pid, port, cmd, terminal_id, thread_id)
+      VALUES (?, 'main', 4242, 0, '', NULL, 'thread-arch')
+    `).run(normalizeWorkspacePath(root));
+    const snapshot = readThreadRegistry(database, root, []);
+    const codes = snapshot.signals.map((s) => s.code);
+    expect(codes).toContain('IDENTITY_SHAPE_CONFLICT');
+    // Conflicted, so it is not published as a usable architect join.
+    expect(snapshot.architects).toEqual({});
     expect(snapshot.identities).toEqual([]);
   });
 
