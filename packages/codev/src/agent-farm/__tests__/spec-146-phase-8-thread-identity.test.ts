@@ -323,7 +323,7 @@ describe('Spec 146 Phase 8 — no in-flight path migration in source', () => {
   it('does not swallow a missing status.yaml when recording thread_id', () => {
     const spawnSrc = readFileSync(resolve(import.meta.dirname, '../commands/spawn.ts'), 'utf8');
     expect(spawnSrc).not.toMatch(/if \(existsSync\(statusPath\)\) recordThreadId/);
-    expect(spawnSrc).toMatch(/could not record it in status.yaml/);
+    expect(spawnSrc).toMatch(/could not record thread_id=/);
     expect(spawnSrc).toMatch(/findStatusPath/);
   });
 });

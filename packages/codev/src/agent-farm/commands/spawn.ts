@@ -157,18 +157,19 @@ export function persistSpawnedBuilder(
   builder: Parameters<typeof upsertBuilder>[0],
   porch?: { worktreePath: string; projectId: string; projectName: string },
 ): void {
-  upsertBuilder(builder);
-  if (!builder.threadId || !porch) return;
-  const statusPath = findStatusPath(porch.worktreePath, porch.projectId, { alias: false })
-    ?? getStatusPath(porch.worktreePath, porch.projectId, porch.projectName);
-  try {
-    recordThreadId(statusPath, builder.threadId);
-  } catch (err) {
-    throw new Error(
-      `Thread-backed spawn of ${builder.id} wrote thread_id=${builder.threadId} to global.db but could not record it in status.yaml (${statusPath}): ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err },
-    );
+  if (builder.threadId && porch) {
+    const statusPath = findStatusPath(porch.worktreePath, porch.projectId, { alias: false })
+      ?? getStatusPath(porch.worktreePath, porch.projectId, porch.projectName);
+    try {
+      recordThreadId(statusPath, builder.threadId);
+    } catch (err) {
+      throw new Error(
+        `Thread-backed spawn of ${builder.id} could not record thread_id=${builder.threadId} in status.yaml (${statusPath}): ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
+    }
   }
+  upsertBuilder(builder);
 }
 
 /**

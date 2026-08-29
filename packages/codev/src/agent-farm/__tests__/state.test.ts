@@ -42,6 +42,7 @@ vi.mock('../db/index.js', () => {
 
 // Import after mocking
 const state = await import('../state.js');
+const { persistSpawnedBuilder } = await import('../commands/spawn.js');
 
 // Bugfix #826: architect rows are scoped by workspace_path. Tests use this
 // single workspace unless explicitly testing cross-workspace isolation.
@@ -450,6 +451,20 @@ describe('State Management', () => {
         type: 'spec',
         threadId: 'thr-1',
       })).toThrow(/never both/);
+    });
+
+    it('does not write a builder row when status.yaml is missing', () => {
+      expect(() => persistSpawnedBuilder({
+        id: 'B-no-yaml',
+        name: 'n',
+        status: 'implementing',
+        phase: 'init',
+        worktree: '/workspace/test/.builders/wt',
+        branch: 'b',
+        type: 'spec',
+        threadId: 'thr-1',
+      }, { worktreePath: testDir, projectId: '163', projectName: 'missing' })).toThrow(/status.yaml/);
+      expect(state.getBuilder('B-no-yaml')).toBeNull();
     });
   });
 
