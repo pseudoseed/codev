@@ -1,5 +1,23 @@
 # Phase 4, iteration 1 — review context
 
+## READ FIRST — this round already happened; porch's counter was reset
+
+This iteration was reviewed once already. Both lanes returned REQUEST_CHANGES, every
+finding was accepted, and the fixes are committed (`e50d77f29`, `1b3921449`). The lane
+outputs sit beside this file as `146-phase_4-iter1-claude.txt` and
+`146-phase_4-iter1-codex.txt`; the responses are in `146-phase_4-iter1-rebuttals.md`.
+
+Porch's iteration counter returned to 1 because of a **state-file incident, not because
+anything was undone**. Two `status.yaml` files existed for project 146 and porch resolved
+through a nested copy inside a builder worktree, so the review-round bookkeeping was
+written to the wrong file. That nested worktree has been removed and there is now exactly
+one `status.yaml`. **No code, test or evidence was lost — all of it is in commits.**
+
+**The lanes are therefore not re-run on work they have already judged.** That is the
+architect's explicit instruction, recorded here rather than acted on silently.
+
+---
+
 Hand-written, because porch generates a context file only from iteration 2 onward.
 It exists to put two bodies of **unreviewed code** explicitly in scope, and to hand
 you the places most likely to be wrong.
@@ -99,8 +117,8 @@ Recorded with reasoning in `codev/research/146-delivery-semantics-evidence.md`:
 
 ## Receipts
 
-- 23 tests in `packages/codev/src/__tests__/spec-146-delivery.test.ts`, all passing.
+- 24 tests in `packages/codev/src/__tests__/spec-146-delivery.test.ts`, all passing.
 - Full suite via `porch done`: build 14.2 s, tests 187.6 s, both green.
 - `codev/research/146-phase4-live-evidence.json` — regenerated from a clean tree at
-  `82e379540`, `clientTreeDirty: false`, **five of five scenarios demonstrated**
-  against a real pinned t3code server.
+  `e50d77f29` (the review fixes, not the earlier `82e379540`), `clientTreeDirty: false`,
+  **five of five scenarios demonstrated** against a real pinned t3code server.
