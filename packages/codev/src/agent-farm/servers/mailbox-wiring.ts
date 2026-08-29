@@ -21,6 +21,12 @@ import { writeMessagePaced } from './message-write.js';
 import { classifyBuffer, type GateProfile, type GateVerdict } from './render-gate.js';
 import { resolveProfile } from './gate-profiles.js';
 import {
+  detectHarnessFromCommand,
+  interruptSignalForHarness,
+  INTERRUPT_BYTES,
+  type InterruptSignal,
+} from '../utils/harness.js';
+import {
   buildContextFsPort,
   harnessFromLaunchScript,
   type ContextFsPort,
@@ -44,7 +50,11 @@ import {
   type HeldRecoveryInfo,
 } from './mailbox-delivery.js';
 import type { MailboxEscalationPayload } from '@cluesmith/codev-types';
-import { heldRecoveryAction, heldRecoveryKeystroke } from './mailbox-hold-policy.js';
+import {
+  heldRecoveryAction,
+  heldRecoveryKeystroke,
+  type HeldRecoveryAction,
+} from './mailbox-hold-policy.js';
 
 /**
  * "Recent output" window for the liveness diagnostic (Spec 1313, Phase 7 — spec line
@@ -169,6 +179,44 @@ export function resolveProfileForSession(session: DeliverySession): GateProfile 
 }
 
 /**
+ * The harness a live session is running, or `null` when it cannot be identified
+ * (Issue #196). Same two-step resolution {@link resolveProfileForSession} uses, so
+ * the interrupt table and the gate table can never disagree about what app a
+ * terminal is: the launch `command`'s basename first, then the worktree's
+ * `.builder-start.sh` for the wrapped-launch case (a builder runs through the
+ * script, so `session.command` is the shell).
+ */
+export function resolveHarnessForSession(session: DeliverySession): string | null {
+  // Both fields are defensively re-checked: a reconnected terminal row can carry an
+  // empty `command` (see db/index.ts), and an unidentified session must fall through
+  // to the fail-safe `esc` rather than throw inside an interrupt write.
+  const command = typeof session.command === 'string' ? session.command : '';
+  const detected = command ? detectHarnessFromCommand(command) : undefined;
+  if (detected) return detected;
+  const cwd = typeof session.cwd === 'string' ? session.cwd : '';
+  return cwd ? harnessFromLaunchScript(NODE_FS_PORT, cwd) : null;
+}
+
+/**
+ * The signal that safely interrupts THIS session's agent (Issue #196).
+ *
+ * Fail-safe by construction: an unidentifiable session resolves to `esc`, never to
+ * the byte that quits opencode. This is the only thing an interrupt caller needs —
+ * see {@link interruptByteForSession} for the byte itself.
+ */
+export function interruptSignalForSession(session: DeliverySession): InterruptSignal {
+  return interruptSignalForHarness(resolveHarnessForSession(session));
+}
+
+/**
+ * The wire byte that safely interrupts THIS session's agent (Issue #196). Every
+ * interrupt write site reads this instead of spelling a control byte itself.
+ */
+export function interruptByteForSession(session: DeliverySession): string {
+  return INTERRUPT_BYTES[interruptSignalForSession(session)];
+}
+
+/**
  * Classify a session's CURRENT screen for the gate (Spec 1313 render-gate round 2). Reads the
  * session's persistent {@link SessionScreen} mirror — a bounded headless Terminal fed the
  * session's output from birth — and runs the shared classifier on its viewport. This replaces
@@ -277,9 +325,10 @@ export function heldRemedy(toAgent: string, detail: string | null): string {
   if (detail === 'user-text') {
     return (
       `${inspect} Its composer is holding TEXT the agent left behind and will not clear on its own. ` +
-      `Tower sends one automatic Ctrl+C after the starvation window. If it remains held, ` +
+      `Tower sends one automatic turn-ending keystroke after the starvation window. If it remains held, ` +
       `clear it with: afx send ${toAgent} --interrupt "<your message>"   ` +
-      `(sends Ctrl+C first, which clears the line — 'afx interrupt' sends ESC, which does not).`
+      `(ends the turn first, using the byte that is safe for this agent's harness — Ctrl+C clears the ` +
+      `line on claude/codex, while an agent that quits on Ctrl+C gets ESC instead, which may leave the draft).`
     );
   }
 
@@ -426,6 +475,25 @@ function surfaceLiveness(info: LivenessInfo, log: LogFn): void {
 }
 
 /**
+ * Write ONE bounded recovery keystroke to `session` and return the byte written, or
+ * `null` when the write was rejected (Issue #196).
+ *
+ * The whole point of this function is that it is the ONLY place the #92 auto-recovery
+ * puts a control byte on a PTY, and it derives that byte from the session's own harness.
+ * That path fires with NO operator in the loop, so an unconditional `\x03` here let Tower
+ * quit an opencode builder by itself — strictly worse than the manual `--interrupt` case,
+ * because nobody is watching to learn from it. Exported so the regression test can assert
+ * on the bytes this production code writes rather than on a policy return value.
+ */
+export function writeHeldRecovery(
+  session: DeliverySession,
+  action: HeldRecoveryAction,
+): string | null {
+  const control = heldRecoveryKeystroke(action, interruptSignalForSession(session));
+  return session.write(control) ? control : null;
+}
+
+/**
  * Repair one terminal screen after the drainer proved the SAME deadlocking verdict
  * stable for the starvation window (#92). This sends only a control byte; the held
  * message remains in SQLite and still requires a later render-gate CLEAN verdict.
@@ -433,13 +501,15 @@ function surfaceLiveness(info: LivenessInfo, log: LogFn): void {
 function recoverHeld(info: HeldRecoveryInfo, log: LogFn): boolean {
   const session = resolveLiveSessionForAgent(info.workspacePath, info.toAgent);
   if (!session || isThreadDeliverySession(session)) return false;
-  const control = heldRecoveryKeystroke(info.action);
-  if (!session.write(control)) return false;
+  const written = writeHeldRecovery(session, info.action);
+  if (written === null) return false;
 
   const where = `${info.toAgent} @ ${path.basename(info.workspacePath)}`;
-  const recovery = info.action === 'cancel-draft'
-    ? 'Ctrl+C to clear abandoned text'
-    : 'ESC to repaint/end the unreadable screen';
+  const recovery = info.action !== 'cancel-draft'
+    ? 'ESC to repaint/end the unreadable screen'
+    : written === INTERRUPT_BYTES['ctrl-c']
+      ? 'Ctrl+C to clear abandoned text'
+      : 'ESC (this agent quits on Ctrl+C, so the draft may survive — inspect the pane)';
   log(
     'WARN',
     `[mailbox] AUTO-RECOVERY: ${where} remained STUCK (${info.detail}) for ${Math.round(info.stableMs / 1000)}s; sent ${recovery}`,

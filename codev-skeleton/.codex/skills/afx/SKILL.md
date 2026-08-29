@@ -64,7 +64,7 @@ afx send [builder] [message]
 |------|-------------|
 | `--all` | Send to all builders |
 | `--file <path>` | Include file content |
-| `--interrupt` | Send Ctrl+C first |
+| `--interrupt` | End the turn first, with the byte that is safe for the target's harness (Ctrl+C on claude/codex, ESC on opencode) |
 | `--raw` | Skip structured formatting |
 | `--no-enter` | Don't press Enter after message |
 
@@ -89,7 +89,7 @@ afx interrupt <builder>
 A builder chaining foreground waits inside one turn queues every `afx send` unread — including your order
 to stop. ESC alone is the safe default because Enter can activate a highlighted dialog action. Use
 `--enter` only when the terminal is in a known running turn and the queued messages need to process.
-Distinct from `afx send --interrupt` (Ctrl+C).
+Distinct from `afx send --interrupt`, which ends the turn (Ctrl+C on claude/codex, ESC on opencode) and then delivers a message.
 
 ```bash
 afx interrupt 0042 --enter

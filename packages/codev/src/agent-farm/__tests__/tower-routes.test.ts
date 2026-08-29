@@ -222,7 +222,12 @@ function makeRes(): { res: http.ServerResponse; body: () => string; statusCode: 
  * requires that proven lower bound, else a bare marker is an indeterminate partial and is held).
  * `bytesWritten` is the monotone change token the delivery path samples.
  */
-function gateSession(mockWrite: (data: string) => void, ring: string, writable = true) {
+function gateSession(
+  mockWrite: (data: string) => void,
+  ring: string,
+  writable = true,
+  command = 'claude',
+) {
   const raw = `${ring}\r\n${'─'.repeat(20)}\r\n`;
   const gateScreen = new SessionScreen(80, 24);
   gateScreen.feed(raw);
@@ -236,7 +241,9 @@ function gateSession(mockWrite: (data: string) => void, ring: string, writable =
     writable,
     isUserIdle: () => true,
     composing: false,
-    command: 'claude',
+    // Issue #196: the interrupt path resolves the harness from this, so a test can
+    // present an opencode terminal by passing `command: 'opencode'`.
+    command,
     launchArgs: [] as string[],
     cwd: '/tmp/ws',
     info: { cols: 80, rows: 24 },
@@ -1911,6 +1918,110 @@ describe('tower-routes', () => {
 
         expect(mockWrite).not.toHaveBeenCalled(); // the inside-the-lock isStillLive() re-check bailed
         expect(mailbox.getById(sendDbHolder.db, parsed.mailboxId)?.status).toBe('held'); // not falsely delivered
+      });
+    });
+
+    // =====================================================================
+    // Issue #196: --interrupt resolves its byte from the target's harness.
+    // Asserted on the BYTES WRITTEN, not on a return value — the bug was a
+    // successful call that put a fatal byte on the wire.
+    // =====================================================================
+    describe('--interrupt resolves the signal per harness (#196)', () => {
+      const CTRL_C = '\x03';
+      const ESC = '\x1b';
+
+      afterEach(() => {
+        shutdownDelayedSends();
+        resetSubmissionChains();
+        vi.useRealTimers();
+      });
+
+      /** Drive one immediate `--interrupt` against a session running `command`. */
+      async function interruptSessionRunning(command: string): Promise<string[]> {
+        const written: string[] = [];
+        mockParseJsonBody.mockResolvedValue({
+          to: 'builder-x', message: 'stop', workspace: '/tmp/ws',
+          options: { interrupt: true },
+        });
+        mockResolveTarget.mockReturnValue({
+          terminalId: 'term-001', workspacePath: '/tmp/ws', agent: 'builder-x',
+        });
+        mockGetTerminalManager.mockReturnValue({
+          getSession: () => gateSession((d) => written.push(d), '\u276f ', true, command),
+          listSessions: () => [],
+        });
+        const { res, statusCode } = makeRes();
+        await handleRequest(makeReq('POST', '/api/send'), res, makeCtx());
+        expect(statusCode()).toBe(200);
+        return written;
+      }
+
+      it('sends Ctrl+C to a ctrl-c harness (claude)', async () => {
+        const written = await interruptSessionRunning('claude');
+        expect(written).toContain(CTRL_C);
+        expect(written).not.toContain(ESC);
+      });
+
+      it('sends Ctrl+C to a ctrl-c harness (codex)', async () => {
+        expect(await interruptSessionRunning('codex')).toContain(CTRL_C);
+      });
+
+      it('NEVER sends Ctrl+C to an esc harness (opencode quits on it)', async () => {
+        const written = await interruptSessionRunning('opencode');
+        // The load-bearing assertion: not one byte written is \x03.
+        expect(written).not.toContain(CTRL_C);
+        expect(written.join('')).not.toContain(CTRL_C);
+        // The intent still lands — ESC ends an opencode turn (its own footer says so).
+        expect(written).toContain(ESC);
+      });
+
+      it('NEVER sends Ctrl+C to a session whose agent cannot be identified', async () => {
+        // Fail-safe: an unresolvable command must not inherit claude's default.
+        const written = await interruptSessionRunning('/usr/local/bin/some-new-tui');
+        expect(written).not.toContain(CTRL_C);
+        expect(written).toContain(ESC);
+      });
+
+      it('reports the signal it actually sent', async () => {
+        mockParseJsonBody.mockResolvedValue({
+          to: 'builder-x', message: 'stop', workspace: '/tmp/ws', options: { interrupt: true },
+        });
+        mockResolveTarget.mockReturnValue({
+          terminalId: 'term-001', workspacePath: '/tmp/ws', agent: 'builder-x',
+        });
+        mockGetTerminalManager.mockReturnValue({
+          getSession: () => gateSession(vi.fn(), '\u276f ', true, 'opencode'),
+          listSessions: () => [],
+        });
+        const { res, body } = makeRes();
+        await handleRequest(makeReq('POST', '/api/send'), res, makeCtx());
+        expect(JSON.parse(body()).interruptSignal).toBe('esc');
+      });
+
+      it('applies the same table on the DELAYED interrupt path', async () => {
+        vi.useFakeTimers();
+        const written: string[] = [];
+        mockParseJsonBody.mockResolvedValue({
+          to: 'builder-x', message: 'stop', workspace: '/tmp/ws',
+          options: { interrupt: true, deliverAfter: 5 },
+        });
+        mockResolveTarget.mockReturnValue({
+          terminalId: 'term-i', workspacePath: '/tmp/ws', agent: 'builder-x',
+        });
+        mockGetTerminalManager.mockReturnValue({
+          getSession: () => gateSession((d) => written.push(d), '\u276f ', true, 'opencode'),
+          listSessions: () => [],
+        });
+        const { res, statusCode } = makeRes();
+        await handleRequest(makeReq('POST', '/api/send'), res, makeCtx());
+        expect(statusCode()).toBe(200);
+        expect(written).toEqual([]); // nothing at request time
+
+        await vi.advanceTimersByTimeAsync(5000);
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+
+        expect(written).not.toContain(CTRL_C);
+        expect(written).toContain(ESC);
       });
     });
   });

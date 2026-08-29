@@ -174,7 +174,7 @@ export interface SendOptions {
   message?: string;     // Message to send
   all?: boolean;        // Send to all builders
   file?: string;        // File to include in message
-  interrupt?: boolean;  // Send Ctrl+C first to ensure prompt is ready
+  interrupt?: boolean;  // End the turn first, with the byte safe for the target's harness (#196)
   raw?: boolean;        // Skip structured formatting
   noEnter?: boolean;    // Don't send Enter after message
   /**

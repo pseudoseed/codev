@@ -1580,7 +1580,7 @@ afx send 0003 "Check the tests"        # Send message to builder 0003
 afx send --all "Stop and report"       # Broadcast to all builders
 afx send architect "Need help"         # Builder sends to architect (from worktree)
 afx send 0003 "msg" --file diff.txt    # Include file content
-afx send 0003 "msg" --interrupt        # Send Ctrl+C first
+afx send 0003 "msg" --interrupt        # End the turn first (Ctrl+C, or ESC on opencode)
 afx send 0003 "msg" --raw              # Skip structured formatting
 
 # Direct CLI access (v1.5.0+)

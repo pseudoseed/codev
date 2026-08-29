@@ -455,7 +455,7 @@ export async function runAgentFarm(args: string[]): Promise<void> {
     .description('Send instructions to a running builder')
     .option('--all', 'Send to all builders')
     .option('--file <path>', 'Include file content in message')
-    .option('--interrupt', 'Send Ctrl+C first')
+    .option('--interrupt', "End the turn first, using the byte that is safe for the target's harness (Ctrl+C on claude/codex; ESC on opencode, which quits on Ctrl+C)")
     .option('--raw', 'Skip structured message formatting')
     .option('--no-enter', 'Do not send Enter after message')
     .option('--delay <seconds>', 'Deliver after N seconds (persisted; survives a Tower restart, except a delayed --interrupt ^C nudge)')

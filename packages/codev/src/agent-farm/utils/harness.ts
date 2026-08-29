@@ -24,7 +24,38 @@ import { buildWorktreeGuardFiles } from './worktree-write-guard.js';
 // Types
 // =============================================================================
 
+/**
+ * What byte safely ENDS A TURN on a given agent's TUI (Issue #196).
+ *
+ * Not a style choice — a correctness fact per app, on the same footing as the
+ * model flag or the prompt arg. claude and codex read Ctrl+C as "interrupt the
+ * turn"; **opencode reads it as "quit"** and the process exits. Verified in the
+ * Tower log 2026-08-29: an unconditional `\x03` to an opencode builder took the
+ * shellper down 30s later, and opencode has no conversation resume, so the
+ * replacement woke with no memory of its work.
+ *
+ * ESC is the universal safe form — it ends the turn on all three (it is what
+ * opencode itself advertises: its busy footer reads `esc interrupt`, the string
+ * `OPENCODE_PROFILE.busyIndicatorPattern` matches). So callers DOWNGRADE to ESC
+ * on an `esc` harness rather than refusing; the operator's intent still lands.
+ */
+export type InterruptSignal = 'esc' | 'ctrl-c';
+
+/** The wire byte for each signal. The ONLY place these control bytes are spelled. */
+export const INTERRUPT_BYTES: Record<InterruptSignal, string> = {
+  esc: '\x1b',
+  'ctrl-c': '\x03',
+};
+
 export interface HarnessProvider {
+  /**
+   * The signal that safely interrupts a turn on this harness (Issue #196).
+   *
+   * REQUIRED, deliberately: a new built-in harness that forgets to declare it is
+   * a compile error, not a silent default into `ctrl-c` — which is exactly how
+   * this bug would come back. See {@link InterruptSignal}.
+   */
+  interruptSignal: InterruptSignal;
   /**
    * For Node spawn() call sites (architect.ts, tower-utils.ts).
    * Returns CLI args and env vars to inject the role.
@@ -192,6 +223,15 @@ export interface CustomHarnessConfig {
   modelArgs?: string[];
   modelScriptFragment?: string;
   /**
+   * Optional: what byte safely interrupts a turn on this harness (Issue #196).
+   *
+   * Omitting it means `esc` — the fail-safe direction. An unknown third-party TUI
+   * must never inherit `ctrl-c` by default: ESC at worst does nothing, Ctrl+C can
+   * kill the process and its unsaved conversation.
+   */
+  interruptSignal?: InterruptSignal;
+
+  /**
    * Optional binary/command that runs this harness, for a per-spawn
    * `--harness <name>` (Issue #2). Without it a per-spawn selection falls back
    * to the workspace's configured builder command (when that command already is
@@ -205,6 +245,8 @@ export interface CustomHarnessConfig {
 // =============================================================================
 
 export const CLAUDE_HARNESS: HarnessProvider = {
+  // Verified: Claude Code reads Ctrl+C as "end this turn" and keeps the process.
+  interruptSignal: 'ctrl-c',
   // Spec 1273: `/clear` empties the conversation while leaving the process — and
   // therefore the --append-system-prompt role below — intact. That is what makes
   // an in-session reset possible here and nowhere else today.
@@ -250,6 +292,8 @@ export const CLAUDE_HARNESS: HarnessProvider = {
 };
 
 export const CODEX_HARNESS: HarnessProvider = {
+  // Verified: codex-cli reads Ctrl+C as "end this turn" and keeps the process.
+  interruptSignal: 'ctrl-c',
   buildRoleInjection: (_content, filePath) => ({
     args: ['-c', `model_instructions_file=${filePath}`],
     env: {},
@@ -265,6 +309,9 @@ export const CODEX_HARNESS: HarnessProvider = {
 };
 
 export const OPENCODE_HARNESS: HarnessProvider = {
+  // Issue #196: opencode QUITS on Ctrl+C. Its own busy footer advertises the
+  // right gesture -- `esc interrupt` -- which is what OPENCODE_PROFILE matches on.
+  interruptSignal: 'esc',
   buildRoleInjection: () => {
     throw new Error(
       'OpenCode is only supported as a builder shell, not as an architect shell. ' +
@@ -451,6 +498,9 @@ export function buildCustomHarnessProvider(config: CustomHarnessConfig): Harness
 
   return {
     ...modelHooks,
+    // Fail-safe default (Issue #196): an undeclared custom harness gets ESC, not
+    // the byte that can quit it.
+    interruptSignal: config.interruptSignal ?? 'esc',
     buildRoleInjection: (content, filePath) => ({
       args: config.roleArgs.map(arg => expandTemplateVars(arg, content, filePath)),
       env: Object.fromEntries(
@@ -527,6 +577,13 @@ export function validateCustomHarnessConfig(name: string, config: unknown): Cust
     }
   }
 
+  if (obj.interruptSignal !== undefined
+      && obj.interruptSignal !== 'esc' && obj.interruptSignal !== 'ctrl-c') {
+    throw new Error(
+      `Harness "${name}": "interruptSignal" must be "esc" or "ctrl-c" if provided, got ${JSON.stringify(obj.interruptSignal)}`,
+    );
+  }
+
   if (obj.command !== undefined && typeof obj.command !== 'string') {
     throw new Error(`Harness "${name}": "command" must be a string, got ${typeof obj.command}`);
   }
@@ -593,6 +650,48 @@ export function assertHarnessAcceptsModel(
     `A custom harness can declare one by setting "modelArgs" and "modelScriptFragment" ` +
     `(both expanding \${MODEL}) in .codev/config.json under the "harness" section.`,
   );
+}
+
+// =============================================================================
+// Interrupt signal resolution
+// =============================================================================
+
+/**
+ * The interrupt signal for a harness NAME, fail-safe (Issue #196).
+ *
+ * The single table every interrupt caller reads. Resolution is deliberately
+ * narrower than {@link resolveHarness}: an unknown, retired or unresolvable name
+ * yields `esc` rather than falling through to CLAUDE_HARNESS's `ctrl-c`. That
+ * default is the whole point — `resolveHarness`'s claude fallback is what would
+ * hand an unidentified opencode terminal the byte that kills it.
+ */
+export function interruptSignalForHarness(
+  harnessName: string | undefined | null,
+  customHarnesses?: Record<string, CustomHarnessConfig>,
+): InterruptSignal {
+  if (!harnessName) return 'esc';
+
+  const builtin = getBuiltinHarness(harnessName);
+  if (builtin) return builtin.interruptSignal;
+
+  if (customHarnesses && Object.prototype.hasOwnProperty.call(customHarnesses, harnessName)) {
+    return customHarnesses[harnessName].interruptSignal ?? 'esc';
+  }
+
+  return 'esc';
+}
+
+/**
+ * The wire byte that safely interrupts a turn on `harnessName` (Issue #196).
+ *
+ * Callers write THIS instead of a literal `\x03`. A second hardcoded control byte
+ * at a call site reintroduces the bug this exists to close.
+ */
+export function interruptByteForHarness(
+  harnessName: string | undefined | null,
+  customHarnesses?: Record<string, CustomHarnessConfig>,
+): string {
+  return INTERRUPT_BYTES[interruptSignalForHarness(harnessName, customHarnesses)];
 }
 
 // =============================================================================
