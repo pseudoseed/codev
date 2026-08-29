@@ -219,12 +219,20 @@ export async function classifyAgentScreen(
   // reborn session had in the field.
   //
   // Here the two geometries are simply KNOWN, so compare them. No heuristic, no per-app
-  // assumption, both directions, every harness. After attach-time adoption they normally
-  // agree; they diverge when `PtySession.resize` shrinks the mirror and then DROPS the
-  // app-side resize (the `status !== 'running'` branches) — the residual path adoption
-  // cannot close, and the one this catches. `ShellperClient.resize` records the new size
-  // only on the success path, which is what makes a dropped resize show up as a
-  // disagreement instead of being papered over.
+  // assumption, and it covers BOTH axes at once. After attach-time adoption they normally
+  // agree; they diverge when `PtySession.resize` moves the mirror and then DROPS the
+  // app-side resize — the residual path adoption cannot close, and the one this catches.
+  // `ShellperClient.resize` records the new size only on the success path, which is what
+  // makes a dropped resize show up as a disagreement instead of being papered over.
+  //
+  // That divergence is only ever CREATED while the session is non-writable (every branch
+  // that drops the resize also fails `writable`), but writability RETURNS without a
+  // re-attach: `startRestartWait` (#1264) keeps the client and the WebSocket clients across
+  // a child restart, a resize in that window moves the mirror alone, and the respawned
+  // child's first byte clears `exitCode` — so the session is live again on a stale mirror
+  // with no `attachShellper` to re-sync it. That is why this check is reachable at all, and
+  // why it must not outrank the busy signal above.
+  //
   // SCOPED to bottom-anchored profiles (opencode) on purpose, though the disagreement is
   // just as real for claude/codex/agy. Their composers sit at the cursor and stay in view,
   // so a short mirror has never taken them off the air — they survive it by luck, not by
@@ -240,7 +248,8 @@ export async function classifyAgentScreen(
       // session API to compare them by hand; the next one should be readable from the log.
       log?.(
         `[gate] geometry-mismatch ${(session as PtySession).label}: mirror ${cols}x${rows} ` +
-        `vs pty ${ptyGeometry.cols}x${ptyGeometry.rows} — held; realigns on next attach`,
+        `vs pty ${ptyGeometry.cols}x${ptyGeometry.rows} — held. Self-clears only on a ` +
+        `re-attach; a restart-path divergence (#1264) will NOT, and needs a client resize.`,
       );
       return { clean: false, reason: 'busy', detail: 'geometry-mismatch' };
     }
