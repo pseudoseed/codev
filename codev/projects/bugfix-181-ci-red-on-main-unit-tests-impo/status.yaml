@@ -1,0 +1,14 @@
+id: bugfix-181
+title: ci-red-on-main-unit-tests-impo
+protocol: bugfix
+phase: investigate
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: pending
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-29T09:31:37.800Z'
+updated_at: '2026-08-29T09:31:37.801Z'
