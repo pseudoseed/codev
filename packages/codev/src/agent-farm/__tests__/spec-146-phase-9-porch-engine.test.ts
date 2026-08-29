@@ -102,6 +102,20 @@ describe('Spec 146 Phase 9 — @cluesmith/codev pack relative imports', () => {
         rmSync(packDirectory, { recursive: true, force: true });
       }
     },
+    // MEASURED, not guessed. `npm pack` on packages/codev — which packs a vendored three.js and
+    // a copied skeleton — costs ~2.3s quiet (2725/2275/2017ms) and ~4.6s under moderate disk
+    // load (4419/4635/4728ms, four parallel writers). Vitest's default 5000ms is roughly 2x the
+    // quiet cost and BELOW the loaded cost, so this timed out for a sibling builder that had two
+    // vitest runs contending — reported as a failure in a test that was doing nothing wrong.
+    //
+    // The asymmetry decides the number: a bound that is too large costs a slower failure, while
+    // one that is too small costs a false failure and the investigation it triggers. 60s is ~13x
+    // the loaded cost. Raise it, do not skip it — a skip would remove the packing guard entirely.
+    //
+    // This test only RUNS when packages/codev/dist exists (`skipIf(!distBuilt)`), and porch's own
+    // build criterion creates dist — so `porch check` and `porch done` are precisely what arm it.
+    // That is why it is invisible in an isolated re-run and appears under porch.
+    60_000,
   );
 
   it.skipIf(distBuilt)('records why pack relative imports could not check', () => {
