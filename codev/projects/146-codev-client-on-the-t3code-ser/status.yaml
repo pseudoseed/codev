@@ -62,8 +62,8 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 1
-build_complete: true
+iteration: 2
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -360,8 +360,22 @@ history:
         file: >-
           /Users/chris/dev/codev-1455/.builders/spir-146/codev/projects/146-codev-client-on-the-t3code-ser/146-phase_7-iter3-claude.txt
         stated: true
+  - iteration: 1
+    plan_phase: phase_8
+    build_output: ''
+    reviews:
+      - model: codex
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-146/codev/projects/146-codev-client-on-the-t3code-ser/146-phase_8-iter1-codex.txt
+        stated: true
+      - model: claude
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/spir-146/codev/projects/146-codev-client-on-the-t3code-ser/146-phase_8-iter1-claude.txt
+        stated: false
 started_at: '2026-08-28T15:56:27.086Z'
-updated_at: '2026-08-29T15:02:22.409Z'
+updated_at: '2026-08-29T15:40:24.435Z'
 context_refreshes:
   - boundary: enter:plan
     at: '2026-08-28T15:58:58.492Z'
