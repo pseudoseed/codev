@@ -312,6 +312,41 @@ describe('spec 146 phase 4: an unreachable server fails loudly', () => {
     }
   });
 
+  it('a failed send lets the DRAIN finish, not just the caller', async () => {
+    // The depth assertion above names the message; this one names the loop.
+    //
+    // `#drain` used to reject the caller without shifting the item, so the failed
+    // message stayed at the head of a `while` and was re-sent forever. The caller
+    // saw a correct-looking rejection while the queue span hot behind it, which is
+    // why the defect surfaced as the whole test FILE hanging rather than as a
+    // failure: the spin outlived the test that started it, kept failing against a
+    // temp dir that had been removed, and starved every test after it.
+    //
+    // So the property is that `flush()` RESOLVES. A queue that re-sends forever
+    // never lets it.
+    const dir = tempDir('unreachable-drain-terminates');
+    try {
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      let attempts = 0;
+      const dead = {
+        async call() {
+          attempts += 1;
+          throw Object.assign(new Error('the t3code socket is not open'), { name: 'NotConnectedError' });
+        },
+      };
+      const queue = new ThreadMessageQueue(() => ({ threadId: 't1', isTurnActive: false }), dead, journal);
+
+      await expect(queue.send(message('doomed'))).rejects.toThrow(/socket is not open/);
+      await queue.flush();
+
+      expect(queue.depth).toBe(0);
+      // Tried once and given up, rather than retried behind the caller's back.
+      expect(attempts).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('fails within a bounded time rather than hanging', async () => {
     const dir = tempDir('unreachable-bounded');
     try {

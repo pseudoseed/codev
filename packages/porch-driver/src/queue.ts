@@ -186,9 +186,13 @@ export class ThreadMessageQueue {
         this.#queue.shift();
         item.resolve(receipt);
       } catch (error) {
-        // Loud, at the call site, and out of the queue. Holding it here would be
-        // the hold-and-retry behaviour the spec says not to reproduce, and the
-        // caller would be told nothing.
+        // Loud, at the call site, and OUT OF THE QUEUE — the shift is the half
+        // that makes the comment true. Rejecting without removing left the failed
+        // message at the head of a `while` loop that re-sent it forever: a hot
+        // spin that never drains, never returns, and starves everything behind it.
+        // It is also the hold-and-retry behaviour the spec says not to reproduce,
+        // arrived at by accident rather than by choice.
+        this.#queue.shift();
         this.#accepted.delete(item.message.idempotencyKey);
         item.reject(error);
       }

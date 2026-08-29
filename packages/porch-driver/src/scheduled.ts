@@ -167,7 +167,17 @@ export class ScheduleStore {
   /**
    * Messages that have neither fired nor been cancelled, in schedule order.
    *
-   * This is what `afx inbox` lists once it is repointed here — see the ruling in
+   * **`afx inbox` is NOT repointed here.** An earlier draft of this comment said it
+   * would be; the architect ruled the other way and the reasoning is worth keeping
+   * next to the code that tempted it. Every part of that command's surface exists
+   * to manage a hold — it lists messages held because the render gate could not
+   * classify a screen, shows the reason, and lets a human dismiss one. On this path
+   * there is no hold state, no reason code and nothing to dismiss: a send lands or
+   * fails at the call site. Pointing it here would have given it rows to display
+   * while removing the reason anyone ever opened it.
+   *
+   * `afx inbox` therefore retires WITH the mailbox in Phase 14, and its removal is a
+   * release-note line because it is a command people type. Ruling and reasoning in
    * `codev/research/146-delivery-semantics-evidence.md`.
    */
   pending(): ReadonlyArray<ScheduledMessage> {
