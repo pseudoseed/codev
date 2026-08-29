@@ -196,7 +196,7 @@ describe('State Management', () => {
       const row = state.getArchitectByName(WS, 'uiv2');
       expect(row?.threadId).toBe('thr-arch');
       expect(row?.terminalId).toBeUndefined();
-      expect(row?.cmd).toBe('');
+      expect(row?.cmd).toBe('claude');
     });
 
     it('rejects an architect carrying both terminalId and threadId', () => {

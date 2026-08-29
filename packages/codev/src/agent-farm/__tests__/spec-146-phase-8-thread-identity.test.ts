@@ -12,7 +12,6 @@ import {
   allocateSpawnThread,
   assertExclusiveIdentity,
   chooseSpawnPath,
-  countPtyDrain,
   countPtyDrainFromBuilders,
   DualIdentityError,
   setSpawnThreadFactory,
@@ -117,27 +116,14 @@ describe('Spec 146 Phase 8 — exclusivity and drain', () => {
   });
 
   it('counts PTY drain rows and drops to zero as they complete', () => {
-    const db = new Database(':memory:');
-    db.exec(GLOBAL_SCHEMA);
-    db.prepare(`INSERT INTO builders (workspace_path, id, name, worktree, branch, terminal_id, status)
-                VALUES ('/ws', 'pty-1', 'a', '/wt', 'b', 'term-1', 'implementing')`).run();
-    db.prepare(`INSERT INTO builders (workspace_path, id, name, worktree, branch, thread_id, status)
-                VALUES ('/ws', 'thr-1', 'a', '/wt', 'b', 'thread-1', 'implementing')`).run();
-    db.prepare(`INSERT INTO builders (workspace_path, id, name, worktree, branch, terminal_id, status)
-                VALUES ('/ws', 'pty-done', 'a', '/wt', 'b', 'term-2', 'complete')`).run();
-    expect(countPtyDrain(db)).toBe(1);
-    db.prepare(`UPDATE builders SET status = 'complete' WHERE id = 'pty-1'`).run();
-    expect(countPtyDrain(db)).toBe(0);
-    db.close();
-  });
-
-  it('counts drain from in-memory builders the same way', () => {
     const builders: Builder[] = [
-      { id: '1', name: 'a', status: 'implementing', phase: '', worktree: '', branch: '', type: 'spec', terminalId: 't' },
-      { id: '2', name: 'a', status: 'implementing', phase: '', worktree: '', branch: '', type: 'spec', threadId: 'h' },
-      { id: '3', name: 'a', status: 'complete', phase: '', worktree: '', branch: '', type: 'spec', terminalId: 't2' },
+      { id: 'pty-1', name: 'a', status: 'implementing', phase: '', worktree: '', branch: '', type: 'spec', terminalId: 'term-1' },
+      { id: 'thr-1', name: 'a', status: 'implementing', phase: '', worktree: '', branch: '', type: 'spec', threadId: 'thread-1' },
+      { id: 'pty-done', name: 'a', status: 'complete', phase: '', worktree: '', branch: '', type: 'spec', terminalId: 'term-2' },
     ];
     expect(countPtyDrainFromBuilders(builders)).toBe(1);
+    builders[0] = { ...builders[0], status: 'complete' };
+    expect(countPtyDrainFromBuilders(builders)).toBe(0);
   });
 });
 
@@ -229,6 +215,11 @@ describe('Spec 146 Phase 8 — status.yaml round-trip', () => {
     const loaded = readState(statusPath);
     expect(loaded.thread_id).toBe('thread-abc');
     expect(readFileSync(statusPath, 'utf8')).toMatch(/thread_id: thread-abc/);
+  });
+
+  it('fails loudly when status.yaml is missing', () => {
+    const statusPath = resolve(dir, 'codev/projects/163-missing/status.yaml');
+    expect(() => recordThreadId(statusPath, 'thr-1')).toThrow(/Project not found/);
   });
 });
 
@@ -327,5 +318,12 @@ describe('Spec 146 Phase 8 — no in-flight path migration in source', () => {
     ].join('\n');
     expect(src).not.toMatch(/SET\s+thread_id\s*=\s*terminal_id/i);
     expect(src).not.toMatch(/thread_id\s*=\s*builders\.terminal_id/i);
+  });
+
+  it('does not swallow a missing status.yaml when recording thread_id', () => {
+    const spawnSrc = readFileSync(resolve(import.meta.dirname, '../commands/spawn.ts'), 'utf8');
+    expect(spawnSrc).not.toMatch(/if \(existsSync\(statusPath\)\) recordThreadId/);
+    expect(spawnSrc).toMatch(/could not record it in status.yaml/);
+    expect(spawnSrc).toMatch(/findStatusPath/);
   });
 });

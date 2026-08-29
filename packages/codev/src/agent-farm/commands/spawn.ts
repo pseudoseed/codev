@@ -35,7 +35,7 @@ import {
   allocateSpawnThread,
   chooseSpawnPath,
 } from '../db/thread-identity.js';
-import { getStatusPath, recordThreadId } from '../../commands/porch/state.js';
+import { findStatusPath, getStatusPath, recordThreadId } from '../../commands/porch/state.js';
 import { DEFAULT_ARCHITECT_NAME } from '../utils/architect-name.js';
 
 /**
@@ -159,8 +159,16 @@ export function persistSpawnedBuilder(
 ): void {
   upsertBuilder(builder);
   if (!builder.threadId || !porch) return;
-  const statusPath = getStatusPath(porch.worktreePath, porch.projectId, porch.projectName);
-  if (existsSync(statusPath)) recordThreadId(statusPath, builder.threadId);
+  const statusPath = findStatusPath(porch.worktreePath, porch.projectId, { alias: false })
+    ?? getStatusPath(porch.worktreePath, porch.projectId, porch.projectName);
+  try {
+    recordThreadId(statusPath, builder.threadId);
+  } catch (err) {
+    throw new Error(
+      `Thread-backed spawn of ${builder.id} wrote thread_id=${builder.threadId} to global.db but could not record it in status.yaml (${statusPath}): ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
 }
 
 /**

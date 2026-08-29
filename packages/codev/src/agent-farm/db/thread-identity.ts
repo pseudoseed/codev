@@ -1,7 +1,6 @@
-import type { Database } from 'better-sqlite3';
 import type { ArchitectState, Builder } from '../types.js';
 
-export const THREAD_ARCHITECT_SENTINEL = { pid: 0, port: 0, cmd: '' } as const;
+export const THREAD_ARCHITECT_SENTINEL = { pid: 0, port: 0 } as const;
 
 export class DualIdentityError extends Error {
   constructor(detail: string) {
@@ -33,7 +32,7 @@ export function architectWriteValues(architect: ArchitectState): {
     return {
       pid: THREAD_ARCHITECT_SENTINEL.pid,
       port: THREAD_ARCHITECT_SENTINEL.port,
-      cmd: THREAD_ARCHITECT_SENTINEL.cmd,
+      cmd: architect.cmd,
       terminalId: null,
       threadId: architect.threadId,
     };
@@ -88,14 +87,6 @@ export async function allocateSpawnThread(
     throw new Error('Thread-backed spawn has no factory');
   }
   return spawnThreadFactory(input);
-}
-
-export function countPtyDrain(db: Database): number {
-  const row = db.prepare(
-    `SELECT COUNT(*) AS n FROM builders
-     WHERE terminal_id IS NOT NULL AND thread_id IS NULL AND status != 'complete'`,
-  ).get() as { n: number };
-  return row.n;
 }
 
 export function countPtyDrainFromBuilders(builders: ReadonlyArray<Builder>): number {
