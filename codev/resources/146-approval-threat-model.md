@@ -87,6 +87,12 @@ A forged record is still a record, and it is still in the artifact.
 
 The store is outside every workspace and outside `.env`, and a test asserts that too.
 
+A store that **exists but will not parse** reports `APPROVAL_STORE_UNREADABLE`, never
+`APPROVAL_CAPABILITY_UNKNOWN`. Returning an empty fallback would have a corrupt file assert
+that the credential was never issued — the same distinction the codev-agent failure matrix
+draws between `GLOBAL_DB_LOCKED` and `GLOBAL_DB_UNREADABLE`. A store that has never been
+written is absence, and still answers `UNKNOWN`.
+
 ### Expiry
 
 Capabilities carry an expiry: 12 hours by default, 7 days at most. An expired capability is

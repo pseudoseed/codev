@@ -364,6 +364,25 @@ function handleApprovalRoute(
         writeJson(res, 400, { signal: 'APPROVAL_REQUEST_MALFORMED' });
         return;
       }
+      // The capability must exist, be live, and belong to THIS session before a
+      // nonce is minted against it. Minting against any string was harmless —
+      // the secret still has to verify at `porch approve` — but an unchecked
+      // identifier accepted at one layer is the shape this phase keeps finding.
+      const capability = context.approvalCapabilities.describe(capabilityId);
+      if (!capability || capability.revokedAt || Date.parse(capability.expiresAt) <= Date.now()) {
+        writeJson(res, 404, {
+          signal: APPROVAL_SIGNAL.APPROVAL_CAPABILITY_UNKNOWN,
+          message: 'no live capability with that id on this host',
+        });
+        return;
+      }
+      if (capability.sessionId !== recognition.sessionId) {
+        writeJson(res, 403, {
+          signal: APPROVAL_SIGNAL.APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION,
+          message: 'that capability was issued to a different human session',
+        });
+        return;
+      }
       const nonce = context.approvalNonces.mint({ projectId, gateName, capabilityId });
       writeJson(res, 201, { signal: APPROVAL_SIGNAL.APPROVAL_AUTHORIZED, nonce, projectId, gateName });
     });

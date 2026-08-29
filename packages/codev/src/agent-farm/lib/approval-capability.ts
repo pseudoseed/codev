@@ -68,6 +68,7 @@ export const APPROVAL_SIGNAL = {
   APPROVAL_NONCE_EXPIRED: 'APPROVAL_NONCE_EXPIRED',
   APPROVAL_NONCE_SCOPE_MISMATCH: 'APPROVAL_NONCE_SCOPE_MISMATCH',
   APPROVAL_NONCE_CAPABILITY_MISMATCH: 'APPROVAL_NONCE_CAPABILITY_MISMATCH',
+  APPROVAL_STORE_UNREADABLE: 'APPROVAL_STORE_UNREADABLE',
   APPROVAL_ISSUANCE_REFUSED_AGENT: 'APPROVAL_ISSUANCE_REFUSED_AGENT',
   APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION: 'APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION',
 } as const;
@@ -137,12 +138,29 @@ export function defaultApprovalRoot(): string {
   return join(homedir(), '.agent-farm', 'approval');
 }
 
+/**
+ * Thrown when the store exists but cannot be parsed.
+ *
+ * The previous version returned the empty fallback, so a corrupt
+ * `capabilities.json` answered `APPROVAL_CAPABILITY_UNKNOWN` — an assertion that
+ * the credential was never issued. That is "I could not tell" spelled as "no",
+ * and it is the same distinction the failure matrix already draws between
+ * `GLOBAL_DB_LOCKED` and `GLOBAL_DB_UNREADABLE`.
+ */
+export class ApprovalStoreUnreadable extends Error {
+  constructor(readonly storePath: string, cause: unknown) {
+    super(`APPROVAL_STORE_UNREADABLE: ${storePath} exists but could not be parsed (${String(cause)})`);
+    this.name = 'ApprovalStoreUnreadable';
+  }
+}
+
+/** A missing store is absence and returns the fallback; an unparseable one is not. */
 function readJsonFile<T>(path: string, fallback: T): T {
   if (!existsSync(path)) return fallback;
   try {
     return JSON.parse(readFileSync(path, 'utf8')) as T;
-  } catch {
-    return fallback;
+  } catch (error) {
+    throw new ApprovalStoreUnreadable(path, error);
   }
 }
 
@@ -159,6 +177,7 @@ function writeJsonFile(path: string, value: unknown): void {
 /** How long to keep trying for the lock before giving up. */
 const LOCK_TIMEOUT_MS = 2_000;
 const LOCK_STALE_MS = 30_000;
+const LOCK_RETRY_MS = 10;
 
 /**
  * Run a read-modify-write under an exclusive lock.
@@ -190,7 +209,12 @@ function withLock<T>(path: string, operation: () => T): T {
       if (Date.now() >= deadline) {
         throw new Error(`APPROVAL_STORE_LOCKED: could not acquire ${lockPath} within ${LOCK_TIMEOUT_MS}ms`);
       }
-      // Busy-wait: these critical sections are two file operations long.
+      // Yield rather than spin. These critical sections are two file operations
+      // long, so a short blocking sleep costs nothing and keeps a contended
+      // approval from burning a core for two seconds. `Atomics.wait` is the only
+      // synchronous sleep available, and this path is synchronous by design (the
+      // lock must span a read-modify-write that callers do not await).
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_RETRY_MS);
     }
   }
   try {
@@ -282,7 +306,18 @@ export class ApprovalCapabilityStore {
     }
     const capabilityId = presentation.slice(0, separator);
     const secret = presentation.slice(separator + 1);
-    const record = this.#read().find((entry) => entry.id === capabilityId);
+    let record: StoredCapability | undefined;
+    try {
+      record = this.#read().find((entry) => entry.id === capabilityId);
+    } catch (error) {
+      if (!(error instanceof ApprovalStoreUnreadable)) throw error;
+      return {
+        authorized: false,
+        code: APPROVAL_SIGNAL.APPROVAL_STORE_UNREADABLE,
+        message: error.message,
+        capabilityId,
+      };
+    }
     if (!record) {
       return {
         authorized: false,
@@ -374,6 +409,19 @@ export class ApprovalCapabilityStore {
       if (revoked > 0) this.#write(capabilities);
       return revoked;
     });
+  }
+
+  /**
+   * The stored record WITHOUT its verifier, for callers that need to know a
+   * capability is live before acting on its id. The verifier is withheld rather
+   * than returned-and-ignored: a hash that never leaves this class cannot be
+   * leaked by a caller that logs its input.
+   */
+  describe(capabilityId: string): Omit<StoredCapability, 'verifier'> | null {
+    const record = this.#read().find((entry) => entry.id === capabilityId);
+    if (!record) return null;
+    const { verifier: _withheld, ...rest } = record;
+    return rest;
   }
 
   /** Raw file bytes, for tests that assert no secret was persisted. */
@@ -523,7 +571,18 @@ export class ApprovalNonceStore {
     nonce: string,
     scope: { projectId: string; gateName: string; capabilityId: string },
   ): NonceConsumption | null {
-    const nonces = this.#read();
+    let nonces: StoredNonce[];
+    try {
+      nonces = this.#read();
+    } catch (error) {
+      if (!(error instanceof ApprovalStoreUnreadable)) throw error;
+      // Not UNKNOWN: a store we cannot read is not a store that says no.
+      return {
+        accepted: false,
+        code: APPROVAL_SIGNAL.APPROVAL_STORE_UNREADABLE,
+        message: error.message,
+      };
+    }
     const entry = nonces.find((candidate) => candidate.nonce === nonce);
     if (!entry) {
       return {

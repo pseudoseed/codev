@@ -238,6 +238,7 @@ describe('failure matrix signals are distinct', () => {
       APPROVAL_NONCE_SCOPE_MISMATCH: 'bound to a different project/gate pair',
       APPROVAL_NONCE_CAPABILITY_MISMATCH: 'minted for a different capability than the one presented',
       APPROVAL_STORE_LOCKED: 'the store lock could not be taken; a retry succeeds, like CODEV_AGENT_STARTING',
+      APPROVAL_STORE_UNREADABLE: 'the store exists but will not parse; distinct from "never issued", per-request not a service failure',
       CODEV_ARCHITECT_NAME: 'environment variable name read for caller attribution',
       APPROVAL_ISSUANCE_REFUSED_AGENT: 'caller declared itself a builder/architect; defence in depth',
       APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION: 'issuance without a paired human session',

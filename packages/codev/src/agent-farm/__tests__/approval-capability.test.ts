@@ -253,6 +253,52 @@ describe('approval nonces', () => {
   });
 });
 
+describe('an unreadable store is not a store that says no', () => {
+  // The same distinction the failure matrix draws between GLOBAL_DB_LOCKED and
+  // GLOBAL_DB_UNREADABLE. Returning the empty fallback made a corrupt file
+  // answer "that capability was never issued", which is a lie about a file we
+  // could not read.
+  it('a corrupt capability store reports APPROVAL_STORE_UNREADABLE, not UNKNOWN', () => {
+    const capabilities = store();
+    const issued = capabilities.issue({ sessionId: 'human-session-1' });
+    writeFileSync(capabilities.path, '{ not json');
+
+    const verdict = capabilities.verify(issued.presentation);
+    expect(verdict.authorized).toBe(false);
+    expect(verdict.code).toBe(APPROVAL_SIGNAL.APPROVAL_STORE_UNREADABLE);
+    expect(verdict.code).not.toBe(APPROVAL_SIGNAL.APPROVAL_CAPABILITY_UNKNOWN);
+  });
+
+  it('a corrupt nonce store reports APPROVAL_STORE_UNREADABLE, not UNKNOWN', () => {
+    const nonces = new ApprovalNonceStore({ root });
+    const nonce = nonces.mint({ projectId: '146', gateName: 'pr', capabilityId: 'cap-1' });
+    writeFileSync(join(root, 'approval-nonces.json'), 'truncated…');
+
+    const verdict = nonces.peek(nonce, { projectId: '146', gateName: 'pr', capabilityId: 'cap-1' });
+    expect(verdict.accepted).toBe(false);
+    expect(verdict.code).toBe(APPROVAL_SIGNAL.APPROVAL_STORE_UNREADABLE);
+    expect(verdict.code).not.toBe(APPROVAL_SIGNAL.APPROVAL_NONCE_UNKNOWN);
+  });
+
+  // A store that does not exist yet IS absence, and must still answer that way.
+  it('a store that was never written still answers UNKNOWN', () => {
+    const capabilities = new ApprovalCapabilityStore({ root: join(root, 'never-written') });
+    expect(capabilities.verify('11111111-2222-3333-4444-555555555555.secret').code)
+      .toBe(APPROVAL_SIGNAL.APPROVAL_CAPABILITY_UNKNOWN);
+  });
+
+  // `describe` is what the nonce-minting route checks a capability with. It must
+  // never hand back the verifier — a caller that logs its input would publish it.
+  it('describe returns the record without its verifier', () => {
+    const capabilities = store();
+    const issued = capabilities.issue({ sessionId: 'human-session-1' });
+    const described = capabilities.describe(issued.capabilityId);
+    expect(described?.sessionId).toBe('human-session-1');
+    expect(described && 'verifier' in described).toBe(false);
+    expect(capabilities.describe('no-such-id')).toBeNull();
+  });
+});
+
 describe('the store serializes its read-modify-write', () => {
   // NAMED FOR WHAT IT ACTUALLY EXERCISES. This does not run two processes, so it
   // is not a concurrency test and must not be read as one. It asserts the lock is
