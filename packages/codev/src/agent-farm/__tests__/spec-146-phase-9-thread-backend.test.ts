@@ -161,6 +161,15 @@ describe('Spec 146 Phase 9 — production spawn wiring (#179 item 2)', () => {
     expect(readThreadBackendConfig(workspace({ shell: {} }))).toBeNull();
   });
 
+  it('an unparseable config throws rather than reading as not-configured', () => {
+    // A config file that cannot be parsed is "I could not tell", and returning null would
+    // spell it the same way as "this workspace has no server", which is a decision.
+    dir = mkdtempSync(join(tmpdir(), 'phase9-backend-'));
+    mkdirSync(join(dir, '.codev'), { recursive: true });
+    writeFileSync(join(dir, '.codev', 'config.json'), '{ not json');
+    expect(() => readThreadBackendConfig(dir!)).toThrow(/is not valid JSON/);
+  });
+
   it('a half-configured threads block throws rather than silently staying on PTY', () => {
     expect(() => readThreadBackendConfig(workspace({ threads: { serverUrl: 'http://127.0.0.1:3799' } })))
       .toThrow(/bootstrapToken=missing/);

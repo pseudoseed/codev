@@ -201,7 +201,7 @@ is the one running the program, so `/arch-save` cannot be exercised against it.
 
 | File | Tests |
 |---|---|
-| `spec-146-phase-9-thread-backend.test.ts` | 16 — new; items 1 and 2, the packaging guards, and the spawn payload |
+| `spec-146-phase-9-thread-backend.test.ts` | 17 — new; items 1 and 2, the packaging guards, and the spawn payload |
 | `spec-146-phase-9-porch-engine.test.ts` | 7 — 4 added; the first turn, the role on it, the idle control, and `activeTurnId` |
 | `spec-146-phase-9-interrupt-side-effect.test.ts` | 2 — new; the deterministic half of the interrupt criterion, with its control |
 | `spec-146-phase-9-afx-parity.test.ts` | unchanged |
