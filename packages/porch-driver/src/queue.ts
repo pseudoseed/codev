@@ -38,6 +38,7 @@
 
 import type { DispatchJournal, CommandDispatcher } from './commands.js';
 import {
+  buildMessageCommand,
   commandIdForKey,
   journalHasDispatched,
   sendMessage,
@@ -142,13 +143,15 @@ export class ThreadMessageQueue {
 
     // Journalled BEFORE the queue admits it, so a crash here leaves an intent that
     // recovery re-dispatches rather than a message that existed only in memory.
-    this.journal.recordIntent(commandId, 'thread.message.send', {
-      type: 'thread.message.send',
-      commandId,
-      threadId: message.threadId,
-      idempotencyKey: message.idempotencyKey,
-      message: { role: 'user', text: message.text },
-    });
+    //
+    // **The intent must be the command that will actually be sent.** This wrote its
+    // own copy of the payload, and when the command type was corrected only the
+    // dispatch path was. Nothing failed at the time — the journal is porch's own
+    // file and takes any object — so the damage was invisible until a crash, at
+    // which point recovery would replay a command the server has no branch for and
+    // lose precisely the queued messages recovery exists to save.
+    const command = buildMessageCommand(message);
+    this.journal.recordIntent(commandId, String(command.type), command);
 
     const queuedAt = new Date().toISOString();
     this.#queue.push({ message, commandId, position, resolve, reject });
@@ -167,8 +170,29 @@ export class ThreadMessageQueue {
       } satisfies QueuedByPorch;
     }
 
-    // Not deferred: the caller gets the server's own answer, which is a stronger
-    // claim and must only be made when it is true.
+    // Not deferred AT SEND TIME — but it can become deferred before it is dispatched,
+    // and then awaiting the server's answer would wait forever.
+    //
+    // No turn was active when this was queued, so the caller is owed the stronger
+    // `accepted-by-server` receipt. Except that an earlier message in the same drain
+    // pass may dispatch first and START a turn, and with no `awaitSettle` the drain
+    // then stops with this one still queued. Nothing will resolve `answered` until
+    // someone calls `flush()` again, which the caller cannot know to do because it is
+    // blocked here.
+    //
+    // So: let the current drain pass finish, then report what is actually true. Still
+    // queued means `queued-by-porch` — the weaker claim, and the honest one.
+    await this.#draining;
+    if (this.#queue.some((item) => item.commandId === commandId)) {
+      return {
+        kind: 'queued-by-porch',
+        idempotencyKey: message.idempotencyKey,
+        commandId,
+        threadId: message.threadId,
+        queuedAt,
+        position,
+      } satisfies QueuedByPorch;
+    }
     return await answered;
   }
 

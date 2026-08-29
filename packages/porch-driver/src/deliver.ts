@@ -159,6 +159,41 @@ export function messageIdForKey(idempotencyKey: string): string {
 }
 
 /**
+ * The command payload for a message. **The only place its shape is written.**
+ *
+ * It exists because the shape was written in two places and only one of them was
+ * corrected. `sendMessage` dispatched the fixed `thread.turn.start`; the queue
+ * journalled its recovery intent as the old `thread.message.send` with the old
+ * body. Nothing failed at the time — the journal is porch's own file and accepts
+ * any object — so the defect sat one crash away: recovery would replay a command
+ * the server has no branch for, and the queued messages recovery exists to save
+ * would be exactly the ones lost.
+ *
+ * Both review lanes found it independently, which is the useful signal about
+ * duplicated shape: it is not that the second copy was wrong, it is that a second
+ * copy existed at all.
+ */
+export function buildMessageCommand(
+  message: OutboundMessage,
+  createdAt: string = new Date().toISOString(),
+): Record<string, unknown> & { type: string } {
+  return {
+    type: MESSAGE_METHOD,
+    commandId: commandIdForKey(message.idempotencyKey),
+    threadId: message.threadId,
+    message: {
+      messageId: messageIdForKey(message.idempotencyKey),
+      role: 'user',
+      text: message.text,
+      attachments: [],
+    },
+    runtimeMode: 'full-access',
+    interactionMode: 'default',
+    createdAt,
+  };
+}
+
+/**
  * Send one message now, without consulting turn state.
  *
  * Callers that must not interleave into a running turn use {@link ThreadMessageQueue}
@@ -196,28 +231,7 @@ export async function sendMessage(
   await dispatchCommand(
     dispatcher,
     journal,
-    {
-      type: MESSAGE_METHOD,
-      commandId,
-      threadId: message.threadId,
-      // The contract's shape, not an approximation of it: `messageId` and
-      // `attachments` are required members of `message`, and `runtimeMode` is a
-      // required member of the command. The earlier payload carried a bare
-      // `{ role, text }` plus a top-level `idempotencyKey` the union does not
-      // define — invisible against a fake dispatcher, refused by the server.
-      //
-      // The key is not sent. It is not a field t3code knows; its whole job is to
-      // derive the `commandId`, which IS what the server deduplicates on.
-      message: {
-        messageId: messageIdForKey(message.idempotencyKey),
-        role: 'user',
-        text: message.text,
-        attachments: [],
-      },
-      runtimeMode: 'full-access',
-      interactionMode: 'default',
-      createdAt: new Date().toISOString(),
-    },
+    buildMessageCommand(message),
     options,
   );
 

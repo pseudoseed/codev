@@ -368,6 +368,14 @@ describe('spec 146 phase 4: queued while a turn is active', () => {
       const dispatcher = recordingDispatcher();
       await recoverPendingCommands(dispatcher, reopened);
       expect(dispatcher.calls[0].payload.message.text).toBe('survive-me');
+
+      // AND IT MUST BE A COMMAND THE SERVER WOULD TAKE. Asserting only the text is
+      // what let the queue journal `thread.message.send` unnoticed: recovery
+      // replayed a payload no branch of the union accepts, so the queued messages
+      // recovery exists to save were exactly the ones a crash would lose. Both
+      // review lanes found this independently.
+      expect(dispatcher.calls[0].payload.type).toBe('thread.turn.start');
+      expect(checkPayload(DISPATCH_METHOD, 'input', dispatcher.calls[0].payload).status).toBe('ok');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -646,6 +654,56 @@ describe('spec 146 phase 4: durable scheduled delivery', () => {
       lines[0] = '{not json';
       writeFileSync(path, lines.join('\n'));
       expect(() => new ScheduleStore(path).pending()).toThrow(ScheduleCorruptError);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a message due during an active turn is QUEUED, not interleaved', async () => {
+    // A due time has no relationship to what the thread is doing, so a scheduled
+    // message will eventually come due mid-turn. Firing it with a direct
+    // `sendMessage` interleaves it into that turn and breaks the one property this
+    // phase exists to establish — and no scheduled test would have noticed, because
+    // they all drive the store with no thread at all.
+    const dir = tempDir('scheduled-during-turn');
+    try {
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      const store = new ScheduleStore(join(dir, 'schedule.jsonl'));
+      const dispatcher = recordingDispatcher();
+
+      let turnActive = true;
+      const queue = new ThreadMessageQueue(
+        () => ({ threadId: 't1', isTurnActive: turnActive }),
+        dispatcher,
+        journal,
+      );
+
+      const delivery = new ScheduledDelivery(store, dispatcher, journal, () => Date.now(), async (m) => {
+        // Production wiring: through the queue, not a direct dispatch.
+        return (await queue.send({
+          threadId: m.threadId,
+          text: m.text,
+          idempotencyKey: m.idempotencyKey,
+        })) as never;
+      });
+
+      delivery.schedule({
+        idempotencyKey: 'due-now',
+        threadId: 't1',
+        text: 'scheduled while busy',
+        dueAt: Date.now() - 1,
+        scheduledAt: new Date().toISOString(),
+      });
+
+      await delivery.fireDue();
+
+      // Held, because a turn is running. Nothing reached the transport.
+      expect(dispatcher.calls).toHaveLength(0);
+      expect(queue.depth).toBe(1);
+
+      turnActive = false;
+      await queue.flush();
+      expect(dispatcher.texts).toEqual(['scheduled while busy']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

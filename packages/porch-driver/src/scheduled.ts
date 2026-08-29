@@ -204,6 +204,9 @@ export class ScheduleStore {
  * `start()` re-arms everything the store still lists as pending, so a process that
  * comes back up honours a schedule written by the one before it.
  */
+/** How long a failed fire waits before trying again. */
+const RETRY_DELAY_MS = 30_000;
+
 export class ScheduledDelivery {
   #timers = new Map<string, ReturnType<typeof setTimeout>>();
   #firing = new Map<string, Promise<AcceptedByServer>>();
@@ -215,6 +218,25 @@ export class ScheduledDelivery {
     private readonly journal: DispatchJournal,
     /** Injected so tests can drive time without sleeping through a real delay. */
     private readonly now: () => number = () => Date.now(),
+    /**
+     * How a due message is sent. Defaults to a direct dispatch.
+     *
+     * **Pass the thread's queue in production.** A due time has no relationship to
+     * what the thread is doing, so a scheduled message will eventually come due in
+     * the middle of an active turn — and a direct `sendMessage` would interleave it
+     * into that turn, breaking the one property this phase exists to establish. The
+     * queue is what holds it until settle.
+     *
+     * The default stays direct because the store is also usable without a thread
+     * (the tests drive it that way), but a caller wiring this to a real builder and
+     * leaving the default has quietly opted out of queue-until-settle.
+     */
+    private readonly send: (message: ScheduledMessage) => Promise<AcceptedByServer> = async (message) =>
+      await sendMessage(this.dispatcher, this.journal, {
+        threadId: message.threadId,
+        text: message.text,
+        idempotencyKey: message.idempotencyKey,
+      }),
   ) {}
 
   /**
@@ -282,8 +304,28 @@ export class ScheduledDelivery {
       this.#timers.delete(message.idempotencyKey);
       void this.#fire(message).catch(() => {
         // A failed fire leaves the row PENDING: it did not fire, and saying so by
-        // deleting it would spell "could not send" like "sent". The next start()
-        // or fireDue() picks it up again.
+        // deleting it would spell "could not send" like "sent".
+        //
+        // But pending is not enough on its own. The timer has already been removed
+        // above, so without re-arming, "the next start() or fireDue() picks it up"
+        // meant a RESTART or an external caller — a `--delay` message whose one
+        // dispatch attempt failed would sit dormant in a healthy long-lived process
+        // forever. That is the silent loss this store exists to prevent, arrived at
+        // from the other side.
+        //
+        // Re-armed on a fixed retry delay rather than immediately, so a server that
+        // is down does not become a hot loop. Still at-least-once: the derived
+        // `commandId` makes a later success collapse with any attempt that did land.
+        if (this.#started) {
+          const retry = setTimeout(() => {
+            this.#timers.delete(message.idempotencyKey);
+            if (this.store.pending().some((m) => m.idempotencyKey === message.idempotencyKey)) {
+              this.#arm({ ...message, dueAt: this.now() });
+            }
+          }, RETRY_DELAY_MS);
+          retry.unref?.();
+          this.#timers.set(message.idempotencyKey, retry);
+        }
       });
     }, delay);
     // Never hold the process open for a message that can wait for the next start().
@@ -296,11 +338,7 @@ export class ScheduledDelivery {
     if (inFlight) return await inFlight;
 
     const attempt = (async () => {
-      const receipt = await sendMessage(this.dispatcher, this.journal, {
-        threadId: message.threadId,
-        text: message.text,
-        idempotencyKey: message.idempotencyKey,
-      });
+      const receipt = await this.send(message);
       // AFTER the dispatch. Marking it fired first would lose the message at
       // exactly the crash window this store exists to survive.
       this.store.markFired(message.idempotencyKey);
