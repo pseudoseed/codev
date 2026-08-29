@@ -7,7 +7,6 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Readable } from 'node:stream';
 import type http from 'node:http';
 import Database from 'better-sqlite3';
 import { GLOBAL_SCHEMA } from '../../db/schema.js';
@@ -149,17 +148,19 @@ describe('failure matrix', () => {
 
   it('status.yaml unreadable emits STATUS_UNREADABLE', () => {
     const root = tmp();
-    const statusPath = writeStatus(root, '1', porchYaml('1'));
-    chmodSync(statusPath, 0o000);
+    writeStatus(root, '1', porchYaml('1'));
+    const projects = join(root, 'codev', 'projects');
+    chmodSync(projects, 0o000);
     try {
-      const result = readScopedStatus(root, statusPath);
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.signal.code).toBe(SIGNAL.STATUS_UNREADABLE);
-      expect(result.signal.code).not.toBe(SIGNAL.STATUS_MALFORMED);
-      expect(result.signal.code).not.toBe('STATUS_NOT_FOUND');
+      const results = readStatusesFromArtifactRoot(root);
+      expect(results).toHaveLength(1);
+      expect(results[0]?.ok).toBe(false);
+      if (results[0]?.ok) return;
+      expect(results[0].signal.code).toBe(SIGNAL.STATUS_UNREADABLE);
+      expect(results[0].signal.code).not.toBe(SIGNAL.STATUS_MALFORMED);
+      expect(results[0].signal.code).not.toBe('STATUS_NOT_FOUND');
     } finally {
-      chmodSync(statusPath, 0o644);
+      chmodSync(projects, 0o755);
     }
   });
 
@@ -232,20 +233,22 @@ describe('failure matrix', () => {
 
   it('a capability presented after revocation emits HUMAN_SESSION_REVOKED', () => {
     const sessions = new HumanPairedSessionRegistry();
+    const database = db();
     initAgentRoutes({
-      db: () => db(),
+      db: () => database,
       log: () => undefined,
       isKnownWorkspace: () => true,
       humanSessions: sessions,
     });
     const issued = sessions.completePairing({ pairingId: 'pair-1', principalKind: 'human-client' });
+    const presentation = `${issued.sessionId}.${issued.credential}`;
     expect(sessions.revoke(issued.sessionId)).toBe(true);
+    expect(sessions.recognize(presentation).reason).toBe('REVOKED');
     const out = fakeRes();
-    const req = Readable.from([]) as unknown as http.IncomingMessage;
-    (req as { method: string }).method = 'GET';
-    (req as { headers: Record<string, string> }).headers = {
-      [HUMAN_SESSION_HEADER]: `${issued.sessionId}.${issued.credential}`,
-    };
+    const req = {
+      method: 'GET',
+      headers: { [HUMAN_SESSION_HEADER]: presentation },
+    } as unknown as http.IncomingMessage;
     const handled = handleAgentRoute(
       req,
       out.res,
