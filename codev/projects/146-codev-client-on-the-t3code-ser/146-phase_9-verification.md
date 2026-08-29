@@ -148,6 +148,25 @@ projects as well as new ones. Only the file, not `.codev/` — protocol and temp
 live under that directory and are meant to be committed, and a test asserts both halves.
 Adding the rule does not untrack a file a project already tracks.
 
+#### The same defect class, one level up: two files restating one list
+
+Adding `.codev/config.json` to `CODEV_GITIGNORE_ENTRIES` broke exact-set assertions in
+`gitignore.test.ts` **and** `update.test.ts`. Only the first was updated; the full suite caught
+the second as `2 failed | 6648 passed`.
+
+Fixing both would have left the next entry to break them again, so the list now has one home.
+`__tests__/helpers/gitignore-expectations.ts` exports the two stale-`.gitignore` fixtures and
+`entriesMissingFrom(existing)`, which computes what a backfill should add from
+`CODEV_GITIGNORE_ENTRIES` itself. Both test files import it; neither restates the set.
+
+Its line-splitting is its own three lines rather than a reuse of the parser inside
+`gitignore.ts`. Deriving the expected value with the code under test would make the assertion
+agree with the implementation by construction, including when the implementation is wrong.
+What is single-sourced is the entry list, not the parsing of it.
+
+This is the same shape as the packaging fix above — a set enumerated by hand in more than one
+place, with nothing that notices when one copy moves.
+
 ### Item 5 — reassigned to builder-air-180, one half kept
 
 Item 5 is **no longer this builder's**. `builder-air-180` ran the live interrupt criterion

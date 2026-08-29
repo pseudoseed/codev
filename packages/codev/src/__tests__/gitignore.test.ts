@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { PRE_880_GITIGNORE, PRE_1192_GITIGNORE, entriesMissingFrom } from './helpers/gitignore-expectations.js';
 import {
   createGitignore,
   updateGitignore,
@@ -151,13 +152,13 @@ describe('Gitignore Utilities', () => {
       fs.mkdirSync(targetDir, { recursive: true });
       fs.writeFileSync(
         path.join(targetDir, '.gitignore'),
-        '# Codev\n.agent-farm/\n.consult/\ncodev/.update-hashes.json\n.builders/\n'
+        PRE_880_GITIGNORE
       );
 
       const result = backfillGitignore(targetDir, CODEV_GITIGNORE_ENTRIES, { today: new Date('2026-05-27') });
 
       expect(result.skipped).toBe(false);
-      expect(result.added).toEqual(['.architect-role.md', '.codev/config.json', 'codev/state/*.md', '!codev/state/*_thread.md']);
+      expect(result.added).toEqual(entriesMissingFrom(PRE_880_GITIGNORE));
       expect(result.alreadyPresent).toEqual(
         expect.arrayContaining(['.agent-farm/', '.consult/', 'codev/.update-hashes.json', '.builders/'])
       );
@@ -223,12 +224,12 @@ describe('Gitignore Utilities', () => {
     it('does not write in dry-run mode', () => {
       const targetDir = path.join(tempDir, 'project');
       fs.mkdirSync(targetDir, { recursive: true });
-      const original = '# Codev\n.agent-farm/\n.consult/\ncodev/.update-hashes.json\n.builders/\n';
+      const original = PRE_880_GITIGNORE;
       fs.writeFileSync(path.join(targetDir, '.gitignore'), original);
 
       const result = backfillGitignore(targetDir, CODEV_GITIGNORE_ENTRIES, { dryRun: true });
 
-      expect(result.added).toEqual(['.architect-role.md', '.codev/config.json', 'codev/state/*.md', '!codev/state/*_thread.md']);
+      expect(result.added).toEqual(entriesMissingFrom(PRE_880_GITIGNORE));
       expect(fs.readFileSync(path.join(targetDir, '.gitignore'), 'utf-8')).toBe(original);
     });
 
@@ -237,7 +238,7 @@ describe('Gitignore Utilities', () => {
       fs.mkdirSync(targetDir, { recursive: true });
       fs.writeFileSync(
         path.join(targetDir, '.gitignore'),
-        '# Codev\n.agent-farm/\n.consult/\ncodev/.update-hashes.json\n.builders/\n'
+        PRE_880_GITIGNORE
       );
 
       backfillGitignore(targetDir, CODEV_GITIGNORE_ENTRIES, { today: new Date('2026-05-27') });
@@ -257,12 +258,12 @@ describe('Gitignore Utilities', () => {
       fs.mkdirSync(targetDir, { recursive: true });
       fs.writeFileSync(
         path.join(targetDir, '.gitignore'),
-        '# Codev\n.agent-farm/\n.consult/\ncodev/.update-hashes.json\n.builders/\n.architect-role.md\n'
+        PRE_1192_GITIGNORE
       );
 
       const result = backfillGitignore(targetDir, CODEV_GITIGNORE_ENTRIES, { today: new Date('2026-07-19') });
 
-      expect(result.added).toEqual(['.codev/config.json', 'codev/state/*.md', '!codev/state/*_thread.md']);
+      expect(result.added).toEqual(entriesMissingFrom(PRE_1192_GITIGNORE));
 
       const content = fs.readFileSync(path.join(targetDir, '.gitignore'), 'utf-8');
       expect(content.indexOf('codev/state/*.md')).toBeLessThan(

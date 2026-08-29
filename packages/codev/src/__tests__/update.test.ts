@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
+import { PRE_880_GITIGNORE, entriesMissingFrom } from './helpers/gitignore-expectations.js';
 
 // Mock chalk for cleaner test output
 vi.mock('chalk', () => ({
@@ -560,7 +561,7 @@ describe('update command', () => {
       const result = await update({ agent: true });
 
       expect(result.error).toBeUndefined();
-      expect(result.gitignoreAdded).toEqual(['.architect-role.md', '.codev/config.json', 'codev/state/*.md', '!codev/state/*_thread.md']);
+      expect(result.gitignoreAdded).toEqual(entriesMissingFrom(staleGitignore));
 
       const content = fs.readFileSync(path.join(projectDir, '.gitignore'), 'utf-8');
       expect(content).toContain('.architect-role.md');
@@ -572,7 +573,7 @@ describe('update command', () => {
       const projectDir = path.join(testBaseDir, 'gitignore-dryrun');
       fs.mkdirSync(path.join(projectDir, 'codev'), { recursive: true });
 
-      const stale = '# Codev\n.agent-farm/\n.consult/\ncodev/.update-hashes.json\n.builders/\n';
+      const stale = PRE_880_GITIGNORE;
       fs.writeFileSync(path.join(projectDir, '.gitignore'), stale);
 
       process.chdir(projectDir);
@@ -580,7 +581,7 @@ describe('update command', () => {
       const { update } = await import('../commands/update.js');
       const result = await update({ agent: true, dryRun: true });
 
-      expect(result.gitignoreAdded).toEqual(['.architect-role.md', '.codev/config.json', 'codev/state/*.md', '!codev/state/*_thread.md']);
+      expect(result.gitignoreAdded).toEqual(entriesMissingFrom(stale));
       expect(fs.readFileSync(path.join(projectDir, '.gitignore'), 'utf-8')).toBe(stale);
     });
 
@@ -602,7 +603,7 @@ describe('update command', () => {
       const projectDir = path.join(testBaseDir, 'gitignore-idempotent');
       fs.mkdirSync(path.join(projectDir, 'codev'), { recursive: true });
 
-      const stale = '# Codev\n.agent-farm/\n.consult/\ncodev/.update-hashes.json\n.builders/\n';
+      const stale = PRE_880_GITIGNORE;
       fs.writeFileSync(path.join(projectDir, '.gitignore'), stale);
 
       process.chdir(projectDir);
