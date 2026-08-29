@@ -10,12 +10,14 @@ import {
 } from '../db/index.js';
 import {
   allocateSpawnThread,
+  architectWriteValues,
   assertExclusiveIdentity,
   chooseSpawnPath,
   countPtyDrainFromBuilders,
   DualIdentityError,
   setSpawnThreadFactory,
   setThreadBackedSpawnsEnabled,
+  THREAD_ARCHITECT_SENTINEL,
 } from '../db/thread-identity.js';
 import { launchSpawnedBuilder } from '../commands/spawn.js';
 import { readState, recordThreadId, writeState } from '../../commands/porch/state.js';
@@ -124,6 +126,50 @@ describe('Spec 146 Phase 8 — exclusivity and drain', () => {
     expect(countPtyDrainFromBuilders(builders)).toBe(1);
     builders[0] = { ...builders[0], status: 'complete' };
     expect(countPtyDrainFromBuilders(builders)).toBe(0);
+  });
+});
+
+/**
+ * The plan originally specified three architect sentinels: pid 0, port 0, cmd ''.
+ * The architect ruled on #170 that the plan was wrong and the code is right — pid, port
+ * and terminal_id are PTY-specific and meaningless for a thread-backed row, but `cmd` is
+ * how the architect was launched and an architect restart reads it. The plan is amended.
+ *
+ * These are characterization tests. They exist to stop the next reader seeing a two-field
+ * sentinel against what looks like a three-field intent and "fixing" the code back.
+ */
+describe('Spec 146 Phase 8 — architect sentinels (#170)', () => {
+  const base = { id: 'main', pid: 4242, port: 4100, cmd: 'claude --dangerously', startedAt: 'x' };
+
+  it('blanks pid and port on a thread-backed architect but never cmd', () => {
+    const written = architectWriteValues({ ...base, threadId: 'thr-1' } as never);
+    expect(written.pid).toBe(0);
+    expect(written.port).toBe(0);
+    expect(written.cmd).toBe('claude --dangerously');
+    expect(written.terminalId).toBeNull();
+    expect(written.threadId).toBe('thr-1');
+  });
+
+  it('carries cmd through unchanged on a terminal-backed architect too', () => {
+    const written = architectWriteValues({ ...base, terminalId: 'term-1' } as never);
+    expect(written.cmd).toBe('claude --dangerously');
+    expect(written.terminalId).toBe('term-1');
+    expect(written.threadId).toBeNull();
+  });
+
+  it('the sentinel names exactly two fields — cmd is deliberately not one', () => {
+    expect(Object.keys(THREAD_ARCHITECT_SENTINEL).sort()).toEqual(['pid', 'port']);
+    expect(THREAD_ARCHITECT_SENTINEL).not.toHaveProperty('cmd');
+  });
+
+  it('refuses to write an architect row carrying both identities', () => {
+    expect(() => architectWriteValues({ ...base, terminalId: 't', threadId: 'h' } as never))
+      .toThrow(DualIdentityError);
+  });
+
+  it('an empty cmd is preserved as empty rather than substituted', () => {
+    const written = architectWriteValues({ ...base, cmd: '', threadId: 'thr-2' } as never);
+    expect(written.cmd).toBe('');
   });
 });
 

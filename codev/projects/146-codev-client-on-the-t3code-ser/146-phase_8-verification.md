@@ -14,7 +14,7 @@ tree at `builder/spir-146` after the merge of `c67547eef`.
 |---|---|
 | `status.yaml` records `threadId` at spawn; field optional, old files still load | `commands/porch/types.ts:272` (`thread_id?: string`), `commands/porch/state.ts:179` (`recordThreadId`) |
 | Columns added in Phase 5, written here, no backfill | `db/index.ts:700-704` (v21 guard), `state.ts:238` (`COALESCE(excluded.thread_id, builders.thread_id)`) |
-| Architect: `ADD COLUMN` + sentinels, exclusivity in code not `CHECK` | **PARTIAL.** `db/thread-identity.ts` — `assertExclusiveIdentity` and `architectWriteValues` are there, but `THREAD_ARCHITECT_SENTINEL` is `{pid:0, port:0}`: the plan names three sentinels and the code implements two. See **Not met**, below. |
+| Architect: `ADD COLUMN` + sentinels, exclusivity in code not `CHECK` | **MET, plan amended.** `db/thread-identity.ts` — `THREAD_ARCHITECT_SENTINEL {pid:0, port:0}`, `assertExclusiveIdentity`, `architectWriteValues`. The plan's third sentinel (`cmd` `''`) was dropped by architect ruling **#170**: the plan was wrong, not the code. See below. |
 | Backup taken before the migration, path logged at `info` | `db/index.ts:718-740` — `threadIdentityBackupPath` → `<db>.pre-v21.bak`, `VACUUM INTO` (chosen over a byte copy because global.db is WAL) |
 | Existing migration mechanism: version constant, guarded inline block, `GLOBAL_SCHEMA` convergence | `db/index.ts:144` (`GLOBAL_CURRENT_VERSION = 21`), `db/index.ts:700`, `db/schema.ts:187,221` |
 | `afx spawn` writes `thread_id` to both stores and no `terminal_id` | **NOT MET IN PRODUCTION.** The code path exists — `commands/spawn.ts:145` (`chooseSpawnPath`), `:147` (`allocateSpawnThread`), `:169` (`recordThreadId`) — but nothing in production registers a factory, so `chooseSpawnPath` returns `pty` and the branch is unreachable outside tests. See **Not met**, below. |
@@ -52,11 +52,22 @@ in code, because the architect's instruction for this phase is **verify, do not 
    recorded here too because it also unmakes phase 8's acceptance criterion "a new spawn
    takes the thread path", which no issue currently says.
 
-2. **The `cmd` sentinel is not implemented.** The plan specifies `pid` 0, `port` 0, `cmd`
-   `''` for a thread-backed architect. `architectWriteValues` returns `cmd: architect.cmd`
-   unchanged, and no test rejects or normalizes a non-empty command on a thread-backed row.
-   The `NOT NULL` constraint is still satisfied either way, so nothing breaks; the divergence
-   from the plan is unrecorded, which is the actual problem.
+2. ~~**The `cmd` sentinel is not implemented.**~~ **RESOLVED — the plan was wrong, not the
+   code.** Codex was right that `architectWriteValues` diverges from the plan's `cmd` `''` and
+   right that `architectWriteValues` had **zero** test coverage. The architect ruled on **#170**
+   that `pid`, `port` and `terminal_id` are genuinely PTY-specific and meaningless for a
+   thread-backed row, but `cmd` is *how the architect was launched* and an architect restart
+   reads it — blanking it discards live information. So:
+
+   - The plan's phase_8 deliverable is amended to name two sentinels, not three, with the #170
+     rationale recorded inline.
+   - Five characterization tests were **added** (they did not exist) under
+     `Spec 146 Phase 8 — architect sentinels (#170)`, asserting `cmd` survives on both the
+     thread-backed and terminal-backed branches, that `THREAD_ARCHITECT_SENTINEL` names exactly
+     `pid` and `port`, that a dual-identity architect row is refused, and that an empty `cmd` is
+     preserved rather than substituted.
+   - Mutation-checked: blanking `cmd` in `architectWriteValues` makes the first of those tests
+     fail. The test can fail, so it is holding something.
 
 3. **Two acceptance criteria are simulated, not exercised.** The plan asks for the migration
    "against a copy of a real `global.db`" and for "the **previous** release" to open the
@@ -67,9 +78,16 @@ in code, because the architect's instruction for this phase is **verify, do not 
    The plan's integration case — a thread-backed builder driven alongside a running PTY
    builder — is likewise not run, and cannot be until (1) is fixed.
 
-None of the three is a regression: the merged code does what its own tests say. What was
-wrong was this document's first draft, which read the tests as evidence for claims one step
-larger than they support.
+Two of the three stand; the third turned out to be a plan defect and is resolved above. None
+is a regression: the merged code does what its own tests say. What was wrong was this
+document's first draft, which read the tests as evidence for claims one step larger than they
+support.
+
+**The `claude` lane for this iteration is VOID** — it wrote to the worktree and posted a
+public GitHub comment instead of reviewing. Its artifact (`146-phase_8-iter1-claude.txt`)
+records the void explicitly rather than being absent, because an absent lane artifact and a
+rejected one are different things porch cannot otherwise tell apart (#168).
+`146-phase_8-iter1-opencode.txt` is the substitute lane.
 
 ## What is NOT claimed
 
