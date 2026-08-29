@@ -685,6 +685,43 @@ describe('failure matrix', () => {
     expect(signal?.message).not.toContain('has no global.db identity row');
   });
 
+  // THE REAL ID SHAPES, READ FROM REAL status.yaml FILES ON 2026-08-29.
+  //
+  //   spir-146   -> id: '146'        (trailing digits)
+  //   air-173    -> id: '173'        (trailing digits)
+  //   bugfix-102 -> id: bugfix-102   (the WHOLE builder id)
+  //
+  // The protocols genuinely differ and no single parse covers both. A first version
+  // took only trailing digits and named `bugfix-174` in its comment as a worked
+  // example of the rule holding — it does not. That claim was written as settled
+  // without opening one of the three files that refute it, which is the same defect
+  // as the 302-projects fixture, in the commit that introduced the rule against it.
+  //
+  // So the shapes are fixtures now, with the date. A future change cannot quietly
+  // assume one rule without this failing.
+  it.each([
+    ['spir-146', '146'],
+    ['air-173', '173'],
+    ['bugfix-102', 'bugfix-102'],
+  ])('builder %s resolves porch project %s in a multi-project worktree', (builderId, projectId) => {
+    const root = tmp();
+    const worktree = join(root, '.builders', builderId);
+    mkdirSync(worktree, { recursive: true });
+    // Several projects, including a decoy whose id is the digits the whole-id
+    // protocols must NOT be confused with.
+    writeStatus(worktree, projectId, porchYaml(projectId, 'thread_id: thread-porch'));
+    writeStatus(worktree, 'decoy-1', porchYaml('decoy-1'));
+    writeStatus(worktree, 'decoy-2', porchYaml('decoy-2'));
+    const database = db();
+    insertBuilder(database, { workspace: root, id: builderId, worktree, threadId: 'thread-db' });
+
+    const snapshot = readThreadRegistry(database, root, readStatusesFromArtifactRoot(worktree));
+    // Resolved by identity, so the stores can be compared and found to disagree.
+    expect(snapshot.identities[0]?.porch?.projectId).toBe(projectId);
+    expect(snapshot.signals.map((s) => s.code)).toContain(SIGNAL.THREAD_ID_DISAGREEMENT);
+    expect(snapshot.signals.map((s) => s.code)).not.toContain('PORCH_JOIN_AMBIGUOUS');
+  });
+
   it('a multi-project worktree still resolves by thread_id when the id carries no project', () => {
     const root = tmp();
     // `task-uxln` names no project, so the thread is the only association left.

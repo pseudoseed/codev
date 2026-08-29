@@ -91,25 +91,43 @@ function dbSignal(error: unknown): AgentStateSignal {
  * to prevent.
  */
 /**
- * The porch project a builder id names, or undefined if it names none.
+ * The porch project ids a builder id could name, most specific first.
  *
- * Builder ids are `<protocol>-<projectId>` — `spir-146`, `air-173`, `bugfix-174` —
- * and `status.yaml` carries the same `id`. Task builders (`task-uxln`) have no
- * project, and returning undefined for them is correct rather than a gap.
+ * **THE PROTOCOLS GENUINELY DIFFER, and no single parse covers both.** Verified by
+ * reading real `status.yaml` files on 2026-08-29:
+ *
+ * | builder id    | porch `id:`   |
+ * |---------------|---------------|
+ * | `spir-146`    | `'146'`       |
+ * | `air-173`     | `'173'`       |
+ * | `bugfix-102`  | `bugfix-102`  |
+ *
+ * So numbered protocols use the trailing digits and bugfix uses the **whole**
+ * builder id. An earlier version of this function took only the trailing digits and
+ * named `bugfix-174` as a worked example of the rule holding — it does not, and the
+ * claim was written into a comment as settled without opening one of the three files
+ * that would have refuted it. Reading them takes one command.
+ *
+ * Task builders (`task-uxln`) match neither and fall through to the thread join,
+ * which is correct rather than a gap.
  *
  * **This association is deliberately independent of `thread_id`.** Matching on the
  * thread only resolves when the two stores AGREE, which makes disagreement between
  * them structurally undetectable — and reporting that disagreement is one of this
- * phase's acceptance criteria. Identity has to come from something that is still
- * true when the two stores differ.
+ * phase's acceptance criteria. Identity has to come from something that stays true
+ * while the two stores differ.
  *
- * There is no `project_id` column to use instead; the id convention is the available
- * association, so it is parsed here in one place rather than assumed at the call
- * site.
+ * There is no `project_id` column to use instead; these conventions are the available
+ * association, so they are parsed here in one place rather than assumed at call sites.
  */
-function projectIdFromBuilderId(builderId: string): string | undefined {
-  const match = /-(\d+)$/.exec(builderId);
-  return match ? match[1] : undefined;
+function projectIdCandidates(builderId: string): string[] {
+  // A `builder-` prefix appears in branch names; strip it defensively so an id that
+  // arrives in that form still resolves.
+  const bare = builderId.replace(/^builder-/, '');
+  const candidates = [bare];
+  const digits = /-(\d+)$/.exec(bare);
+  if (digits) candidates.push(digits[1]);
+  return candidates;
 }
 
 function statusForWorktree(
@@ -121,9 +139,9 @@ function statusForWorktree(
   const canonical = normalizeWorkspacePath(worktree);
   const matches = successful.filter((status) => normalizeWorkspacePath(status.artifactRoot) === canonical);
 
-  // IDENTITY FIRST, because it survives the two stores disagreeing.
-  const projectId = projectIdFromBuilderId(builderId);
-  if (projectId !== undefined) {
+  // IDENTITY FIRST, because it survives the two stores disagreeing. Most specific
+  // form first: the whole id (bugfix), then the trailing digits (spir, air).
+  for (const projectId of projectIdCandidates(builderId)) {
     const byProject = matches.filter((status) => status.projectId === projectId);
     if (byProject.length === 1) return { status: byProject[0], candidates: matches.length };
   }
