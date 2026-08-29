@@ -34,7 +34,12 @@ export async function interrupt(options: InterruptOptions): Promise<void> {
 
   logger.header('Sending Interrupt (ESC)');
 
-  const builder = findBuilderById(target);
+  let builder = null;
+  try {
+    builder = findBuilderById(target);
+  } catch {
+    builder = null;
+  }
   if (builder && isThreadBacked(builder) && builder.threadId) {
     try {
       const settled = await interruptThread(builder.threadId);
