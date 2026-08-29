@@ -133,3 +133,31 @@ The suite fails with 40 unrelated errors when `CODEV_WORKTREE_ROOT` is set in th
 fixtures in three test files. Filed as **#189**; the architect is spawning a bugfix builder.
 Until it lands, run checks as
 `env -u CODEV_WORKTREE_ROOT -u CODEV_BUILDER_ID -u CODEV_ARCHITECT_NAME <cmd>`.
+
+## Follow-up found after the build passed — the publish path was still broken
+
+Item 1 dropped `private: true` from `porch-driver` and `t3-client` so `@cluesmith/codev`
+could depend on them. That makes them **publishable**; it does not make them **published**.
+
+Both sat at version `0.0.0` while every version-aligned sibling is at `3.3.1`, and neither is
+on the registry (`npm view @cluesmith/porch-driver version` → E404; `@cluesmith/codev-types`
+→ `3.3.1`). pnpm rewrites `workspace:*` to the dependency's own version at publish time, so the
+next release of `@cluesmith/codev` would have shipped declaring `"@cluesmith/porch-driver":
+"0.0.0"` and `npm install -g @cluesmith/codev` would have failed with **E404** — the exact
+failure the release protocol already warns about for core/sdk/types.
+
+Fixed in four places:
+
+- `packages/porch-driver/package.json`, `packages/t3-client/package.json` — `0.0.0` → `3.3.1`.
+- `scripts/bump-all.sh` — both added to the lockstep loop, so they move with the next release.
+- `codev/protocols/release/protocol.md` — both added to the lockstep list, to all three
+  `pnpm publish --filter` lines, to the E404 warning, and to the backport bump note.
+  `t3-client` is listed before `porch-driver` because porch-driver depends on it.
+- `spec-146-phase-9-thread-backend.test.ts` — 11 tests → 13. One asserts version alignment
+  against `packages/codev`'s version; the other asserts the release tooling actually carries
+  both packages, since alignment today is undone by the next `pnpm bump-version` otherwise.
+
+**Mutation-checked, not just written:** reverting porch-driver to `0.0.0` and removing it from
+`bump-all.sh` and the publish filters fails both new tests (2 failed | 11 passed); restoring
+passes 13. The existing manifest test already knew `workspace:*` resolves to a version at
+publish time and stopped one step short of asserting that version is one that will exist.

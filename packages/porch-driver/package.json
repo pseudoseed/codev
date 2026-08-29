@@ -1,6 +1,6 @@
 {
   "name": "@cluesmith/porch-driver",
-  "version": "0.0.0",
+  "version": "3.3.1",
   "description": "Spec 146, Phase 3: porch's session lifecycle against a t3code server. Spawn a thread on a worktree, run a turn to settle, run phase checks as processes porch owns, and survive a crash at either of the two windows that lose work. Library calls only \u2014 no PTY.",
   "type": "module",
   "exports": {

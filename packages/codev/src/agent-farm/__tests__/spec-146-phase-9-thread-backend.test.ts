@@ -40,6 +40,33 @@ describe('Spec 146 Phase 9 — the engine is reachable in production (#179 item 
       .toBe('workspace:*');
   });
 
+  it('porch-driver and t3-client are version-aligned with @cluesmith/codev', () => {
+    // Dropping `private: true` makes them publishable; it does not make them published.
+    // pnpm rewrites `workspace:*` to the dependency's own version at publish time, so a
+    // porch-driver left at 0.0.0 ships as `"@cluesmith/porch-driver": "0.0.0"` — a version
+    // that is not on the registry, and `npm install -g @cluesmith/codev` fails with E404.
+    const released = pkg('packages/codev/package.json').version;
+    expect(pkg('packages/porch-driver/package.json').version).toBe(released);
+    expect(pkg('packages/t3-client/package.json').version).toBe(released);
+  });
+
+  it('the release tooling bumps and publishes them', () => {
+    // Version alignment above is a fact about today's tree; these two assertions are what
+    // keeps it true across the next release. Both files are edited by hand at release time.
+    const bump = readFileSync(join(repoRoot, 'scripts/bump-all.sh'), 'utf8');
+    expect(bump).toContain('packages/porch-driver');
+    expect(bump).toContain('packages/t3-client');
+
+    const release = readFileSync(join(repoRoot, 'codev/protocols/release/protocol.md'), 'utf8');
+    const publishLines = release.split('\n').filter((l) => l.startsWith('pnpm publish --filter'));
+    // Without this the loop below passes vacuously if the protocol is ever restructured.
+    expect(publishLines.length).toBeGreaterThan(0);
+    for (const line of publishLines) {
+      expect(line).toContain("--filter '@cluesmith/porch-driver'");
+      expect(line).toContain("--filter '@cluesmith/t3-client'");
+    }
+  });
+
   it('the production engine does not import porch-driver by a relative path out of the package', () => {
     const src = readFileSync(
       join(repoRoot, 'packages/codev/src/agent-farm/porch-thread-engine.ts'),
