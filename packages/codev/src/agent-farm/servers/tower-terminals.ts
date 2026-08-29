@@ -200,6 +200,33 @@ export function getWorkspaceTerminals(): Map<string, WorkspaceTerminals> {
   return workspaceTerminals;
 }
 
+/** Attribute the global session cap to the workspaces currently using it. */
+function sessionOwnerSummary(): string {
+  if (!terminalManager) return '';
+
+  const ownerByTerminal = new Map<string, string>();
+  for (const [workspacePath, entry] of workspaceTerminals) {
+    for (const terminalId of [
+      ...entry.architects.values(),
+      ...entry.builders.values(),
+      ...entry.shells.values(),
+    ]) {
+      ownerByTerminal.set(terminalId, workspacePath);
+    }
+  }
+
+  const counts = new Map<string, number>();
+  for (const session of terminalManager.listSessions()) {
+    const owner = ownerByTerminal.get(session.id) ?? 'unregistered';
+    counts.set(owner, (counts.get(owner) ?? 0) + 1);
+  }
+  const top = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 3)
+    .map(([owner, count]) => `${owner} (${count})`);
+  return top.length > 0 ? `Top workspaces: ${top.join(', ')}` : '';
+}
+
 /**
  * Get or create the global TerminalManager instance.
  * Uses a temporary directory as workspaceRoot since terminals can be for any workspace.
@@ -215,6 +242,7 @@ export function getTerminalManager(): TerminalManager {
       diskLogEnabled: true,
       diskLogMaxBytes: DEFAULT_DISK_LOG_MAX_BYTES,
       reconnectTimeoutMs: 300_000,
+      sessionOwnerSummary,
     });
   }
   return terminalManager;

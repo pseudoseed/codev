@@ -21,6 +21,10 @@ export interface TerminalManagerConfig {
   diskLogEnabled?: boolean;
   diskLogMaxBytes?: number;
   reconnectTimeoutMs?: number;
+  /** Test seam and platform override for pruning dead process records. */
+  processExists?: (pid: number) => boolean;
+  /** Tower-provided ownership context appended to max-session errors. */
+  sessionOwnerSummary?: () => string;
 }
 
 export interface CreateTerminalRequest {
@@ -53,14 +57,51 @@ export class TerminalManager {
       diskLogEnabled: config.diskLogEnabled ?? true,
       diskLogMaxBytes: config.diskLogMaxBytes ?? DEFAULT_DISK_LOG_MAX_BYTES,
       reconnectTimeoutMs: config.reconnectTimeoutMs ?? 300_000,
+      processExists: config.processExists ?? ((pid) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      }),
+      sessionOwnerSummary: config.sessionOwnerSummary ?? (() => ''),
     };
+  }
+
+  /**
+   * Reject a new session only after stale process records have been pruned.
+   * Fresh shellper callers use this before spawning; createSessionRaw keeps the
+   * same check as a concurrency backstop after the asynchronous spawn.
+   */
+  assertCanCreateSession(): void {
+    if (this.sessions.size < this.config.maxSessions) return;
+    this.reconcileDeadSessions();
+    if (this.sessions.size < this.config.maxSessions) return;
+
+    const owners = this.config.sessionOwnerSummary();
+    const suffix = owners ? `; ${owners}` : '';
+    throw new ManagerError(
+      'MAX_SESSIONS',
+      `Maximum ${this.config.maxSessions} sessions reached${suffix}`,
+    );
+  }
+
+  /** Remove in-memory sessions whose backing process has exited. */
+  reconcileDeadSessions(): number {
+    let reaped = 0;
+    for (const [id, session] of this.sessions) {
+      const pid = session.pid;
+      if (session.status !== 'exited' && (pid <= 0 || this.config.processExists(pid))) continue;
+      this.sessions.delete(id);
+      reaped++;
+    }
+    return reaped;
   }
 
   /** Create a new PTY session. */
   async createSession(req: CreateTerminalRequest): Promise<PtySessionInfo> {
-    if (this.sessions.size >= this.config.maxSessions) {
-      throw new ManagerError('MAX_SESSIONS', `Maximum ${this.config.maxSessions} sessions reached`);
-    }
+    this.assertCanCreateSession();
 
     const id = randomUUID();
     const shell = req.command ?? process.env.SHELL ?? '/bin/bash';
@@ -129,9 +170,7 @@ export class TerminalManager {
    * on the surviving shellper client.
    */
   createSessionRaw(opts: { label: string; cwd: string; id?: string; command?: string; args?: string[] }): PtySessionInfo {
-    if (this.sessions.size >= this.config.maxSessions) {
-      throw new ManagerError('MAX_SESSIONS', `Maximum ${this.config.maxSessions} sessions reached`);
-    }
+    this.assertCanCreateSession();
 
     const id = opts.id ?? randomUUID();
     const existing = this.sessions.get(id);
