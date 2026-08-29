@@ -42,7 +42,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, wr
 import { dirname } from 'node:path';
 
 import type { CommandDispatcher, DispatchJournal } from './commands.js';
-import { commandIdForKey, sendMessage, type AcceptedByServer } from './deliver.js';
+import { commandIdForKey, sendMessage, type SendReceipt } from './deliver.js';
 
 /** A message waiting for its due time. */
 export interface ScheduledMessage {
@@ -209,7 +209,7 @@ const RETRY_DELAY_MS = 30_000;
 
 export class ScheduledDelivery {
   #timers = new Map<string, ReturnType<typeof setTimeout>>();
-  #firing = new Map<string, Promise<AcceptedByServer>>();
+  #firing = new Map<string, Promise<SendReceipt>>();
   #started = false;
 
   constructor(
@@ -230,13 +230,23 @@ export class ScheduledDelivery {
      * The default stays direct because the store is also usable without a thread
      * (the tests drive it that way), but a caller wiring this to a real builder and
      * leaving the default has quietly opted out of queue-until-settle.
+     *
+     * **The return type is the union, not `AcceptedByServer`.** The queue this doc
+     * comment recommends returns `queued-by-porch` whenever a turn is active, so a
+     * narrower type here would be a promise this class cannot keep: it would hand
+     * back a queued receipt under a type that claims the server answered, which is
+     * the one distinction this phase exists to preserve. Both lanes found it by the
+     * `as never` the test needed to make the narrow type compile — a cast is the
+     * type system reporting a mismatch, not a way to spell it away.
      */
-    private readonly send: (message: ScheduledMessage) => Promise<AcceptedByServer> = async (message) =>
+    private readonly send: (message: ScheduledMessage) => Promise<SendReceipt> = async (message) =>
       await sendMessage(this.dispatcher, this.journal, {
         threadId: message.threadId,
         text: message.text,
         idempotencyKey: message.idempotencyKey,
       }),
+    /** Injected so the retry path can be tested without waiting out a real delay. */
+    private readonly retryDelayMs: number = RETRY_DELAY_MS,
   ) {}
 
   /**
@@ -289,11 +299,33 @@ export class ScheduledDelivery {
    *
    * The path tests use, and the path a caller uses to drain on demand. Returns the
    * receipts, so "nothing was due" and "one thing fired" are distinguishable.
+   *
+   * **Every due message is attempted, even after one fails.** Returning on the first
+   * rejection let a single unreachable thread cancel the rest of the batch, and the
+   * messages it skipped were never attempted at all — they stay pending, so nothing
+   * is lost, but the caller is told "the drain failed" when most of it had not been
+   * tried. Due times are independent of each other; a failure of one says nothing
+   * about the others.
+   *
+   * It still fails loudly, which is the property the phase requires: the error is
+   * rethrown once every due message has had its attempt, so a caller cannot mistake
+   * a partial drain for a complete one.
    */
-  async fireDue(): Promise<ReadonlyArray<AcceptedByServer>> {
+  async fireDue(): Promise<ReadonlyArray<SendReceipt>> {
     const due = this.store.pending().filter((m) => m.dueAt <= this.now());
-    const receipts: AcceptedByServer[] = [];
-    for (const message of due) receipts.push(await this.#fire(message));
+    const receipts: SendReceipt[] = [];
+    const failures: unknown[] = [];
+    for (const message of due) {
+      try {
+        receipts.push(await this.#fire(message));
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, `${failures.length} of ${due.length} due messages failed to fire`);
+    }
     return receipts;
   }
 
@@ -322,7 +354,7 @@ export class ScheduledDelivery {
             if (this.store.pending().some((m) => m.idempotencyKey === message.idempotencyKey)) {
               this.#arm({ ...message, dueAt: this.now() });
             }
-          }, RETRY_DELAY_MS);
+          }, this.retryDelayMs);
           retry.unref?.();
           this.#timers.set(message.idempotencyKey, retry);
         }
@@ -333,14 +365,26 @@ export class ScheduledDelivery {
     this.#timers.set(message.idempotencyKey, timer);
   }
 
-  async #fire(message: ScheduledMessage): Promise<AcceptedByServer> {
+  async #fire(message: ScheduledMessage): Promise<SendReceipt> {
     const inFlight = this.#firing.get(message.idempotencyKey);
     if (inFlight) return await inFlight;
 
     const attempt = (async () => {
       const receipt = await this.send(message);
-      // AFTER the dispatch. Marking it fired first would lose the message at
+      // AFTER the send resolves. Marking it fired first would lose the message at
       // exactly the crash window this store exists to survive.
+      //
+      // What "the send resolved" means depends on the wiring, and the earlier
+      // comment here claimed the stronger of the two. Direct dispatch: the server
+      // answered. Through the queue: the intent is fsynced to the command journal
+      // and the message is admitted, which may be well before the server sees it.
+      //
+      // Marking fired on a queued receipt is still correct, because durability has
+      // MOVED rather than been skipped — `recoverPendingCommands` replays the queued
+      // intent under the same derived `commandId`, so a crash re-delivers it once.
+      // What it does mean is that this store's own retry path no longer covers that
+      // message; the queue owns it from here. Said plainly because the receipt kind
+      // is the only thing that distinguishes the two cases at runtime.
       this.store.markFired(message.idempotencyKey);
       return receipt;
     })();

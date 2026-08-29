@@ -679,12 +679,13 @@ describe('spec 146 phase 4: durable scheduled delivery', () => {
       );
 
       const delivery = new ScheduledDelivery(store, dispatcher, journal, () => Date.now(), async (m) => {
-        // Production wiring: through the queue, not a direct dispatch.
-        return (await queue.send({
+        // Production wiring: through the queue, not a direct dispatch. No cast — the
+        // queue's `SendReceipt` is exactly what `send` is declared to return.
+        return await queue.send({
           threadId: m.threadId,
           text: m.text,
           idempotencyKey: m.idempotencyKey,
-        })) as never;
+        });
       });
 
       delivery.schedule({
@@ -695,7 +696,14 @@ describe('spec 146 phase 4: durable scheduled delivery', () => {
         scheduledAt: new Date().toISOString(),
       });
 
-      await delivery.fireDue();
+      const receipts = await delivery.fireDue();
+
+      // The receipt says QUEUED, not ACCEPTED — the server has not seen this yet.
+      // This assertion is the point of widening `send` to `SendReceipt`: under the
+      // old narrow type the test needed `as never`, and a `queued-by-porch` object
+      // came back wearing a type that claimed the server had answered.
+      expect(receipts).toHaveLength(1);
+      expect(receipts[0].kind).toBe('queued-by-porch');
 
       // Held, because a turn is running. Nothing reached the transport.
       expect(dispatcher.calls).toHaveLength(0);
@@ -704,6 +712,85 @@ describe('spec 146 phase 4: durable scheduled delivery', () => {
       turnActive = false;
       await queue.flush();
       expect(dispatcher.texts).toEqual(['scheduled while busy']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a fire that fails on its TIMER re-arms itself instead of going dormant', async () => {
+    // The dormant-timer fix was made against `fireDue()`, but `fireDue()` is not the
+    // path that breaks: it is called by a test or an on-demand caller, either of
+    // which will call again. The path that goes dormant is the TIMER — it removes
+    // itself before firing, so a failure there ends the message's life in a healthy
+    // long-lived process. Driving `fireDue()` directly would still pass if the timer
+    // catch stopped re-arming, which is why this test starts a real timer.
+    const dir = tempDir('sched-timer-retry');
+    try {
+      const storePath = join(dir, 'scheduled.jsonl');
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      const store = new ScheduleStore(storePath);
+      store.schedule(scheduled('k-timer', 0));
+
+      let attempts = 0;
+      const texts: string[] = [];
+      const dispatcher = {
+        async call(_method: string, payload: { readonly message?: { readonly text?: string } }) {
+          attempts += 1;
+          // Fail the first attempt only; the retry must be what succeeds.
+          if (attempts === 1) throw Object.assign(new Error('socket closed'), { name: 'NotConnectedError' });
+          texts.push(payload.message?.text ?? '');
+          return { ok: true };
+        },
+      };
+
+      // 5 ms retry delay, injected, so the test does not wait out the real 30 s.
+      const delivery = new ScheduledDelivery(store, dispatcher, journal, () => Date.now(), undefined, 5);
+      delivery.start();
+
+      const deadline = Date.now() + 2_000;
+      while (attempts < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      delivery.stop();
+
+      expect(attempts).toBeGreaterThanOrEqual(2);
+      expect(texts).toEqual(['k-timer']);
+      // It fired, so it is no longer pending: the retry delivered it.
+      expect(new ScheduleStore(storePath).pending()).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('one failed fire does not cancel the rest of the due batch', async () => {
+    // Due times are independent. Returning on the first rejection left every later
+    // due message unattempted while reporting the drain as failed — pending, so
+    // nothing was lost, but "not tried" was being spelled the same way as "tried".
+    const dir = tempDir('sched-batch');
+    try {
+      const storePath = join(dir, 'scheduled.jsonl');
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      const store = new ScheduleStore(storePath);
+      store.schedule(scheduled('k-doomed', 1_000));
+      store.schedule(scheduled('k-fine', 1_000));
+
+      const attempted: string[] = [];
+      const dispatcher = {
+        async call(_method: string, payload: { readonly message?: { readonly text?: string } }) {
+          const text = payload.message?.text ?? '';
+          attempted.push(text);
+          if (text === 'k-doomed') throw Object.assign(new Error('socket closed'), { name: 'NotConnectedError' });
+          return { ok: true };
+        },
+      };
+
+      const delivery = new ScheduledDelivery(store, dispatcher, journal, () => 2_000);
+      await expect(delivery.fireDue()).rejects.toThrow('socket closed');
+
+      // Both were attempted, not just the one that failed first.
+      expect(attempted).toEqual(['k-doomed', 'k-fine']);
+      // The one that succeeded is gone; the one that failed is still pending.
+      expect(new ScheduleStore(storePath).pending().map((m) => m.idempotencyKey)).toEqual(['k-doomed']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
