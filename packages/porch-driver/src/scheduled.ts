@@ -38,7 +38,16 @@
  * because a message that was due while the process was down is late, not cancelled.
  */
 
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  ftruncateSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 
 import type { CommandDispatcher, DispatchJournal } from './commands.js';
@@ -109,16 +118,32 @@ export class ScheduleStore {
     }
   }
 
-  /** Cut a partial final line off before appending, so the next record is not glued to it. */
+  /**
+   * Cut a partial final line off before appending, so the next record is not glued
+   * to it.
+   *
+   * **Shortens the file in place; never rewrites it.** This opened with `'w'`, which
+   * empties the file and then writes every surviving record back — so a crash inside
+   * that window lost EVERY pending scheduled message, in the one function whose
+   * whole premise is fsync discipline. It is reachable by crash-then-crash, since
+   * the window is only entered because an earlier crash left a torn tail: the
+   * recovery path was the most dangerous code in the store.
+   *
+   * `ftruncateSync` drops the torn bytes and touches nothing before them, so there
+   * is no window in which the good records are absent from the file.
+   */
   #truncateTornTail(): string | null {
     if (!existsSync(this.path)) return null;
     const raw = readFileSync(this.path, 'utf-8');
     if (raw.length === 0 || raw.endsWith('\n')) return null;
     const lastNewline = raw.lastIndexOf('\n');
     const torn = raw.slice(lastNewline + 1);
-    const fd = openSync(this.path, 'w');
+    // Byte length, not string length: a multi-byte character in a record would make
+    // a character count truncate in the wrong place, and JSON text can hold any.
+    const keepBytes = lastNewline === -1 ? 0 : Buffer.byteLength(raw.slice(0, lastNewline + 1), 'utf-8');
+    const fd = openSync(this.path, 'r+');
     try {
-      writeSync(fd, lastNewline === -1 ? '' : raw.slice(0, lastNewline + 1));
+      ftruncateSync(fd, keepBytes);
       fsyncSync(fd);
     } finally {
       closeSync(fd);

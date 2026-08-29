@@ -264,6 +264,16 @@ async function scenarioQueuedDuringTurn({ thread, journal, primary, seen }) {
           const deadline = Date.now() + 120_000;
           while (thread.isTurnActive && Date.now() < deadline) await sleep(500);
         },
+        // `isTurnActive` is a PROJECTION fed by the subscription, so between the
+        // server accepting our `thread.turn.start` and the projection updating, it
+        // still reads false — and the drain would dispatch the next queued message
+        // into the turn it just started. `awaitSettle` above cannot close that: it
+        // polls the same stale projection and returns instantly inside the window.
+        //
+        // `expectTurn` is registered BEFORE each dispatch and its `settled` resolves
+        // only after the turn was seen RUNNING, so the drain waits on the turn
+        // rather than on a flag that has not caught up.
+        expectTurn: () => tracker.expectTurn(thread.threadId),
       }),
       primary.dispatcher,
       journal,
