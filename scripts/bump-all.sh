@@ -74,8 +74,13 @@ bump_file() {
 bump_file "package.json"
 
 # Bump the version-aligned workspace packages.
-# codev/core/types are npm-published; artifact-canvas is version-aligned for consistency
+# codev/core/sdk/types are npm-published; artifact-canvas is version-aligned for consistency
 # but consumed by hosts via workspace:* (not independently published in v1, per spec-945).
-for pkg in packages/codev packages/core packages/sdk packages/types packages/artifact-canvas; do
+# porch-driver and t3-client became npm-published in spec 146 phase 9: @cluesmith/codev now
+# has runtime `workspace:*` dependencies on them, and pnpm rewrites those to the dependency's
+# own version at publish time. Left off this list they stay behind, are never published at the
+# released version, and `npm install -g @cluesmith/codev` fails with E404.
+for pkg in packages/codev packages/core packages/sdk packages/types packages/artifact-canvas \
+           packages/porch-driver packages/t3-client; do
   bump_file "$pkg/package.json"
 done

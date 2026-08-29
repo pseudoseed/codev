@@ -31,6 +31,20 @@ import type { ModelReasoningEffort } from '@openai/codex-sdk';
 // ---------------------------------------------------------------------------
 
 export interface CodevConfig {
+  /**
+   * Thread-backed spawning against a t3code server (spec 146). Absent means PTY, which is
+   * the default: thread-backed spawning is opt-in per workspace.
+   *
+   * Read through `loadConfig` rather than by reading `.codev/config.json` directly, so
+   * `.codev/config.local.json` — the per-engineer, already-gitignored layer — can carry a
+   * `bootstrapToken` without the committed file having to.
+   */
+  threads?: {
+    serverUrl?: string;
+    bootstrapToken?: string;
+    harness?: string;
+    model?: string;
+  };
   shell?: {
     architect?: string | string[];
     architectHarness?: string;

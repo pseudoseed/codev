@@ -67,15 +67,147 @@ function dbSignal(error: unknown): AgentStateSignal {
   };
 }
 
+/**
+ * Resolve the porch record for a builder worktree.
+ *
+ * **"A worktree owns one project" was false, and it was load-bearing.** The previous
+ * version returned a match only when exactly one `status.yaml` lived under the
+ * worktree. Real worktrees carry the whole `codev/projects/` tree: counted
+ * 2026-08-29, **302 project directories, 289 of them holding a `status.yaml`**, and
+ * 303 directories on `main`. (An earlier version of this comment said "289 of them"
+ * where the test said 302 — two real measurements of different things, written as
+ * though they were one. Both numbers are stated now, with what each counts.)
+ * So the join never resolved, every thread-backed builder was
+ * reported `THREAD_UNMANAGED`, and `THREAD_ID_DISAGREEMENT` could not fire at all
+ * because it sits behind a resolved record. The phase's own reconciliation criterion
+ * was therefore unreachable in production while its tests passed on single-project
+ * fixtures that shared the code's false premise.
+ *
+ * `thread_id` is the designed join and Phase 8 is its first writer, so it is tried
+ * first and simply finds nothing until then. That is honest, and it is why the
+ * ambiguous case must NOT be reported as "no porch record": one says nobody is
+ * managing this thread, the other says several records could be and we will not
+ * guess. Same word, two different situations, which is the failure this phase exists
+ * to prevent.
+ */
+/**
+ * The porch project ids a builder id could name, most specific first.
+ *
+ * **THE PROTOCOLS GENUINELY DIFFER, and no single parse covers both.** Verified by
+ * reading real `status.yaml` files on 2026-08-29:
+ *
+ * | `builders.id`          | porch `id:`         | matched by      |
+ * |------------------------|---------------------|-----------------|
+ * | `builder-spir-146`     | `'146'`             | trailing digits |
+ * | `builder-air-173`      | `'173'`             | trailing digits |
+ * | `builder-bugfix-1137`  | `bugfix-1137`       | stripped id     |
+ * | `builder-task-nhnj`    | `builder-task-nhnj` | **raw** id      |
+ *
+ * **All 12 real `builders.id` rows carry the `builder-` prefix**, so the strip is the
+ * only path that resolves a normal builder — and the raw form must still be tried
+ * FIRST, because `codev/projects/builder-task-nhnj-task-NHnJ` is named for the
+ * prefixed id. Stripping first loses it.
+ *
+ * Every one of these four shapes was found by reading the two real stores. Three
+ * earlier versions of this comment each asserted a rule that one of them refutes,
+ * written as settled without opening the files. Two review lanes then each found a
+ * shape the other missed — both had been sitting in `codev/projects` the whole time.
+ * The test now generates its shape list from disk for that reason: a list you type is
+ * a claim, one you read is a fact.
+ *
+ * **This association is deliberately independent of `thread_id`.** Matching on the
+ * thread only resolves when the two stores AGREE, which makes disagreement between
+ * them structurally undetectable — and reporting that disagreement is one of this
+ * phase's acceptance criteria. Identity has to come from something that stays true
+ * while the two stores differ.
+ *
+ * There is no `project_id` column to use instead; these conventions are the available
+ * association, so they are parsed here in one place rather than assumed at call sites.
+ */
+function projectIdCandidates(builderId: string): { readonly exact: string[]; readonly digits?: string } {
+  // THE STRIP IS LOAD-BEARING, NOT DEFENSIVE. All 12 rows in `builders.id` carry the
+  // prefix — `builder-spir-146`, `builder-air-173` — and `row.id` is exactly what
+  // this function receives, so the stripped form is the only path that resolves for
+  // a normal builder. The earlier comment called it defensive without querying the
+  // table.
+  //
+  // But the RAW id has to be tried first, because a project can legitimately be
+  // named for the prefixed id: `codev/projects/builder-task-nhnj-task-NHnJ` has
+  // `id: builder-task-nhnj`. Stripping first loses it.
+  const bare = builderId.replace(/^builder-/, '');
+  const exact = builderId === bare ? [bare] : [builderId, bare];
+
+  // Task builders take their identity from the id itself, never from digits: their
+  // suffix is a random short id (`task-nhnj`) that can be all-digits by chance, and
+  // matching a project by it would be a coincidence rather than an association.
+  if (/(^|-)task-/.test(bare)) return { exact };
+
+  const digits = /-(\d+)$/.exec(bare);
+  return digits ? { exact, digits: digits[1] } : { exact };
+}
+
 function statusForWorktree(
   successful: readonly PorchStatusProjection[],
   worktree: string,
-): PorchStatusProjection | undefined {
+  builderId: string,
+  threadId: string,
+): { readonly status?: PorchStatusProjection; readonly candidates: number } {
   const canonical = normalizeWorkspacePath(worktree);
   const matches = successful.filter((status) => normalizeWorkspacePath(status.artifactRoot) === canonical);
-  // A builder worktree normally owns one project.  If it contains more than
-  // one, no arbitrary project is selected as its identity.
-  return matches.length === 1 ? matches[0] : undefined;
+
+  // IDENTITY FIRST, because it survives the two stores disagreeing. Exact forms
+  // before digits: raw id, then `builder-`-stripped, then the trailing digits.
+  const { exact, digits } = projectIdCandidates(builderId);
+  for (const projectId of exact) {
+    const byProject = matches.filter((status) => status.projectId === projectId);
+    if (byProject.length === 1) return { status: byProject[0], candidates: matches.length };
+  }
+
+  // DIGITS ONLY WHEN THEY CANNOT MEAN TWO THINGS.
+  //
+  // Project ids are not all unpadded: '0087', '0088', '0092', '0120' and '0124' all
+  // exist, and `0120` (spir) coexists with `120` (air) right now. So a digit match
+  // can name the wrong project across protocols — and it would do so with a RESOLVED
+  // record, which is a confident wrong answer rather than an ambiguous one. That is
+  // strictly worse than not resolving, exactly as a wrong diagnosis is worse than a
+  // missing one.
+  //
+  // So a digit candidate is used only when no other record in this worktree is
+  // numerically equal to it. A collision falls through to PORCH_JOIN_AMBIGUOUS,
+  // which is the honest answer: we know it is one of these and not which.
+  if (digits !== undefined) {
+    // An EXACT textual match is the better evidence and is used when present —
+    // otherwise the existence of `0120` would stop the legitimate `120` builder
+    // resolving, trading a rare wrong answer for a common missing one.
+    const exactDigits = matches.filter((status) => status.projectId === digits);
+    if (exactDigits.length === 1) return { status: exactDigits[0], candidates: matches.length };
+
+    // No exact match, but something numerically equal: that is a guess across the
+    // padding boundary, and it would resolve WRONG rather than not at all. Refuse.
+    const numerically = matches.filter(
+      (status) => /^\d+$/.test(status.projectId) && Number(status.projectId) === Number(digits),
+    );
+    if (numerically.length === 1) {
+      // KNOWN LIMIT, stated rather than silently accepted: if a builder id ever drops
+      // a project's zero padding (`spir-120` for project `0120`), the exact branch
+      // above resolves it to `120` instead, which is a confident wrong answer. No
+      // such builder exists in the 12 real rows, so this is not designed around — but
+      // it is the case to check first if a builder is ever seen joined to the wrong
+      // project.
+      return { candidates: matches.length };
+    }
+  }
+
+  // Then the thread, for ids that do not carry a project (and once Phase 8 writes it).
+  const byThread = matches.filter((status) => status.threadId === threadId);
+  if (byThread.length === 1) return { status: byThread[0], candidates: matches.length };
+
+  // The single-project case still resolves, for worktrees that really do hold one.
+  if (matches.length === 1) return { status: matches[0], candidates: 1 };
+
+  // Zero, or several with nothing to choose between them. No record is invented, and
+  // the caller is told which of the two it is.
+  return { candidates: matches.length };
 }
 
 /**
@@ -125,8 +257,20 @@ export function readThreadRegistry(
   }
 
   for (const row of architects) {
+    // `cmd` IS NOT TERMINAL-BACKED STATE. Issue #170.
+    //
+    // `terminal_id`, `pid` and `port` are genuinely PTY-specific, and null/0/0 are
+    // honest sentinels for a thread-backed architect. `cmd` is not: it records how
+    // the architect was launched, which is meaningful either way, it is NOT NULL in
+    // the schema, and `status.ts` renders it. Phase 8 therefore writes `cmd` for
+    // thread-backed architects — correctly — and this detector then reported every
+    // one of them as IDENTITY_SHAPE_CONFLICT, forever.
+    //
+    // Two merged phases in direct contradiction, latent only because no factory is
+    // registered yet. The detector moves rather than the writer, because the writer
+    // is right about what `cmd` means.
     if (row.thread_id !== null && (
-      row.terminal_id !== null || row.pid !== 0 || row.port !== 0 || row.cmd !== ''
+      row.terminal_id !== null || row.pid !== 0 || row.port !== 0
     )) {
       signals.push({
         code: 'IDENTITY_SHAPE_CONFLICT',
@@ -172,7 +316,8 @@ export function readThreadRegistry(
     if (row.thread_id === null) continue;
     builderMap[row.id] = row.thread_id;
     consumed.add(row.thread_id);
-    const porch = statusForWorktree(statuses, row.worktree);
+    const resolved = statusForWorktree(statuses, row.worktree, row.id, row.thread_id);
+    const porch = resolved.status;
     const management = porch ? 'managed' : 'unmanaged';
     identities.push({
       threadId: row.thread_id,
@@ -183,7 +328,21 @@ export function readThreadRegistry(
       management,
       ...(porch ? { porch } : {}),
     });
-    if (!porch) {
+    if (!porch && resolved.candidates > 1) {
+      // NOT "unmanaged". Several porch records live under this worktree and none
+      // names this thread, so which one manages it is unknown — which is a different
+      // fact, with a different remedy, from nothing managing it at all. Phase 8
+      // writing `thread_id` is what resolves this.
+      signals.push({
+        code: 'PORCH_JOIN_AMBIGUOUS',
+        message:
+          `Thread ${row.thread_id} has ${resolved.candidates} candidate porch records under ` +
+          `${row.worktree} and none names it; the managing record is unknown, not absent`,
+        threadId: row.thread_id,
+        role: 'builder',
+        roleId: row.id,
+      });
+    } else if (!porch) {
       signals.push({
         code: 'THREAD_UNMANAGED',
         message: `Thread ${row.thread_id} has no matching porch record`,
@@ -221,11 +380,17 @@ export function readThreadRegistry(
     if (porch.threadId === undefined) continue;
     const matching = identities.find((identity) => identity.porch?.statusPath === porch.statusPath);
     if (!matching) {
+      // "has no global.db identity row" WAS A FALSE DIAGNOSIS, not merely a vague
+      // one. A row can exist and name a different thread, and telling an operator
+      // the row is missing sends them to create one instead of reconciling two that
+      // disagree. The message now states what is actually known — this record joined
+      // to no identity — and leaves why to the signals that can tell.
       signals.push({
         code: live && !live.has(porch.threadId) ? 'PORCH_THREAD_NO_LONGER_EXISTS' : 'PORCH_RECORD_UNMAPPED',
         message: live && !live.has(porch.threadId)
           ? `Porch record ${porch.projectId} names thread ${porch.threadId}, which t3code did not return`
-          : `Porch record ${porch.projectId} names thread ${porch.threadId} but has no global.db identity row`,
+          : `Porch record ${porch.projectId} names thread ${porch.threadId} and joined to no identity; ` +
+            `a global.db row may be absent, or may exist naming a different thread`,
         source: porch.statusPath,
         projectId: porch.projectId,
         threadId: porch.threadId,

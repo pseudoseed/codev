@@ -176,6 +176,46 @@ export function isPublicRoute(method: string, pathname: string): boolean {
   return false;
 }
 
+/** The one prefix that carries its own authentication. Exported so tests pin it. */
+export const CODEV_AGENT_SURFACE_PREFIX = '/api/agent/v1/';
+
+/**
+ * True for the codev-agent protocol surface (Spec 146 Phase 7).
+ *
+ * DELEGATED, NOT PUBLIC, and the distinction is the whole design. This function
+ * is deliberately NOT part of `isPublicRoute`: that list is "reachable without
+ * authentication", and every route here requires more authentication than the
+ * shared key provides, not less.
+ *
+ * What guards this surface instead: `servers/agent-auth.ts` requires a PER-MACHINE
+ * credential on every route in `AGENT_ROUTES`, and the approval routes require a
+ * human-paired session on top. The table IS the router, so a path under this
+ * prefix is either a table entry with an authentication mode or a 404 — an
+ * enumerating test drives a real unauthenticated request at every entry, and a
+ * second test proves the dispatcher serves no path the table does not name.
+ *
+ * WHY THE SHARED KEY HAD TO COME OFF THIS SURFACE rather than sit in front of it:
+ * a remote device pairs by redeeming an out-of-band token and receives a machine
+ * credential. It never receives `~/.agent-farm/local-key`, and there is no secure
+ * way to give it one — sending the shared key over the wire to admit a device
+ * hands every client the all-or-nothing secret that pairing exists to replace,
+ * and that key cannot be revoked for one machine without rotating it for all.
+ * The first version of this phase required both, which meant a device could pair
+ * and then reach nothing: a documented flow that could not run.
+ *
+ * So the trade, stated plainly: on this prefix only, a static shared secret is
+ * replaced by per-machine revocable credentials. Stronger per client, not weaker.
+ * The host allowlist still applies — `isRequestAllowed` checks it first, and this
+ * exemption never runs for a rebound Host.
+ *
+ * Safe to delegate wholesale because `handleAgentRoute` CLAIMS the whole prefix:
+ * it returns false only for paths outside it, so nothing under this prefix can
+ * fall through to a keyed handler below.
+ */
+export function isCodevAgentRoute(pathname: string): boolean {
+  return pathname.startsWith(CODEV_AGENT_SURFACE_PREFIX);
+}
+
 /**
  * CORS origin allowlist (advisory Layer 3). Replaces the previous
  * reflect-any-`https://` behavior. Allowed: loopback origins on any port
@@ -304,6 +344,10 @@ export function isRequestAllowed(req: http.IncomingMessage): boolean {
   }
 
   if (isPublicRoute(method, pathname)) return true;
+
+  // Spec 146 Phase 7: the codev-agent surface authenticates itself. NOT public —
+  // the name of the function says what it is, and `isCodevAgentRoute` says why.
+  if (isCodevAgentRoute(pathname)) return true;
 
   const expected = getExpectedKey();
   if (!expected) return false;

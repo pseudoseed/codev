@@ -28,10 +28,20 @@ pnpm -w run build
 # codev-types is packed+installed too: codev now imports it at runtime (the
 # request-auth wire constants), so it must be a real installed dependency, not
 # just resolved from the workspace at build time.
-rm -f packages/types/*.tgz packages/core/*.tgz packages/sdk/*.tgz packages/codev/*.tgz
+#
+# Every runtime `@cluesmith/*` dependency of packages/codev must appear in all four
+# lists below. `pnpm pack` rewrites `workspace:*` to the dependency's own version, so
+# one left out is resolved from the npm registry instead — and t3-client and
+# porch-driver (added in spec 146 phase 9) are not published there, so the install
+# E404s before Tower is restarted. A test in
+# spec-146-phase-9-thread-backend.test.ts reads that dependency set from the manifest
+# and asserts this file covers it.
+rm -f packages/types/*.tgz packages/core/*.tgz packages/sdk/*.tgz packages/t3-client/*.tgz packages/porch-driver/*.tgz packages/codev/*.tgz
 pnpm --filter @cluesmith/codev-types pack --pack-destination packages/types
 pnpm --filter @cluesmith/codev-core pack --pack-destination packages/core
 pnpm --filter @cluesmith/codev-sdk pack --pack-destination packages/sdk
+pnpm --filter @cluesmith/t3-client pack --pack-destination packages/t3-client
+pnpm --filter @cluesmith/porch-driver pack --pack-destination packages/porch-driver
 pnpm --filter @cluesmith/codev pack --pack-destination packages/codev
 
 # Uninstall first — `npm install -g` over an existing same-name package
@@ -40,13 +50,15 @@ pnpm --filter @cluesmith/codev pack --pack-destination packages/codev
 # previously-installed version, npm's same-version short-circuit can leave
 # stale files on disk even after uninstall+install.
 GLOBAL_ROOT="$(npm root -g)"
-npm uninstall -g @cluesmith/codev @cluesmith/codev-core @cluesmith/codev-sdk @cluesmith/codev-types 2>/dev/null || true
-rm -rf "$GLOBAL_ROOT/@cluesmith/codev" "$GLOBAL_ROOT/@cluesmith/codev-core" "$GLOBAL_ROOT/@cluesmith/codev-sdk" "$GLOBAL_ROOT/@cluesmith/codev-types"
+npm uninstall -g @cluesmith/codev @cluesmith/codev-core @cluesmith/codev-sdk @cluesmith/codev-types @cluesmith/t3-client @cluesmith/porch-driver 2>/dev/null || true
+rm -rf "$GLOBAL_ROOT/@cluesmith/codev" "$GLOBAL_ROOT/@cluesmith/codev-core" "$GLOBAL_ROOT/@cluesmith/codev-sdk" "$GLOBAL_ROOT/@cluesmith/codev-types" "$GLOBAL_ROOT/@cluesmith/t3-client" "$GLOBAL_ROOT/@cluesmith/porch-driver"
 
 npm install -g \
   "$REPO_ROOT/packages/types/cluesmith-codev-types-"*.tgz \
   "$REPO_ROOT/packages/core/cluesmith-codev-core-"*.tgz \
   "$REPO_ROOT/packages/sdk/cluesmith-codev-sdk-"*.tgz \
+  "$REPO_ROOT/packages/t3-client/cluesmith-t3-client-"*.tgz \
+  "$REPO_ROOT/packages/porch-driver/cluesmith-porch-driver-"*.tgz \
   "$REPO_ROOT/packages/codev/cluesmith-codev-"*.tgz
 
 # pnpm pack strips the executable bit from shell scripts in the tarball,

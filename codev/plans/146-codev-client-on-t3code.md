@@ -1197,12 +1197,28 @@ not have this problem — its `pid` and `port` already carry `DEFAULT 0`.
 - [ ] The `thread_id` columns themselves were added in Phase 5, which is the first phase that
       needs them to exist. This phase does not re-add them; it is the first that **writes** them.
       Old rows stay valid with no backfill, following the pattern `harness` and `model` established.
-- [ ] For `architect`, **the `ADD COLUMN` plus sentinel-values option is chosen** (`pid` 0, `port` 0, `cmd` `''`), with exclusivity enforced in code rather than by a
+- [ ] For `architect`, **the `ADD COLUMN` plus sentinel-values option is chosen** (`pid` 0,
+      `port` 0), with exclusivity enforced in code rather than by a
       `CHECK`. The rejected alternative — a table rebuild relaxing the three `NOT NULL` columns
       with a `CHECK` constraint — is stricter at the schema level, but it changes the table shape,
       and with no down-migration the only way back is a restore from backup. Additive stays
       readable by the previous release; a rebuild does not. **A row must represent either shape and
       never both.**
+
+      **AMENDED — `cmd` is NOT a sentinel.** This deliverable originally read `pid` 0, `port` 0,
+      `cmd` `''`. The architect ruled on **#170** that the plan was wrong here and the merged code
+      is right: `pid`, `port` and `terminal_id` are genuinely PTY-specific and carry no meaning for
+      a thread-backed row, but `cmd` is *how the architect was launched* and is meaningful under
+      either shape. Blanking it discards what an architect restart reads. So
+      `architectWriteValues` passes `cmd` through unchanged in both branches, and
+      `THREAD_ARCHITECT_SENTINEL` is `{ pid: 0, port: 0 }` — two sentinels, not three.
+
+      **This amendment also adds the test that holds the decision in place.** There was none:
+      `architectWriteValues` had zero coverage, which the phase_8 iteration-1 `codex` lane found
+      and which was confirmed against the file before this was written. The characterization test
+      asserting `cmd` survives on a thread-backed row is created by this amendment, not inherited
+      from the merged work. Without it the next reader sees a two-field sentinel against a
+      three-field plan and "fixes" the code back.
 - [ ] **A backup of `global.db` is taken before the migration runs**, and its path is logged at
       `info`. Step 3 of the spec's rollback is a restore, so the backup is not a precaution, it is
       the mechanism.

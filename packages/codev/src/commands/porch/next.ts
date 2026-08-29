@@ -9,6 +9,7 @@
  *   porch next → execute tasks → porch done → porch next → ...
  */
 
+import { hostname } from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { readState, writeStateAndCommit, findStatusPath, projectNotFoundMessage, getProjectDir, getArtifactRoot, resolveArtifactBaseName } from './state.js';
@@ -294,10 +295,21 @@ export async function next(workspaceRoot: string, projectId: string): Promise<Po
         // Auto-approve gate and advance
         const gateName = getPhaseGate(protocol, state.phase);
         if (gateName) {
+          const approvedAt = new Date().toISOString();
           state.gates[gateName] = {
             ...state.gates[gateName],
             status: 'approved',
-            approved_at: new Date().toISOString(),
+            approved_at: approvedAt,
+            // Spec 146 Phase 6: this gate was NOT approved through the capability
+            // path — it was approved by frontmatter a human committed to the
+            // artifact. Recorded so the artifact says which of the three it was,
+            // rather than leaving an approval with no provenance at all.
+            approval: {
+              authorization: 'pre-approved-artifact',
+              approved_at: approvedAt,
+              machine: hostname(),
+              caller: `pre-approval frontmatter on ${artifactGlob}`,
+            },
           };
         }
         // Advance to next phase

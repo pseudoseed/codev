@@ -1,48 +1,47 @@
 {
   "name": "@cluesmith/porch-driver",
-  "version": "0.0.0",
-  "private": true,
+  "version": "3.3.1",
   "description": "Spec 146, Phase 3: porch's session lifecycle against a t3code server. Spawn a thread on a worktree, run a turn to settle, run phase checks as processes porch owns, and survive a crash at either of the two windows that lose work. Library calls only \u2014 no PTY.",
   "type": "module",
   "exports": {
     "./harness-map": {
-      "types": "./src/harness-map.ts",
+      "types": "./dist/harness-map.d.ts",
       "default": "./dist/harness-map.js"
     },
     "./commands": {
-      "types": "./src/commands.ts",
+      "types": "./dist/commands.d.ts",
       "default": "./dist/commands.js"
     },
     "./cursor": {
-      "types": "./src/cursor.ts",
+      "types": "./dist/cursor.d.ts",
       "default": "./dist/cursor.js"
     },
     "./thread": {
-      "types": "./src/thread.ts",
+      "types": "./dist/thread.d.ts",
       "default": "./dist/thread.js"
     },
     "./turn": {
-      "types": "./src/turn.ts",
+      "types": "./dist/turn.d.ts",
       "default": "./dist/turn.js"
     },
     "./checks": {
-      "types": "./src/checks.ts",
+      "types": "./dist/checks.d.ts",
       "default": "./dist/checks.js"
     },
     "./worktree-setup": {
-      "types": "./src/worktree-setup.ts",
+      "types": "./dist/worktree-setup.d.ts",
       "default": "./dist/worktree-setup.js"
     },
     "./deliver": {
-      "types": "./src/deliver.ts",
+      "types": "./dist/deliver.d.ts",
       "default": "./dist/deliver.js"
     },
     "./queue": {
-      "types": "./src/queue.ts",
+      "types": "./dist/queue.d.ts",
       "default": "./dist/queue.js"
     },
     "./scheduled": {
-      "types": "./src/scheduled.ts",
+      "types": "./dist/scheduled.d.ts",
       "default": "./dist/scheduled.js"
     }
   },
@@ -52,7 +51,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
   },
   "devDependencies": {
     "@types/node": "22.x",

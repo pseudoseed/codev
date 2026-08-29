@@ -219,6 +219,16 @@ export async function startTower(
       AF_TEST_DB: `test-${actualPort}.db`,
       SHELLPER_SOCKET_DIR: socketDir,
       CODEV_AGENT_FARM_DIR: agentFarmDir,
+      // Spec 146 Phase 7: neutralise the developer's ambient bridge settings,
+      // for the same reason #1515 isolated the agent-farm dir. A machine that
+      // exports BRIDGE_MODE=1 and BRIDGE_TOWER_HOST=0.0.0.0 was silently making
+      // every "default behaviour" test spawn a bridge-mode Tower — and since
+      // Phase 7 refuses an undeclared plaintext exposure, that now shows up as a
+      // Tower that will not start. A test's bind must come from the test.
+      // `extraEnv` spreads after this, so a suite that wants bridge mode says so.
+      BRIDGE_MODE: '',
+      BRIDGE_TOWER_HOST: '',
+      CODEV_BRIDGE_TLS: '',
       ...extraEnv,
     },
   });

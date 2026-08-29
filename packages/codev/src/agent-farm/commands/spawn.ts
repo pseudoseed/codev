@@ -35,6 +35,7 @@ import {
   allocateSpawnThread,
   chooseSpawnPath,
 } from '../db/thread-identity.js';
+import { ensureThreadBackendReady } from '../thread-backend.js';
 
 import { findStatusPath, getStatusPath, recordThreadId } from '../../commands/porch/state.js';
 import { DEFAULT_ARCHITECT_NAME } from '../utils/architect-name.js';
@@ -80,6 +81,7 @@ import {
   startBuilderSession,
   startShellSession,
   buildWorktreeLaunchScript,
+  BUILDER_ROLE_FILE,
 } from './spawn-worktree.js';
 import { getTowerClient } from '../lib/tower-client.js';
 import { executeForgeCommand, loadForgeConfig } from '../../lib/forge.js';
@@ -140,8 +142,26 @@ export async function launchSpawnedBuilder(opts: {
   model?: string;
   prompt?: string;
   launchScript?: string;
+  roleContent?: string | null;
+  roleFilePath?: string | null;
   startPty: () => Promise<{ terminalId: string }>;
+  workspaceRoot?: string;
 }): Promise<{ terminalId?: string; threadId?: string }> {
+  // Issue #179 item 2: the production caller for installThreadSpawnFactory. Without
+  // it no factory is ever registered and chooseSpawnPath returns `pty` unconditionally,
+  // which made Phase 8's thread branch unreachable outside tests. A workspace with no
+  // t3code server configured is unchanged — this is opt-in, not a flag day — but a
+  // workspace that HAS one now actually takes the thread path.
+  //
+  // Skipped when the caller passes no workspaceRoot, which is how the unit tests drive
+  // this function with an injected factory and no server.
+  //
+  // `prompt` and `roleContent` are the builder's actual mission, and reaching the thread
+  // path is not the same as spawning a builder on it. Every call site used to pass the
+  // generated prompt only into the `startPty` closure, so on the thread path the engine
+  // received `prompt: undefined`, never began a turn, and produced a thread that exists
+  // and has been told nothing — a spawn that looks successful and did not spawn anything.
+  if (opts.workspaceRoot) await ensureThreadBackendReady(opts.workspaceRoot);
   const pathKind = chooseSpawnPath(opts.existing ?? undefined);
   if (pathKind === 'thread') {
     const threadId = opts.existing?.threadId ?? await allocateSpawnThread({
@@ -152,6 +172,8 @@ export async function launchSpawnedBuilder(opts: {
       model: opts.model,
       prompt: opts.prompt,
       launchScript: opts.launchScript,
+      roleContent: opts.roleContent,
+      roleFilePath: opts.roleFilePath,
     });
     return { threadId };
   }
@@ -591,7 +613,11 @@ async function spawnSpec(options: SpawnOptions, config: Config, selection: Agent
   const identity = await launchSpawnedBuilder({
     existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
     builderId, worktreePath, branch: branchName,
+    workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
+    prompt: builderPrompt,
+    roleContent: role?.content ?? null,
+    roleFilePath: role ? resolve(worktreePath, BUILDER_ROLE_FILE) : null,
     startPty: () => startBuilderSession(
       config, builderId, worktreePath, effective.command,
       builderPrompt, role?.content ?? null, role?.source ?? null,
@@ -674,7 +700,11 @@ async function spawnTask(options: SpawnOptions, config: Config, selection: Agent
   const identity = await launchSpawnedBuilder({
     existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
     builderId, worktreePath, branch: branchName,
+    workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
+    prompt: builderPrompt,
+    roleContent: role?.content ?? null,
+    roleFilePath: role ? resolve(worktreePath, BUILDER_ROLE_FILE) : null,
     startPty: () => startBuilderSession(
       config, builderId, worktreePath, effective.command,
       builderPrompt, role?.content ?? null, role?.source ?? null,
@@ -743,7 +773,11 @@ async function spawnProtocol(options: SpawnOptions, config: Config, selection: A
   const identity = await launchSpawnedBuilder({
     existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
     builderId, worktreePath, branch: branchName,
+    workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
+    prompt,
+    roleContent: role?.content ?? null,
+    roleFilePath: role ? resolve(worktreePath, BUILDER_ROLE_FILE) : null,
     startPty: () => startBuilderSession(
       config, builderId, worktreePath, effective.command,
       prompt, role?.content ?? null, role?.source ?? null,
@@ -830,8 +864,16 @@ async function spawnWorktree(options: SpawnOptions, config: Config, selection: A
   const identity = await launchSpawnedBuilder({
     existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
     builderId, worktreePath, branch: branchName,
+    workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
     launchScript: scriptPath,
+    // A worktree spawn has no prompt — its payload is the launch script — but it DOES have a
+    // role, baked into that script above. The thread path has no script to bake it into, so
+    // without these it is the one spawn form that comes up with no role at all while the PTY
+    // form gets one. `DriverThread` holds a pending role and joins it onto whichever turn
+    // starts first, so forwarding it works even with no initial prompt.
+    roleContent: role?.content ?? null,
+    roleFilePath: role ? resolve(worktreePath, BUILDER_ROLE_FILE) : null,
     startPty: async () => {
       logger.info('Creating PTY terminal session for worktree...');
       const session = await createPtySession(
@@ -1013,7 +1055,11 @@ async function spawnIssueDrivenBuilder(
   const identity = await launchSpawnedBuilder({
     existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
     builderId, worktreePath, branch: branchName,
+    workspaceRoot: config.workspaceRoot,
     harnessName: effective.harnessName, model: effective.modelId,
+    prompt: builderPrompt,
+    roleContent: role?.content ?? null,
+    roleFilePath: role ? resolve(worktreePath, BUILDER_ROLE_FILE) : null,
     startPty: () => startBuilderSession(
       config, builderId, worktreePath, effective.command,
       builderPrompt, role?.content ?? null, role?.source ?? null,

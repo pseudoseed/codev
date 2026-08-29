@@ -244,9 +244,14 @@ export async function handleRequest(
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+  // Spec 146 Phase 7: the machine credential and pairing token travel in their own
+  // headers, so a browser on an allowed remote origin cannot pair or authenticate
+  // unless preflight advertises them. Omitting them made cross-origin pairing fail
+  // at the preflight, before any of Phase 7's own checks ran.
   res.setHeader(
     'Access-Control-Allow-Headers',
-    `Content-Type, ${TOWER_KEY_HEADER}, ${LEGACY_WEB_KEY_HEADER}, X-Codev-Human-Session`,
+    `Content-Type, ${TOWER_KEY_HEADER}, ${LEGACY_WEB_KEY_HEADER}, X-Codev-Human-Session, `
+      + 'X-Codev-Machine-Credential, X-Codev-Pairing-Token',
   );
   res.setHeader('Cache-Control', 'no-store');
 

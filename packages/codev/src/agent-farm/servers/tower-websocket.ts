@@ -11,6 +11,7 @@ import type net from 'node:net';
 import { WebSocketServer, WebSocket } from 'ws';
 import { WS_CLOSE_SESSION_UNKNOWN, WS_CLOSE_UNAUTHORIZED } from '../lib/reconnect-backoff.js';
 import { isWebSocketAllowed } from '../utils/server-utils.js';
+import { isUpgradeOriginAllowed } from './agent-auth.js';
 import { encodeData, encodeControl, decodeFrame } from '../../terminal/ws-protocol.js';
 import type { PtySession } from '../../terminal/pty-session.js';
 import { attachWithReplay } from '../../terminal/attach-replay.js';
@@ -225,6 +226,18 @@ export function setupUpgradeHandler(
 ): void {
   server.on('upgrade', async (req: http.IncomingMessage, socket: net.Socket, head: Buffer) => {
     const reqUrl = new URL(req.url || '/', `http://localhost:${port}`);
+
+    // Spec 146 Phase 7: explicit origin rule at the upgrade. A WebSocket that
+    // ignores `Origin` is reachable from any page the browser visits — `ws://` is
+    // not subject to the same-origin policy and sends no preflight. This check
+    // only ever REFUSES: an upgrade with no `Origin` (every Node `ws` client in
+    // this repo) still has to pass the key check below, so a missing Origin
+    // cannot degrade into a bypass.
+    if (!isUpgradeOriginAllowed(req)) {
+      logTerminal('WARN', `WS upgrade 403 ${reqUrl.pathname} — Origin "${req.headers.origin ?? ''}" is not allowed`);
+      rejectUnauthorized(req, socket, head, wss);
+      return;
+    }
 
     // Request authentication (advisory GHSA-xvjp-7748-v88v): validate the key at
     // the handshake, before any session lookup or PTY attach, for every WS route.

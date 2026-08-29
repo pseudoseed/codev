@@ -10,58 +10,58 @@ import {
 } from '../db/index.js';
 import {
   allocateSpawnThread,
+  architectWriteValues,
   assertExclusiveIdentity,
   chooseSpawnPath,
   countPtyDrainFromBuilders,
   DualIdentityError,
   setSpawnThreadFactory,
   setThreadBackedSpawnsEnabled,
+  THREAD_ARCHITECT_SENTINEL,
 } from '../db/thread-identity.js';
 import { launchSpawnedBuilder } from '../commands/spawn.js';
 import { readState, recordThreadId, writeState } from '../../commands/porch/state.js';
 import type { ProjectState } from '../../commands/porch/types.js';
 import type { Builder } from '../types.js';
 
-const PRE_V21_ARCHITECT = `
-  CREATE TABLE architect (
-    workspace_path TEXT NOT NULL,
-    id TEXT NOT NULL,
-    pid INTEGER NOT NULL,
-    port INTEGER NOT NULL,
-    cmd TEXT NOT NULL,
-    started_at TEXT NOT NULL DEFAULT (datetime('now')),
-    terminal_id TEXT,
-    session_id TEXT,
-    PRIMARY KEY (workspace_path, id)
-  );
-`;
+/**
+ * The pre-v21 fixture is DERIVED from the shipped `GLOBAL_SCHEMA`, not hand-typed.
+ *
+ * The iteration-1 `codex` and `opencode` lanes both flagged that a typed fixture is a claim
+ * about the schema, and a claim can drift from the thing it describes: a column added to
+ * `architect` in `schema.ts` would leave this test passing against a table that no longer
+ * exists in production. Deriving it makes the fixture a fact about the real schema instead.
+ *
+ * `stripThreadId` asserts its own reach — it fails if it did not actually remove a column —
+ * so a rename of `thread_id` breaks this by name rather than silently producing a fixture
+ * identical to the post-migration shape, which would make every migration test vacuous.
+ */
+function extractCreateTable(schema: string, table: string): string {
+  const re = new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\([\\s\\S]*?\\n\\);`, 'm');
+  const match = schema.match(re);
+  if (!match) throw new Error(`GLOBAL_SCHEMA has no CREATE TABLE for ${table}`);
+  return match[0].replace('IF NOT EXISTS ', '');
+}
 
-const PRE_V21_BUILDERS = `
-  CREATE TABLE builders (
-    workspace_path TEXT NOT NULL,
-    id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    port INTEGER NOT NULL DEFAULT 0,
-    pid INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'spawning'
-      CHECK(status IN ('spawning', 'implementing', 'blocked', 'pr', 'complete')),
-    phase TEXT NOT NULL DEFAULT '',
-    worktree TEXT NOT NULL,
-    branch TEXT NOT NULL,
-    type TEXT NOT NULL DEFAULT 'spec'
-      CHECK(type IN ('spec', 'task', 'protocol', 'shell', 'worktree', 'bugfix', 'pir')),
-    task_text TEXT,
-    protocol_name TEXT,
-    issue_number TEXT,
-    terminal_id TEXT,
-    spawned_by_architect TEXT,
-    started_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    harness TEXT,
-    model TEXT,
-    PRIMARY KEY (workspace_path, id)
-  );
-`;
+function stripThreadId(createTable: string, table: string): string {
+  const lines = createTable.split('\n');
+  const columnIndex = lines.findIndex((line) => /^\s*thread_id\s+TEXT\s*,?\s*$/.test(line));
+  if (columnIndex === -1) {
+    throw new Error(`Expected a thread_id column to strip from ${table}; the schema changed`);
+  }
+  // Drop the column and the comment block that documents it, so the fixture reads as a
+  // real pre-v21 table rather than one with a dangling explanation of a missing column.
+  let firstIndex = columnIndex;
+  while (firstIndex > 0 && /^\s*--/.test(lines[firstIndex - 1])) firstIndex -= 1;
+  const stripped = [...lines.slice(0, firstIndex), ...lines.slice(columnIndex + 1)];
+  if (stripped.length === lines.length) {
+    throw new Error(`stripThreadId removed nothing from ${table}`);
+  }
+  return stripped.join('\n');
+}
+
+const PRE_V21_ARCHITECT = stripThreadId(extractCreateTable(GLOBAL_SCHEMA, 'architect'), 'architect');
+const PRE_V21_BUILDERS = stripThreadId(extractCreateTable(GLOBAL_SCHEMA, 'builders'), 'builders');
 
 type TableInfoRow = {
   cid: number;
@@ -124,6 +124,50 @@ describe('Spec 146 Phase 8 — exclusivity and drain', () => {
     expect(countPtyDrainFromBuilders(builders)).toBe(1);
     builders[0] = { ...builders[0], status: 'complete' };
     expect(countPtyDrainFromBuilders(builders)).toBe(0);
+  });
+});
+
+/**
+ * The plan originally specified three architect sentinels: pid 0, port 0, cmd ''.
+ * The architect ruled on #170 that the plan was wrong and the code is right — pid, port
+ * and terminal_id are PTY-specific and meaningless for a thread-backed row, but `cmd` is
+ * how the architect was launched and an architect restart reads it. The plan is amended.
+ *
+ * These are characterization tests. They exist to stop the next reader seeing a two-field
+ * sentinel against what looks like a three-field intent and "fixing" the code back.
+ */
+describe('Spec 146 Phase 8 — architect sentinels (#170)', () => {
+  const base = { id: 'main', pid: 4242, port: 4100, cmd: 'claude --dangerously', startedAt: 'x' };
+
+  it('blanks pid and port on a thread-backed architect but never cmd', () => {
+    const written = architectWriteValues({ ...base, threadId: 'thr-1' } as never);
+    expect(written.pid).toBe(0);
+    expect(written.port).toBe(0);
+    expect(written.cmd).toBe('claude --dangerously');
+    expect(written.terminalId).toBeNull();
+    expect(written.threadId).toBe('thr-1');
+  });
+
+  it('carries cmd through unchanged on a terminal-backed architect too', () => {
+    const written = architectWriteValues({ ...base, terminalId: 'term-1' } as never);
+    expect(written.cmd).toBe('claude --dangerously');
+    expect(written.terminalId).toBe('term-1');
+    expect(written.threadId).toBeNull();
+  });
+
+  it('the sentinel names exactly two fields — cmd is deliberately not one', () => {
+    expect(Object.keys(THREAD_ARCHITECT_SENTINEL).sort()).toEqual(['pid', 'port']);
+    expect(THREAD_ARCHITECT_SENTINEL).not.toHaveProperty('cmd');
+  });
+
+  it('refuses to write an architect row carrying both identities', () => {
+    expect(() => architectWriteValues({ ...base, terminalId: 't', threadId: 'h' } as never))
+      .toThrow(DualIdentityError);
+  });
+
+  it('an empty cmd is preserved as empty rather than substituted', () => {
+    const written = architectWriteValues({ ...base, cmd: '', threadId: 'thr-2' } as never);
+    expect(written.cmd).toBe('');
   });
 });
 
@@ -292,6 +336,37 @@ describe('Spec 146 Phase 8 — v21 migration, backup, restore, convergence', () 
     const row = restored.prepare('SELECT id, cmd FROM architect WHERE id = ?').get('main') as { id: string; cmd: string };
     expect(row).toEqual({ id: 'main', cmd: 'claude' });
     restored.close();
+  });
+
+  /**
+   * The reuse branch is the one that protects the restore point. A second migration
+   * attempt — a crash between the backup and the ALTER, then a retry — must NOT
+   * overwrite the backup, because by then the live database may already be half
+   * migrated and a fresh VACUUM INTO would capture that instead of the pre-v21 state.
+   * Flagged as untested by the phase_8 iteration-2 `claude` lane.
+   */
+  it('reuses an existing pre-v21 backup instead of overwriting the restore point', () => {
+    const backupPath = threadIdentityBackupPath(dbPath);
+    writeFileSync(backupPath, 'ORIGINAL RESTORE POINT');
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      logs.push(args.map(String).join(' '));
+    });
+
+    const db = openPreV21();
+    const result = applyThreadIdentityMigration(db, dbPath);
+
+    expect(result.backupPath).toBe(backupPath);
+    expect(readFileSync(backupPath, 'utf8')).toBe('ORIGINAL RESTORE POINT');
+    expect(logs.some((l) => l.includes('Reusing pre-v21 global.db backup') && l.includes(backupPath))).toBe(true);
+    expect(logs.some((l) => l.includes('Backed up global.db before'))).toBe(false);
+
+    // The migration still completes: reuse governs the backup, never the ALTER.
+    expect(columnOrder(db, 'architect')).toContain('thread_id');
+    expect(columnOrder(db, 'builders')).toContain('thread_id');
+
+    db.close();
+    spy.mockRestore();
   });
 
   it('a migrated database accepts previous-release writes that do not name thread_id', () => {

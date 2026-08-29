@@ -56,6 +56,109 @@ describe('createPorchThreadEngine (Spec 146 Phase 9)', () => {
     expect(engine.worktreePath(threadId)).toBe(worktreePath);
   });
 
+  /**
+   * The spawn payload — #179 item 2's real substance.
+   *
+   * Reaching the thread path is not the same as spawning a builder on it. Every
+   * `launchSpawnedBuilder` call site passed the generated prompt only into its
+   * `startPty` closure, so the engine received `prompt: undefined`, never began a turn,
+   * and produced a thread that exists and has been told nothing. The parity test could
+   * not see it: it asserted an in-memory `launched` boolean, not a dispatched turn.
+   */
+  function engineOn(dispatcher: ReturnType<typeof recordingDispatcher>, root: string) {
+    return createPorchThreadEngine({
+      dispatcher,
+      journal: new DispatchJournal(join(root, 'commands.jsonl')),
+      tracker: new TurnTracker(),
+      projectId: 'p1',
+      workspaceRoot: root,
+      defaultHarness: 'codex',
+      defaultModel: 'gpt-5.6-luna',
+    });
+  }
+
+  const turnStarts = (dispatcher: ReturnType<typeof recordingDispatcher>) =>
+    dispatcher.calls.filter((c) => (c.payload as { type?: string }).type === 'thread.turn.start');
+
+  it('create begins the builder-s first turn with the prompt it was given', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'porch-engine-prompt-'));
+    const worktreePath = join(dir, 'wt');
+    mkdirSync(worktreePath);
+    const dispatcher = recordingDispatcher();
+    const threadId = await engineOn(dispatcher, dir).create({
+      builderId: 'air-173',
+      worktreePath,
+      branch: 'b',
+      prompt: 'IMPLEMENT ISSUE 179',
+    });
+
+    const started = turnStarts(dispatcher);
+    expect(started).toHaveLength(1);
+    const payload = started[0].payload as { threadId: string; message: { text: string } };
+    expect(payload.threadId).toBe(threadId);
+    expect(payload.message.text).toContain('IMPLEMENT ISSUE 179');
+  });
+
+  it('create carries the role into that first turn', async () => {
+    // `DriverThread` joins a pending role onto the first turn; the engine previously
+    // dropped `roleContent` on the floor, so a thread-backed builder came up with no
+    // role at all while the PTY path gave it one.
+    dir = mkdtempSync(join(tmpdir(), 'porch-engine-role-'));
+    const worktreePath = join(dir, 'wt');
+    mkdirSync(worktreePath);
+    const dispatcher = recordingDispatcher();
+    await engineOn(dispatcher, dir).create({
+      builderId: 'air-173',
+      worktreePath,
+      branch: 'b',
+      prompt: 'IMPLEMENT ISSUE 179',
+      roleContent: 'YOU ARE A BUILDER',
+      roleFilePath: join(worktreePath, '.builder-role.md'),
+    });
+
+    const started = turnStarts(dispatcher);
+    expect(started).toHaveLength(1);
+    const { message } = started[0].payload as { message: { text: string } };
+    const text = message.text;
+    expect(text).toContain('YOU ARE A BUILDER');
+    expect(text).toContain('IMPLEMENT ISSUE 179');
+  });
+
+  it('create with no prompt starts no turn — an idle thread, which is the bug', async () => {
+    // The control for the two above. Without it they would still pass if `create`
+    // began a turn unconditionally, and this is the state every call site produced.
+    dir = mkdtempSync(join(tmpdir(), 'porch-engine-idle-'));
+    const worktreePath = join(dir, 'wt');
+    mkdirSync(worktreePath);
+    const dispatcher = recordingDispatcher();
+    const threadId = await engineOn(dispatcher, dir).create({
+      builderId: 'air-173', worktreePath, branch: 'b',
+    });
+
+    expect(turnStarts(dispatcher)).toHaveLength(0);
+    expect(threadId).toBeTruthy();
+  });
+
+  it('activeTurnId is non-null while a turn runs and is not the invented turn-<threadId>', async () => {
+    // It was written as `turn-${threadId}` and cleared only by `interrupt`, so a turn
+    // that settled normally left the record claiming one was still running, and the id
+    // was invented rather than the server's. It is now the dispatched command's id until
+    // the server names the turn.
+    dir = mkdtempSync(join(tmpdir(), 'porch-engine-active-'));
+    const worktreePath = join(dir, 'wt');
+    mkdirSync(worktreePath);
+    const dispatcher = recordingDispatcher();
+    const engine = engineOn(dispatcher, dir);
+    const threadId = await engine.create({ builderId: 'air-173', worktreePath, branch: 'b' });
+    expect(engine.get(threadId)?.activeTurnId).toBeNull();
+
+    await engine.startTurn(threadId, 'go');
+    const active = engine.get(threadId)?.activeTurnId;
+    expect(active).toBeTruthy();
+    expect(active).not.toBe(`turn-${threadId}`);
+    expect(active).toBe((turnStarts(dispatcher)[0].payload as { commandId: string }).commandId);
+  });
+
   it('createPorchThreadEngine.interrupt dispatches thread.turn.interrupt', async () => {
     dir = mkdtempSync(join(tmpdir(), 'porch-engine-int-'));
     const worktreePath = join(dir, 'wt');

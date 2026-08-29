@@ -62,15 +62,22 @@ export function decideApprovalRelay(
 
 /**
  * The relay message body: a short, human-style instruction to the architect,
- * phrased the way a person would ("Approve ..., please pass it to the builder"),
- * not a passive "X was approved" notice. The imperative framing matters: a
- * past-tense fact reads as "already done", so the architect never relays it and
- * the builder stalls. The "please pass it to the builder" cue is load-bearing: it
- * routes execution to the builder (builder-runs-it) rather than the architect
- * running `porch approve` itself. It deliberately does not name `porch` or a
- * command: the builder's own prompt covers running it once relayed. Provenance
- * (a human clicked in VS Code) is carried by the `[USER via VS Code]` header Tower
- * renders from the `VSCODE_USER_SENDER` `from`, not by text in the body.
+ * phrased the way a person would, not a passive "X was approved" notice. The
+ * imperative framing matters: a past-tense fact reads as "already done", so the
+ * architect never relays it and the builder stalls.
+ *
+ * **Spec 146 Phase 6 changed who runs the command.** This used to say "please
+ * pass it to the builder", routing execution to the builder — and `porch approve`
+ * now refuses any call whose cwd is inside a `.builders/` worktree, so following
+ * that cue ended in `APPROVAL_CAPABILITY_REQUIRED` and exit 1. The architect runs
+ * it, from the workspace root. The message names `porch approve` and where to run
+ * it — but not the full argument list, which the architect already knows — because
+ * the builder prompt that used to cover the command now tells the builder not to
+ * run it at all.
+ *
+ * Provenance (a human clicked in VS Code) is carried by the `[USER via VS Code]`
+ * header Tower renders from the `VSCODE_USER_SENDER` `from`, not by text in the
+ * body.
  *
  * `id` is the builder handle the architect routes to; `issueId` is appended only
  * when the id doesn't already carry it, so a builder whose id is the issue number
@@ -83,7 +90,7 @@ export function buildRelayMessage(args: {
 }): string {
   const { id, gateLabel, issueId } = args;
   const issuePart = issueId && !id.includes(issueId) ? ` (#${issueId})` : '';
-  return `Approve the ${gateLabel} gate for ${id}${issuePart}, please pass it to the builder.`;
+  return `Approve the ${gateLabel} gate for ${id}${issuePart}, please run \`porch approve\` from the workspace root — the builder cannot run it.`;
 }
 
 /** Result shape returned by `TowerClient.sendMessage` (Spec 1313 mailbox-first). */
@@ -91,8 +98,9 @@ type SendResult = { ok: boolean; delivered?: boolean; held?: boolean; reason?: s
 
 /**
  * How the send result is surfaced to the human who clicked. The click does not
- * *approve* — it hands the decision to the architect, who passes it to the
- * builder — so the wording is "sent / held / failed", never "approved". The
+ * *approve* — it hands the decision to the architect, who runs `porch approve`
+ * from the workspace root — so the wording is "sent / held / failed", never
+ * "approved". The
  * `held` case is first-class: on a held relay the approval has NOT happened, and
  * a UI that reports success there is a defect (#1494).
  */

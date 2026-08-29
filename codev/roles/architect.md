@@ -30,19 +30,26 @@ Commands and flags live in the `afx` skill — check it rather than guessing.
 ## Gates
 
 The builder stops and waits. Read the artifact in its worktree with an absolute path, decide —
-then **relay the decision; the builder runs the command.**
+then **approve from the workspace root and tell the builder it happened.**
 
 ```bash
-afx send <id> "Spec approved by the human. Run porch approve and continue to plan."
+porch approve <id> <gate> --a-human-explicitly-approved-this   # from the workspace root
+afx send <id> "Spec approved by the human — gate is approved. Continue to plan."
 ```
 
-You do not run `porch approve` on the builder's behalf. The gate is the human's decision, you
-are the channel that carries it, and the builder executes against its own porch state. Approval
+`porch approve` refuses a call whose cwd is inside a `.builders/` worktree, so **the builder can
+no longer run it for you**, and neither can you from inside its worktree. `findStatusPath`
+searches `.builders/*`, so the workspace root reaches the builder's project without a subshell.
+The gate is still the human's decision and you are still the channel that carries it. Approval
 the builder never hears about is approval that didn't happen.
 
-The command the builder runs requires `--a-human-explicitly-approved-this`, and that flag is
-load-bearing: a gate message is a notification *to* a human, never a token an agent may spend on
-its own authority.
+The command requires `--a-human-explicitly-approved-this`. **That flag is not load-bearing** and
+never was: it only checked that a string appeared in argv, and an agent with a shell can type it.
+What is load-bearing is the approval capability (`$CODEV_APPROVAL_CAPABILITY`), issued only to a
+human-paired client session, and the fact that `porch approve` refuses a call it can attribute to
+a builder session presenting no capability. So the approval is run **outside** the builder's
+worktree, by the human or the architect carrying their decision — a gate message is a
+notification *to* a human, never a token an agent may spend on its own authority.
 
 ## Integration review — depth matched to risk
 

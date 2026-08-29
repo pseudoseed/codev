@@ -61,6 +61,13 @@ import { notifyTerminal, gateApprovedMessage, notifyProtocolComplete } from './n
 import { loadConfig } from '../../lib/config.js';
 import { version } from '../../version.js';
 import { readGateRequestFile } from './gate-request.js';
+import { resolveApprovalAuthorization } from './approval-record.js';
+import {
+  ApprovalCapabilityStore,
+  ApprovalNonceStore,
+  CAPABILITY_ENV_VAR,
+  NONCE_ENV_VAR,
+} from '../../agent-farm/lib/approval-capability.js';
 
 // ============================================================================
 // Output Helpers
@@ -865,15 +872,34 @@ export async function gate(
 }
 
 /**
+ * Injection seams for `approve`. Production passes none of them; tests pass all
+ * of them so an approval decision is never made from the ambient environment of
+ * whatever process happens to be running the suite. A builder running vitest
+ * carries CODEV_BUILDER_ID, so reading `process.env` implicitly in a test would
+ * attribute every test approval to an agent session.
+ */
+export interface ApproveOptions {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly cwd?: string;
+  readonly capabilities?: ApprovalCapabilityStore;
+  readonly nonces?: ApprovalNonceStore;
+}
+
+/**
  * porch approve <id> <gate> --a-human-explicitly-approved-this
- * Human approves a gate. Requires explicit flag to prevent automated approvals.
+ *
+ * Spec 146 Phase 6: the flag is a typed confirmation of intent, NOT a control.
+ * It only ever asserted that a string appeared in argv, and a builder with a
+ * shell can type that string. Authorization is the approval capability, resolved
+ * by `resolveApprovalAuthorization` before anything on disk is touched.
  */
 export async function approve(
   workspaceRoot: string,
   projectId: string,
   gateName: string,
   hasHumanFlag: boolean,
-  resolver?: ArtifactResolver
+  resolver?: ArtifactResolver,
+  options: ApproveOptions = {},
 ): Promise<void> {
   const statusPath = findStatusPath(workspaceRoot, projectId);
   if (!statusPath) {
@@ -884,6 +910,53 @@ export async function approve(
   // (bugfix #676 — see check() for rationale).
   const artifactRoot = getArtifactRoot(statusPath);
   const scopedResolver = scopeResolver(workspaceRoot, artifactRoot, resolver);
+
+  // AUTHORIZATION HAPPENS BEFORE ANY MUTATION.
+  //
+  // Both `writeStateAndCommit` calls below (the verify auto-completion and the
+  // gate auto-creation for upgraded projects) used to run ABOVE the flag test,
+  // so a refused call had already written and committed `status.yaml`. Nothing
+  // between here and the first write may move above this block.
+  //
+  // The flag is checked first only because it is the cheaper, more actionable
+  // message; failing it is not an authorization decision.
+  if (!hasHumanFlag) {
+    console.log('');
+    console.log(chalk.red('ERROR: Human approval required.'));
+    console.log('');
+    console.log('  To approve, please run:');
+    console.log('');
+    console.log(chalk.cyan(`    porch approve ${projectId} ${gateName} --a-human-explicitly-approved-this`));
+    console.log('');
+    process.exit(1);
+  }
+
+  const approvalDecision = resolveApprovalAuthorization({
+    projectId,
+    gateName,
+    artifactRoot,
+    cwd: options.cwd ?? workspaceRoot,
+    env: options.env ?? process.env,
+    capabilities: options.capabilities ?? new ApprovalCapabilityStore(),
+    nonces: options.nonces ?? new ApprovalNonceStore(),
+  });
+  if (!approvalDecision.authorized) {
+    console.log('');
+    console.log(chalk.red(`ERROR: approval refused (${approvalDecision.code}).`));
+    console.log(`  ${approvalDecision.message}`);
+    console.log('');
+    console.log('  Approve from the client, or from a shell holding a capability:');
+    console.log(chalk.cyan(`    ${CAPABILITY_ENV_VAR}=<id>.<secret> ${NONCE_ENV_VAR}=<nonce> \\`));
+    console.log(chalk.cyan(`      porch approve ${projectId} ${gateName} --a-human-explicitly-approved-this`));
+    console.log('');
+    process.exit(1);
+  }
+  const approvalRecord = approvalDecision.record;
+  if (approvalRecord.authorization === 'flag-only') {
+    // Said out loud rather than left silent: this approval carries no evidence
+    // of who made it. Silence here would read as "a human was verified".
+    console.log(chalk.yellow('  Approving with no capability: this approval records no session id.'));
+  }
 
   const state = readState(statusPath);
 
@@ -910,18 +983,6 @@ export async function approve(
   if (state.gates[gateName].status === 'approved') {
     console.log(chalk.yellow(`Gate ${gateName} is already approved.`));
     return;
-  }
-
-  // Require explicit human flag
-  if (!hasHumanFlag) {
-    console.log('');
-    console.log(chalk.red('ERROR: Human approval required.'));
-    console.log('');
-    console.log('  To approve, please run:');
-    console.log('');
-    console.log(chalk.cyan(`    porch approve ${projectId} ${gateName} --a-human-explicitly-approved-this`));
-    console.log('');
-    process.exit(1);
   }
 
   // Run phase checks before approving
@@ -971,8 +1032,22 @@ export async function approve(
     }
   }
 
+  // Spend the single-use nonce HERE, not at authorization time. Everything above
+  // this line — the already-approved early return and the phase checks — can end
+  // the call without an approval, and burning the nonce on those would force a
+  // re-mint through the authenticated route for no reason.
+  const nonceCommit = approvalDecision.consumeNonce?.();
+  if (nonceCommit && !nonceCommit.accepted) {
+    console.log('');
+    console.log(chalk.red(`ERROR: approval refused (${nonceCommit.code}).`));
+    console.log(`  ${nonceCommit.message}`);
+    console.log('');
+    process.exit(1);
+  }
+
   state.gates[gateName].status = 'approved';
-  state.gates[gateName].approved_at = new Date().toISOString();
+  state.gates[gateName].approved_at = approvalRecord.approved_at;
+  state.gates[gateName].approval = approvalRecord;
   // Issue #872 / #887: human approving the pr gate means they've acted — the
   // PR is no longer waiting on a reviewer, so the pr-ready signal must go
   // false in the same write that records the approval. Clearing on
@@ -1319,6 +1394,8 @@ function printUsage(): void {
   console.log('  gate [id] [--request-file PATH]  Request human approval');
   console.log('  pending                  List all gates awaiting approval across projects');
   console.log('  approve <id> <gate> --a-human-explicitly-approved-this');
+  console.log(`                           (the flag confirms intent; the capability in`);
+  console.log(`                            $${CAPABILITY_ENV_VAR} is what authorizes)`);
   console.log('  verify <id> --skip "reason"      Skip verification and mark as verified');
   console.log('  rollback <id> <phase>    Rewind project to an earlier phase');
   console.log('  init <protocol> <id> <name>  Initialize a new project');

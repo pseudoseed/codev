@@ -66,15 +66,27 @@ describe('decideApprovalRelay', () => {
 });
 
 describe('buildRelayMessage', () => {
-  it('is an imperative relay instruction with a "pass it to the builder" cue', () => {
+  // Spec 146 Phase 6: the cue used to be "pass it to the builder". `porch approve`
+  // now refuses a call from inside a `.builders/` worktree, so that cue routed the
+  // architect into a command that exits 1. The message names the command and the
+  // workspace root instead.
+  it('is an imperative relay instruction naming the command and the workspace root', () => {
     const msg = buildRelayMessage({ id: '158', gateLabel: 'plan review', issueId: '158' });
-    expect(msg).toBe('Approve the plan review gate for 158, please pass it to the builder.');
+    expect(msg).toBe('Approve the plan review gate for 158, please run `porch approve` from the workspace root — the builder cannot run it.');
   });
 
-  it('does NOT name porch or spell out a command (the builder runs it once relayed)', () => {
+  // THE PREMISE OF THE OLD ASSERTION IS GONE, so the assertion changed rather
+  // than being worked around. It read "does NOT name porch or spell out a command
+  // (the builder runs it once relayed)" — and the builder no longer runs it, so
+  // saying nothing about the command left the architect with no route at all.
+  // What still holds: no full argument list, which the architect already knows.
+  it('names porch approve and the workspace root, without pasting the flag', () => {
     const msg = buildRelayMessage({ id: '158', gateLabel: 'plan review', issueId: '158' });
-    expect(msg).not.toContain('porch');
+    expect(msg).toContain('porch approve');
+    expect(msg).toContain('workspace root');
     expect(msg).not.toContain('--a-human-explicitly-approved-this');
+    // And it must not send the architect back to the path that now exits 1.
+    expect(msg).not.toContain('pass it to the builder');
   });
 
   it('does not render the issue number twice when the id already carries it', () => {
@@ -86,12 +98,12 @@ describe('buildRelayMessage', () => {
 
   it('appends the issue ref only when the id does not carry it', () => {
     const m = buildRelayMessage({ id: 'task-abc', gateLabel: 'PR', issueId: '42' });
-    expect(m).toBe('Approve the PR gate for task-abc (#42), please pass it to the builder.');
+    expect(m).toBe('Approve the PR gate for task-abc (#42), please run `porch approve` from the workspace root — the builder cannot run it.');
   });
 
   it('omits the issue ref when no issue id is known', () => {
     const m = buildRelayMessage({ id: 'pir-9', gateLabel: 'PR' });
-    expect(m).toBe('Approve the PR gate for pir-9, please pass it to the builder.');
+    expect(m).toBe('Approve the PR gate for pir-9, please run `porch approve` from the workspace root — the builder cannot run it.');
   });
 });
 
@@ -153,7 +165,7 @@ describe('relayApproval (send wiring)', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].to).toBe('architect:vscode');
     expect(calls[0].opts).toMatchObject({ workspace: '/ws', from: VSCODE_USER_SENDER });
-    expect(calls[0].message).toBe('Approve the plan review gate for 158, please pass it to the builder.');
+    expect(calls[0].message).toBe('Approve the plan review gate for 158, please run `porch approve` from the workspace root — the builder cannot run it.');
   });
 
   it('does NOT send when the owning architect is offline (refuse-offline)', async () => {
