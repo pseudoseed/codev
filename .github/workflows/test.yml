@@ -80,6 +80,14 @@ jobs:
         working-directory: packages/codev
         run: pnpm copy-skeleton
 
+      # The publish-scrub guard (#214) resolves what each publishable package would actually
+      # ship, and `dist/`, `dashboard-dist/` and `v2-dist/` are build outputs. Without this
+      # step the scan over packages/codev silently narrows to the committed files and passes.
+      # ~12s locally, and it subsumes the copy-skeleton step above.
+      - name: Build codev package
+        working-directory: packages/codev
+        run: pnpm build
+
       - name: Run unit tests with coverage
         working-directory: packages/codev
         run: |

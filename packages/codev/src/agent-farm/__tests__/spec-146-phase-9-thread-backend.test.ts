@@ -166,8 +166,15 @@ describe('Spec 146 Phase 9 — the engine is reachable in production (#179 item 
     for (const { name, path } of workspaceDeps()) {
       // Built somewhere in CI, or its dist/ — a gitignored build output every one of these
       // points `exports.*.default` into — simply does not exist in any job.
-      expect({ name, built: workflow.includes(`working-directory: ${path}`) })
-        .toEqual({ name, built: true });
+      //
+      // The `run:` line has to build (#214). This originally matched the working-directory
+      // alone, which counts ANY step in that package — a copy, a lint, a test — as a build.
+      // That is the vacuous-pass shape, inside a guard written to prevent a vacuous pass:
+      // `packages/codev` carries a `copy-skeleton` step, so the assertion would have passed
+      // over a job that never built it. Same criterion as the publish-scrub guard, so the
+      // two cannot disagree about what a build is.
+      const buildsIt = new RegExp(`working-directory: ${path}\\s*\\n\\s*run: [^\\n]*pnpm build`).test(workflow);
+      expect({ name, built: buildsIt }).toEqual({ name, built: true });
       // And packed into the tarball set that `npm install -g` is verified against, or npm
       // resolves it from the registry mid-verification.
       const dir = path.replace(/^packages\//, '');

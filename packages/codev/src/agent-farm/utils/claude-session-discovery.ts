@@ -27,7 +27,7 @@ const JSONL_EXT = '.jsonl';
  * Encode an absolute path to the directory name Claude uses under
  * ~/.claude/projects/. The scheme is: replace every '/' and '.' with '-'.
  *
- * Example: '/Users/x/repos/foo/.builders/pir-1' → '-Users-x-repos-foo--builders-pir-1'
+ * Example: '/Users/<user>/repos/foo/.builders/pir-1' → '-Users-<user>-repos-foo--builders-pir-1'
  */
 export function encodeClaudeProjectDir(absolutePath: string): string {
   return absolutePath.replace(/[/.]/g, '-');

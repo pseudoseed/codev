@@ -66,6 +66,20 @@ const { ResumingSubscription } = await import(join(distDir, 'subscription.js'));
  */
 const clients = [];
 
+/**
+ * The checkout the server operates on.
+ *
+ * Required rather than defaulted (#214). The default was one machine's absolute path, so
+ * anyone else running this got a failure somewhere inside the server rather than a sentence
+ * naming the missing input. `live/` is not in the package's `files`, so this never reached a
+ * tarball — it was committed, which is a smaller problem and still not one worth keeping.
+ */
+const T3CODE_ROOT = process.env.T3CODE_ROOT;
+if (!T3CODE_ROOT) {
+  console.error('T3CODE_ROOT is not set. Point it at your t3code checkout and re-run.');
+  process.exit(2);
+}
+
 const port = Number(process.env.T3_HARNESS_PORT ?? 3799);
 const base = `http://127.0.0.1:${port}`;
 const run = (cmd) => execFileSync('node', [harness, cmd], { encoding: 'utf8' });
@@ -196,13 +210,13 @@ try {
       commandId: id(),
       projectId: project,
       title: 'phase 2 live integration',
-      workspaceRoot: process.env.T3CODE_ROOT ?? '/Users/chris/dev/t3code',
+      workspaceRoot: T3CODE_ROOT,
       defaultModelSelection: { instanceId: 'codex', model: 'gpt-5.6-luna' },
       createdAt: now(),
     });
 
     const worktree = await client.call('vcs.createWorktree', {
-      cwd: process.env.T3CODE_ROOT ?? '/Users/chris/dev/t3code',
+      cwd: T3CODE_ROOT,
       refName: 'HEAD',
       newRefName: `codev-phase2-${Date.now()}`,
       path: null,

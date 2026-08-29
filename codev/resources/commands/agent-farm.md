@@ -871,8 +871,8 @@ afx ports list
 Shows port blocks allocated to different projects:
 ```
 Port Allocations
-4200-4299: /Users/me/project-a
-4300-4399: /Users/me/project-b
+4200-4299: /Users/<user>/project-a
+4300-4399: /Users/<user>/project-b
 ```
 
 #### afx ports cleanup

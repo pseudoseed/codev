@@ -40,8 +40,8 @@ const readSchemas = () => readJson(join(generated, 'schema.json')).schemas as Re
  * `describe` level, so with no checkout vitest prints one skipped *suite* rather
  * than a green run that silently verified nothing.
  */
-const T3_ROOT = process.env.T3CODE_ROOT ?? '/Users/chris/dev/t3code';
-const HAS_CHECKOUT = existsSync(join(T3_ROOT, 'packages', 'contracts', 'src'));
+const T3_ROOT = process.env.T3CODE_ROOT ?? '';
+const HAS_CHECKOUT = T3_ROOT !== '' && existsSync(join(T3_ROOT, 'packages', 'contracts', 'src'));
 
 describe('spec 146: packages/types stays dependency-free', () => {
   it('declares no runtime dependencies', () => {
@@ -140,7 +140,7 @@ describe('spec 146: the emitter is lossy, and says so', () => {
  * is none, so its absence is legible in the run output instead of disappearing
  * into a green unit run.
  */
-describe.skipIf(!HAS_CHECKOUT)(`spec 146 [live: needs t3code checkout at ${T3_ROOT}]`, () => {
+describe.skipIf(!HAS_CHECKOUT)(`spec 146 [live: needs t3code checkout at ${T3_ROOT || '$T3CODE_ROOT (unset)'}]`, () => {
   it('hashes match the pinned checkout', () => {
     const pin = readJson(join(t3Root, 'pin.json'));
     const contracts = join(T3_ROOT, pin.contractsRoot);
