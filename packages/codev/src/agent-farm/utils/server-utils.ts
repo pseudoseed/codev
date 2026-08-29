@@ -173,9 +173,16 @@ export function isPublicRoute(method: string, pathname: string): boolean {
   // AGENT_ROUTE_NOT_FOUND for a path the table does not name, and refuses anything
   // unauthenticated before dispatch. Nothing under this prefix can fall through to
   // a keyed handler below.
-  if (pathname === AGENT_SURFACE_PREFIX.slice(0, -1) || pathname.startsWith(AGENT_SURFACE_PREFIX)) {
-    return true;
-  }
+  //
+  // The test is `startsWith` on a prefix that INCLUDES the trailing slash, and it
+  // is written to be byte-identical to `handleAgentRoute`'s own claim check. That
+  // is the whole basis for the delegation: what is handed past the key layer and
+  // what the agent dispatcher takes responsibility for have to be the same set of
+  // paths. Delegating the bare `/api/agent/v1` too would make this set one path
+  // wider than the claim — harmless today, since it falls through to a generic
+  // 404, but it would mean this comment's invariant was not actually true, and a
+  // safety argument that is only nearly true is not one worth resting on.
+  if (pathname.startsWith(AGENT_SURFACE_PREFIX)) return true;
 
   if (method !== 'GET') return false;
 

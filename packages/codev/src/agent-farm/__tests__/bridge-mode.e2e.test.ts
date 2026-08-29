@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import net from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 
 import {
   startTower,
@@ -27,6 +27,8 @@ let towerDefault: Awaited<ReturnType<typeof startTower>> | null = null;
 let towerBridgeAll: Awaited<ReturnType<typeof startTower>> | null = null;
 let towerBridgeNoHost: Awaited<ReturnType<typeof startTower>> | null = null;
 let invalidProcess: ChildProcess | null = null;
+/** stdout+stderr of the invalid-host spawn, so the exit can be checked for its REASON. */
+let invalidOutput = "";
 
 async function isHostResponding(host: string, port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -66,10 +68,21 @@ describe("Bridge Mode", () => {
     await import("node:path");
     // @ts-expect-error dynamic import resolved
     const { resolve } = await import("node:path");
+    // Three levels, not four. Four resolves to `packages/dist/`, which does not
+    // exist, so every spawn below died of MODULE_NOT_FOUND — and the only
+    // assertion on it is `exitCode !== 0`, which MODULE_NOT_FOUND satisfies. The
+    // test passed for years without ever reaching the code it names.
     const towerServerPath = resolve(
       import.meta.dirname,
-      "../../../../dist/agent-farm/servers/tower-server.js",
+      "../../../dist/agent-farm/servers/tower-server.js",
     );
+    if (!existsSync(towerServerPath)) {
+      throw new Error(
+        `[bridge-mode e2e] tower-server.js not found at ${towerServerPath}. `
+        + "Run `npm run build` first — a missing entrypoint would otherwise be "
+        + "indistinguishable from the refusal this suite asserts.",
+      );
+    }
 
     const socketDir = mkdtempSync("/tmp/codev-sock-invalid-");
     const invalidAgentFarmDir = createIsolatedAgentFarmDir();
@@ -87,6 +100,9 @@ describe("Bridge Mode", () => {
         BRIDGE_TOWER_HOST: "not-a-valid-host",
       },
     });
+
+    invalidProcess.stdout?.on("data", (chunk) => { invalidOutput += String(chunk); });
+    invalidProcess.stderr?.on("data", (chunk) => { invalidOutput += String(chunk); });
 
     await new Promise<void>((resolve) => {
       invalidProcess!.on("exit", () => resolve());
@@ -147,6 +163,10 @@ describe("Bridge Mode", () => {
   describe("BRIDGE_MODE=1 with invalid BRIDGE_TOWER_HOST", () => {
     it("causes tower to exit with non-zero code", () => {
       expect(invalidProcess?.exitCode).not.toBe(0);
+      // `exitCode !== 0` alone is what let a MODULE_NOT_FOUND stand in for the
+      // refusal. Naming the reason is what makes this an assertion about the
+      // bind policy rather than about the process merely being dead.
+      expect(invalidOutput).toContain("Invalid bind host");
     });
   });
 

@@ -99,6 +99,17 @@ describe('isPublicRoute', () => {
       expect(isPublicRoute('GET', '/api/agentx/v1/session')).toBe(false);
     });
 
+    it('delegates exactly the set handleAgentRoute claims, bare prefix included', () => {
+      // `handleAgentRoute` claims `${AGENT_ROUTE_PREFIX}/` — WITH the slash — so
+      // the bare prefix is not its responsibility and must not be handed past the
+      // key layer either. It is only a generic 404 today, so the cost of the
+      // mismatch is nil; the cost of the INVARIANT being untrue is that the
+      // argument for delegating a whole prefix stops holding, and that argument is
+      // load-bearing. Keep the two sets identical.
+      expect(isPublicRoute('GET', AGENT_ROUTE_PREFIX)).toBe(false);
+      expect(isPublicRoute('GET', `${AGENT_ROUTE_PREFIX}/`)).toBe(true);
+    });
+
     it('delegates to the same prefix the route table is built on', () => {
       // server-utils cannot import agent-auth (agent-auth imports isAllowedOrigin
       // from here), so the prefix is written twice. This is the seam that keeps
