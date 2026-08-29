@@ -23,6 +23,11 @@
  * the cheapest fix for a red on a doc placeholder is to add that name to the list, and two
  * rounds of that is where a real path goes to become invisible. If this fires on a
  * placeholder, rewrite the placeholder structurally; do not teach the guard about humans.
+ *
+ * SCOPE: home-directory paths only. Emails, hostnames, IPs and credentials are not checked
+ * here, so a green run means "no home path shipped", never "nothing identifying shipped".
+ * Sourcemaps ARE in scope — `sources` and `sourcesContent` carry build-machine paths and
+ * nobody reads a `.map` — and there are tests below naming that, so it stays deliberate.
  */
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -34,6 +39,9 @@ const repoRoot = resolve(import.meta.dirname, '../../../..');
 
 const readManifest = (dir: string) => JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
 
+/** A package directory carrying a `.` or `+` would otherwise loosen the match it is built into. */
+const escapeRe = (literal: string) => literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
  * Every package this repo would publish, derived rather than listed.
  *
@@ -41,8 +49,9 @@ const readManifest = (dir: string) => JSON.parse(readFileSync(join(dir, 'package
  * package out of scope. A new package under `packages/` is in scope the day it appears,
  * which is the whole point — the next one will not be checked by anyone remembering.
  */
-function publishablePackages(): Array<{ name: string; dir: string; rel: string }> {
-  const packagesDir = join(repoRoot, 'packages');
+function publishablePackages(
+  packagesDir = join(repoRoot, 'packages'),
+): Array<{ name: string; dir: string; rel: string }> {
   const found = readdirSync(packagesDir)
     .map((entry) => ({ entry, dir: join(packagesDir, entry) }))
     .filter(({ dir }) => existsSync(join(dir, 'package.json')))
@@ -63,7 +72,12 @@ function publishablePackages(): Array<{ name: string; dir: string; rel: string }
  * output is an array of one pack result; anything else is a resolution failure, not an
  * empty tarball, and is raised as such.
  */
+const shippedCache = new Map<string, string[]>();
+
+/** Both assertions below resolve the same tarballs; `npm pack` is ~0.5s a package. */
 function shippedFiles(pkg: { name: string; dir: string; rel: string }): string[] {
+  const cached = shippedCache.get(pkg.dir);
+  if (cached) return cached;
   let raw: string;
   try {
     raw = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
@@ -83,6 +97,7 @@ function shippedFiles(pkg: { name: string; dir: string; rel: string }): string[]
   const result = JSON.parse(raw.slice(start));
   const files: string[] = (result[0]?.files ?? []).map((f: { path: string }) => f.path);
   if (files.length === 0) throw new Error(`npm reports an empty tarball for ${pkg.name} (${pkg.rel})`);
+  shippedCache.set(pkg.dir, files);
   return files;
 }
 
@@ -157,7 +172,10 @@ describe('Issue #214 — no home-directory path reaches a published tarball', ()
     // exactly as completely as a pass, which is how the packed-imports test stayed invisible
     // to CI for its entire life (#200).
     expect(
-      unresolved.map(({ pkg, missing }) => `${pkg.rel} ships ${missing.join(', ')} but they resolve to nothing`),
+      unresolved.map(({ pkg, missing }) =>
+        `${pkg.rel} ships ${missing.join(', ')} but they resolve to nothing — `
+        + `these are build outputs. Run \`pnpm -w run build\` and re-run; this is a missing `
+        + `build artifact, not a failure of the code under test.`),
     ).toEqual([]);
   }, 60_000);
 
@@ -218,6 +236,51 @@ describe('Issue #214 — the guard fails when it should', () => {
     );
   }, 30_000);
 
+  /**
+   * Sourcemaps are a disclosure route the original audit did not cover: `sources` and
+   * `sourcesContent` can carry the build machine's absolute paths, and nobody reads a `.map`.
+   * They need no special handling — a `.map` is UTF-8 text, so the scan above already reads
+   * them — but "covered incidentally" and "covered" are different claims, and only one of
+   * them survives someone adding a binary-ish skip later. This is the test that makes it the
+   * second one.
+   */
+  it('reads sourcemaps, where an absolute path hides in `sources`', () => {
+    withFixture(
+      {
+        'dist/app.js': '//# sourceMappingURL=app.js.map\n',
+        'dist/app.js.map': JSON.stringify({
+          version: 3,
+          sources: ['/Users/someone/dev/project/src/app.ts'],
+          sourcesContent: ['export const ok = 1;\n'],
+          mappings: '',
+        }),
+      },
+      { files: ['dist'] },
+      (dir) => {
+        const pkg = { name: 'fixture', dir, rel: 'fixture' };
+        expect(scanForHomePaths(pkg, shippedFiles(pkg)).map((h) => h.file)).toEqual(['dist/app.js.map']);
+      },
+    );
+  }, 30_000);
+
+  it('reads a home path embedded in `sourcesContent`, not only in `sources`', () => {
+    withFixture(
+      {
+        'dist/app.js.map': JSON.stringify({
+          version: 3,
+          sources: ['../src/app.ts'],
+          sourcesContent: ['// copied from /Users/someone/dev/spike\nexport const ok = 1;\n'],
+          mappings: '',
+        }),
+      },
+      { files: ['dist'] },
+      (dir) => {
+        const pkg = { name: 'fixture', dir, rel: 'fixture' };
+        expect(scanForHomePaths(pkg, shippedFiles(pkg)).map((h) => h.file)).toEqual(['dist/app.js.map']);
+      },
+    );
+  }, 30_000);
+
   it('reports an unbuilt `files` entry rather than scanning an empty set', () => {
     withFixture({ 'src/ok.ts': 'export const ok = 1;\n' }, { files: ['src', 'dist'] }, (dir) => {
       const pkg = { name: 'fixture', dir, rel: 'fixture' };
@@ -235,10 +298,31 @@ describe('Issue #214 — the guard fails when it should', () => {
   }, 30_000);
 
   it('refuses to report a clean run over an empty population', () => {
-    // `publishablePackages` reads a real directory, so the guarded case is asserted through
-    // the error it raises: a resolver that finds nothing must not look like a clean sweep.
+    // The branch that matters is the one nothing else reaches: a `packages/` that resolves to
+    // no publishable package must raise, not return `[]`. An empty array satisfies every
+    // assertion made about what was found, which is the whole failure mode this file exists
+    // for — so it is exercised against a real empty directory rather than reasoned about.
+    const empty = mkdtempSync(join(tmpdir(), 'publish-scrub-empty-'));
+    try {
+      expect(() => publishablePackages(empty)).toThrow(/No publishable packages found/);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
     expect(publishablePackages().length).toBeGreaterThan(0);
-    expect(() => readdirSync(join(repoRoot, 'packages', 'no-such-dir'))).toThrow();
+  });
+
+  it('treats a directory of only private packages as an empty population', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'publish-scrub-private-'));
+    try {
+      mkdirSync(join(dir, 'only-private'));
+      writeFileSync(
+        join(dir, 'only-private', 'package.json'),
+        JSON.stringify({ name: 'p', version: '0.0.0', private: true }),
+      );
+      expect(() => publishablePackages(dir)).toThrow(/No publishable packages found/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -253,17 +337,18 @@ describe('Issue #214 — CI builds every publishable package before this guard r
   it('the unit test job has a build step for each of them', () => {
     const workflow = readFileSync(join(repoRoot, '.github/workflows/test.yml'), 'utf8');
     const start = workflow.indexOf('\n  unit:');
-    const end = workflow.indexOf('\n  canvas-browser:');
-    // Anchors, not offsets: if either job is renamed this fails loudly instead of slicing an
-    // empty string and reporting that every package is built.
-    expect({ start: start > -1, end: end > start }).toEqual({ start: true, end: true });
-    const unitJob = workflow.slice(start, end);
+    // The NEXT top-level job, whichever it is. Anchoring on a named successor meant a job
+    // inserted after `unit:` widened the slice, and its build steps would have counted as the
+    // unit job's. A rename still fails loudly rather than slicing an empty string.
+    const end = start === -1 ? -1 : workflow.slice(start + 1).search(/\n {2}[a-z0-9][a-z0-9-]*:\n/);
+    expect({ start: start > -1, end: end > -1 }).toEqual({ start: true, end: true });
+    const unitJob = workflow.slice(start, start + 1 + end);
 
     // A step that merely names the directory is not a build — `packages/codev` already had a
     // `copy-skeleton` step there, and matching on the directory alone would have called that
     // a build and passed while `dist/` stayed absent. The `run:` line has to build.
     const missing = publishablePackages()
-      .filter((pkg) => !new RegExp(`working-directory: ${pkg.rel}\\s*\\n\\s*run: [^\\n]*pnpm build`).test(unitJob))
+      .filter((pkg) => !new RegExp(`working-directory: ${escapeRe(pkg.rel)}\\s*\\n\\s*run: [^\\n]*pnpm build`).test(unitJob))
       .map((pkg) => `${pkg.rel} is publishable but the unit test job never builds it`);
     expect(missing).toEqual([]);
   });

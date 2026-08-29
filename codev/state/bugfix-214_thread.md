@@ -95,10 +95,73 @@ criterion: `true` (passes). New criterion: `false` (fails). Restored workflow: `
 
 ### Suite
 
-Full `packages/codev` unit suite: **342 files passed, 3 skipped; 6,793 tests passed, 51
-skipped, 0 failed** (203s). The three touched test files re-run after the last edits:
+Full `packages/codev` unit suite: **342 files passed, 3 skipped; 6,796 tests passed, 51
+skipped, 0 failed** (191s). The three touched test files re-run after the last edits:
 74 passed, 1 skipped.
 
 `spec-146-t3-contract.test.ts` had a second type error at line 323 (`T3_NODE` on a spread of
 `process.env`). Pre-existing, not in this diff, and invisible because `packages/codev`'s
 tsconfig excludes `**/__tests__/**` and vitest does not type-check. Left alone.
+
+## PR
+
+PR #215 — https://github.com/pseudoseed/codev/pull/215
+
+### CMAP, and the two ways a lane fails
+
+The first CMAP attempt **exited 0 having reviewed nothing.** All three lanes printed
+`Multiple projects found:` followed by every project id in the repo, wrote no review, and
+returned success. The BUGFIX pr phase prompt gives the command without `--project-id`, and
+auto-detection from porch state did not work in this worktree. A caller checking exit status
+alone would have recorded three approvals from three lanes that never ran.
+
+Re-run with `--project-id bugfix-214 --output`. Two of the three default lanes were
+quota-exhausted, and they failed in two different ways that are worth separating:
+
+- **gemini** — `agy` exited 1 on quota. The lane emits `LANE_DID_NOT_REVIEW: true` and a
+  sentence saying it is not an approval. **This is the machinery working.**
+- **codex** — usage limit reached, no output file written, **exit code 0**. This is the
+  machinery not working. A lane that fails by producing nothing and exiting 0 is
+  indistinguishable from success to anything that only checks the exit code; it relies
+  entirely on the caller noticing an absent file. Same shape as the bug this PR fixes and the
+  #209 weakness it exposed.
+
+**opencode** substituted for codex — it is the one reviewer on an account none of the others
+share. If it also fails, this goes to the gate with two verdicts and says so. A skip does not
+get dressed as an approval.
+
+### Verdicts
+
+**claude: APPROVE (HIGH). opencode: APPROVE (HIGH).** gemini skipped, codex quota-exhausted.
+Two real reviews, one honest skip, one silent failure named as such.
+
+Both reviewers read files on disk rather than the diff. claude independently counted 7
+publishable packages, confirmed all 7 have a matching build step, and caught that
+`packages/sdk`'s test file carries a real-looking `/Users/amr/...` path which correctly does not
+ship. opencode stated its own coverage boundary — no suite re-run, no tarball packed, and
+recorded the pass figure as unverified by it rather than repeating it.
+
+Every non-blocking note applied rather than deferred. Two were real weakenings of the guards
+(unescaped `RegExp` interpolation in both; a job-slice anchored on a named successor that an
+inserted job would widen), two were quality (remedy text, memoization).
+
+### The nit that mattered most
+
+**My empty-population test went around the branch instead of through it.** It asserted the real
+`packages/` is non-empty, and separately that `readdirSync` throws on a missing directory. It
+never called the code that turns "no publishable package" into an error. The test written to
+prove the guard cannot pass over an empty set was not exercising the thing that makes that true —
+vacuous-pass one level deeper, inside the instrument aimed at it. Third time this exact shape
+turned up in this project: the original bug, #209's directory-only build check, and now this.
+
+Fixed by driving the throw with a real empty directory and a directory holding only a
+`private: true` package. The second is the better case: *no packages* and *packages, none
+publishable* are different states.
+
+### Sourcemaps
+
+opencode asked whether shipped `.map` files could carry absolute `sources`. Checked: 1 `.map`
+ships across `dashboard-dist` and `v2-dist`, every `sources` entry relative. Clean — but clean by
+luck, since nothing asked the question. A `.map` is UTF-8 text so the scan already read them;
+what was missing was anything saying so. Two tests now plant an absolute path in `sources` and in
+`sourcesContent`. Guard is 16 tests.

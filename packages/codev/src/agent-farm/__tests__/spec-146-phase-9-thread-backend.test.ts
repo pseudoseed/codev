@@ -173,7 +173,10 @@ describe('Spec 146 Phase 9 — the engine is reachable in production (#179 item 
       // `packages/codev` carries a `copy-skeleton` step, so the assertion would have passed
       // over a job that never built it. Same criterion as the publish-scrub guard, so the
       // two cannot disagree about what a build is.
-      const buildsIt = new RegExp(`working-directory: ${path}\\s*\\n\\s*run: [^\\n]*pnpm build`).test(workflow);
+      // `path` is escaped: a package directory carrying a `.` or `+` would otherwise loosen
+      // the match rather than tighten it, which is the wrong direction for a guard.
+      const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const buildsIt = new RegExp(`working-directory: ${escaped}\\s*\\n\\s*run: [^\\n]*pnpm build`).test(workflow);
       expect({ name, built: buildsIt }).toEqual({ name, built: true });
       // And packed into the tarball set that `npm install -g` is verified against, or npm
       // resolves it from the registry mid-verification.
