@@ -27,6 +27,7 @@ import {
   resolveOpencodeBin,
   listOpencodeModels,
   opencodeReviewHeader,
+  OPENCODE_READ_ONLY_PERMISSION,
   resolveLaneModelChoice,
   DEFAULT_OPENCODE_MODEL,
   _consultSandboxDirForTest,
@@ -46,6 +47,7 @@ const ENV_KEYS = [
   'FAKE_OPENCODE_MODE',
   'HOME',
   'CODEV_METRICS_DB',
+  'OPENCODE_PERMISSION',
 ] as const;
 
 /**
@@ -63,6 +65,7 @@ if (argv[0] === 'models') {
   process.exit(0);
 }
 fs.writeFileSync(process.env.FAKE_OPENCODE_ARGV_LOG, JSON.stringify(argv));
+fs.writeFileSync(process.env.FAKE_OPENCODE_ARGV_LOG + '.env', process.env.OPENCODE_PERMISSION || '');
 process.stderr.write('\\n> build · fake\\n');
 const mode = process.env.FAKE_OPENCODE_MODE || 'ok';
 if (mode === 'reject') {
@@ -90,6 +93,12 @@ function writeConfig(config: unknown): void {
 
 function opencodeArgv(): string[] {
   return JSON.parse(fs.readFileSync(argvLog, 'utf-8'));
+}
+
+/** OPENCODE_PERMISSION as the spawned process actually saw it, or null if it was never set. */
+function opencodePermission(): Record<string, string> | null {
+  const raw = fs.readFileSync(`${argvLog}.env`, 'utf-8');
+  return raw ? JSON.parse(raw) : null;
 }
 
 beforeEach(() => {
@@ -136,6 +145,41 @@ describe('opencode is a first-class lane', () => {
 
   it('rejects a syntactically invalid id like any other configurable lane', () => {
     expect(() => validateConsultModels({ opencode: '-leading-dash' })).toThrow(/Invalid model id/);
+  });
+});
+
+// --- workspace safety -----------------------------------------------------------------
+
+describe('the lane cannot write into what it is reviewing (#149)', () => {
+  it('denies the write tools through OPENCODE_PERMISSION', async () => {
+    await _runOpencodeConsultation('the query', 'the role', dir);
+
+    // opencode's default `build` agent ships `permission: "*" -> allow`, so before this the lane
+    // auto-approved its own edits and was observed editing the plan.md it had been asked to
+    // review. `--auto` does not prevent that: it governs permissions that are not already
+    // allowed, and `*` allows them.
+    expect(opencodePermission()).toEqual({
+      edit: 'deny',
+      write: 'deny',
+      patch: 'deny',
+      bash: 'deny',
+    });
+  });
+
+  it('overrides a caller who had granted itself write permission', async () => {
+    process.env.OPENCODE_PERMISSION = JSON.stringify({ edit: 'allow', bash: 'allow' });
+
+    await _runOpencodeConsultation('the query', 'the role', dir);
+
+    expect(opencodePermission()).toEqual(OPENCODE_READ_ONLY_PERMISSION);
+  });
+
+  it('leaves the parent process env alone — the denial is scoped to the child', async () => {
+    delete process.env.OPENCODE_PERMISSION;
+
+    await _runOpencodeConsultation('the query', 'the role', dir);
+
+    expect(process.env.OPENCODE_PERMISSION).toBeUndefined();
   });
 });
 

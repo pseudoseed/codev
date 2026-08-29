@@ -1,10 +1,21 @@
 /** Serialize Vitest commands that still share Tower ports and user-global state (#130). */
 import { createServer, type Server } from 'node:net';
+import { SUITE_LOCK_BUSY_EXIT, SUITE_LOCK_TIMEOUT_NEEDLE } from './src/lib/suite-lock.js';
+
+export { SUITE_LOCK_BUSY_EXIT, SUITE_LOCK_TIMEOUT_NEEDLE };
 
 // Immediately below the test Tower range (14100+), and deliberately outside it.
 export const TEST_SUITE_LOCK_PORT = 13_999;
 const POLL_MS = 200;
 const WAIT_TIMEOUT_MS = 120_000;
+
+export class SuiteLockBusyError extends Error {
+  readonly exitCode = SUITE_LOCK_BUSY_EXIT;
+  constructor(message: string) {
+    super(message);
+    this.name = 'SuiteLockBusyError';
+  }
+}
 
 function tryAcquire(port: number): Promise<Server | null> {
   return new Promise((resolve, reject) => {
@@ -35,8 +46,8 @@ export async function acquireTestSuiteLock(
     if (!server) {
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) {
-        throw new Error(
-          `[codev tests] Timed out waiting for the suite lock on port ${port}. `
+        throw new SuiteLockBusyError(
+          `[codev tests] ${SUITE_LOCK_TIMEOUT_NEEDLE} on port ${port}. `
           + `Another Vitest run or unrelated process likely holds it; check with: lsof -i :${port}`,
         );
       }
@@ -57,4 +68,14 @@ export async function acquireTestSuiteLock(
   });
 }
 
-export default async function setup(): Promise<() => Promise<void>> { return acquireTestSuiteLock(); }
+export default async function setup(): Promise<() => Promise<void>> {
+  try {
+    return await acquireTestSuiteLock();
+  } catch (err) {
+    if (err instanceof SuiteLockBusyError) {
+      console.error(err.message);
+      process.exit(err.exitCode);
+    }
+    throw err;
+  }
+}

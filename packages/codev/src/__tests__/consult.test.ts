@@ -555,6 +555,37 @@ describe('consult command', () => {
       expect(callArgs.options.permissionMode).toBe('bypassPermissions');
     });
 
+    it('cannot write into what it is reviewing (#149)', async () => {
+      vi.resetModules();
+      const { consult } = await import('../commands/consult/index.js');
+
+      mockQueryFn.mockImplementation(() =>
+        (async function* () {
+          yield { type: 'assistant', message: { content: [{ text: 'OK' }] } };
+          yield { type: 'result', subtype: 'success' };
+        })()
+      );
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+      await consult({ model: 'claude', prompt: 'test query' });
+
+      const { options } = mockQueryFn.mock.calls[0][0];
+
+      // `tools` is the boundary. `allowedTools` only auto-approves: with bypassPermissions and no
+      // `tools`, the whole Claude Code toolset stayed in context, and the lane was observed
+      // editing the artifact under review and running Bash outside the workspace.
+      expect(options.tools).toEqual(['Read', 'Glob', 'Grep']);
+
+      // Belt for an SDK build that predates `tools`.
+      expect(options.disallowedTools).toEqual(
+        expect.arrayContaining(['Bash', 'Edit', 'Write', 'NotebookEdit'])
+      );
+
+      // bypassPermissions without a restricted toolset is the exact shape of the bug.
+      expect(options.permissionMode === 'bypassPermissions' && options.tools === undefined)
+        .toBe(false);
+    });
+
     it('should extract text from assistant messages', async () => {
       vi.resetModules();
       const { consult } = await import('../commands/consult/index.js');

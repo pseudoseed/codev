@@ -10,6 +10,8 @@ import { pathToFileURL } from 'node:url';
 import {
   acquireTestSuiteLock,
   TEST_SUITE_LOCK_PORT,
+  SuiteLockBusyError,
+  SUITE_LOCK_BUSY_EXIT,
 } from '../../vitest-global-setup.js';
 
 const PACKAGE_ROOT = resolve(import.meta.dirname, '../..');
@@ -142,9 +144,18 @@ describe('issue #130 concurrent suite exclusion', () => {
     });
 
     try {
-      await expect(acquireTestSuiteLock(port, 50)).rejects.toThrow(
-        `Another Vitest run or unrelated process likely holds it; check with: lsof -i :${port}`,
-      );
+      try {
+        await acquireTestSuiteLock(port, 50);
+        throw new Error('lock wait should throw');
+      } catch (err) {
+        expect(err).toBeInstanceOf(SuiteLockBusyError);
+        expect(err).toMatchObject({
+          exitCode: SUITE_LOCK_BUSY_EXIT,
+          message: expect.stringContaining(
+            `Another Vitest run or unrelated process likely holds it; check with: lsof -i :${port}`,
+          ),
+        });
+      }
     } finally {
       await new Promise<void>((resolveClose, reject) => {
         occupant.close((error) => error ? reject(error) : resolveClose());
