@@ -19,6 +19,11 @@ export const FAILURE_MATRIX_SIGNAL = {
   HUMAN_SESSION_REVOKED: 'HUMAN_SESSION_REVOKED',
   THREAD_ID_DISAGREEMENT: 'THREAD_ID_DISAGREEMENT',
   STREAM_PROJECTION_REPAIRED: 'STREAM_PROJECTION_REPAIRED',
+  // Spec 146 Phase 6. Operator-facing and distinct from expiry on purpose: an
+  // approval that used to work has stopped, and "revoked" sends the operator to
+  // reissue while "expired" sends them to check the clock. The constant is
+  // re-exported from lib/approval-capability.ts, which is where it is emitted.
+  CAPABILITY_REVOKED: 'CAPABILITY_REVOKED',
   // A watcher could not be established on a directory. Operator-facing: that root's
   // changes now reach the client only via the reconciliation backstop, so the stream
   // is degraded rather than broken — and saying nothing would spell that as healthy.

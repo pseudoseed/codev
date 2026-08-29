@@ -70,6 +70,7 @@ import {
   initAgentRoutes,
   shutdownAgentRoutes,
 } from './agent-routes.js';
+import { ApprovalCapabilityStore, ApprovalNonceStore } from '../lib/approval-capability.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -701,10 +702,15 @@ async function bootSequence(): Promise<void> {
   // The registry is in-memory: a restart expires every human session instead
   // of resurrecting a replayable credential.
   const humanSessions = new HumanPairedSessionRegistry();
+  // Spec 146 Phase 6: capabilities outlive a Tower restart (a human should not
+  // re-pair to approve a gate after a crash), so unlike the session registry
+  // these are file-backed. What is stored is a verifier, never a credential.
   initAgentRoutes({
     db: getGlobalDb,
     log,
     humanSessions,
+    approvalCapabilities: new ApprovalCapabilityStore(),
+    approvalNonces: new ApprovalNonceStore(),
     isKnownWorkspace: (workspacePath) => {
       const wanted = normalizeWorkspacePath(workspacePath);
       return getKnownWorkspacePaths().some((known) => normalizeWorkspacePath(known) === wanted);

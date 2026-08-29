@@ -38,7 +38,12 @@ structured content is useful.
 
 ## Gate approvals
 
-Gates are human-only approval checkpoints. The `--a-human-explicitly-approved-this` flag is **required** — it exists to prevent AI agents from auto-approving.
+Gates are human-only approval checkpoints. The `--a-human-explicitly-approved-this` flag is
+**required**, but it is a typed confirmation of intent, **not a control** — it only ever checked
+that a string appeared in argv, and any agent with a shell can type it. What authorizes an
+approval is the approval capability in `$CODEV_APPROVAL_CAPABILITY`, issued only to a
+human-paired client session. `porch approve` refuses a call it can attribute to a builder or
+architect session that presents no capability.
 
 | Gate | Protocol | When |
 |------|----------|------|

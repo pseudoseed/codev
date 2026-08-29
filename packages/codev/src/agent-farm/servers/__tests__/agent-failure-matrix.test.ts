@@ -13,6 +13,7 @@ import Database from 'better-sqlite3';
 import { GLOBAL_SCHEMA } from '../../db/schema.js';
 import { normalizeWorkspacePath } from '../../utils/workspace-path.js';
 import { classifyDualServiceFailure, FAILURE_MATRIX_SIGNAL } from '../agent-failure.js';
+import { APPROVAL_SIGNAL, ApprovalCapabilityStore, ApprovalNonceStore } from '../../lib/approval-capability.js';
 import {
   handleAgentRoute,
   HumanPairedSessionRegistry,
@@ -105,6 +106,32 @@ function fakeRes(): { statusCode: number; body: string; res: http.ServerResponse
   return captured;
 }
 
+/** A request whose body arrives in one chunk, then ends. */
+function fakeReq(method: string, headers: Record<string, string>, body: string): http.IncomingMessage {
+  const listeners: Record<string, Array<(value?: unknown) => void>> = {};
+  const req = {
+    method,
+    headers,
+    destroy: () => undefined,
+    on(event: string, handler: (value?: unknown) => void) {
+      (listeners[event] ??= []).push(handler);
+      if (event === 'end') {
+        queueMicrotask(() => {
+          for (const dataHandler of listeners.data ?? []) dataHandler(Buffer.from(body, 'utf8'));
+          for (const endHandler of listeners.end ?? []) endHandler();
+        });
+      }
+      return req;
+    },
+  } as unknown as http.IncomingMessage;
+  return req;
+}
+
+/** Let the queued body delivery and the handler's promise chain run. */
+function flush(): Promise<void> {
+  return new Promise((resolveFlush) => setTimeout(resolveFlush, 0));
+}
+
 const tmpDirs: string[] = [];
 const dbs: Database.Database[] = [];
 
@@ -193,6 +220,30 @@ describe('failure matrix signals are distinct', () => {
       // Matched, never emitted: these are node/sqlite error codes dbSignal reads.
       SQLITE_BUSY: 'sqlite error code matched by dbSignal, not a code we emit',
       SQLITE_LOCKED: 'sqlite error code matched by dbSignal, not a code we emit',
+      // Spec 146 Phase 6 approval outcomes. Every one answers "this request was
+      // refused", which is a per-request answer to a caller, not a service or
+      // file failure an operator diagnoses. CAPABILITY_REVOKED is the exception
+      // and IS a matrix row: it is the one where something that worked stops.
+      APPROVAL_AUTHORIZED: 'the SUCCESS case, not a failure at all',
+      APPROVAL_CAPABILITY_REQUIRED: 'nothing was presented; distinct from an invalid presentation',
+      APPROVAL_CAPABILITY_MALFORMED: 'presentation is not <id>.<secret>; a client bug',
+      APPROVAL_CAPABILITY_UNKNOWN: 'no such capability on this host; distinct from a wrong secret',
+      APPROVAL_CAPABILITY_INVALID: 'wrong secret for a real capability id',
+      APPROVAL_CAPABILITY_EXPIRED: 'past its expiry; sends an operator to the clock, not to reissue',
+      APPROVAL_CAPABILITY_FOREIGN_MACHINE: 'issued for another machine; per-machine isolation working',
+      APPROVAL_NONCE_MISSING: 'no nonce presented; distinct from one that is unknown',
+      APPROVAL_NONCE_UNKNOWN: 'never minted here, or older than the nonce lifetime',
+      APPROVAL_NONCE_REPLAYED: 'a consumed nonce presented again; the tombstone makes it distinct',
+      APPROVAL_NONCE_EXPIRED: 'minted here but past its TTL',
+      APPROVAL_NONCE_SCOPE_MISMATCH: 'bound to a different project/gate pair',
+      APPROVAL_ISSUANCE_REFUSED_AGENT: 'caller declared itself a builder/architect; defence in depth',
+      APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION: 'issuance without a paired human session',
+      APPROVAL_REQUEST_MALFORMED: '400 for an unparseable or oversized approval body',
+      // Env var names read by the porch approval path, not signals.
+      CODEV_APPROVAL_CAPABILITY: 'environment variable name carrying the presentation',
+      CODEV_APPROVAL_NONCE: 'environment variable name carrying the nonce',
+      CODEV_WORKTREE_ROOT: 'environment variable name read for caller attribution',
+      CODEV_BUILDER_ID: 'environment variable name read for caller attribution',
     };
 
     // FIELD-AGNOSTIC ON PURPOSE, AND THE PREVIOUS VERSION WAS NOT.
@@ -210,17 +261,26 @@ describe('failure matrix signals are distinct', () => {
     // over-collects — SQLITE_BUSY and the stream's event types are not signals —
     // and over-collecting is the safe direction: the cost is one classification
     // line, versus a code shipping unnoticed.
+    // Spec 146 Phase 6 added a sixth emitter OUTSIDE servers/. It is listed here
+    // rather than left unscanned, because a code defined where the guard does not
+    // look is exactly the hole this guard exists to close. Paths are relative to
+    // servers/ so the rename check still fails by name.
     const CODEV_AGENT_FILES = [
       'agent-routes.ts',
       'agent-state-stream.ts',
       'agent-failure.ts',
       'status-reader.ts',
       'thread-registry.ts',
+      '../lib/approval-capability.ts',
     ];
     const serversDir = join(dirname(fileURLToPath(import.meta.url)), '..');
     const present = readdirSync(serversDir);
+    const libPresent = readdirSync(join(serversDir, '..', 'lib'));
     // If a file is renamed away, fail rather than silently scanning less.
-    for (const file of CODEV_AGENT_FILES) expect(present).toContain(file);
+    for (const file of CODEV_AGENT_FILES) {
+      if (file.startsWith('../lib/')) expect(libPresent).toContain(file.slice('../lib/'.length));
+      else expect(present).toContain(file);
+    }
 
     // THE GUARD ASSERTS ITS OWN REACH.
     //
@@ -909,6 +969,29 @@ describe('failure matrix', () => {
     }
   });
 
+  // A REVOKED CAPABILITY IS NOT AN EXPIRED ONE (Spec 146 Phase 6).
+  //
+  // Both stop an approval that used to work, and collapsing them sends an operator
+  // to the wrong place: revoked means reissue, expired means the capability aged
+  // out. The store is driven with a real issue → revoke → verify sequence rather
+  // than a hand-built record, so the code being asserted is the one production
+  // produces from its own storage.
+  it('a revoked capability emits CAPABILITY_REVOKED, not an expiry or an invalid secret', () => {
+    const root = tmp();
+    const store = new ApprovalCapabilityStore({ root, machine: 'mac-studio' });
+    const issued = store.issue({ sessionId: 'session-1' });
+    expect(store.verify(issued.presentation).code).toBe(APPROVAL_SIGNAL.APPROVAL_AUTHORIZED);
+
+    expect(store.revoke(issued.capabilityId)).toBe(true);
+    const verdict = store.verify(issued.presentation);
+    expect(verdict.authorized).toBe(false);
+    expect(verdict.code).toBe(SIGNAL.CAPABILITY_REVOKED);
+    // Assert against the neighbours it must not collapse into.
+    expect(verdict.code).not.toBe(APPROVAL_SIGNAL.APPROVAL_CAPABILITY_EXPIRED);
+    expect(verdict.code).not.toBe(APPROVAL_SIGNAL.APPROVAL_CAPABILITY_INVALID);
+    expect(verdict.code).not.toBe(APPROVAL_SIGNAL.APPROVAL_CAPABILITY_UNKNOWN);
+  });
+
   // THE PLAN'S TEST PLAN ASKS FOR THESE TWO BY NAME.
   //
   // "Integration: ... a human-paired session recognised and an unpaired one refused."
@@ -942,6 +1025,8 @@ describe('failure matrix', () => {
       log: () => undefined,
       isKnownWorkspace: () => true,
       humanSessions: sessions,
+      approvalCapabilities: new ApprovalCapabilityStore({ root: tmp(), machine: 'test-machine' }),
+      approvalNonces: new ApprovalNonceStore({ root: tmp() }),
     });
     const issued = sessions.completePairing({ pairingId: 'pair-ok', principalKind: 'human-client' });
     const out = fakeRes();
@@ -967,6 +1052,8 @@ describe('failure matrix', () => {
       log: () => undefined,
       isKnownWorkspace: () => true,
       humanSessions: sessions,
+      approvalCapabilities: new ApprovalCapabilityStore({ root: tmp(), machine: 'test-machine' }),
+      approvalNonces: new ApprovalNonceStore({ root: tmp() }),
     });
     const out = fakeRes();
     // No session header at all — never paired, as distinct from paired-then-revoked.
@@ -991,6 +1078,8 @@ describe('failure matrix', () => {
       log: () => undefined,
       isKnownWorkspace: () => true,
       humanSessions: sessions,
+      approvalCapabilities: new ApprovalCapabilityStore({ root: tmp(), machine: 'test-machine' }),
+      approvalNonces: new ApprovalNonceStore({ root: tmp() }),
     });
     const issued = sessions.completePairing({ pairingId: 'pair-1', principalKind: 'human-client' });
     const presentation = `${issued.sessionId}.${issued.credential}`;
@@ -1012,6 +1101,73 @@ describe('failure matrix', () => {
     expect(body.reason).toBe('REVOKED');
     expect(body.signal).not.toBe('HUMAN_SESSION_REQUIRED');
     expect(body.reason).not.toBe('UNKNOWN');
+  });
+
+  // ISSUANCE OVER THE ROUTE, Spec 146 Phase 6.
+  //
+  // These drive the real handler with a real body, because the deliverable is
+  // about what a caller receives, not about what the issuing function does when
+  // called directly. `fakeReq` is a readable that emits the body once.
+  it('refuses capability issuance to a caller with no human-paired session', async () => {
+    const sessions = new HumanPairedSessionRegistry();
+    const database = db();
+    initAgentRoutes({
+      db: () => database,
+      log: () => undefined,
+      isKnownWorkspace: () => true,
+      humanSessions: sessions,
+      approvalCapabilities: new ApprovalCapabilityStore({ root: tmp(), machine: 'test-machine' }),
+      approvalNonces: new ApprovalNonceStore({ root: tmp() }),
+    });
+    const out = fakeRes();
+    const handled = handleAgentRoute(
+      fakeReq('POST', {}, '{}'),
+      out.res,
+      new URL('http://localhost/api/agent/v1/approval-capabilities'),
+    );
+    expect(handled).toBe(true);
+    await flush();
+    expect(out.statusCode).toBe(401);
+    expect((JSON.parse(out.body) as { signal: string }).signal).toBe('HUMAN_SESSION_REQUIRED');
+  });
+
+  it('issues to a paired session, and refuses a paired caller that declares itself a builder', async () => {
+    const sessions = new HumanPairedSessionRegistry();
+    const database = db();
+    const store = new ApprovalCapabilityStore({ root: tmp(), machine: 'test-machine' });
+    initAgentRoutes({
+      db: () => database,
+      log: () => undefined,
+      isKnownWorkspace: () => true,
+      humanSessions: sessions,
+      approvalCapabilities: store,
+      approvalNonces: new ApprovalNonceStore({ root: tmp() }),
+    });
+    const issued = sessions.completePairing({ pairingId: 'pair-issue', principalKind: 'human-client' });
+    const headers = { [HUMAN_SESSION_HEADER]: `${issued.sessionId}.${issued.credential}` };
+    const url = new URL('http://localhost/api/agent/v1/approval-capabilities');
+
+    const ok = fakeRes();
+    handleAgentRoute(fakeReq('POST', headers, '{}'), ok.res, url);
+    await flush();
+    expect(ok.statusCode).toBe(201);
+    const body = JSON.parse(ok.body) as { presentation: string; capabilityId: string };
+    // The route returned something that actually verifies — otherwise a 201 with
+    // a junk body would pass this test.
+    expect(store.verify(body.presentation).authorized).toBe(true);
+
+    // Same paired session, but declaring itself a builder. Defence in depth: a
+    // caller that lies is NOT caught here, and the threat model says so.
+    const refused = fakeRes();
+    handleAgentRoute(
+      fakeReq('POST', headers, JSON.stringify({ principalKind: 'builder' })),
+      refused.res,
+      url,
+    );
+    await flush();
+    expect(refused.statusCode).toBe(403);
+    expect((JSON.parse(refused.body) as { signal: string }).signal)
+      .toBe(APPROVAL_SIGNAL.APPROVAL_ISSUANCE_REFUSED_AGENT);
   });
 
   it('a revoked session tombstone expires with the original lifetime', () => {

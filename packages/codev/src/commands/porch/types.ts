@@ -6,6 +6,7 @@
  */
 
 import type { GateRequest } from '@cluesmith/codev-types';
+import type { ApprovalRecord } from './approval-record.js';
 
 // ============================================================================
 // Protocol Definition Types (loaded from protocol.json)
@@ -157,6 +158,12 @@ export interface GateStatus {
   requested_at?: string;
   approved_at?: string;
   request?: GateRequest;
+  /**
+   * Spec 146 Phase 6: who authorized this approval and with what. Absent on
+   * gates approved before the capability existed — absence means unknown, which
+   * is why `authorization` is recorded explicitly rather than inferred.
+   */
+  approval?: ApprovalRecord;
 }
 
 /**

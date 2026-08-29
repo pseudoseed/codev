@@ -4,6 +4,12 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import type http from 'node:http';
 import type Database from 'better-sqlite3';
 import { decodeWorkspacePath } from '../lib/tower-client.js';
+import {
+  APPROVAL_SIGNAL,
+  ApprovalCapabilityStore,
+  ApprovalNonceStore,
+  issueApprovalCapability,
+} from '../lib/approval-capability.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 import { openAgentStateSse, type AgentStreamSnapshot } from './agent-state-stream.js';
 import { readWorkspaceStatuses } from './status-reader.js';
@@ -152,6 +158,9 @@ export interface AgentRouteContext {
   readonly log: (level: 'INFO' | 'ERROR' | 'WARN', message: string) => void;
   readonly isKnownWorkspace: (workspacePath: string) => boolean;
   readonly humanSessions: HumanPairedSessionRegistry;
+  /** Spec 146 Phase 6: issuance is the only way a capability comes into being. */
+  readonly approvalCapabilities: ApprovalCapabilityStore;
+  readonly approvalNonces: ApprovalNonceStore;
   /** Optional only because the browser normally joins t3code itself. */
   readonly t3codeSnapshot?: (workspacePath: string) => T3codeThreadSnapshot;
 }
@@ -246,6 +255,132 @@ function decodeWorkspace(encoded: string): string | null {
   }
 }
 
+
+/** Cap on an approval request body. These carry four short fields, never a payload. */
+const MAX_APPROVAL_BODY_BYTES = 4096;
+
+function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown> | null> {
+  return new Promise((resolvePromise) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+    const finish = (value: Record<string, unknown> | null): void => {
+      if (settled) return;
+      settled = true;
+      resolvePromise(value);
+    };
+    req.on('data', (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > MAX_APPROVAL_BODY_BYTES) {
+        req.destroy();
+        finish(null);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('error', () => finish(null));
+    req.on('end', () => {
+      if (chunks.length === 0) return finish({});
+      try {
+        const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        finish(parsed !== null && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null);
+      } catch {
+        finish(null);
+      }
+    });
+  });
+}
+
+function recognizeCaller(req: http.IncomingMessage, context: AgentRouteContext) {
+  const header = req.headers[HUMAN_SESSION_HEADER];
+  return context.humanSessions.recognize(Array.isArray(header) ? header[0] : header);
+}
+
+/**
+ * Approval capability issuance, nonce minting and revocation.
+ *
+ * CSRF: the session travels in a custom request header, never a cookie, so a
+ * cross-origin form post cannot carry it and a cross-origin fetch that tries is
+ * stopped by preflight. There is no ambient credential on this surface to ride.
+ *
+ * The declared-principal refusal below is DEFENCE IN DEPTH, not identification.
+ * Over loopback TCP the peer process is not attributable: `remoteAddress` is
+ * 127.0.0.1 for a builder, an architect and a browser alike, and there is no
+ * peer-credential mechanism for TCP on macOS. A builder that declares itself a
+ * human client is not caught here. What stops it is that it has no human-paired
+ * session, and that what the host stores is a verifier it cannot present.
+ */
+function handleApprovalRoute(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+  context: AgentRouteContext,
+): void {
+  const recognition = recognizeCaller(req, context);
+  if (!recognition.paired) {
+    writeJson(res, 401, {
+      signal: recognition.reason === 'REVOKED'
+        ? 'HUMAN_SESSION_REVOKED'
+        : 'HUMAN_SESSION_REQUIRED',
+      reason: recognition.reason,
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === `${AGENT_ROUTE_PREFIX}/approval-capabilities`) {
+    void readJsonBody(req).then((body) => {
+      if (!body) {
+        writeJson(res, 400, { signal: 'APPROVAL_REQUEST_MALFORMED' });
+        return;
+      }
+      const outcome = issueApprovalCapability(context.approvalCapabilities, {
+        humanSession: recognition,
+        declaredPrincipal: typeof body.principalKind === 'string' ? body.principalKind : undefined,
+        machine: typeof body.machine === 'string' ? body.machine : undefined,
+        lifetimeMs: typeof body.lifetimeMs === 'number' ? body.lifetimeMs : undefined,
+      });
+      if (!outcome.issued) {
+        writeJson(res, 403, { signal: outcome.code, message: outcome.message });
+        return;
+      }
+      // The presentation is returned once and never stored in presentable form.
+      writeJson(res, 201, {
+        signal: APPROVAL_SIGNAL.APPROVAL_AUTHORIZED,
+        capabilityId: outcome.capability.capabilityId,
+        presentation: outcome.capability.presentation,
+        machine: outcome.capability.machine,
+        expiresAt: outcome.capability.expiresAt,
+      });
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === `${AGENT_ROUTE_PREFIX}/approval-nonces`) {
+    void readJsonBody(req).then((body) => {
+      const projectId = body && typeof body.projectId === 'string' ? body.projectId : '';
+      const gateName = body && typeof body.gateName === 'string' ? body.gateName : '';
+      const capabilityId = body && typeof body.capabilityId === 'string' ? body.capabilityId : '';
+      if (!projectId || !gateName || !capabilityId) {
+        writeJson(res, 400, { signal: 'APPROVAL_REQUEST_MALFORMED' });
+        return;
+      }
+      const nonce = context.approvalNonces.mint({ projectId, gateName, capabilityId });
+      writeJson(res, 201, { signal: APPROVAL_SIGNAL.APPROVAL_AUTHORIZED, nonce, projectId, gateName });
+    });
+    return;
+  }
+
+  const revokeMachine = url.pathname.match(/^\/api\/agent\/v1\/approval-capabilities\/machine\/([^/]+)$/);
+  if (req.method === 'DELETE' && revokeMachine) {
+    const machine = decodeURIComponent(revokeMachine[1]);
+    const revoked = context.approvalCapabilities.revokeMachine(machine);
+    writeJson(res, 200, { signal: APPROVAL_SIGNAL.CAPABILITY_REVOKED, machine, revoked });
+    return;
+  }
+
+  writeJson(res, 404, { signal: 'AGENT_ROUTE_NOT_FOUND' });
+}
+
 /**
  * Return true when the request belongs to codev-agent.  Called only after
  * Tower's existing request-authentication choke point, so terminal routes keep
@@ -275,6 +410,11 @@ export function handleAgentRoute(
           : 'HUMAN_SESSION_REQUIRED',
       ...recognition,
     });
+    return true;
+  }
+
+  if (url.pathname.startsWith(`${AGENT_ROUTE_PREFIX}/approval-`)) {
+    handleApprovalRoute(req, res, url, context);
     return true;
   }
 

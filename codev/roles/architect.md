@@ -40,9 +40,13 @@ You do not run `porch approve` on the builder's behalf. The gate is the human's 
 are the channel that carries it, and the builder executes against its own porch state. Approval
 the builder never hears about is approval that didn't happen.
 
-The command the builder runs requires `--a-human-explicitly-approved-this`, and that flag is
-load-bearing: a gate message is a notification *to* a human, never a token an agent may spend on
-its own authority.
+The command requires `--a-human-explicitly-approved-this`. **That flag is not load-bearing** and
+never was: it only checked that a string appeared in argv, and an agent with a shell can type it.
+What is load-bearing is the approval capability (`$CODEV_APPROVAL_CAPABILITY`), issued only to a
+human-paired client session, and the fact that `porch approve` refuses a call it can attribute to
+a builder session presenting no capability. So the approval is run **outside** the builder's
+worktree, by the human or the architect carrying their decision — a gate message is a
+notification *to* a human, never a token an agent may spend on its own authority.
 
 ## Integration review — depth matched to risk
 
