@@ -95,6 +95,17 @@ export function parseJsonBody(req: http.IncomingMessage, maxSize = 1024 * 1024):
 let cachedExpectedKey: string | null | undefined;
 
 /**
+ * The codev-agent surface, which authenticates itself (Spec 146 Phase 7).
+ *
+ * Declared here rather than imported from `agent-auth.ts` because that module
+ * imports `isAllowedOrigin` from this one, and a cycle between the request-auth
+ * choke point and the surface it delegates to is not worth the shared constant.
+ * A test asserts this string still equals `AGENT_ROUTE_PREFIX + '/'`, so the two
+ * cannot drift apart silently — which is the only risk the duplication carries.
+ */
+const AGENT_SURFACE_PREFIX = '/api/agent/v1/';
+
+/**
  * The expected local key, cached after first read. Issues the key if missing
  * (Tower is the owner). Returns null and stays fail-closed if the key cannot be
  * read or created (e.g. an unwritable `~/.agent-farm`).
@@ -140,15 +151,31 @@ export function keysMatch(presented: string, expected: string): boolean {
  * explicitly excluded so a static-asset carve-out never exposes a data route.
  */
 export function isPublicRoute(method: string, pathname: string): boolean {
-  // KEYLESS AT THIS LAYER, NOT UNAUTHENTICATED. Spec 146 Phase 7's pairing
-  // redemption is the bootstrap: a machine that has just been handed an
-  // out-of-band pairing token holds no host-local key, and there is no secure way
-  // to give it one — distributing the shared key to pair a device would defeat
-  // the point of pairing. So this single POST passes the Tower key check and is
-  // then authenticated by `agent-auth.ts` against the pairing token, which is
-  // single-use with a ten-minute TTL. Every other `/api/agent/v1/` route still
-  // requires the key AND a machine credential.
-  if (method === 'POST' && pathname === '/api/agent/v1/pairing/redeem') return true;
+  // KEYLESS AT THIS LAYER, NOT UNAUTHENTICATED. Spec 146 Phase 7.
+  //
+  // The codev-agent surface carries its OWN authentication, and it is a strictly
+  // stronger one than the shared local key: `agent-auth.ts` requires a per-machine
+  // credential on every route in its table (`NO ROUTE IS PUBLIC`), the credential
+  // is stored as a hash, and it can be revoked for one device without disturbing
+  // any other. The shared key can express none of that — it is one secret for
+  // every client, and holding it is all-or-nothing.
+  //
+  // So this prefix delegates rather than exempts. Requiring the shared key here
+  // TOO would not add a boundary; it would only make the surface unreachable by
+  // the devices it exists for. A paired iPad holds its machine credential and
+  // nothing else: `~/.agent-farm/local-key` is host-local, and handing it over the
+  // wire to make pairing work would hand every client the all-or-nothing secret
+  // that pairing exists to replace. An earlier revision required both, which made
+  // the documented remote flow a flow that could not run.
+  //
+  // Safe to hand over wholesale because `handleAgentRoute` CLAIMS the whole
+  // prefix: it returns false only for paths outside it, answers 404
+  // AGENT_ROUTE_NOT_FOUND for a path the table does not name, and refuses anything
+  // unauthenticated before dispatch. Nothing under this prefix can fall through to
+  // a keyed handler below.
+  if (pathname === AGENT_SURFACE_PREFIX.slice(0, -1) || pathname.startsWith(AGENT_SURFACE_PREFIX)) {
+    return true;
+  }
 
   if (method !== 'GET') return false;
 

@@ -15,7 +15,8 @@ way you would treat handing out an SSH key.
 | Mechanism | What it guarantees | What it does not |
 |---|---|---|
 | Loopback binding | **Reachability.** Only this machine's own processes can send a packet to the port. | Nothing about *who* sent it. Over loopback TCP the peer is not attributable — `remoteAddress` is `127.0.0.1` for a builder, an architect and a browser alike. |
-| Machine credential | **Authentication against a remote peer**, and per-machine revocation. A remote peer cannot read `~/.agent-farm`. | Nothing against a local process running as your user. It can read every file this service can. |
+| Machine credential | **Authentication against a remote peer**, and per-machine revocation. A remote peer cannot read `~/.agent-farm`. This is the only credential the `/api/agent/v1/` surface accepts. | Nothing against a local process running as your user. It can read every file this service can. |
+| Host key (`~/.agent-farm/local-key`) | That a caller **can read a file on this host**. It guards the rest of Tower: terminals, overview, the dashboard. | Nothing per-device: it is one secret shared by every client, so it cannot revoke one and keep the others. That is why the agent surface does not use it, rather than using it as well. |
 | Human-paired session | That an approval carries evidence of **which browser session** performed it. | It is not proof a human typed. See `146-approval-threat-model.md`. |
 | Origin rules | That a **page you happen to visit** cannot drive this service with the credentials your browser would attach. | Nothing against a non-browser caller, which is why they are never the only check. |
 | Tailnet | **Transport.** Who can route to the host. | It is not an authentication model. A device on your tailnet still has to pair. |
@@ -45,12 +46,26 @@ x-codev-pairing-token: <pairingId>.<secret>
 {"machine": "ipad"}
 ```
 
-This one request needs **no host key** — that is deliberate. A device being paired
-for the first time does not have the host's local key, and handing it one to pair
-would defeat the point of pairing. Redemption is the only route on the
-`/api/agent/v1/` surface that passes Tower's key check, and it is still
-authenticated: by the pairing token, which is single-use and expires in ten
-minutes. Every other route needs both the host key and a machine credential.
+**No request on this surface needs the host key**, including this one. That is
+deliberate, and it is worth being precise about, because "keyless" here does not
+mean "unauthenticated".
+
+`~/.agent-farm/local-key` is one shared secret for every client on the host. A
+remote device has no way to get it that is not "send the all-or-nothing secret
+over the wire", which is the thing pairing exists to replace. So the
+`/api/agent/v1/` surface does not use it. It uses the machine credential instead,
+which is per device, stored only as a hash, and revocable for one device without
+touching any other — every property the shared key cannot express. Requiring both
+would add no boundary and would make every procedure below impossible to run.
+
+Redemption is the one route that takes a **pairing token** rather than a
+credential, because the device has no credential yet. It is still authenticated:
+single-use, ten-minute TTL. Every other route requires a machine credential, and
+the privileged ones require a human session on top of it.
+
+The rest of Tower — `/api/terminals`, `/api/overview`, the dashboard — is
+unchanged and still requires the host key. Only the agent surface authenticates
+itself.
 
 The response carries the machine credential once. The host stores only a hash of
 it, so it cannot be recovered later — if the device loses it, issue a new pairing
@@ -79,20 +94,39 @@ machine — the LAN, any other network it is attached to — and buys nothing th
 proxy was not already doing. It is the exposure this phase exists to prevent, and
 an earlier draft of this runbook told you to do it.
 
+The origin allowlist is read by the Tower **process**, so it has to be in the
+environment before Tower starts. Exporting it in a shell next to an
+already-running Tower changes nothing, and the symptom is a browser that fails at
+the preflight while the variable is visibly set — set it first, then start:
+
+```bash
+export CODEV_TOWER_ALLOWED_ORIGINS=https://<host>.<tailnet>.ts.net
+afx tower stop && afx tower start
+```
+
+**That restart kills every running agent session.** There is no reload for this;
+the variable is read at boot. Do it when nothing is mid-phase, or accept the cost
+knowingly — it is not a step to run casually while builders are working.
+
+Then put the proxy in front of it:
+
 ```bash
 npx t3 pair --tailscale
 tailscale serve --https=443 http://127.0.0.1:4100
 ```
 
-Then add the public origin to the allowlist, so the browser boundary matches the
-deployment:
+Tower needs no `BRIDGE_MODE` for this. Confirm the boot log says
+`BIND_LOOPBACK_ONLY`, then check the allowlist took effect from a browser-shaped
+request rather than from the variable:
 
 ```bash
-export CODEV_TOWER_ALLOWED_ORIGINS=https://<host>.<tailnet>.ts.net
+curl -si -H "Origin: https://<host>.<tailnet>.ts.net" \
+  https://<host>.<tailnet>.ts.net/api/agent/v1/session | head -1
 ```
 
-Tower needs no `BRIDGE_MODE` for this. Confirm the boot log says
-`BIND_LOOPBACK_ONLY`.
+Want `401` with a `MACHINE_CREDENTIAL_REQUIRED` body — the origin was accepted and
+the credential is what is missing. A `403` with `ORIGIN_NOT_ALLOWED` means Tower
+did not inherit the variable.
 
 ### When you actually do need a non-loopback bind
 

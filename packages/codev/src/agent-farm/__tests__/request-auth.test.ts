@@ -28,6 +28,7 @@ import {
   getExpectedKey,
   resetExpectedKeyCache,
 } from '../utils/server-utils.js';
+import { AGENT_ROUTE_PREFIX } from '../servers/agent-auth.js';
 import { ensureLocalKey } from '@cluesmith/codev-core/auth';
 
 function req(method: string, url: string, headers: Record<string, string> = {}): http.IncomingMessage {
@@ -70,6 +71,42 @@ describe('isPublicRoute', () => {
     expect(isPublicRoute('POST', '/health')).toBe(false);
     expect(isPublicRoute('POST', '/')).toBe(false);
     expect(isPublicRoute('DELETE', '/workspace/ENC/assets/app.js')).toBe(false);
+  });
+
+  // Spec 146 Phase 7. `isPublicRoute` is a two-answer function with three cases:
+  // keyed, genuinely public, and DELEGATED — the agent surface authenticates
+  // itself, per machine, and requiring the shared key on top of that would only
+  // make it unreachable by the paired devices it exists for. These tests pin the
+  // delegation so the third case cannot be read as the second.
+  describe('the codev-agent surface delegates rather than being public', () => {
+    it('hands the whole /api/agent/v1/ prefix past the shared-key layer', () => {
+      expect(isPublicRoute('POST', '/api/agent/v1/pairing/redeem')).toBe(true);
+      expect(isPublicRoute('GET', '/api/agent/v1/session')).toBe(true);
+      expect(isPublicRoute('GET', '/api/agent/v1/workspaces/ENC/state')).toBe(true);
+      expect(isPublicRoute('DELETE', '/api/agent/v1/machines/ipad')).toBe(true);
+      // Including a path the route table does not name: handleAgentRoute claims
+      // the prefix and answers 404 itself, so this cannot reach a keyed handler.
+      expect(isPublicRoute('GET', '/api/agent/v1/not-a-route')).toBe(true);
+    });
+
+    it('stops at the prefix — a neighbouring path is not swept in', () => {
+      // The guard that matters: `startsWith('/api/agent/v1')` without the trailing
+      // slash would make `/api/agent/v1-admin` public, and nothing downstream
+      // claims that path.
+      expect(isPublicRoute('GET', '/api/agent/v1-admin')).toBe(false);
+      expect(isPublicRoute('GET', '/api/agent/v2/session')).toBe(false);
+      expect(isPublicRoute('GET', '/api/agent')).toBe(false);
+      expect(isPublicRoute('GET', '/api/agentx/v1/session')).toBe(false);
+    });
+
+    it('delegates to the same prefix the route table is built on', () => {
+      // server-utils cannot import agent-auth (agent-auth imports isAllowedOrigin
+      // from here), so the prefix is written twice. This is the seam that keeps
+      // the copies honest: if AGENT_ROUTE_PREFIX ever moves, the carve-out that
+      // follows it must move too, or the surface goes unreachable.
+      expect(isPublicRoute('GET', `${AGENT_ROUTE_PREFIX}/session`)).toBe(true);
+      expect(AGENT_ROUTE_PREFIX).toBe('/api/agent/v1');
+    });
   });
 
   it('makes only the annotator shell + vendor public; its data/media routes stay keyed', () => {

@@ -832,10 +832,18 @@ describe('remote-access runbook', () => {
     expect(text).toContain('never passes through the terminator');
   });
 
-  it('says the pairing route needs no host key, and why', () => {
+  it('says the agent surface needs no host key, and why', () => {
     const text = runbook();
-    expect(text).toContain('no host key');
+    // The claim that matters is about the SURFACE, not just the pairing route. An
+    // earlier draft said only redemption was keyless and every other route needed
+    // the host key too — which described a remote flow that could not run, since
+    // nothing puts that key on the device. A runbook that documents an impossible
+    // request is worse than one that documents none.
+    expect(text).toContain('No request on this surface needs the host key');
     expect(text).toContain('single-use');
+    // And it must still say what the host key is for, so "keyless" is not read as
+    // "we removed a check".
+    expect(text).toContain('still requires the host key');
   });
 
   it('states the blast radius of one unparseable credential file', () => {
