@@ -61,7 +61,7 @@ afx spawn --worktree                 # Worktree for quick fixes
 ```bash
 # Send message to a builder (from architect)
 afx send 0013 "Check PR 32 comments"
-afx send 0013 --interrupt "Stop and check PR"    # Send Ctrl+C first
+afx send 0013 --interrupt "Stop and check PR"    # Ready the prompt first (target-safe keystrokes)
 afx send 0013 --file src/auth.ts "Review this"   # Include file content
 
 # Send to all builders
@@ -79,7 +79,7 @@ afx send 0013 --no-enter "don't press enter"
 **Options:**
 - `--all` - Send to all builders
 - `--file <path>` - Include file content in message
-- `--interrupt` - Send Ctrl+C first to interrupt current activity
+- `--interrupt` - Ready the prompt first — end any running turn and clear the composer — with the keystrokes recorded as safe for the target (Ctrl+C on claude/codex and shells; **ESC then Ctrl+U** on opencode, which quits on Ctrl+C — Issue #196)
 - `--raw` - Skip structured message formatting
 - `--no-enter` - Do not send Enter after message
 

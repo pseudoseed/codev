@@ -455,10 +455,10 @@ export async function runAgentFarm(args: string[]): Promise<void> {
     .description('Send instructions to a running builder')
     .option('--all', 'Send to all builders')
     .option('--file <path>', 'Include file content in message')
-    .option('--interrupt', 'Send Ctrl+C first')
+    .option('--interrupt', "Ready the prompt first — end any running turn and clear the composer — with the keystrokes recorded as safe for the target (Ctrl+C on claude/codex and shells; ESC then Ctrl+U on opencode, which quits on Ctrl+C)")
     .option('--raw', 'Skip structured message formatting')
     .option('--no-enter', 'Do not send Enter after message')
-    .option('--delay <seconds>', 'Deliver after N seconds (persisted; survives a Tower restart, except a delayed --interrupt ^C nudge)')
+    .option('--delay <seconds>', 'Deliver after N seconds (persisted; survives a Tower restart, except a delayed --interrupt keystroke nudge)')
     .action(async (builder, message, options) => {
       const { send } = await import('./commands/send.js');
       try {

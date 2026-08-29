@@ -11,21 +11,23 @@
  * at all and survives a Tower restart by construction.
  *
  * This module holds a due-time timer used by ONE caller: the delayed-`--interrupt`
- * path. When it fires it writes only the Ctrl+C that ends the current turn — no
- * message body, and it marks nothing `delivered`. The body then lands through the
- * same render gate every send uses, after the ^C ends the turn.
+ * path. When it fires it writes only the prompt-ready keystrokes for that target — Ctrl+C
+ * on claude/codex and shells, ESC then Ctrl+U on opencode (#196) — with no message body,
+ * and it marks nothing `delivered`. The body then lands through the same render gate every
+ * send uses, once the turn has ended.
  *
  * ## Why the registry exists at all
  *
  * A bare `setTimeout` would work until Tower shuts down, at which point the
- * process would either hang on a pending timer or exit with a ^C half-scheduled
+ * process would either hang on a pending timer or exit with an interrupt half-scheduled
  * and no record of it. The registry makes shutdown explicit.
  *
- * ## Shutdown drops the ^C nudge, never the message
+ * ## Shutdown drops the interrupt nudge, never the message
  *
  * A pre-due `--delay` message is a persisted mailbox row: it survives a restart
- * and delivers when the target's prompt is next clean. Only the in-memory ^C
- * nudge is dropped on shutdown — recoverable (a human re-interrupts if it matters),
+ * and delivers when the target's prompt is next clean. Only the in-memory nudge — Ctrl+C,
+ * or ESC then Ctrl+U on opencode (#196) — is dropped on shutdown; recoverable (a human
+ * re-interrupts if it matters),
  * and matching the documented "only the interrupt semantics gracefully degrade"
  * boundary. This is the CONSCIOUS reversal of Spec 1307's original body-drop-on-
  * restart trade (see review 1313): the render gate now supplies the protection that

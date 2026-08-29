@@ -1,0 +1,561 @@
+# bugfix-196 — `afx send --interrupt` sends Ctrl+C to every harness
+
+## INVESTIGATE (2026-08-29)
+
+### Reproduction
+
+Symptom evidence is in the issue: Ctrl+C delivered to `builder-bugfix-189` (opencode) at
+16:59:52, shellper gone by 17:00:22. Code-level reproduction is deterministic — both write
+sites take no harness input at all:
+
+- `servers/tower-routes.ts:1785` — delayed `--interrupt`: `live.write('\x03')`
+- `servers/tower-routes.ts:2111` — immediate `--interrupt`: `session.write('\x03')`
+
+Neither reads the session's `command`, `cwd`, or launch script. Every `--interrupt` to every
+agent gets the same byte.
+
+Corroboration that ESC is opencode's own interrupt: `servers/gate-profiles.ts`
+`OPENCODE_PROFILE.busyIndicatorPattern = /esc\s+interrupt/` — that string is read off real
+captured opencode 1.18.18 frames. opencode advertises ESC, not Ctrl+C.
+
+### Root cause
+
+There is no per-harness record of what byte safely interrupts a turn. `utils/harness.ts`
+carries every other per-harness fact (`supportsContextReset`, model args, prompt arg,
+session/resume behaviour) but nothing about interrupt semantics, so callers hardcode `\x03`.
+
+### Third site, same class
+
+`servers/mailbox-hold-policy.ts:22` `heldRecoveryKeystroke()` returns `\x03` for the
+`cancel-draft` recovery, written by `mailbox-wiring.ts:436` `recoverHeld()` — also with no
+harness check. This one fires **automatically** after the #92 starvation window, with no
+operator in the loop. Same fatal byte, worse trigger. In scope: the issue says a second
+hardcoded `\x03` anywhere else reintroduces the bug.
+
+### Fix shape
+
+1. `interruptSignal: 'esc' | 'ctrl-c'` as a **required** field on `HarnessProvider`
+   (claude/codex → `ctrl-c`, opencode → `esc`). Required, so a new builtin cannot omit it.
+2. Custom harnesses: optional config field, default `esc` (fail-safe — an unknown app must
+   never default into the fatal byte).
+3. One resolver in `harness.ts`; session→harness resolution in `mailbox-wiring.ts` mirroring
+   `resolveProfileForSession` (command basename, then `.builder-start.sh`), unresolved → `esc`.
+4. Both tower-routes sites and `recoverHeld` derive the byte. Downgrade, not refuse: ESC ends
+   the turn on all three harnesses, so the operator's intent still lands.
+5. CLI help text for `--interrupt` stops claiming "Ctrl+C".
+
+Well under 300 LOC. Fits BUGFIX.
+
+### Constraints from the architect
+
+- Do not touch `commands/spawn.ts` / `commands/spawn-worktree.ts` (spir-146 has uncommitted
+  changes there). Nothing in the fix shape needs them.
+- `lsof -i :13999` before any full suite; spir-146 has priority on the lock. Never pgrep/pkill
+  on a pattern that could match an agent's prompt text.
+
+## FIX (2026-08-29)
+
+Written, not yet executed — the architect froze all vitest runs and process spawns at 17:43
+and extended it to spawns at 17:45 while spir-146 re-runs. Code and tests are committed
+unverified; build/test checks run when cleared.
+
+### What changed
+
+`utils/harness.ts` — the table.
+- `InterruptSignal = 'esc' | 'ctrl-c'` and `INTERRUPT_BYTES`, the only place `\x03`/`\x1b`
+  are spelled.
+- `interruptSignal` is a **required** field on `HarnessProvider`. A new builtin that omits it
+  is a compile error, not a silent `ctrl-c` default.
+- claude/codex `ctrl-c`; opencode `esc`.
+- Custom harnesses: optional config field, validated, defaulting to `esc`.
+- `interruptSignalForHarness` / `interruptByteForHarness`. Deliberately narrower than
+  `resolveHarness`: unknown, retired or custom-undeclared all yield `esc`, never claude's
+  `ctrl-c` fallback.
+
+`servers/mailbox-wiring.ts` — session→signal.
+- `resolveHarnessForSession` mirrors `resolveProfileForSession` (command basename, then
+  `.builder-start.sh`), so the interrupt table and the gate table cannot disagree about what
+  app a terminal is. Defensive on empty `command`/`cwd` — a reconnected row can carry
+  `command: ''`.
+- `writeHeldRecovery(session, action)` is now the single place the #92 auto-recovery puts a
+  control byte on a PTY.
+
+Three write sites now derive: `tower-routes.ts` immediate `--interrupt`, `tower-routes.ts`
+delayed `--interrupt`, and `recoverHeld`. Downgrade, not refuse — ESC ends the turn on all
+three harnesses, so the operator's intent still lands. The response and both log lines now
+name the signal actually sent.
+
+Operator-facing text corrected in both trees (the issue's "the operator learns by losing a
+session"): CLI help, `types.ts`, `codev/resources/*`, `codev-skeleton/resources/*`, and the
+afx/arch-save skills under `.claude/` and `.codex/` in both trees.
+
+### The auto-recovery path (architect scope addition, 17:47)
+
+Found independently during INVESTIGATE, already fixed when the instruction arrived.
+`heldRecoveryAction('user-text') → 'cancel-draft' → '\x03'` fires **automatically** after the
+starvation window with nobody in the loop. air-197 has established opencode's holds are a real
+rows-geometry clipping problem, so `user-text` holds on opencode are reachable, not theoretical.
+Tower could kill an opencode builder by itself.
+
+On an `esc` harness the recovery now sends ESC. That may not clear the draft, so the row stays
+held for a human — the correct trade against quitting the agent and losing its conversation.
+The starvation notice says so rather than promising Ctrl+C.
+
+### File boundaries honoured
+
+- `commands/spawn.ts` / `spawn-worktree.ts`: untouched (spir-146).
+- `gate-profiles.ts` / `render-gate.ts`: untouched (air-197). Test 3 iterates
+  `BUILTIN_HARNESSES` and filters through the already-exported `hasGateProfile()`, so it reads
+  the gate registry without editing that file. An earlier `export PROFILES_BY_HARNESS` edit was
+  reverted for this reason.
+
+### Tests
+
+`__tests__/bugfix-196-interrupt-signal.test.ts` — the table, both resolvers, custom-harness
+config, the recovery policy, and the automatic path asserted on **bytes written**.
+
+`__tests__/tower-routes.test.ts` — the live `/api/send` interrupt path, also on bytes written:
+Ctrl+C for claude and codex; never Ctrl+C for opencode or an unidentifiable command; the
+delayed path obeys the same table; the response reports the signal sent. `gateSession` gained
+an optional `command` argument (default `'claude'`, so every existing caller is unchanged).
+
+Test 3 is the coverage guard: every entry in `BUILTIN_HARNESSES`, and every gate-classifiable
+harness, must carry a signal. Deliberately resolved through `getBuiltinHarness` rather than
+`interruptSignalForHarness` — the latter fails safe to `esc`, which would make a missing entry
+look present.
+
+## FIX round 2 (2026-08-29) — the question the architect would not ship past
+
+The architect asked, before accepting the fix: on opencode, what actually clears a draft?
+ESC ends a turn; it does not clear typed text. If nothing clears it, `cancel-draft` is
+unrecoverable on opencode and must say so rather than retrying a keystroke that cannot work.
+
+### Answered from the shipped binary
+
+`/opt/homebrew/Cellar/opencode/1.18.18/bin/opencode` — the exact version the gate profiles
+were measured against — carries its default keybind table in the bundle. Read out of it:
+
+```
+leader:                     "ctrl+x"
+app_exit:                   "ctrl+c,ctrl+d,<leader>q"
+input_clear:                "ctrl+c"
+input_delete_to_line_start: "ctrl+u"
+session_interrupt:          "escape"
+```
+
+**Ctrl+C is bound to both `app_exit` and `input_clear`.** That overlap is the root cause, and
+it is in opencode's own defaults, not in ours — which is why the byte looks like a draft-clear
+right up until the composer is empty and it quits instead. Grepping every default binding
+containing `ctrl+u` returns exactly one: `input_delete_to_line_start`. It can quit nothing.
+
+### What changed
+
+`clearDraftKey` is a second **required** per-harness fact beside `interruptSignal`.
+claude/codex `ctrl-c`; opencode `ctrl-u` (`\x15`); unknown/retired/custom-undeclared `none`.
+
+Clearing a draft and ending a turn are different intents and no longer share a table entry.
+Round 1 conflated them; that was wrong, and it only looked right because one byte happens to
+do both on two of the three harnesses.
+
+`heldRecoveryKeystroke` returns `string | null`. `'none'` yields null, **nothing is written**,
+and `recoverHeld` logs `UNRECOVERABLE HOLD` with its own notification naming the agent, then
+latches so it cannot spin. A rejected PTY write is `failed` and stays retryable — transient and
+unrecoverable are now different facts too.
+
+### The answer was in between the two branches offered
+
+Neither "a byte clears it" nor "nothing does". `ctrl+u` deletes to line **start**, so it clears
+the common single-line leftover draft and cannot clear a multi-row one.
+
+### Residual 1 — recorded, not fixed
+
+A `ctrl+u` on an already-empty line emits no output, so the drainer's change token does not
+move and the attempt latches inert. The architect's instruction: do not fix it, but do not let
+it collapse into one boolean either, because residual 2's fix has to branch on it.
+
+`recoveryState.attempted: boolean` became `phase: RecoveryPhase`:
+
+| phase | meaning |
+|---|---|
+| `not-attempted` | window has not elapsed; will fire |
+| `written` | keystroke went out and the screen then changed |
+| `written-inert` | keystroke went out and the screen did **not** change at all |
+| `unrecoverable` | no safe byte exists; the screen was never touched |
+
+`written-inert` is derived by sampling the output token at the moment the keystroke goes out
+and comparing on the next pass, so it means exactly one thing. `DeliveryPorts.recoverHeld` now
+returns `HeldRecoveryOutcome` (`'written' | 'unrecoverable' | 'failed'`) instead of a boolean
+that was covering two different facts; a legacy boolean still reads as written/failed, so no
+other implementer changed. Behaviour is unchanged — this is bookkeeping.
+
+`MailboxDrainer.recoveryPhaseFor(workspacePath, toAgent)` exposes it read-only. Without an
+accessor the phase is private and unassertable, and would have rotted into a comment.
+
+### Residual 2 — filed by the architect as its own issue
+
+`mailbox-delivery`'s liveness telemetry deliberately excludes `user-text` ("a human
+legitimately at the line — must not false-alarm"). So a `user-text` hold that recovery fails to
+clear starves with **no alarm on any harness**, not just opencode. The `UNRECOVERABLE HOLD`
+notice covers only the no-byte case; attempted-and-did-not-work is still silent. Closing it
+needs a second-stage escalation in the drainer's streak state machine and revisits #92's
+`user-text` exclusion — beyond a bugfix ceiling.
+
+### Verification
+
+Regression proven both directions: reintroducing the hardcoded `\x03` at all three write sites
+fails exactly 6 tests; restoring the fix goes green. Typecheck clean on every touched file
+(the pre-existing `TowerClient` errors are an unbuilt-dependency artifact, in files untouched
+here). 35/35 on the new file, 148/148 across the three targeted files.
+
+## FIX round 3 — what `--interrupt` is actually for
+
+The architect challenged the round-2 result: after it, on opencode `afx interrupt` sent ESC,
+`afx send --interrupt` sent ESC, and only the *machine's* auto-recovery could clear a draft
+(Ctrl+U). The operator had no way to clear an opencode composer while Tower did. Backwards.
+
+### Established from source, because the sources disagree by era
+
+| source | what `--interrupt` meant |
+|---|---|
+| Spec 0020 (origin) | "Send Ctrl+C first to ensure prompt is ready" — the mitigation for the "Vim trap", i.e. a **running process** to escape |
+| Spec 1273 | gave "end the turn" its own command (`afx interrupt`, ESC) and recorded `--interrupt` as "a different signal… not what was verified to unwedge a builder mid-turn" |
+| Issue #21 | adopted it as the remedy for an **abandoned composer**, because Ctrl+C clears typed text where ESC does not |
+
+So the contract is *make the prompt ready for this message*, and that genuinely decomposes into
+**both** halves. They were never separated because one byte did both on the only harnesses that
+existed. Routing to `clearDraftKey` alone would also have been wrong: on a mid-turn opencode,
+Ctrl+U clears nothing and the message lands inside a live turn.
+
+`promptReadySequence()` derives both from the same table and deduplicates:
+
+| harness | bytes |
+|---|---|
+| claude, codex | `Ctrl+C` — one write, byte-identical to pre-fix |
+| opencode | `ESC` then `Ctrl+U` |
+| unidentifiable | `ESC` alone; no guessed clear byte |
+
+### A regression I introduced, found by self-review
+
+Round 1's `heldRemedy()` rewrite deleted the clause #21 asserts on verbatim —
+`'afx interrupt' sends ESC, which does not` — the line #21's header says cost five manual
+interventions. Found by reading my own diff, before the suite reported it. Fixed rather than
+relaxed: the clause is *more* true now, since ESC clears typed text on no harness at all.
+
+### Dead exports removed
+
+`interruptByteForHarness` and `interruptSignalForSession` became test-only once
+`promptReadySequence` took over their call sites. Removed rather than kept — a registered,
+documented, inert export is the failure mode this codebase already warns about in
+`assertHarnessAcceptsModel`. Tests repointed at the live API, so the coverage survives.
+
+## The suite failures — full attribution
+
+Three separate causes, none of them the fix:
+
+| files / tests | cause | resolution |
+|---|---|---|
+| 3 / 40 | #189 `CODEV_*` env leak (worktree spawned from stale main) | merged `origin/main` |
+| 19 / 39 | unbuilt tree | `pnpm build` |
+| 1 / 1 | my `heldRemedy` regression | fixed |
+
+**23 files / 120 tests, no residue.** Post-build: `6553 passed | 48 skipped`, **zero test failures**.
+
+### Four build artifacts, five error messages
+
+The unbuilt-tree group needed `packages/codev/skeleton/`, `packages/codev/dist/`, and
+`packages/porch-driver/dist/` — a sibling package `pnpm build` in `packages/codev` does not
+produce. One root cause reported five ways:
+
+| message | verdict |
+|---|---|
+| `Cannot find module '…/packages/codev/dist/terminal/shellper-main.js'` | honest |
+| `Cannot find module '…/porch-driver/dist/thread.js'` | honest |
+| `Roles directory not found in .codev/roles/, codev/roles/, or embedded skeleton` | misleading |
+| `Skeleton directory not found. Package may be corrupted.` | wrong |
+| `Unknown review type "pr" in porch.consultation.modelsByType` | wrong subsystem |
+
+The last one cost the most: it names a config file that is **correct**, and a reader follows it
+there and stays. `listReviewTypes()` unions protocol names across all four resolver tiers but
+resolves each `protocol.json` by precedence, so an empty tier 4 silently shrinks the known
+review-type set to whatever the test fixture declares. Filed to #204.
+
+`dist/terminal/shellper-main.js` mtime was **12:13:35** — the build I ran *after* the failing
+suite, so it was never present. spir-146 disproved "a concurrent build deleted it" for its own
+run with the same kind of evidence pointing the other way. Same missing file, opposite
+mechanism, indistinguishable symptom (`Invalid shellper info JSON` after a silent poll timeout).
+Filed to #200.
+
+Root cause of all of it on my side: **I ran the suite before building.** Porch's own check order
+is `regression_test, build, tests`; running by hand out of order is what hid it.
+
+
+## Mutation-verifying the two guards the architect asked for
+
+Both new tests were proved to fail when the thing they guard is broken, rather than asserted to
+work on inspection. Two one-line mutations, applied together:
+
+| mutation | what it models |
+|---|---|
+| `promptReadySequence`: `return [interrupt, clear]` (dedup removed) | claude/codex emit two `\x03` instead of one |
+| the legacy-boolean coercion: `false` → `'written'` instead of `'failed'` | a transient write failure latches as permanent |
+
+Result: **5 failed | 150 passed**, and the failures name exactly the right guards —
+
+```
+× writes EXACTLY one \x03 and no other control byte on claude
+× sends ONE byte to claude/codex, where Ctrl+C is both halves
+× is a single Ctrl+C on claude and codex — unchanged from before the fix
+× coerces a LEGACY boolean port: false stays RETRYABLE, never latched
+× identifies the agent from the launch command, full path and args included
+```
+
+Restored from pristine copies; `git diff` on `servers/` is empty, confirming the production
+files are byte-identical to the committed versions.
+
+One refinement on the ask: the request was "exactly one `\x03`, nothing before or after".
+"After" would depend on the 100 ms message-write scheduling, so anchoring there would have made
+the test timing-dependent. It asserts `written[0] === '\x03'` and then filters the *whole*
+exchange to control bytes and expects the set to be exactly `['\x03']` — the same guarantee
+without the flake.
+
+## CMAP round 2 — the finding a test could not have found
+
+One usable lane (codex + agy quota-dead, opencode failed twice on a worktree permission
+dead-end → #207). Five findings, two blocking.
+
+### Blocking 1: the ESC → Ctrl+U pair was written back-to-back, and was a silent no-op
+
+**ESC immediately followed by a character is the standard terminal encoding for
+Alt+character.** So `\x1b\x15` in one write can reach a TUI as *one alt-modified keypress*
+rather than two keystrokes.
+
+Verified live against real opencode 1.18.18 in a node-pty
+(`codev/research/196-esc-alt-encoding-probe.mjs`):
+
+| arm | process survived | composer cleared |
+|---|---|---|
+| **[A]** unspaced `ESC+Ctrl+U`, one write | true | **FALSE** |
+| **[B]** settled `ESC`, 50 ms, `Ctrl+U` | true | **TRUE** |
+| **[C]** control — `Ctrl+U` alone | true | **TRUE** |
+
+**[A] is the code that was under review.** It did not quit opencode, so nothing looked
+wrong — and it did not clear the draft either. `--interrupt` would have reported success
+having done nothing. The fix for "we send bytes that do the wrong thing on a harness" would
+have shipped with its opencode path inert.
+
+**[C] is what makes [A] evidence rather than an anecdote.** Without it, [A]'s failure is
+ambiguous between "the pair is swallowed" and "Ctrl+U does not clear on opencode" — and
+those have opposite fixes.
+
+**Detection method matters here.** Marker-absent is the obvious signal and the weak one: a
+redraw that simply does not repaint the marker looks identical to a clear. opencode draws
+its `Ask anything...` placeholder *only* when the composer is empty, so the placeholder's
+**return** is a positive signal for a positive claim.
+
+Fix: `writeControlSequence()` in `message-write.ts`, reusing `ESCAPE_ENTER_DELAY_MS` (50 ms)
+— that constant exists for exactly this reason and says so. A single byte writes immediately
+and returns offset 0, so claude and codex are unchanged in **timing** as well as in bytes.
+A second bug was hiding behind the first: the immediate path offset the message body a flat
+100 ms from the *first* byte, so on a two-byte harness the body would have landed 50 ms after
+Ctrl+U instead of 100. It is now `controlsDone + 100`.
+
+**Two false starts, recorded because they cost time and will cost someone else more:** the
+probe was piped through `tail`, which buffers until EOF, so a *finished* run looked hung; and
+the PTY handles kept node alive after the final log, so EOF never came. Write incrementally to
+a file and exit explicitly.
+
+### Blocking 2: `heldRemedy` promised a repair that would not arrive — #190's exact shape
+
+It stated unconditionally that Tower sends an automatic clearing keystroke. On an
+unidentified or custom target nothing is written and the hold reports `unrecoverable`. Now
+takes `canAutoClear`, computed from the live session by `canAutoClearFor()`; when there is no
+recorded keystroke it says so and says the hold needs a human. Written this afternoon, while
+fixing #190's family.
+
+### The pinning coupling, checked *before* editing this time
+
+`delayed-send.ts`'s stale `^C` wording is pinned by `spec-1470-parity.test.ts:202`
+(`'Only the in-memory ^C'`). Both changed together, guard's contract preserved — the exception
+must still be scoped to the in-memory nudge **and** name a concrete keystroke. Mutation-checked:
+genericised FAILS, sentence-deleted FAILS, fixed PASSES.
+
+That is the second spec-1470 assertion this PR updated. Both for the same reason: the fact
+being pinned became **false** through a deliberate contract change, not merely stale.
+
+### Round summary
+
+Three review rounds, three real blocking findings, **every one found by looking rather than by
+testing**: the shell target, the inert config fields, and the Alt-encoding. The test suite was
+green for all three.
+
+## ⚠️ PENDING MERGE with #203 — a safety property that must survive resolution
+
+#203 ([Issue #197], the gate-mirror sizing fix) lands before this branch and touches four of
+the same files: `mailbox-hold-policy.ts`, `mailbox-wiring.ts`, `mailbox-delivery.ts`,
+`issue-92-stuck-hold-recovery.test.ts`.
+
+**#203 removes `geometry-mismatch` from `heldRecoveryAction` — it must return `null` for it.**
+This branch still routes it to `escape-screen`, and the two edits are different functions in
+the same file, so git will likely want a hand.
+
+Reinstating it would put an **ESC into a live turn**. #197 measured why: on an 80×24 mirror the
+reflow carries opencode's `esc interrupt` footer off-screen, so the busy *proof* is **destroyed,
+not outranked** — ordering the busy check first does not rescue it, because the evidence is gone.
+And it would land inside a conflict resolution, which nobody reviews as carefully as a diff.
+
+After merging, verify explicitly rather than trusting the diff:
+- `heldRecoveryAction('geometry-mismatch')` → `null`
+- the docblock still carries **both** independent grounds — FUTILITY and DANGER, each sufficient alone
+- #203's `geometry-mismatch` branch in `heldRemedy` and its block in `inbox.ts` are kept
+- this branch's `heldRecoveryKeystroke(action, clearDraft)` signature and `canAutoClear` survive
+
+### The precise trap, found by reading #203's diff before the merge
+
+`issue-92-stuck-hold-recovery.test.ts` is where this goes wrong silently. #203 **deletes** the
+row `['geometry-mismatch', 'escape-screen', '\x1b']` from the `it.each` table and replaces it
+with an explicit `expect(heldRecoveryAction('geometry-mismatch')).toBeNull()`.
+
+This branch **edited that same table** — it now reads
+`['geometry-mismatch', 'escape-screen', 'ctrl-u', '\x1b']`, because the keystroke signature
+gained a clear-key column. So "keep my side" reinstates the mapping *and* keeps a test asserting
+it, which makes the safety regression look **verified**. That is the worst available outcome and
+it is one careless conflict resolution away.
+
+Resolution: take #203's shape for that table (no geometry row, plus its null test) and keep this
+branch's extra column on the rows that remain.
+
+Also from #203, to keep: `isClassifierStuck` gains `geometry-mismatch` so the hold escalates
+rather than starving silently; `classifyAgentScreen` gains a `log?` param and returns early on
+`busy-indicator` so a proven-live turn **outranks** the geometry compare; `heldRemedy` gains a
+`geometry-mismatch` branch. #203 also notes its remedy branches key on `heldRecoveryAction`
+rather than a second list of details — this branch's `canAutoClear` change respects that, since
+it only conditions the existing `user-text` branch.
+
+A scripted check covering all twelve properties lives in the session scratchpad
+(`post-merge-203-check.sh`).
+
+## The #203 merge — resolved, and what the conflict actually was
+
+One conflict: `issue-92-stuck-hold-recovery.test.ts`. The other three shared files auto-merged.
+
+It was the row predicted before the merge. #203 deletes
+`['geometry-mismatch', 'escape-screen', '\x1b']`; this branch had **edited that same row** to
+carry a clear-key column. The table asserts `heldRecoveryAction(detail) === action`, so keeping
+this branch's side would not merely have reinstated an ESC into a live turn — **a passing test
+would have certified it as correct**. Every later reader would have had evidence it was intended,
+and anyone removing it would have had to argue with a green suite.
+
+Resolved to #203's shape with this branch's extra column, plus a comment recording that the
+row's **absence is load-bearing**: an absent row reads as an oversight, and only a comment
+distinguishes "nobody added this" from "removed for two independent reasons".
+
+Verified in the order *exists before passes*, because a test that vanishes in a merge passes
+vacuously and a green run cannot tell you it is gone:
+
+1. **Runtime** (`tsx`, not grep): `heldRecoveryAction('geometry-mismatch') === null`;
+   `user-text → cancel-draft`; `no-region-end → escape-screen`; `busy-indicator → null`.
+2. **Docblock read, not reconciled**: FUTILITY ("holds even for a provably idle agent") and
+   DANGER ("holds even if a keystroke could help"), each sufficient alone.
+3. The guard test still **exists** at `:50`.
+4. It **passes**.
+
+The 12-property check script was written *before* the merge and failed all eight of #203's
+properties on the pre-merge tree — which is how I know it detects absence rather than passing
+vacuously. All twelve pass after.
+
+### A repo-wide gap this exposed: tests are not typechecked
+
+`packages/codev/tsconfig.json` excludes `**/__tests__/**`. So a **call-arity error in a test is
+invisible to `tsc`** and surfaces only at runtime.
+
+That is how my `heldRecoveryKeystroke(action)` → `(action, clearDraft)` signature change silently
+broke #203's helper in `pty-session-geometry.test.ts`: `clearDraft` was `undefined`,
+`CLEAR_DRAFT_BYTES[undefined]` was `undefined`, and the fake session was written the string
+`undefined` instead of `\x03`.
+
+It also means "typecheck clean" — which I reported repeatedly this session — was **never checking
+test files at all**. Two contributing errors of my own: I filtered `tsc` output by filename
+patterns that did not match this file, and I had fixed `issue-92`'s callers by hand successfully,
+which made me believe the compiler was watching when I had simply been careful in the file I was
+already in.
+
+Since the compiler cannot enumerate callers here, grep must: every test-file caller of the four
+functions whose signatures changed was checked. Exactly one was stale.
+
+**#203's `POSITIVE CONTROL` test is what caught it** — the test whose own comment says it exists
+so the neighbouring `expect(writes).toEqual([])` assertions cannot pass on a harness that observes
+nothing. It caught a real break in the harness itself, which is precisely the case it was written
+for.
+
+---
+
+## PR-gate review round: the architect's consolidated CMAP, and the five items
+
+### The CMAP was ARCHITECT-RUN, and that was a ruling, not a shortcut
+
+I raised a conflict rather than resolving it myself. Porch's PR prompt names three lanes —
+gemini, codex, claude — and requires three concrete verdicts. Two of those returned nothing on
+2026-08-29: **codex quota-exhausted account-wide**, **agy/gemini rate-limited**. The architect
+had already changed `.codev/config.json` to `porch.consultation.models: ['claude','opencode']`
+for that reason.
+
+The ruling: the architect's own lanes ARE the CMAP for this gate, run on the resolved tree
+`6b8081a5a` and posted at PR #205 comment 5464362460. **Two live lanes: claude (COMMENT, HIGH)
+and opencode (REQUEST_CHANGES, HIGH). codex and gemini produced NO verdict, and a silence is not
+an approval (#20).** That is what I report — two honest verdicts, not three claimed ones.
+
+My own `claude` lane attempt earlier had also failed, on project auto-detection: it enumerated
+every project in the repo instead of resolving `bugfix-196`. Recorded as a failed lane, never as
+a verdict.
+
+### The five items, and which one was a defect
+
+**1. `heldRemedy(..., canAutoClear = true)` — the only defect in the round.** The parameter
+defaulted to *promising* an automatic clearing keystroke. A caller that omits it re-arms #190 in
+prose: the operator is told to wait for a repair that will not arrive. The default failed
+**toward** the false claim, in the function written to stop making it.
+
+Fixed by making it REQUIRED, not by flipping the default to `false` — `false` is safe but still
+silent, and the point is that every call site has to answer the question out loud.
+
+That lever has a hole worth naming: `tsc` catches an omitted argument in production source but
+**not in tests**, because this package's tsconfig excludes the `__tests__` directories (the same
+gap that let my `heldRecoveryKeystroke` signature change silently break #203's positive control,
+documented above). So the guard is doubled: an arity assertion, `heldRemedy.length === 3`.
+Re-adding a default drops it to 2, which is the only runtime-visible trace it leaves.
+
+**2. `inbox.ts` still printed the original lie** — `(Ctrl+C first, which clears the line)` — on
+the one screen an operator reads at the exact moment this bug's symptom occurs. That file was not
+in the PR. It now names the resolved keystrokes and says outright that opencode QUITS on Ctrl+C.
+`status.ts`'s internal comment carried the same claim and got the same correction.
+
+**3. Stale internal comments on the paths this PR rewrote.** Every operator-facing surface had
+been swept; the comments on the two rewritten paths had not. Corrected: `tower-routes.ts`
+(the `handleDelayedSend` docblock, the delayed-interrupt timer, the immediate-path lock
+comment — the settle is `controlsDone + 100`, not a flat 100 ms), `tower-client.ts`'s
+`escape`/`interrupt` JSDoc, `types.ts`'s `interrupt?:`, and both copies of the claim that
+`geometry-mismatch` maps to `escape-screen` (`render-gate.ts` and `classifyAgentScreen`) — false
+since #197 removed that mapping.
+
+The last one needed more than deleting a sentence. The ordering argument in those comments was
+*built on* that mapping. The real reason the busy check must run first is that a geometry
+mismatch **destroys** the liveness proof rather than outranking it: the reflow carries opencode's
+`esc interrupt` footer off-screen, so the same live turn reclassifies. The comments now carry
+that argument instead of the dead one.
+
+**4. The resolution order is now in `arch.md`.** `basename → .builder-start.sh → shell`, under
+Agent Farm Internals, with a cross-reference from the mailbox-first section. Both lanes raised it
+independently. opencode's sharper case is the one I would not have written down on my own: **if
+the launch script is MISSING, a bash-wrapped opencode builder is classified as a shell and gets
+Ctrl+C — without anyone reordering anything.** So a pruned worktree or a renamed script is a
+safety question, not a cosmetic one.
+
+**5.** Three follow-ups (the `/api/send` response type into `codev-types`, a grep test for
+literal control bytes outside `utils/harness.ts`, `recoveryPhaseFor`'s consumer) are the
+architect's to file, not mine to fix here.
+
+### Verification for this round
+
+Build green. 3 new tests on `heldRemedy`'s two branches and its arity. Locally: 383 across the
+ten affected agent-farm/terminal files, plus 106 across the 9 sdk files including the #1189
+boundary suites. No behaviour changed except `heldRemedy`'s signature — items 2-4 are text.

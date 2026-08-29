@@ -24,7 +24,81 @@ import { buildWorktreeGuardFiles } from './worktree-write-guard.js';
 // Types
 // =============================================================================
 
+/**
+ * What byte safely ENDS A TURN on a given agent's TUI (Issue #196).
+ *
+ * Not a style choice — a correctness fact per app, on the same footing as the
+ * model flag or the prompt arg. claude and codex read Ctrl+C as "interrupt the
+ * turn"; **opencode reads it as "quit"** and the process exits. Verified in the
+ * Tower log 2026-08-29: an unconditional `\x03` to an opencode builder took the
+ * shellper down 30s later, and opencode has no conversation resume, so the
+ * replacement woke with no memory of its work.
+ *
+ * ESC is the universal safe form — it ends the turn on all three (it is what
+ * opencode itself advertises: its busy footer reads `esc interrupt`, the string
+ * `OPENCODE_PROFILE.busyIndicatorPattern` matches). So callers DOWNGRADE to ESC
+ * on an `esc` harness rather than refusing; the operator's intent still lands.
+ */
+export type InterruptSignal = 'esc' | 'ctrl-c';
+
+/** The wire byte for each signal. The ONLY place these control bytes are spelled. */
+export const INTERRUPT_BYTES: Record<InterruptSignal, string> = {
+  esc: '\x1b',
+  'ctrl-c': '\x03',
+};
+
+/**
+ * What keystroke CLEARS leftover text from a given agent's composer (Issue #196).
+ *
+ * A different question from {@link InterruptSignal}, and deliberately a separate fact:
+ * ending a turn and clearing a draft are different intents, and on opencode they need
+ * different bytes. `'none'` means no byte is known to clear this app's composer without
+ * risking something worse — the recovery then declines and says so, rather than writing
+ * a guess.
+ *
+ * Read out of the shipped opencode 1.18.18 binary's default keybind table:
+ *   app_exit:                   "ctrl+c,ctrl+d,<leader>q"
+ *   input_clear:                "ctrl+c"
+ *   input_delete_to_line_start: "ctrl+u"
+ * Ctrl+C is bound to BOTH `app_exit` and `input_clear` — that overlap is the whole bug,
+ * and it is in opencode's own config, not in ours. `ctrl+u` is bound to exactly one
+ * action in the entire table, so it clears the line and can quit nothing.
+ */
+export type ClearDraftKey = 'ctrl-c' | 'ctrl-u' | 'none';
+
+/**
+ * The wire byte for each clear key. `'none'` has none, by construction.
+ *
+ * `'ctrl-c'` is DERIVED from {@link INTERRUPT_BYTES}, not re-spelled. The two tables
+ * name the same physical key, and `promptReadySequence`'s dedup is a string compare —
+ * so if these ever drifted apart, every claude and codex builder would silently get two
+ * writes where it gets one today. Deriving makes that drift unrepresentable rather than
+ * merely untested (CMAP round 1, finding 5).
+ */
+export const CLEAR_DRAFT_BYTES: Record<Exclude<ClearDraftKey, 'none'>, string> = {
+  'ctrl-c': INTERRUPT_BYTES['ctrl-c'],
+  'ctrl-u': '\x15',
+};
+
 export interface HarnessProvider {
+  /**
+   * The signal that safely interrupts a turn on this harness (Issue #196).
+   *
+   * REQUIRED, deliberately: a new built-in harness that forgets to declare it is
+   * a compile error, not a silent default into `ctrl-c` — which is exactly how
+   * this bug would come back. See {@link InterruptSignal}.
+   */
+  interruptSignal: InterruptSignal;
+
+  /**
+   * The keystroke that clears leftover text from this harness's composer (Issue #196),
+   * or `'none'` when no byte is known to do it safely. See {@link ClearDraftKey}.
+   *
+   * REQUIRED for the same reason as {@link HarnessProvider.interruptSignal}: the #92
+   * auto-recovery writes this byte with no operator in the loop, so an omitted entry
+   * must be a compile error rather than a default.
+   */
+  clearDraftKey: ClearDraftKey;
   /**
    * For Node spawn() call sites (architect.ts, tower-utils.ts).
    * Returns CLI args and env vars to inject the role.
@@ -205,6 +279,10 @@ export interface CustomHarnessConfig {
 // =============================================================================
 
 export const CLAUDE_HARNESS: HarnessProvider = {
+  // Verified: Claude Code reads Ctrl+C as "end this turn" and keeps the process,
+  // and the same byte clears a leftover composer line.
+  interruptSignal: 'ctrl-c',
+  clearDraftKey: 'ctrl-c',
   // Spec 1273: `/clear` empties the conversation while leaving the process — and
   // therefore the --append-system-prompt role below — intact. That is what makes
   // an in-session reset possible here and nowhere else today.
@@ -250,6 +328,10 @@ export const CLAUDE_HARNESS: HarnessProvider = {
 };
 
 export const CODEX_HARNESS: HarnessProvider = {
+  // Verified: codex-cli reads Ctrl+C as "end this turn" and keeps the process,
+  // and the same byte clears a leftover composer line.
+  interruptSignal: 'ctrl-c',
+  clearDraftKey: 'ctrl-c',
   buildRoleInjection: (_content, filePath) => ({
     args: ['-c', `model_instructions_file=${filePath}`],
     env: {},
@@ -265,6 +347,13 @@ export const CODEX_HARNESS: HarnessProvider = {
 };
 
 export const OPENCODE_HARNESS: HarnessProvider = {
+  // Issue #196, both read out of opencode 1.18.18's default keybind table:
+  //   session_interrupt: "escape"     -> ends the turn (its busy footer says so too)
+  //   app_exit:          "ctrl+c,..."  } Ctrl+C is BOTH, which is why it can quit
+  //   input_clear:       "ctrl+c"     }
+  //   input_delete_to_line_start: "ctrl+u"  -> the only ctrl+u binding in the table
+  interruptSignal: 'esc',
+  clearDraftKey: 'ctrl-u',
   buildRoleInjection: () => {
     throw new Error(
       'OpenCode is only supported as a builder shell, not as an architect shell. ' +
@@ -451,6 +540,15 @@ export function buildCustomHarnessProvider(config: CustomHarnessConfig): Harness
 
   return {
     ...modelHooks,
+    // Issue #196: a custom harness is never resolved by the interrupt path today —
+    // `detectHarnessFromCommand` matches only built-in basenames, and neither
+    // `resolveHarnessForSession` nor `promptReadySequence` threads `customHarnesses`
+    // through. So these are the fail-safe constants, NOT configurable: a declared-but-
+    // unreachable config field is the "registered, documented, inert" shape
+    // `assertHarnessAcceptsModel` below exists to prevent. Wire the resolvers to custom
+    // harnesses first, then make these configurable in the same change.
+    interruptSignal: 'esc',
+    clearDraftKey: 'none',
     buildRoleInjection: (content, filePath) => ({
       args: config.roleArgs.map(arg => expandTemplateVars(arg, content, filePath)),
       env: Object.fromEntries(
@@ -596,8 +694,103 @@ export function assertHarnessAcceptsModel(
 }
 
 // =============================================================================
+// Interrupt signal resolution
+// =============================================================================
+
+/**
+ * The interrupt signal for a harness NAME, fail-safe (Issue #196).
+ *
+ * The single table every interrupt caller reads. Resolution is deliberately
+ * narrower than {@link resolveHarness}: an unknown, retired or CUSTOM name yields
+ * `esc` rather than falling through to CLAUDE_HARNESS's `ctrl-c`. That default is
+ * the whole point — `resolveHarness`'s claude fallback is what would hand an
+ * unidentified opencode terminal the byte that kills it.
+ *
+ * Built-ins only, and no `customHarnesses` parameter: nothing on the interrupt path can
+ * resolve a custom harness today (`detectHarnessFromCommand` matches built-in basenames
+ * only), so accepting one would be an inert parameter dressed as support. A plain SHELL
+ * is handled by the caller via {@link SHELL_TARGET} — it is a known target, not an
+ * unknown harness.
+ */
+export function interruptSignalForHarness(harnessName: string | undefined | null): InterruptSignal {
+  if (!harnessName) return 'esc';
+  return getBuiltinHarness(harnessName)?.interruptSignal ?? 'esc';
+}
+
+/**
+ * The human name of a control byte, for logs and API responses (Issue #196).
+ *
+ * Operators reason in keystrokes, not escapes, and the whole complaint behind this issue
+ * was that nothing told them which byte went out. Unknown bytes are rendered as their hex
+ * escape rather than guessed at.
+ */
+export function keyName(byte: string): string {
+  if (byte === INTERRUPT_BYTES.esc) return 'ESC';
+  if (byte === CLEAR_DRAFT_BYTES['ctrl-c']) return 'Ctrl+C';
+  if (byte === CLEAR_DRAFT_BYTES['ctrl-u']) return 'Ctrl+U';
+  return `\\x${byte.charCodeAt(0).toString(16).padStart(2, '0')}`;
+}
+
+/** Render a byte sequence as a readable keystroke list, e.g. `ESC then Ctrl+U`. */
+export function describeInterruptBytes(bytes: readonly string[]): string {
+  return bytes.length ? bytes.map(keyName).join(' then ') : 'nothing';
+}
+
+/**
+ * The keystroke that clears a leftover draft on `harnessName`, fail-safe (Issue #196).
+ *
+ * Unknown, retired and custom harnesses resolve to `'none'`: no byte is written at all,
+ * and the caller reports the hold as unrecoverable rather than guessing. Built-ins only,
+ * for the same reason as {@link interruptSignalForHarness}.
+ */
+export function clearDraftKeyForHarness(harnessName: string | undefined | null): ClearDraftKey {
+  if (!harnessName) return 'none';
+  return getBuiltinHarness(harnessName)?.clearDraftKey ?? 'none';
+}
+
+// =============================================================================
 // Auto-detection
 // =============================================================================
+
+/**
+ * POSIX shells, whose interrupt is a KNOWN fact rather than an unknown one (Issue #196,
+ * CMAP round 1 finding 1).
+ *
+ * `afx send <shell-id> --interrupt` is reachable — `resolveAgentInRegistry` matches
+ * `entry.shells` — and a plain shell has no harness and no `.builder-start.sh`, so it was
+ * resolving into the unknown bucket and receiving a lone ESC. **bash ignores ESC.** That
+ * turned Spec 0020's original purpose for the flag, escaping a running process (the "Vim
+ * trap"), into a silent no-op that still reported success.
+ *
+ * Ctrl+C is right for a shell in BOTH halves of the contract: SIGINT to the foreground
+ * job, and readline discards the current input line. Fail-safe was the correct instinct
+ * for a genuinely unidentifiable target; a shell is identifiable, so it is identified.
+ */
+const SHELL_BASENAMES = ['bash', 'zsh', 'sh', 'dash', 'fish', 'ksh', 'csh', 'tcsh'];
+
+/** The keystroke facts for a plain shell target. */
+export const SHELL_TARGET: { interruptSignal: InterruptSignal; clearDraftKey: ClearDraftKey } = {
+  interruptSignal: 'ctrl-c',
+  clearDraftKey: 'ctrl-c',
+};
+
+/**
+ * Whether `command` launches a plain POSIX shell.
+ *
+ * Deliberately an EXACT basename match, not a substring one: `detectHarnessFromCommand`
+ * uses `includes` and can afford to, but a loose match here would claim things like
+ * `shellper` or a wrapper script ending in `-sh`, and claiming a target wrongly is how a
+ * fatal byte gets sent. Callers must consult this only AFTER harness detection and the
+ * `.builder-start.sh` lookup have both failed — a builder's own `session.command` is the
+ * shell that wraps its agent, and matching that first would send Ctrl+C to an opencode
+ * builder, which is the original bug.
+ */
+export function isShellCommand(command: string): boolean {
+  const firstToken = command.trim().split(/\s+/)[0];
+  if (!firstToken) return false;
+  const basename = (firstToken.split('/').pop() || firstToken).toLowerCase();
+  return SHELL_BASENAMES.includes(basename);
+}
 
 /**
  * Detect harness type from a command string by extracting the basename of the

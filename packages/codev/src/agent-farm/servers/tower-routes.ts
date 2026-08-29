@@ -53,8 +53,13 @@ import { handleAgentRoute } from './agent-routes.js';
 import { handleCanvasRoute, CANVAS_ROUTE_PREFIX } from './canvas-relay.js';
 import { formatArchitectMessage, formatBuilderMessage, formatUserViaVsCodeMessage } from '../utils/message-format.js';
 import type { PtySession } from '../../terminal/pty-session.js';
-import { writeMessageToSession, writeEscapeToSession } from './message-write.js';
-import { makeDeliveryPorts, getMailboxDrainer } from './mailbox-wiring.js';
+import { writeMessageToSession, writeEscapeToSession, writeControlSequence } from './message-write.js';
+import {
+  makeDeliveryPorts,
+  getMailboxDrainer,
+  promptReadySequence,
+} from './mailbox-wiring.js';
+import { describeInterruptBytes, keyName } from '../utils/harness.js';
 import { deliverAgentMailSerialized, type DeliveryPorts } from './mailbox-delivery.js';
 import { deliverCronMail, CRON_SENDER, type CronDeliveryResult } from './cron-delivery.js';
 import {
@@ -1693,11 +1698,13 @@ interface DelayedSendParams {
  * The body is NEVER written from here. A normal delayed send is delivered by the gated
  * backstop drainer once `not_before` passes (≤ one 1.5 s tick after due — the delay is a lower
  * bound). A delayed `--interrupt` (change 2 reshape) additionally keeps a small in-memory timer
- * that fires ONLY the Ctrl+C at due time (guarded by `isStillLive` + a re-fetched writable
- * session, inside the submission lock); the ^C ends the turn and the body then delivers through
- * the SAME gate every send uses — nothing is marked delivered here, so a #1198 dropped write or
- * a shutdown during the wait can never falsely report delivery or double-deliver. A restart
- * during the wait loses only the ^C nudge, never the message.
+ * that fires ONLY the prompt-ready keystrokes at due time (guarded by `isStillLive` + a
+ * re-fetched writable session, inside the submission lock). Issue #196: those keystrokes are
+ * resolved per harness by `promptReadySequence`, never a hardcoded byte — Ctrl+C on claude/codex
+ * and shells, ESC then Ctrl+U on opencode, which QUITS on Ctrl+C. They ready the prompt, and the
+ * body then delivers through the SAME gate every send uses — nothing is marked delivered here,
+ * so a #1198 dropped write or a shutdown during the wait can never falsely report delivery or
+ * double-deliver. A restart during the wait loses only the nudge, never the message.
  */
 function handleDelayedSend(
   res: http.ServerResponse,
@@ -1762,36 +1769,45 @@ function handleDelayedSend(
   ctx.broadcastNotification({ type: 'overview-changed', title: 'Held mail changed', body: 'scheduled' });
 
   if (interrupt) {
-    // Change 2 reshape: an in-memory timer that fires ONLY the Ctrl+C at due time. It writes
-    // no message body and marks nothing delivered — the body delivers through the gated
-    // drainer after the ^C ends the turn. Everything the ^C depends on — `isStillLive`
+    // Change 2 reshape: an in-memory timer that fires ONLY the prompt-ready keystrokes at due
+    // time (#196: resolved per harness by `promptReadySequence`, never a hardcoded `\x03`). It
+    // writes no message body and marks nothing delivered — the body delivers through the gated
+    // drainer once those keystrokes have readied the prompt. Everything they depend on — `isStillLive`
     // (delayed-send.ts's generation guard), the session's existence, and its writability — is
     // re-checked INSIDE the submission lock, right before the write, so a shutdown OR a session
     // teardown/respawn during the lock-wait writes nothing (invariant 2; the directive's
     // preferred shape). Diagnostics arg falls back to toAgent when the target has no terminal
     // id yet.
     scheduleDelayedSend(deliverAfter, terminalId ?? toAgent, (isStillLive) => {
-      if (!isStillLive()) return; // shutdown before/at due → drop the ^C nudge (body survives)
+      if (!isStillLive()) return; // shutdown before/at due → drop the nudge (body survives)
       if (terminalId) {
         let fired = false;
+        let sent: string[] = [];
         void submitToSession(terminalId, () => {
           // Re-check EVERYTHING inside the lock: the queued submission can acquire the lock only
           // AFTER a shutdown or a session teardown/respawn that landed while it waited behind an
           // in-flight write. Re-fetch the session and re-check live + writable here; bail with no
-          // ^C otherwise (the body still delivers via the gate).
+          // keystrokes otherwise (the body still delivers via the gate).
           if (!isStillLive()) return 0;
           const live = getTerminalManager().getSession(terminalId);
           if (!live || !live.writable) return 0;
-          live.write('\x03'); // Ctrl+C only — end the turn; body follows via the gate
+          // Issue #196: the bytes that ready a prompt are PER-HARNESS facts, not constants.
+          // Ctrl+C ends the turn AND clears the line on claude/codex, but QUITS opencode —
+          // there the two halves are ESC and Ctrl+U. Resolved from the session's own agent
+          // and deduplicated, so claude/codex still get exactly one `\x03`.
+          sent = promptReadySequence(live);
+          // Settled, not back-to-back: ESC followed immediately by a character is the
+          // terminal encoding for Alt+character, so an unspaced `\x1b\x15` can be read as
+          // one alt-keypress instead of two keystrokes. Hold the lock until the last byte.
           fired = true;
-          return 0; // no body, no Enter on this path
+          return writeControlSequence(live, sent);
         })
           .then(() =>
             ctx.log('INFO', fired
-              ? `Delayed interrupt ^C fired → ${toAgent} (terminal ${terminalId.slice(0, 8)}...); body delivers via the gate`
+              ? `Delayed interrupt (${describeInterruptBytes(sent)}) fired → ${toAgent} (terminal ${terminalId.slice(0, 8)}...); body delivers via the gate`
               : `Delayed interrupt for ${toAgent}: session not live/writable at write time — body delivers via the gate on the next clean pass`),
           )
-          .catch((err) => ctx.log('ERROR', `Delayed interrupt ^C failed for ${toAgent}: ${(err as Error).message}`));
+          .catch((err) => ctx.log('ERROR', `Delayed interrupt failed for ${toAgent}: ${(err as Error).message}`));
       } else {
         ctx.log('INFO', `Delayed interrupt for ${toAgent}: no live terminal at due time — body delivers via the gate on the next clean pass`);
       }
@@ -2064,9 +2080,10 @@ async function handleSend(
   // immediate-path block — a delayed send is resolved + persisted at request time and does
   // not fall through here.
 
-  // Spec 1313: `interrupt` is the explicit human bypass. Ctrl+C, then deliver
-  // WITHOUT the render-gate (the operator is looking at this terminal). A row is
-  // still persisted and marked delivered for audit parity — every send is a row.
+  // Spec 1313: `interrupt` is the explicit human bypass. The prompt-ready keystrokes for
+  // this harness (#196 — NOT a fixed Ctrl+C), then deliver WITHOUT the render-gate (the
+  // operator is looking at this terminal). A row is still persisted and marked delivered
+  // for audit parity — every send is a row.
   if (interrupt) {
     const row = enqueueMailbox(db, {
       workspacePath: result.workspacePath,
@@ -2094,22 +2111,41 @@ async function handleSend(
     // preferred over double-delivering it; `--interrupt` is the explicit human gate-bypass anyway.
     markMailboxDelivered(db, row.id);
     // Deliver the interrupt as ONE atomic critical section under the Spec 1273 per-terminal
-    // submission lock (CMAP round 1 — Gemini/Codex/Claude): the Ctrl+C, its 100 ms settle, and
-    // the message write all occur inside a single lock acquisition. Previously the \x03 + the
-    // settle sat OUTSIDE the lock, so a concurrent submission to the same terminal could land
-    // its Ctrl+C inside another submission's text→Enter window (killing that composer) or run
-    // during the 100 ms gap. `writeMessageToSession(..., 100)` schedules the text 100 ms after
-    // the ^C (the settle) and returns the completion offset, so the lock is held until the
-    // whole interrupt is on the wire; uncontended, it runs at once.
+    // submission lock (CMAP round 1 — Gemini/Codex/Claude): the prompt-ready keystrokes, their
+    // 100 ms settle, and the message write all occur inside a single lock acquisition.
+    // Previously the control byte + the settle sat OUTSIDE the lock, so a concurrent submission
+    // to the same terminal could land its keystrokes inside another submission's text→Enter
+    // window (killing that composer) or run during the 100 ms gap. `writeMessageToSession(...,
+    // controlsDone + 100)` schedules the text 100 ms after the LAST control byte (#196: a
+    // multi-byte harness settles between its own bytes first, so the offset is measured from
+    // when the sequence finished, not from a flat 100 ms after the first byte) and returns the
+    // completion offset, so the lock is held until the whole interrupt is on the wire;
+    // uncontended, it runs at once.
     //   Scope of the guarantee: this serializes interrupt against interrupt/escape — the only
     //   /api/send writers that take this per-terminal lock. It does NOT serialize against a
     //   concurrent mailbox/backstop delivery (which writes through the per-AGENT serializer, a
     //   disjoint lock); interrupt is the explicit gate-bypassing human action, and closing that
     //   cross-path race would require the mailbox write edge to take this lock too (a separate,
     //   larger change — flagged, not done here).
+    // Issue #196: `--interrupt`'s job is to make the prompt READY for this message, which
+    // is two things — end any running turn, and clear an abandoned composer. Ctrl+C did
+    // both on claude/codex, which is why they were never separated; on opencode Ctrl+C
+    // QUITS, and the two halves are ESC and Ctrl+U. Both are resolved from the session's
+    // own agent and deduplicated, so claude/codex still write exactly one `\x03`.
+    //   Residual, accepted (CMAP round 1, non-blocking): this path BYPASSES the render
+    //   gate by design, so it has no second net. A session whose agent cannot be
+    //   identified gets ESC alone — which ends a turn but clears nothing — and the body
+    //   is then written onto whatever text was already in the composer, fusing with it.
+    //   The gated path re-classifies and would hold instead; here the operator is
+    //   looking at the terminal, which is the trade `--interrupt` has always made.
+    const interruptBytes = promptReadySequence(session);
     await submitToSession(result.terminalId, () => {
-      session.write('\x03'); // Ctrl+C
-      return writeMessageToSession(session, formattedMessage, noEnter, 100);
+      // Settled between bytes (see writeControlSequence): an unspaced ESC+Ctrl+U is the
+      // Alt+u encoding, not two keystrokes. The body is then offset past the LAST byte
+      // rather than a fixed 100 ms from the first, so the 100 ms settle the message has
+      // always had is preserved on a multi-byte harness instead of being eaten by it.
+      const controlsDone = writeControlSequence(session, interruptBytes);
+      return writeMessageToSession(session, formattedMessage, noEnter, controlsDone + 100);
     });
     broadcastMessage({
       type: 'message',
@@ -2119,7 +2155,7 @@ async function handleSend(
       metadata: { raw, source: 'api' },
       timestamp: new Date().toISOString(),
     });
-    ctx.log('INFO', `Message delivered (interrupt): ${from ?? 'unknown'} → ${toAgent} (terminal ${result.terminalId.slice(0, 8)}...)`);
+    ctx.log('INFO', `Message delivered (interrupt: ${describeInterruptBytes(interruptBytes)}): ${from ?? 'unknown'} → ${toAgent} (terminal ${result.terminalId.slice(0, 8)}...)`);
     sendJson(res, 200, {
       ok: true,
       terminalId: result.terminalId,
@@ -2129,6 +2165,9 @@ async function handleSend(
       held: false,
       mailboxId: row.id,
       reason: null,
+      // Issue #196: report which bytes actually went out, so the operator is never
+      // guessing what their `--interrupt` did on this harness.
+      interruptKeys: interruptBytes.map(keyName),
     });
     return;
   }

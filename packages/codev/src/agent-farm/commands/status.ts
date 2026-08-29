@@ -146,7 +146,8 @@ function renderMailboxSummary(heldCount: number, escalated: boolean): void {
     logger.info('  Mail has been held past its escalation age — a stuck composer may be starving delivery.');
     // #21: the old line named `afx interrupt`, which sends ESC. ESC does not clear
     // typed text in a composer, so it changed nothing and the alert fired again
-    // three minutes later. `afx send --interrupt` sends Ctrl+C first, which does.
+    // three minutes later. `afx send --interrupt` readies the prompt first, which does
+    // — with the keystrokes recorded as safe for that harness (#196), not a fixed Ctrl+C.
     logger.info(`  Inspect: ${chalk.cyan('afx inbox')}   ·   see why each is held: ${chalk.cyan('afx inbox show <id>')}`);
     logger.info(`  A composer holding leftover TEXT clears with: ${chalk.cyan('afx send <id> --interrupt "<message>"')}`);
     logger.info(chalk.dim('  (afx interrupt sends ESC, which ends a turn but does not clear typed text.)'));

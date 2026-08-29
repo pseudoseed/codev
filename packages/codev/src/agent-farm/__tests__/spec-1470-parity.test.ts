@@ -199,7 +199,15 @@ describe('--delay persistence documentation', () => {
     // fails FIRST — so the docs are never "corrected" into a new lie.
     const src = read('packages/codev/src/agent-farm/servers/delayed-send.ts');
     expect(src).toContain('survives a Tower restart by construction');
-    expect(src).toContain('Only the in-memory ^C');
+    // Issue #196 widened the nudge beyond Ctrl+C (ESC then Ctrl+U on opencode), so the
+    // literal '^C' became FALSE here exactly as it did in types.ts. Same contract, not
+    // relaxed: the exception must still be scoped to what is IN-MEMORY and must still
+    // name a concrete keystroke, so genericising it to "the in-memory nudge" fails.
+    const nudgeLine = src.split('\n').find(l => l.includes('Only the in-memory'));
+    expect(nudgeLine, 'delayed-send.ts no longer scopes the restart exception to the in-memory nudge')
+      .toBeDefined();
+    expect(nudgeLine, 'the in-memory exception is named but no longer says WHICH keystroke')
+      .toContain('Ctrl+C');
   });
 
   /**
@@ -245,7 +253,18 @@ describe('--delay persistence documentation', () => {
     expect(delayOption, "cli.ts no longer defines a --delay option").toBeDefined();
     expect(delayOption, 'the --delay help claims restart-survival without naming the exception')
       .toContain('--interrupt');
-    expect(read('packages/codev/src/agent-farm/types.ts')).toContain('Ctrl+C nudge');
+    // Issue #196 widened the nudge: it is Ctrl+C on claude/codex but ESC then Ctrl+U on
+    // opencode, so the literal 'Ctrl+C nudge' became FALSE rather than merely stale. The
+    // guard's contract is unchanged and deliberately not relaxed — the exception must
+    // still be named WITH a concrete keystroke, scoped to its own line, so genericising
+    // it to "a keystroke nudge" still fails here.
+    const nudgeLine = read('packages/codev/src/agent-farm/types.ts')
+      .split('\n')
+      .find(l => l.includes('delayed `--interrupt`'));
+    expect(nudgeLine, 'types.ts no longer names the delayed --interrupt restart exception')
+      .toBeDefined();
+    expect(nudgeLine, 'the exception is named but no longer says WHICH keystroke — a vague claim traded for a precise one is what this guard exists to catch')
+      .toContain('Ctrl+C');
     for (const rel of [
       '.claude/skills/arch-save/SKILL.md',
       '.codex/skills/arch-save/SKILL.md',

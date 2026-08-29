@@ -174,7 +174,11 @@ export interface SendOptions {
   message?: string;     // Message to send
   all?: boolean;        // Send to all builders
   file?: string;        // File to include in message
-  interrupt?: boolean;  // Send Ctrl+C first to ensure prompt is ready
+  // #196: BOTH halves of readying a prompt — end any running turn AND clear an abandoned
+  // composer — using the keystrokes recorded as safe for the target's harness, which is a
+  // sequence and not one byte (Ctrl+C on claude/codex and shells; ESC then Ctrl+U on
+  // opencode, which QUITS on Ctrl+C).
+  interrupt?: boolean;
   raw?: boolean;        // Skip structured formatting
   noEnter?: boolean;    // Don't send Enter after message
   /**
@@ -184,8 +188,9 @@ export interface SendOptions {
    * Persisted, and deliberately so: the body is written to the durable mailbox
    * with a `not_before` timestamp, so Tower holds no timer and a restart inside
    * the window does not drop the send (see `servers/delayed-send.ts`). Only the
-   * Ctrl+C nudge of a delayed `--interrupt` is lost to a restart, because that
-   * one genuinely is an in-memory timer.
+   * nudge of a delayed `--interrupt` — Ctrl+C on claude and codex, ESC then Ctrl+U
+   * on opencode (#196) — is lost to a restart, because that one genuinely is an
+   * in-memory timer.
    *
    * Named `delay` here to match the user-facing `--delay` flag; it becomes
    * `deliverAfter` at the client and wire layers, where the question is *when

@@ -174,7 +174,11 @@ export async function inboxList(options: InboxListOptions = {}): Promise<void> {
     logger.info(
       'A row marked user-text is a composer holding text the agent left behind. It will not clear on its own:',
     );
-    logger.info('  afx send <id> --interrupt "<message>"   (Ctrl+C first, which clears the line)');
+    // #196: the parenthetical used to say "Ctrl+C first, which clears the line". Ctrl+C is
+    // fatal on opencode, and this is the one screen an operator reads at the exact moment
+    // they are about to run the command — so it names the resolved keystrokes, not a byte.
+    logger.info('  afx send <id> --interrupt "<message>"   (readies the prompt with the keystrokes recorded as safe for that agent)');
+    logger.info('    Ctrl+C on claude/codex and shells; ESC then Ctrl+U on opencode, which QUITS on Ctrl+C.');
     logger.info('  afx interrupt sends ESC, which ends a turn but does not clear typed text.');
   }
 

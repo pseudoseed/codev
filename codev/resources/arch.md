@@ -625,6 +625,41 @@ applied to every agent in the workspace and was invisible to `afx`, `porch` and 
 Note the `consult` side is unchanged and already had this: `-m` selects the **lane**, `--model-id`
 the provider model (spec 1286).
 
+#### Harness resolution for control keystrokes: basename → launch script → shell (Issue #196)
+
+Control bytes written into a live terminal are **per-harness facts, not constants**. Ctrl+C
+(`\x03`) pauses the turn and clears the composer on claude and codex; **opencode binds Ctrl+C to
+`app_exit` as well as `input_clear` and quits on it** (read out of the shipped binary — `app_exit:
+"ctrl+c,ctrl+d,<leader>q"`, `session_interrupt: "escape"`). Sending it unconditionally destroyed a
+builder session on 2026-08-29, and opencode has no conversation resume, so the replacement woke with
+no memory. The signals live in one table (`INTERRUPT_BYTES` / `CLEAR_DRAFT_BYTES` in
+`agent-farm/utils/harness.ts`) as **required** `HarnessProvider` fields — a new built-in that omits
+one is a compile error rather than a silent default into `ctrl-c`.
+
+**Resolving which harness a live session is running has a load-bearing ORDER**
+(`resolveHarnessForSession` / `isPlainShellSession`, `servers/mailbox-wiring.ts`):
+
+1. **The launch command's basename** (`detectHarnessFromCommand`).
+2. **The worktree's `.builder-start.sh`** (`harnessFromLaunchScript`) — the wrapped-launch case.
+3. **Only then**, the plain-shell test (`isShellCommand` → `SHELL_TARGET`, `ctrl-c`/`ctrl-c`).
+
+**Reverse steps 1–3 and the original bug returns through its own fix.** A builder's
+`session.command` *is* a shell — the `.builder-start.sh` wrapper — so a shell test consulted first
+classifies every builder as a shell and sends `\x03` to opencode. Three tests pin the ordering.
+
+The sharper case needs no reordering at all: if the launch script is **missing**, a bash-wrapped
+opencode builder falls through both harness steps and is classified as a shell. Anything that can
+make step 2 fail — a pruned worktree, a renamed script, a session whose `cwd` is empty — therefore
+has to be treated as a safety question, not a cosmetic one.
+
+An unidentified session is a **known-unknown**: it gets ESC alone and no clear key (`'none'`),
+because the fail-safe for "I could not tell" is the byte that is safe everywhere, never a guess.
+A plain shell is a **known target**, not an unknown one — resolving it into the unknown bucket wrote
+a lone ESC, which bash ignores, turning the flag into a silent no-op that still reported success.
+
+The same order backs the render gate's profile lookup (`resolveProfileForSession`), deliberately:
+the interrupt table and the gate table must never disagree about what app a terminal is.
+
 ### Tower Single Daemon Architecture (Spec 0090, decomposed in Spec 0105)
 
 As of v2.0.0 (Spec 0090 Phase 4), Agent Farm uses a **Tower Single Daemon** architecture. The Tower server manages all projects directly - there are no separate dashboard-server processes per project. As of Spec 0105, the monolithic `tower-server.ts` was decomposed into focused modules (see "Server Architecture" below for the full module table).
@@ -1580,7 +1615,7 @@ afx send 0003 "Check the tests"        # Send message to builder 0003
 afx send --all "Stop and report"       # Broadcast to all builders
 afx send architect "Need help"         # Builder sends to architect (from worktree)
 afx send 0003 "msg" --file diff.txt    # Include file content
-afx send 0003 "msg" --interrupt        # Send Ctrl+C first
+afx send 0003 "msg" --interrupt        # Ready the prompt first (Ctrl+C; ESC then Ctrl+U on opencode)
 afx send 0003 "msg" --raw              # Skip structured formatting
 
 # Direct CLI access (v1.5.0+)
@@ -1793,6 +1828,8 @@ The startup ordering is critical — race conditions have caused real bugs when 
 **Location**: `db/mailbox.ts`, `servers/render-gate.ts`, `servers/gate-profiles.ts`, `servers/write-queue.ts`, `servers/mailbox-delivery.ts`, `servers/mailbox-wiring.ts`, `servers/cron-delivery.ts`, `commands/send.ts`, `commands/inbox.ts`, `terminal/pty-session.ts`
 
 Spec 1313 replaced Spec 403's in-memory, timer-based, force-flushing `SendBuffer` (deleted) with a **mailbox-first** pipeline. The governing invariant: a message body is **only ever written to a prompt a headless-terminal render-gate proves is empty**, so it can never fuse with a draft, a menu, a dialog, or a wrapper screen — corruption is eliminated *by construction*, not detect-and-repair. **There is no force path**: no timeout, valve, or fallback ever writes onto a non-clean screen. Any new automated message writer MUST route through this mailbox+gate — never write a PTY directly.
+
+**Control bytes are per-harness, and the resolution order is load-bearing.** `--interrupt` and the #92 auto-recovery do not write a fixed `\x03`: they resolve the target's harness by **basename → `.builder-start.sh` → shell**, in that order, and look the bytes up in one table. Ctrl+C QUITS opencode. See *Agent Farm Internals → Harness resolution for control keystrokes* (Issue #196) for why reversing that order, or losing the launch script, reintroduces the bug.
 
 #### How it works
 

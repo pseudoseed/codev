@@ -341,7 +341,7 @@ afx send [builder] [message] [options]
 **Options:**
 - `--all` - Send to all builders
 - `--file <path>` - Include file content in message
-- `--interrupt` - Send Ctrl+C first
+- `--interrupt` - Ready the prompt first — end any running turn and clear the composer — with the keystrokes recorded as safe for the target (Ctrl+C on claude/codex and shells; **ESC then Ctrl+U** on opencode, which quits on Ctrl+C — Issue #196)
 - `--raw` - Skip structured message formatting
 - `--no-enter` - Do not send Enter after message
 - `--delay <seconds>` - Deliver after N seconds instead of immediately
@@ -372,7 +372,7 @@ free to exit in the meantime. That is the point: a session can schedule a messag
   `--delay` means.
 - **Reporting:** the CLI says "scheduled", not "sent", and returns the mailbox id of the
   persisted row.
-- `--interrupt` is combinable (the Ctrl+C defers *with* the message); the API's `escape`
+- `--interrupt` is combinable (the interrupt defers *with* the message); the API's `escape`
   option is not (an ESC bypasses buffering precisely so it interrupts the *current* turn).
 
 ```bash
@@ -491,7 +491,9 @@ ends. ESC interrupts the running tool and ends the turn. ESC alone is the safe d
 can activate whatever action an unknown dialog has highlighted. Use `--enter` when ending a known
 running turn and processing its queued messages is worth that risk.
 
-Distinct from `afx send --interrupt`, which sends Ctrl+C.
+Distinct from `afx send --interrupt`, which readies the prompt — ending the turn AND clearing the
+composer — with the keystrokes recorded as safe for the target (Ctrl+C on claude/codex and shells;
+ESC then Ctrl+U on opencode) and then delivers a message.
 
 **Examples:**
 

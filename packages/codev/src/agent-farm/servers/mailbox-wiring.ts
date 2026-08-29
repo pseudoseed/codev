@@ -21,6 +21,16 @@ import { writeMessagePaced } from './message-write.js';
 import { classifyBuffer, type GateProfile, type GateVerdict } from './render-gate.js';
 import { resolveProfile } from './gate-profiles.js';
 import {
+  clearDraftKeyForHarness,
+  detectHarnessFromCommand,
+  interruptSignalForHarness,
+  isShellCommand,
+  CLEAR_DRAFT_BYTES,
+  INTERRUPT_BYTES,
+  SHELL_TARGET,
+  type ClearDraftKey,
+} from '../utils/harness.js';
+import {
   buildContextFsPort,
   harnessFromLaunchScript,
   type ContextFsPort,
@@ -37,6 +47,7 @@ import {
   threadDeliverySession,
   type DeliveryPorts,
   type DeliverySession,
+  type HeldRecoveryResult,
   type DeliveredBroadcast,
   type EscalationInfo,
   type LivenessInfo,
@@ -44,7 +55,11 @@ import {
   type HeldRecoveryInfo,
 } from './mailbox-delivery.js';
 import type { MailboxEscalationPayload } from '@cluesmith/codev-types';
-import { heldRecoveryAction, heldRecoveryKeystroke } from './mailbox-hold-policy.js';
+import {
+  heldRecoveryAction,
+  heldRecoveryKeystroke,
+  type HeldRecoveryAction,
+} from './mailbox-hold-policy.js';
 
 /**
  * "Recent output" window for the liveness diagnostic (Spec 1313, Phase 7 — spec line
@@ -169,6 +184,89 @@ export function resolveProfileForSession(session: DeliverySession): GateProfile 
 }
 
 /**
+ * The harness a live session is running, or `null` when it cannot be identified
+ * (Issue #196). Same two-step resolution {@link resolveProfileForSession} uses, so
+ * the interrupt table and the gate table can never disagree about what app a
+ * terminal is: the launch `command`'s basename first, then the worktree's
+ * `.builder-start.sh` for the wrapped-launch case (a builder runs through the
+ * script, so `session.command` is the shell).
+ */
+export function resolveHarnessForSession(session: DeliverySession): string | null {
+  // Both fields are defensively re-checked: a reconnected terminal row can carry an
+  // empty `command` (see db/index.ts), and an unidentified session must fall through
+  // to the fail-safe `esc` rather than throw inside an interrupt write.
+  const command = typeof session.command === 'string' ? session.command : '';
+  const detected = command ? detectHarnessFromCommand(command) : undefined;
+  if (detected) return detected;
+  const cwd = typeof session.cwd === 'string' ? session.cwd : '';
+  return cwd ? harnessFromLaunchScript(NODE_FS_PORT, cwd) : null;
+}
+
+/**
+ * The keystroke that clears a leftover draft in THIS session's composer, or `'none'`
+ * when the agent is unidentified or has no known safe clear (Issue #196).
+ */
+export function clearDraftKeyForSession(session: DeliverySession): ClearDraftKey {
+  const harness = resolveHarnessForSession(session);
+  if (harness) return clearDraftKeyForHarness(harness);
+  return isPlainShellSession(session) ? SHELL_TARGET.clearDraftKey : 'none';
+}
+
+/**
+ * Whether this session is a PLAIN SHELL rather than an agent (Issue #196, CMAP finding 1).
+ *
+ * Order is load-bearing and this is why it is a separate predicate rather than a branch
+ * inside {@link resolveHarnessForSession}: a builder's `session.command` IS a shell — the
+ * `.builder-start.sh` wrapper — so this may only be consulted once harness detection AND
+ * the launch-script lookup have both come back empty. Reversing that would send Ctrl+C to
+ * an opencode builder, which is the bug this whole change exists to fix.
+ */
+function isPlainShellSession(session: DeliverySession): boolean {
+  if (resolveHarnessForSession(session) !== null) return false;
+  return isShellCommand(typeof session.command === 'string' ? session.command : '');
+}
+
+/**
+ * The bytes `afx send --interrupt` must write to make this session's prompt READY to
+ * receive a message (Issue #196), in order.
+ *
+ * `--interrupt`'s contract is neither "end the turn" nor "clear the draft" — it is
+ * *whatever it takes to get a clean prompt*, and the two intents were never separated
+ * because one byte did both on the only harnesses that existed. From source:
+ *
+ * - Spec 0020 introduced it as "Send Ctrl+C first to ensure prompt is ready", mitigating
+ *   the "Vim trap" — a RUNNING process to escape.
+ * - Spec 1273 then gave "end the turn" its own command (`afx interrupt`, ESC) and recorded
+ *   `--interrupt` as "a different signal", explicitly NOT the mid-turn unwedge.
+ * - Issue #21 adopted it as the remedy for an abandoned composer, because Ctrl+C "does"
+ *   clear typed text where ESC does not.
+ *
+ * So it owns BOTH halves, and on opencode they are two different bytes: ESC ends the turn
+ * (`session_interrupt`) and Ctrl+U clears the line (`input_delete_to_line_start`). Sending
+ * only the interrupt would leave `--interrupt` safe but useless for the job #21 documents —
+ * the operator would have no way to clear an opencode composer while the auto-recovery does.
+ *
+ * Deduplicated, so claude and codex — where one `\x03` is both halves — get exactly one
+ * write, byte-identical to the behaviour before this fix. A harness with no known clear key
+ * gets the interrupt alone rather than a guessed byte.
+ */
+export function promptReadySequence(session: DeliverySession): string[] {
+  const harness = resolveHarnessForSession(session);
+  // A plain shell is a KNOWN target, not an unknown one: Ctrl+C both interrupts the
+  // foreground job and makes readline discard the line. Resolving it into the unknown
+  // bucket wrote a lone ESC, which bash ignores — turning Spec 0020's whole purpose for
+  // this flag into a silent no-op that still reported success.
+  const shell = harness === null && isPlainShellSession(session);
+  const interrupt = shell
+    ? INTERRUPT_BYTES[SHELL_TARGET.interruptSignal]
+    : INTERRUPT_BYTES[interruptSignalForHarness(harness)];
+  const clearKey = shell ? SHELL_TARGET.clearDraftKey : clearDraftKeyForHarness(harness);
+  if (clearKey === 'none') return [interrupt];
+  const clear = CLEAR_DRAFT_BYTES[clearKey];
+  return clear === interrupt ? [interrupt] : [interrupt, clear];
+}
+
+/**
  * Classify a session's CURRENT screen for the gate (Spec 1313 render-gate round 2). Reads the
  * session's persistent {@link SessionScreen} mirror — a bounded headless Terminal fed the
  * session's output from birth — and runs the shared classifier on its viewport. This replaces
@@ -198,10 +296,16 @@ export async function classifyAgentScreen(
   //
   // `busy-indicator` is the one detail `heldRecoveryAction` deliberately refuses to act on:
   // it proves the agent is generating, so any recovery keystroke corrupts active work.
-  // `geometry-mismatch` maps to `escape-screen` — an ESC. Returning the geometry answer for
-  // a mid-turn screen would therefore route the exact screen that policy protects into the
-  // exact keystroke it withholds, trading a delivery failure for a corruption failure. The
-  // first version of this check ran before `classifyBuffer` and did precisely that.
+  //
+  // NOTE the argument no longer runs through `geometry-mismatch`'s recovery action: #197
+  // removed that mapping outright, so a geometry verdict now yields no keystroke at all.
+  // What survives, and is the real reason for the ordering, is that the geometry answer is
+  // read off a frame whose row boundaries are untrustworthy, while `busy-indicator` is a
+  // POSITIVE proof of a live turn read off that same frame. The mismatch destroys the proof
+  // rather than outranking it (a reflow can carry opencode's `esc interrupt` footer
+  // off-screen, and the same live turn then classifies `geometry-mismatch`), so the check
+  // that can still assert something true has to run first. The first version of this check
+  // ran before `classifyBuffer` and lost that proof every time.
   //
   // Both verdicts hold, so nothing is lost by yielding here: the mismatch is still real, and
   // it will be reported the moment the turn ends and the busy indicator clears.
@@ -320,8 +424,23 @@ function formatOwnerNoticeBody(info: HeldOwnerNoticeInfo): string {
     `Mailbox delivery is STUCK for builder '${info.toAgent}' @ ${path.basename(info.workspacePath)}. ` +
     `${info.heldCount} ${plural} held ~${mins}m (reason: ${info.reason ?? 'held'}) — its composer never classifies as a ready prompt, ` +
     `so nothing is being delivered (cron nudges included). ` +
-    heldRemedy(info.toAgent, info.detail ?? null)
+    heldRemedy(info.toAgent, info.detail ?? null, canAutoClearFor(info.workspacePath, info.toAgent))
   );
+}
+
+/**
+ * Whether Tower has a clearing keystroke recorded for this agent, i.e. whether the #92
+ * auto-recovery can actually repair a `user-text` hold on it (Issue #196 / #190).
+ *
+ * Answers "will the automatic repair happen?" so {@link heldRemedy} can stop promising
+ * one that will not. A session that cannot be resolved, or is gone, answers `false`:
+ * on an unknown target `writeHeldRecovery` writes nothing and the hold is reported
+ * unrecoverable, and telling an operator to wait for that is #190's exact shape.
+ */
+function canAutoClearFor(workspacePath: string, toAgent: string): boolean {
+  const session = resolveLiveSessionForAgent(workspacePath, toAgent);
+  if (!session || isThreadDeliverySession(session)) return false;
+  return heldRecoveryKeystroke('cancel-draft', clearDraftKeyForSession(session)) !== null;
 }
 
 /**
@@ -329,10 +448,29 @@ function formatOwnerNoticeBody(info: HeldOwnerNoticeInfo): string {
  *
  * The old text named `afx interrupt`, which sends ESC. ESC does not clear typed
  * text in a composer, so running it changed nothing and the alert fired again
- * three minutes later. What works is `afx send <id> --interrupt`, which sends
- * Ctrl+C first and clears the line — documented as a way to send a message, not
- * as the remedy for this state, so nobody found it. Hit five times on
- * 2026-08-21, each needing manual intervention.
+ * three minutes later. What works is `afx send <id> --interrupt`, which readies the
+ * prompt with the keystrokes recorded as safe for that agent — Ctrl+C on claude/codex
+ * and shells, ESC then Ctrl+U on opencode (#196) — and clears the line. It was
+ * documented as a way to send a message, not as the remedy for this state, so nobody
+ * found it. Hit five times on 2026-08-21, each needing manual intervention.
+ *
+ * `canAutoClear` (#190, again): the automatic recovery only fires when a clearing
+ * keystroke is RECORDED for the target's agent. On an unidentified or custom one
+ * nothing is written and the hold reports `unrecoverable`, so promising a repair that
+ * will never arrive is the same defect this function was written to remove — a remedy
+ * naming something that does not happen.
+ *
+ * It is deliberately REQUIRED, with no default. A default of `true` fails toward the
+ * false claim: a future caller that omits it re-arms #190 in prose, silently, and the
+ * promise is exactly the one this function exists to stop making. A default of `false`
+ * would be safe but silent in the other direction. Requiring it makes an omission a
+ * compile error in production source, so every call site has to answer out loud.
+ *
+ * That lever does NOT reach test files: this package's tsconfig excludes the
+ * `__tests__` directories, so a call-arity error there is invisible to `tsc`. A test in
+ * `bugfix-196-interrupt-signal.test.ts` asserts `heldRemedy.length === 3` for that
+ * reason: re-adding a default drops the arity to 2, which is the only runtime-visible
+ * trace it leaves.
  *
  * `user-text` gets the clearing command. `busy-indicator` is an agent mid-turn:
  * clearing there would corrupt a live turn, and the answer is to wait.
@@ -346,15 +484,24 @@ function formatOwnerNoticeBody(info: HeldOwnerNoticeInfo): string {
  * That is why removing geometry-mismatch's recovery action degraded gracefully here
  * instead of promising an ESC that would never fire; do not replace it with a list.
  */
-export function heldRemedy(toAgent: string, detail: string | null): string {
+export function heldRemedy(toAgent: string, detail: string | null, canAutoClear: boolean): string {
   const inspect = `Inspect with 'afx inbox'.`;
 
   if (detail === 'user-text') {
+    // #190's shape, and worth stating plainly because this function exists to avoid it:
+    // only claim the automatic repair when one can actually be sent.
+    const automatic = canAutoClear
+      ? `Tower sends one automatic clearing keystroke after the starvation window. If it remains held, `
+      : `Tower has NO clearing keystroke recorded for this agent, so no automatic repair will be attempted — `
+        + `this hold needs a human. Clear it with: `;
+    const lead = canAutoClear ? `clear it with: ` : ``;
     return (
       `${inspect} Its composer is holding TEXT the agent left behind and will not clear on its own. ` +
-      `Tower sends one automatic Ctrl+C after the starvation window. If it remains held, ` +
-      `clear it with: afx send ${toAgent} --interrupt "<your message>"   ` +
-      `(sends Ctrl+C first, which clears the line — 'afx interrupt' sends ESC, which does not).`
+      automatic + lead +
+      `afx send ${toAgent} --interrupt "<your message>"   ` +
+      `(readies the prompt using the keystrokes recorded as safe for this agent — Ctrl+C on claude/codex, ` +
+      `ESC then Ctrl+U on opencode, which quits on Ctrl+C — then delivers. By contrast ` +
+      `'afx interrupt' sends ESC, which does not clear typed text on any harness.)`
     );
   }
 
@@ -515,20 +662,71 @@ function surfaceLiveness(info: LivenessInfo, log: LogFn): void {
 }
 
 /**
+ * Write ONE bounded recovery keystroke to `session` and return the byte written, or
+ * `null` when the write was rejected (Issue #196).
+ *
+ * The whole point of this function is that it is the ONLY place the #92 auto-recovery
+ * puts a control byte on a PTY, and it derives that byte from the session's own harness.
+ * That path fires with NO operator in the loop, so an unconditional `\x03` here let Tower
+ * quit an opencode builder by itself — strictly worse than the manual `--interrupt` case,
+ * because nobody is watching to learn from it. Exported so the regression test can assert
+ * on the bytes this production code writes rather than on a policy return value.
+ */
+export function writeHeldRecovery(
+  session: DeliverySession,
+  action: HeldRecoveryAction,
+): string | null {
+  const control = heldRecoveryKeystroke(action, clearDraftKeyForSession(session));
+  if (control === null) return null; // no safe byte for this agent — write nothing
+  return session.write(control) ? control : null;
+}
+
+/**
  * Repair one terminal screen after the drainer proved the SAME deadlocking verdict
  * stable for the starvation window (#92). This sends only a control byte; the held
  * message remains in SQLite and still requires a later render-gate CLEAN verdict.
  */
-function recoverHeld(info: HeldRecoveryInfo, log: LogFn): boolean {
+function recoverHeld(info: HeldRecoveryInfo, log: LogFn): HeldRecoveryResult {
   const session = resolveLiveSessionForAgent(info.workspacePath, info.toAgent);
-  if (!session || isThreadDeliverySession(session)) return false;
-  const control = heldRecoveryKeystroke(info.action);
-  if (!session.write(control)) return false;
-
+  if (!session || isThreadDeliverySession(session)) return { outcome: 'failed' };
   const where = `${info.toAgent} @ ${path.basename(info.workspacePath)}`;
-  const recovery = info.action === 'cancel-draft'
-    ? 'Ctrl+C to clear abandoned text'
-    : 'ESC to repaint/end the unreadable screen';
+
+  // Issue #196: no byte is recorded as safe for this agent, so there is nothing to try.
+  // Say so ONCE and latch (`true`) so the drainer stops re-attempting: a recovery that
+  // CANNOT succeed must not be spelled the same as one that has not succeeded yet, and
+  // it must not spin silently. The row stays in `afx inbox` and needs a human at the pane.
+  if (heldRecoveryKeystroke(info.action, clearDraftKeyForSession(session)) === null) {
+    const agent = resolveHarnessForSession(session) ?? 'an unidentified agent';
+    log(
+      'WARN',
+      `[mailbox] UNRECOVERABLE HOLD: ${where} stuck (${info.detail}) for ${Math.round(info.stableMs / 1000)}s and cannot be auto-repaired — ` +
+        `no keystroke is recorded as safe for ${agent}. Its mail will not deliver until someone clears the pane.`,
+    );
+    mailboxBroadcaster?.({
+      type: 'notification',
+      title: 'Mailbox: hold cannot be auto-recovered',
+      body: `${where} — delivery is STUCK (${info.detail}) and Tower has no safe keystroke for ${agent}, so it will not guess one. Clear the composer by hand; the message is still held.`,
+      workspace: info.workspacePath,
+    });
+    return { outcome: 'unrecoverable' };
+  }
+
+  // A rejected write is TRANSIENT (a torn-down PTY), not unrecoverable: report `failed` so
+  // the drainer re-attempts on a later pass rather than latching.
+  const written = writeHeldRecovery(session, info.action);
+  if (written === null) return { outcome: 'failed' };
+
+  // The keystroke's human label travels back with the outcome so the drainer's
+  // `written-inert` log line can name the byte that was tried (Issue #196, residual 1)
+  // without re-deriving per-harness facts on that side.
+  const keystroke = info.action !== 'cancel-draft'
+    ? 'ESC'
+    : written === CLEAR_DRAFT_BYTES['ctrl-c'] ? 'Ctrl+C' : 'Ctrl+U';
+  const recovery = info.action !== 'cancel-draft'
+    ? 'ESC to repaint/end the unreadable screen'
+    : written === CLEAR_DRAFT_BYTES['ctrl-c']
+      ? 'Ctrl+C to clear abandoned text'
+      : 'Ctrl+U to clear the composer line (this agent quits on Ctrl+C)';
   log(
     'WARN',
     `[mailbox] AUTO-RECOVERY: ${where} remained STUCK (${info.detail}) for ${Math.round(info.stableMs / 1000)}s; sent ${recovery}`,
@@ -539,7 +737,7 @@ function recoverHeld(info: HeldRecoveryInfo, log: LogFn): boolean {
     body: `${where} — delivery was STUCK (${info.detail}); Tower sent ${recovery}. The message will deliver only after the gate verifies a clean prompt.`,
     workspace: info.workspacePath,
   });
-  return true;
+  return { outcome: 'written', keystroke };
 }
 
 // The single backstop drainer instance (replaces the retired SendBuffer). Created

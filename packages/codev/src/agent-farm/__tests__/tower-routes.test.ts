@@ -22,6 +22,7 @@ import { SessionScreen } from '../../terminal/session-screen.js';
 // shutdown-during-lock-wait window deterministically.
 import { shutdownDelayedSends } from '../servers/delayed-send.js';
 import { submitToSession, resetSubmissionChains } from '../servers/session-submit.js';
+import { ESCAPE_ENTER_DELAY_MS } from '../servers/message-write.js';
 
 // ============================================================================
 // Mocks
@@ -222,7 +223,12 @@ function makeRes(): { res: http.ServerResponse; body: () => string; statusCode: 
  * requires that proven lower bound, else a bare marker is an indeterminate partial and is held).
  * `bytesWritten` is the monotone change token the delivery path samples.
  */
-function gateSession(mockWrite: (data: string) => void, ring: string, writable = true) {
+function gateSession(
+  mockWrite: (data: string) => void,
+  ring: string,
+  writable = true,
+  command = 'claude',
+) {
   const raw = `${ring}\r\n${'─'.repeat(20)}\r\n`;
   const gateScreen = new SessionScreen(80, 24);
   gateScreen.feed(raw);
@@ -236,7 +242,9 @@ function gateSession(mockWrite: (data: string) => void, ring: string, writable =
     writable,
     isUserIdle: () => true,
     composing: false,
-    command: 'claude',
+    // Issue #196: the interrupt path resolves the harness from this, so a test can
+    // present an opencode terminal by passing `command: 'opencode'`.
+    command,
     launchArgs: [] as string[],
     cwd: '/tmp/ws',
     info: { cols: 80, rows: 24 },
@@ -1911,6 +1919,155 @@ describe('tower-routes', () => {
 
         expect(mockWrite).not.toHaveBeenCalled(); // the inside-the-lock isStillLive() re-check bailed
         expect(mailbox.getById(sendDbHolder.db, parsed.mailboxId)?.status).toBe('held'); // not falsely delivered
+      });
+    });
+
+    // =====================================================================
+    // Issue #196: --interrupt resolves its byte from the target's harness.
+    // Asserted on the BYTES WRITTEN, not on a return value — the bug was a
+    // successful call that put a fatal byte on the wire.
+    // =====================================================================
+    describe('--interrupt resolves the signal per harness (#196)', () => {
+      const CTRL_C = '\x03';
+      const ESC = '\x1b';
+      const CTRL_U = '\x15';
+
+      afterEach(() => {
+        shutdownDelayedSends();
+        resetSubmissionChains();
+        vi.useRealTimers();
+      });
+
+      /** Drive one immediate `--interrupt` against a session running `command`. */
+      async function interruptSessionRunning(command: string): Promise<string[]> {
+        const written: string[] = [];
+        mockParseJsonBody.mockResolvedValue({
+          to: 'builder-x', message: 'stop', workspace: '/tmp/ws',
+          options: { interrupt: true },
+        });
+        mockResolveTarget.mockReturnValue({
+          terminalId: 'term-001', workspacePath: '/tmp/ws', agent: 'builder-x',
+        });
+        mockGetTerminalManager.mockReturnValue({
+          getSession: () => gateSession((d) => written.push(d), '\u276f ', true, command),
+          listSessions: () => [],
+        });
+        const { res, statusCode } = makeRes();
+        await handleRequest(makeReq('POST', '/api/send'), res, makeCtx());
+        expect(statusCode()).toBe(200);
+        return written;
+      }
+
+      it('sends Ctrl+C to a ctrl-c harness (claude)', async () => {
+        const written = await interruptSessionRunning('claude');
+        expect(written).toContain(CTRL_C);
+        expect(written).not.toContain(ESC);
+      });
+
+      it('sends Ctrl+C to a ctrl-c harness (codex)', async () => {
+        expect(await interruptSessionRunning('codex')).toContain(CTRL_C);
+      });
+
+      it('NEVER sends Ctrl+C to an esc harness (opencode quits on it)', async () => {
+        const written = await interruptSessionRunning('opencode');
+        // The load-bearing assertion: not one byte written is \x03.
+        expect(written).not.toContain(CTRL_C);
+        expect(written.join('')).not.toContain(CTRL_C);
+        // Both halves of --interrupt's contract still land, as two bytes rather than one:
+        // ESC ends the turn (opencode's session_interrupt) and Ctrl+U clears the composer
+        // (input_delete_to_line_start). Sending only ESC would leave the flag safe but
+        // useless for the job #21 documents it for.
+        expect(written).toContain(ESC);
+        expect(written).toContain(CTRL_U);
+        expect(written.indexOf(ESC)).toBeLessThan(written.indexOf(CTRL_U));
+      });
+
+      it('sends ONE byte to claude/codex, where Ctrl+C is both halves', async () => {
+        // Deduplication: the pre-fix behaviour is preserved byte-for-byte on the harnesses
+        // that were never broken.
+        for (const command of ['claude', 'codex']) {
+          const written = await interruptSessionRunning(command);
+          expect(written.filter((byte) => byte === CTRL_C)).toHaveLength(1);
+          expect(written).not.toContain(ESC);
+          expect(written).not.toContain(CTRL_U);
+        }
+      });
+
+      it('writes EXACTLY one \\x03 and no other control byte on claude', async () => {
+        // The load-bearing claim of this change for the harnesses that were never broken:
+        // their behaviour does not change. Asserted as a byte comparison rather than
+        // inferred from a passing suite — a spurious ESC here would trade a bug nobody
+        // has for a bug everybody has.
+        const written = await interruptSessionRunning('claude');
+
+        // Nothing goes out before the interrupt.
+        expect(written[0]).toBe(CTRL_C);
+
+        // And across the WHOLE exchange exactly one control byte goes out: that \\x03.
+        // Not "at least one" — the dedup must not let a second byte ride along.
+        const controls = written.filter(
+          (byte) => byte === CTRL_C || byte === ESC || byte === CTRL_U,
+        );
+        expect(controls).toEqual([CTRL_C]);
+      });
+
+      it('NEVER sends Ctrl+C to a session whose agent cannot be identified', async () => {
+        // Fail-safe: an unresolvable command must not inherit claude's default, and gets
+        // NO guessed clear key either — just the safe interrupt.
+        const written = await interruptSessionRunning('/usr/local/bin/some-new-tui');
+        expect(written).not.toContain(CTRL_C);
+        expect(written).not.toContain(CTRL_U);
+        expect(written).toContain(ESC);
+      });
+
+      it('reports the keystrokes it actually sent', async () => {
+        mockParseJsonBody.mockResolvedValue({
+          to: 'builder-x', message: 'stop', workspace: '/tmp/ws', options: { interrupt: true },
+        });
+        mockResolveTarget.mockReturnValue({
+          terminalId: 'term-001', workspacePath: '/tmp/ws', agent: 'builder-x',
+        });
+        mockGetTerminalManager.mockReturnValue({
+          getSession: () => gateSession(vi.fn(), '\u276f ', true, 'opencode'),
+          listSessions: () => [],
+        });
+        const { res, body } = makeRes();
+        await handleRequest(makeReq('POST', '/api/send'), res, makeCtx());
+        expect(JSON.parse(body()).interruptKeys).toEqual(['ESC', 'Ctrl+U']);
+      });
+
+      it('applies the same table on the DELAYED interrupt path', async () => {
+        vi.useFakeTimers();
+        const written: string[] = [];
+        mockParseJsonBody.mockResolvedValue({
+          to: 'builder-x', message: 'stop', workspace: '/tmp/ws',
+          options: { interrupt: true, deliverAfter: 5 },
+        });
+        mockResolveTarget.mockReturnValue({
+          terminalId: 'term-i', workspacePath: '/tmp/ws', agent: 'builder-x',
+        });
+        mockGetTerminalManager.mockReturnValue({
+          getSession: () => gateSession((d) => written.push(d), '\u276f ', true, 'opencode'),
+          listSessions: () => [],
+        });
+        const { res, statusCode } = makeRes();
+        await handleRequest(makeReq('POST', '/api/send'), res, makeCtx());
+        expect(statusCode()).toBe(200);
+        expect(written).toEqual([]); // nothing at request time
+
+        await vi.advanceTimersByTimeAsync(5000);
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+
+        // ESC is on the wire at once; Ctrl+U is DEFERRED by the settle, so it is not here
+        // yet. That gap is the fix — an unspaced pair is read as Alt+u and clears nothing
+        // (verified live: codev/research/196-esc-alt-encoding-probe.mjs).
+        expect(written).toEqual([ESC]);
+
+        await vi.advanceTimersByTimeAsync(ESCAPE_ENTER_DELAY_MS);
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+
+        expect(written).toEqual([ESC, CTRL_U]);
+        expect(written).not.toContain(CTRL_C);
       });
     });
   });
