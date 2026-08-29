@@ -24,8 +24,10 @@ import {
   clearDraftKeyForHarness,
   detectHarnessFromCommand,
   interruptSignalForHarness,
+  isShellCommand,
   CLEAR_DRAFT_BYTES,
   INTERRUPT_BYTES,
+  SHELL_TARGET,
   type ClearDraftKey,
 } from '../utils/harness.js';
 import {
@@ -205,7 +207,23 @@ export function resolveHarnessForSession(session: DeliverySession): string | nul
  * when the agent is unidentified or has no known safe clear (Issue #196).
  */
 export function clearDraftKeyForSession(session: DeliverySession): ClearDraftKey {
-  return clearDraftKeyForHarness(resolveHarnessForSession(session));
+  const harness = resolveHarnessForSession(session);
+  if (harness) return clearDraftKeyForHarness(harness);
+  return isPlainShellSession(session) ? SHELL_TARGET.clearDraftKey : 'none';
+}
+
+/**
+ * Whether this session is a PLAIN SHELL rather than an agent (Issue #196, CMAP finding 1).
+ *
+ * Order is load-bearing and this is why it is a separate predicate rather than a branch
+ * inside {@link resolveHarnessForSession}: a builder's `session.command` IS a shell — the
+ * `.builder-start.sh` wrapper — so this may only be consulted once harness detection AND
+ * the launch-script lookup have both come back empty. Reversing that would send Ctrl+C to
+ * an opencode builder, which is the bug this whole change exists to fix.
+ */
+function isPlainShellSession(session: DeliverySession): boolean {
+  if (resolveHarnessForSession(session) !== null) return false;
+  return isShellCommand(typeof session.command === 'string' ? session.command : '');
 }
 
 /**
@@ -234,8 +252,15 @@ export function clearDraftKeyForSession(session: DeliverySession): ClearDraftKey
  */
 export function promptReadySequence(session: DeliverySession): string[] {
   const harness = resolveHarnessForSession(session);
-  const interrupt = INTERRUPT_BYTES[interruptSignalForHarness(harness)];
-  const clearKey = clearDraftKeyForHarness(harness);
+  // A plain shell is a KNOWN target, not an unknown one: Ctrl+C both interrupts the
+  // foreground job and makes readline discard the line. Resolving it into the unknown
+  // bucket wrote a lone ESC, which bash ignores — turning Spec 0020's whole purpose for
+  // this flag into a silent no-op that still reported success.
+  const shell = harness === null && isPlainShellSession(session);
+  const interrupt = shell
+    ? INTERRUPT_BYTES[SHELL_TARGET.interruptSignal]
+    : INTERRUPT_BYTES[interruptSignalForHarness(harness)];
+  const clearKey = shell ? SHELL_TARGET.clearDraftKey : clearDraftKeyForHarness(harness);
   if (clearKey === 'none') return [interrupt];
   const clear = CLEAR_DRAFT_BYTES[clearKey];
   return clear === interrupt ? [interrupt] : [interrupt, clear];

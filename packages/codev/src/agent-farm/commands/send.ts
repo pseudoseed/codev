@@ -490,7 +490,14 @@ export async function send(options: SendOptions): Promise<void> {
             `It delivers automatically when the prompt is clear.`,
         );
       } else {
-        logger.success(`Message delivered to ${result.resolvedTo ?? target}`);
+        // Issue #196: name the keystrokes that actually went out. `--interrupt`'s bytes are
+        // per-harness (Ctrl+C on claude/codex and shells, ESC then Ctrl+U on opencode), and
+        // the complaint behind that issue was that nothing told the operator which one they
+        // got — they found out by losing a session.
+        const keys = result.interruptKeys?.length
+          ? ` (sent ${result.interruptKeys.join(' then ')} first)`
+          : '';
+        logger.success(`Message delivered to ${result.resolvedTo ?? target}${keys}`);
       }
     } catch (error) {
       fatal(error instanceof Error ? error.message : String(error));

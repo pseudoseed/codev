@@ -13,6 +13,9 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { GLOBAL_SCHEMA } from '../db/schema.js';
 import { enqueue } from '../db/mailbox.js';
 import {
@@ -23,10 +26,10 @@ import {
   getBuiltinHarness,
   clearDraftKeyForHarness,
   describeInterruptBytes,
+  isShellCommand,
   keyName,
   interruptSignalForHarness,
   validateCustomHarnessConfig,
-  type CustomHarnessConfig,
   type ClearDraftKey,
   type InterruptSignal,
 } from '../utils/harness.js';
@@ -64,6 +67,14 @@ describe('INTERRUPT_BYTES', () => {
     // Ctrl+U must not collide with anything that ends a turn or quits an app.
     expect(CTRL_U).not.toBe(CTRL_C);
     expect(CTRL_U).not.toBe(ESC);
+  });
+
+  it('the two tables agree on ctrl-c — the coupling promptReadySequence dedups on', () => {
+    // CMAP round 1, finding 5. `promptReadySequence`'s dedup is a STRING COMPARE, so
+    // claude and codex get one write only while these two stay equal. They are derived
+    // rather than independently spelled, and this pins the property by identity so the
+    // dependency is named rather than implied.
+    expect(CLEAR_DRAFT_BYTES['ctrl-c']).toBe(INTERRUPT_BYTES['ctrl-c']);
   });
 });
 
@@ -155,13 +166,10 @@ describe('interruptSignalForHarness', () => {
     expect(interruptSignalForHarness('toString')).toBe('esc');
   });
 
-  it('honours a custom harness that declares one, and defaults the rest to esc', () => {
-    const customs: Record<string, CustomHarnessConfig> = {
-      'pauses-on-ctrl-c': { roleArgs: [], roleScriptFragment: '', interruptSignal: 'ctrl-c' },
-      undeclared: { roleArgs: [], roleScriptFragment: '' },
-    };
-    expect(interruptSignalForHarness('pauses-on-ctrl-c', customs)).toBe('ctrl-c');
-    expect(interruptSignalForHarness('undeclared', customs)).toBe('esc');
+  it('resolves built-ins ONLY — a custom name is esc, not a configurable value', () => {
+    // No `customHarnesses` parameter by design: nothing on the interrupt path can resolve
+    // a custom harness, so accepting one would be an inert parameter dressed as support.
+    expect(interruptSignalForHarness('my-custom-agent')).toBe('esc');
   });
 });
 
@@ -197,13 +205,8 @@ describe('clearDraftKeyForHarness', () => {
     }
   });
 
-  it('honours a custom harness that declares one, and defaults the rest to none', () => {
-    const customs: Record<string, CustomHarnessConfig> = {
-      declared: { roleArgs: [], roleScriptFragment: '', clearDraftKey: 'ctrl-u' },
-      undeclared: { roleArgs: [], roleScriptFragment: '' },
-    };
-    expect(clearDraftKeyForHarness('declared', customs)).toBe('ctrl-u');
-    expect(clearDraftKeyForHarness('undeclared', customs)).toBe('none');
+  it('resolves built-ins ONLY — a custom name is none, not a configurable value', () => {
+    expect(clearDraftKeyForHarness('my-custom-agent')).toBe('none');
   });
 });
 
@@ -211,38 +214,31 @@ describe('clearDraftKeyForHarness', () => {
 // Custom harness config
 // ============================================================================
 
-describe('custom harness interruptSignal', () => {
-  it('defaults an undeclared custom provider to esc', () => {
+describe('custom harnesses stay out of the interrupt table', () => {
+  it('builds a provider with the fail-safe constants, not configurable ones', () => {
+    // CMAP round 1, finding 2: making these configurable would ship a validated,
+    // documented field that no write path can reach — `assertHarnessAcceptsModel`'s own
+    // docblock in this file warns against exactly that. They are constants until the
+    // resolvers actually thread `customHarnesses` through.
     const provider = buildCustomHarnessProvider({ roleArgs: [], roleScriptFragment: '' });
     expect(provider.interruptSignal).toBe('esc');
     expect(provider.clearDraftKey).toBe('none');
   });
 
-  it('carries a declared signal onto the provider', () => {
-    const provider = buildCustomHarnessProvider({
-      roleArgs: [], roleScriptFragment: '', interruptSignal: 'ctrl-c', clearDraftKey: 'ctrl-u',
+  it('ignores the config fields rather than validating them into inertness', () => {
+    // A config carrying them still validates (unknown keys are ignored) but the values
+    // are NOT honoured — asserted so nobody re-adds validation without wiring.
+    const config = validateCustomHarnessConfig('x', {
+      roleArgs: [], roleScriptFragment: '', interruptSignal: 'ctrl-c', clearDraftKey: 'ctrl-c',
     });
-    expect(provider.interruptSignal).toBe('ctrl-c');
-    expect(provider.clearDraftKey).toBe('ctrl-u');
+    const provider = buildCustomHarnessProvider(config);
+    expect(provider.interruptSignal).toBe('esc');
+    expect(provider.clearDraftKey).toBe('none');
   });
 
-  it('accepts a valid signal and rejects anything else', () => {
-    const base = { roleArgs: [], roleScriptFragment: '' };
-    expect(validateCustomHarnessConfig('ok', { ...base, interruptSignal: 'esc' }))
-      .toMatchObject({ interruptSignal: 'esc' });
-    expect(validateCustomHarnessConfig('ok', { ...base, interruptSignal: 'ctrl-c' }))
-      .toMatchObject({ interruptSignal: 'ctrl-c' });
-    expect(validateCustomHarnessConfig('ok', base)).toMatchObject(base);
-
-    expect(() => validateCustomHarnessConfig('bad', { ...base, interruptSignal: 'sigkill' }))
-      .toThrow(/interruptSignal/);
-    expect(() => validateCustomHarnessConfig('bad', { ...base, interruptSignal: 3 }))
-      .toThrow(/interruptSignal/);
-
-    expect(validateCustomHarnessConfig('ok', { ...base, clearDraftKey: 'ctrl-u' }))
-      .toMatchObject({ clearDraftKey: 'ctrl-u' });
-    expect(() => validateCustomHarnessConfig('bad', { ...base, clearDraftKey: 'ctrl-z' }))
-      .toThrow(/clearDraftKey/);
+  it('a custom harness name resolves to the fail-safe pair', () => {
+    expect(interruptSignalForHarness('my-custom-agent')).toBe('esc');
+    expect(clearDraftKeyForHarness('my-custom-agent')).toBe('none');
   });
 });
 
@@ -375,8 +371,12 @@ describe('session identification (the seam every interrupt caller shares)', () =
       .toEqual([ESC, CTRL_U]);
   });
 
-  it('fails safe when the command names no known agent', () => {
-    for (const command of ['', 'bash', 'agy']) {
+  it('fails safe when the command names neither a known agent nor a shell', () => {
+    // `bash` is deliberately NOT in this list any more: a shell is a known target with a
+    // known interrupt, and treating it as unknown is what made `--interrupt` a no-op on
+    // shells (CMAP round 1, finding 1). `agy` has a gate profile but no harness entry, so
+    // it stays in the fail-safe bucket.
+    for (const command of ['', 'agy', 'some-new-tui']) {
       expect(promptReadySequence(sessionRunning(command))).toEqual([ESC]);
       expect(clearDraftKeyForSession(sessionRunning(command))).toBe('none');
     }
@@ -637,5 +637,114 @@ describe('keystroke naming', () => {
     expect(describeInterruptBytes([ESC, CTRL_U])).toBe('ESC then Ctrl+U');
     expect(describeInterruptBytes([CTRL_C])).toBe('Ctrl+C');
     expect(describeInterruptBytes([])).toBe('nothing');
+  });
+});
+
+// ============================================================================
+// A plain SHELL is a known target, not an unknown harness (CMAP round 1, finding 1).
+//
+// `afx send <shell-id> --interrupt` is reachable — resolveAgentInRegistry matches
+// entry.shells — and a shell has no harness and no `.builder-start.sh`. Resolving it
+// into the unknown bucket wrote a lone ESC, which bash IGNORES: a documented capability
+// (Spec 0020's "Vim trap" escape) became a silent no-op that still reported success.
+// ============================================================================
+
+describe('isShellCommand', () => {
+  it('recognises the shells a workspace actually launches', () => {
+    for (const command of ['bash', 'zsh', '/bin/bash', 'sh', 'fish', 'dash']) {
+      expect(isShellCommand(command)).toBe(true);
+    }
+    expect(isShellCommand('/bin/zsh -l')).toBe(true);
+  });
+
+  it('does NOT claim an indirect invocation like `env bash`', () => {
+    // `/usr/bin/env` is not a shell, and resolving the wrapped program would mean parsing
+    // arbitrary command lines. Falling back to the unknown bucket here costs a no-op ESC,
+    // which is the safe direction; claiming a target wrongly is the expensive one. The
+    // workspace's configured shell (`shell.shell`, default `bash`) is a bare name, so this
+    // form does not arise in practice today.
+    expect(isShellCommand('/usr/bin/env bash')).toBe(false);
+  });
+
+  it('matches the basename EXACTLY, never as a substring', () => {
+    // A loose match would claim `shellper` (a real binary in this codebase) and any
+    // wrapper script ending in `-sh`. Claiming a target wrongly is how a fatal byte
+    // gets sent, so this is stricter than detectHarnessFromCommand deliberately.
+    for (const command of ['shellper', 'bashful', 'my-sh', 'zshrc-tool', '', 'claude', 'opencode']) {
+      expect(isShellCommand(command)).toBe(false);
+    }
+  });
+});
+
+describe('a shell target keeps Ctrl+C', () => {
+  function session(command: string, cwd = '/nonexistent-worktree-for-bugfix-196'): DeliverySession {
+    return {
+      bytesWritten: 0,
+      info: { cols: 80, rows: 24 },
+      command,
+      launchArgs: [],
+      cwd,
+      writable: true,
+      write: () => true,
+    };
+  }
+
+  it('sends Ctrl+C to a plain shell, not the ESC that bash ignores', () => {
+    for (const command of ['bash', '/bin/zsh', 'sh']) {
+      expect(promptReadySequence(session(command))).toEqual([CTRL_C]);
+    }
+  });
+
+  it('clears a shell composer with Ctrl+C too — readline discards the line', () => {
+    expect(clearDraftKeyForSession(session('bash'))).toBe('ctrl-c');
+  });
+
+  it('still fails safe for a target that is neither a shell nor a known agent', () => {
+    expect(promptReadySequence(session('/usr/local/bin/some-new-tui'))).toEqual([ESC]);
+    expect(clearDraftKeyForSession(session('some-new-tui'))).toBe('none');
+  });
+});
+
+describe('a wrapped builder is NEVER mistaken for a shell', () => {
+  // The ordering guard, and the reason shell detection is a separate predicate consulted
+  // LAST. A builder's own session.command IS a shell — the `.builder-start.sh` wrapper —
+  // so matching it before the launch-script lookup would send Ctrl+C to an opencode
+  // builder, which is precisely the bug this whole change exists to fix.
+  let worktree: string;
+  beforeEach(() => { worktree = mkdtempSync(join(tmpdir(), 'bugfix196-wrapped-')); });
+  afterEach(() => rmSync(worktree, { recursive: true, force: true }));
+
+  function wrappedSession(launchScript: string): DeliverySession {
+    writeFileSync(join(worktree, '.builder-start.sh'), launchScript);
+    return {
+      bytesWritten: 0,
+      info: { cols: 80, rows: 24 },
+      // The shell that wraps the agent — exactly what a real builder session reports.
+      command: 'bash',
+      launchArgs: [],
+      cwd: worktree,
+      writable: true,
+      write: () => true,
+    };
+  }
+
+  it('an opencode builder launched through bash gets ESC then Ctrl+U, NEVER Ctrl+C', () => {
+    const seq = promptReadySequence(wrappedSession('#!/bin/bash\nopencode --prompt "$(cat p.txt)"\n'));
+    expect(seq).toEqual([ESC, CTRL_U]);
+    expect(seq).not.toContain(CTRL_C);
+  });
+
+  it('a claude builder launched through bash still gets a single Ctrl+C', () => {
+    expect(promptReadySequence(wrappedSession('#!/bin/bash\nclaude --dangerously-skip-permissions\n')))
+      .toEqual([CTRL_C]);
+  });
+
+  it('only a shell with NO launch script is treated as a shell', () => {
+    // Same command, no `.builder-start.sh` — now it is genuinely a plain shell.
+    const bare: DeliverySession = {
+      bytesWritten: 0, info: { cols: 80, rows: 24 }, command: 'bash',
+      launchArgs: [], cwd: worktree, writable: true, write: () => true,
+    };
+    expect(promptReadySequence(bare)).toEqual([CTRL_C]);
   });
 });

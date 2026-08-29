@@ -2123,6 +2123,12 @@ async function handleSend(
     // both on claude/codex, which is why they were never separated; on opencode Ctrl+C
     // QUITS, and the two halves are ESC and Ctrl+U. Both are resolved from the session's
     // own agent and deduplicated, so claude/codex still write exactly one `\x03`.
+    //   Residual, accepted (CMAP round 1, non-blocking): this path BYPASSES the render
+    //   gate by design, so it has no second net. A session whose agent cannot be
+    //   identified gets ESC alone — which ends a turn but clears nothing — and the body
+    //   is then written onto whatever text was already in the composer, fusing with it.
+    //   The gated path re-classifies and would hold instead; here the operator is
+    //   looking at the terminal, which is the trade `--interrupt` has always made.
     const interruptBytes = promptReadySequence(session);
     await submitToSession(result.terminalId, () => {
       for (const byte of interruptBytes) session.write(byte);

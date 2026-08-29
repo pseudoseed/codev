@@ -184,7 +184,7 @@ export interface SendOptions {
    * Persisted, and deliberately so: the body is written to the durable mailbox
    * with a `not_before` timestamp, so Tower holds no timer and a restart inside
    * the window does not drop the send (see `servers/delayed-send.ts`). Only the
-   * Ctrl+C nudge of a delayed `--interrupt` is lost to a restart, because that
+   * keystroke nudge of a delayed `--interrupt` is lost to a restart, because that
    * one genuinely is an in-memory timer.
    *
    * Named `delay` here to match the user-facing `--delay` flag; it becomes

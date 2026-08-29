@@ -66,9 +66,17 @@ export const INTERRUPT_BYTES: Record<InterruptSignal, string> = {
  */
 export type ClearDraftKey = 'ctrl-c' | 'ctrl-u' | 'none';
 
-/** The wire byte for each clear key. `'none'` has none, by construction. */
+/**
+ * The wire byte for each clear key. `'none'` has none, by construction.
+ *
+ * `'ctrl-c'` is DERIVED from {@link INTERRUPT_BYTES}, not re-spelled. The two tables
+ * name the same physical key, and `promptReadySequence`'s dedup is a string compare —
+ * so if these ever drifted apart, every claude and codex builder would silently get two
+ * writes where it gets one today. Deriving makes that drift unrepresentable rather than
+ * merely untested (CMAP round 1, finding 5).
+ */
 export const CLEAR_DRAFT_BYTES: Record<Exclude<ClearDraftKey, 'none'>, string> = {
-  'ctrl-c': '\x03',
+  'ctrl-c': INTERRUPT_BYTES['ctrl-c'],
   'ctrl-u': '\x15',
 };
 
@@ -257,22 +265,6 @@ export interface CustomHarnessConfig {
    */
   modelArgs?: string[];
   modelScriptFragment?: string;
-  /**
-   * Optional: what byte safely interrupts a turn on this harness (Issue #196).
-   *
-   * Omitting it means `esc` — the fail-safe direction. An unknown third-party TUI
-   * must never inherit `ctrl-c` by default: ESC at worst does nothing, Ctrl+C can
-   * kill the process and its unsaved conversation.
-   */
-  interruptSignal?: InterruptSignal;
-
-  /**
-   * Optional: what keystroke clears this harness's composer (Issue #196).
-   * Omitting it means `'none'` — the recovery declines loudly rather than guessing a
-   * byte at a third-party TUI.
-   */
-  clearDraftKey?: ClearDraftKey;
-
   /**
    * Optional binary/command that runs this harness, for a per-spawn
    * `--harness <name>` (Issue #2). Without it a per-spawn selection falls back
@@ -548,12 +540,15 @@ export function buildCustomHarnessProvider(config: CustomHarnessConfig): Harness
 
   return {
     ...modelHooks,
-    // Fail-safe default (Issue #196): an undeclared custom harness gets ESC, not
-    // the byte that can quit it.
-    interruptSignal: config.interruptSignal ?? 'esc',
-    // And no draft-clearing byte at all until one is declared: at an unknown TUI a
-    // guessed control byte is how this bug was written in the first place.
-    clearDraftKey: config.clearDraftKey ?? 'none',
+    // Issue #196: a custom harness is never resolved by the interrupt path today —
+    // `detectHarnessFromCommand` matches only built-in basenames, and neither
+    // `resolveHarnessForSession` nor `promptReadySequence` threads `customHarnesses`
+    // through. So these are the fail-safe constants, NOT configurable: a declared-but-
+    // unreachable config field is the "registered, documented, inert" shape
+    // `assertHarnessAcceptsModel` below exists to prevent. Wire the resolvers to custom
+    // harnesses first, then make these configurable in the same change.
+    interruptSignal: 'esc',
+    clearDraftKey: 'none',
     buildRoleInjection: (content, filePath) => ({
       args: config.roleArgs.map(arg => expandTemplateVars(arg, content, filePath)),
       env: Object.fromEntries(
@@ -628,20 +623,6 @@ export function validateCustomHarnessConfig(name: string, config: unknown): Cust
     if (!obj.modelArgs.every((a: unknown) => typeof a === 'string')) {
       throw new Error(`Harness "${name}": "modelArgs" must contain only strings`);
     }
-  }
-
-  if (obj.interruptSignal !== undefined
-      && obj.interruptSignal !== 'esc' && obj.interruptSignal !== 'ctrl-c') {
-    throw new Error(
-      `Harness "${name}": "interruptSignal" must be "esc" or "ctrl-c" if provided, got ${JSON.stringify(obj.interruptSignal)}`,
-    );
-  }
-
-  if (obj.clearDraftKey !== undefined
-      && obj.clearDraftKey !== 'ctrl-c' && obj.clearDraftKey !== 'ctrl-u' && obj.clearDraftKey !== 'none') {
-    throw new Error(
-      `Harness "${name}": "clearDraftKey" must be "ctrl-c", "ctrl-u" or "none" if provided, got ${JSON.stringify(obj.clearDraftKey)}`,
-    );
   }
 
   if (obj.command !== undefined && typeof obj.command !== 'string') {
@@ -720,25 +701,20 @@ export function assertHarnessAcceptsModel(
  * The interrupt signal for a harness NAME, fail-safe (Issue #196).
  *
  * The single table every interrupt caller reads. Resolution is deliberately
- * narrower than {@link resolveHarness}: an unknown, retired or unresolvable name
- * yields `esc` rather than falling through to CLAUDE_HARNESS's `ctrl-c`. That
- * default is the whole point — `resolveHarness`'s claude fallback is what would
- * hand an unidentified opencode terminal the byte that kills it.
+ * narrower than {@link resolveHarness}: an unknown, retired or CUSTOM name yields
+ * `esc` rather than falling through to CLAUDE_HARNESS's `ctrl-c`. That default is
+ * the whole point — `resolveHarness`'s claude fallback is what would hand an
+ * unidentified opencode terminal the byte that kills it.
+ *
+ * Built-ins only, and no `customHarnesses` parameter: nothing on the interrupt path can
+ * resolve a custom harness today (`detectHarnessFromCommand` matches built-in basenames
+ * only), so accepting one would be an inert parameter dressed as support. A plain SHELL
+ * is handled by the caller via {@link SHELL_TARGET} — it is a known target, not an
+ * unknown harness.
  */
-export function interruptSignalForHarness(
-  harnessName: string | undefined | null,
-  customHarnesses?: Record<string, CustomHarnessConfig>,
-): InterruptSignal {
+export function interruptSignalForHarness(harnessName: string | undefined | null): InterruptSignal {
   if (!harnessName) return 'esc';
-
-  const builtin = getBuiltinHarness(harnessName);
-  if (builtin) return builtin.interruptSignal;
-
-  if (customHarnesses && Object.prototype.hasOwnProperty.call(customHarnesses, harnessName)) {
-    return customHarnesses[harnessName].interruptSignal ?? 'esc';
-  }
-
-  return 'esc';
+  return getBuiltinHarness(harnessName)?.interruptSignal ?? 'esc';
 }
 
 /**
@@ -763,28 +739,58 @@ export function describeInterruptBytes(bytes: readonly string[]): string {
 /**
  * The keystroke that clears a leftover draft on `harnessName`, fail-safe (Issue #196).
  *
- * Unknown, retired and custom-undeclared harnesses resolve to `'none'`: no byte is
- * written at all, and the caller reports the hold as unrecoverable rather than guessing.
+ * Unknown, retired and custom harnesses resolve to `'none'`: no byte is written at all,
+ * and the caller reports the hold as unrecoverable rather than guessing. Built-ins only,
+ * for the same reason as {@link interruptSignalForHarness}.
  */
-export function clearDraftKeyForHarness(
-  harnessName: string | undefined | null,
-  customHarnesses?: Record<string, CustomHarnessConfig>,
-): ClearDraftKey {
+export function clearDraftKeyForHarness(harnessName: string | undefined | null): ClearDraftKey {
   if (!harnessName) return 'none';
-
-  const builtin = getBuiltinHarness(harnessName);
-  if (builtin) return builtin.clearDraftKey;
-
-  if (customHarnesses && Object.prototype.hasOwnProperty.call(customHarnesses, harnessName)) {
-    return customHarnesses[harnessName].clearDraftKey ?? 'none';
-  }
-
-  return 'none';
+  return getBuiltinHarness(harnessName)?.clearDraftKey ?? 'none';
 }
 
 // =============================================================================
 // Auto-detection
 // =============================================================================
+
+/**
+ * POSIX shells, whose interrupt is a KNOWN fact rather than an unknown one (Issue #196,
+ * CMAP round 1 finding 1).
+ *
+ * `afx send <shell-id> --interrupt` is reachable — `resolveAgentInRegistry` matches
+ * `entry.shells` — and a plain shell has no harness and no `.builder-start.sh`, so it was
+ * resolving into the unknown bucket and receiving a lone ESC. **bash ignores ESC.** That
+ * turned Spec 0020's original purpose for the flag, escaping a running process (the "Vim
+ * trap"), into a silent no-op that still reported success.
+ *
+ * Ctrl+C is right for a shell in BOTH halves of the contract: SIGINT to the foreground
+ * job, and readline discards the current input line. Fail-safe was the correct instinct
+ * for a genuinely unidentifiable target; a shell is identifiable, so it is identified.
+ */
+const SHELL_BASENAMES = ['bash', 'zsh', 'sh', 'dash', 'fish', 'ksh', 'csh', 'tcsh'];
+
+/** The keystroke facts for a plain shell target. */
+export const SHELL_TARGET: { interruptSignal: InterruptSignal; clearDraftKey: ClearDraftKey } = {
+  interruptSignal: 'ctrl-c',
+  clearDraftKey: 'ctrl-c',
+};
+
+/**
+ * Whether `command` launches a plain POSIX shell.
+ *
+ * Deliberately an EXACT basename match, not a substring one: `detectHarnessFromCommand`
+ * uses `includes` and can afford to, but a loose match here would claim things like
+ * `shellper` or a wrapper script ending in `-sh`, and claiming a target wrongly is how a
+ * fatal byte gets sent. Callers must consult this only AFTER harness detection and the
+ * `.builder-start.sh` lookup have both failed — a builder's own `session.command` is the
+ * shell that wraps its agent, and matching that first would send Ctrl+C to an opencode
+ * builder, which is the original bug.
+ */
+export function isShellCommand(command: string): boolean {
+  const firstToken = command.trim().split(/\s+/)[0];
+  if (!firstToken) return false;
+  const basename = (firstToken.split('/').pop() || firstToken).toLowerCase();
+  return SHELL_BASENAMES.includes(basename);
+}
 
 /**
  * Detect harness type from a command string by extracting the basename of the

@@ -840,6 +840,13 @@ export class TowerClient {
      * this instant. Omitted by older Tower binaries.
      */
     notBefore?: number;
+    /**
+     * Issue #196: the keystrokes an `--interrupt` actually wrote, as names
+     * (`['Ctrl+C']`, `['ESC','Ctrl+U']`). The bytes are per-harness — Ctrl+C ends a turn
+     * on claude/codex but QUITS opencode — so the operator is told which went out rather
+     * than left to assume. Absent on non-interrupt sends and on older Tower binaries.
+     */
+    interruptKeys?: string[];
   }> {
     const result = await this.request<{
       ok: boolean;
@@ -851,6 +858,7 @@ export class TowerClient {
       reason?: string | null;
       mailboxId?: string;
       notBefore?: number;
+      interruptKeys?: string[];
     }>(
       '/api/send',
       {
@@ -887,6 +895,7 @@ export class TowerClient {
       reason: result.data!.reason ?? undefined,
       mailboxId: result.data!.mailboxId,
       notBefore: result.data!.notBefore,
+      interruptKeys: result.data!.interruptKeys,
     };
   }
 

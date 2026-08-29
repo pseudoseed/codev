@@ -929,6 +929,11 @@ export class MailboxDrainer {
    * screen did not move at all, no safe byte exists — are what a fix for the silent
    * `user-text` starvation has to branch on. Collapsed into a boolean they are
    * unrecoverable facts, and whoever picks that up would have to rediscover them.
+   *
+   * CONSUMER: issue #198, which adds the second-stage escalation for a hold that recovery
+   * attempted and failed to clear. Until that lands this accessor has no production caller
+   * by design — the `written-inert` log line is the interim signal — and the tests in
+   * `bugfix-196-interrupt-signal.test.ts` are what keep the transitions honest meanwhile.
    */
   recoveryPhaseFor(workspacePath: string, toAgent: string): RecoveryPhase | null {
     return this.recoveryState.get(`${workspacePath}\0${toAgent}`)?.phase ?? null;
@@ -951,7 +956,8 @@ export class MailboxDrainer {
 
     // #92: retrying a STATIC abandoned/unreadable screen can never change its verdict.
     // After the SAME recoverable detail remains stable for the starvation window, send
-    // one control byte: Ctrl+C clears abandoned user text; ESC repaints/ends an unreadable
+    // one control byte, resolved PER HARNESS (#196): the recorded clear key discards abandoned
+    // user text (Ctrl+C on claude/codex, Ctrl+U on opencode); ESC repaints/ends an unreadable
     // screen. A detail change resets the clock, and `busy-indicator` is never recoverable.
     // This is only a screen repair — the next pass must still classify CLEAN before the
     // held message is written. Arm the once-per-verdict guard only after a live write.
