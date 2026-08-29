@@ -1,7 +1,7 @@
 id: bugfix-196
 title: afx-send-interrupt-sends-ctrl-
 protocol: bugfix
-phase: investigate
+phase: fix
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-29T17:39:30.397Z'
-updated_at: '2026-08-29T17:39:30.399Z'
+updated_at: '2026-08-29T17:41:58.658Z'
