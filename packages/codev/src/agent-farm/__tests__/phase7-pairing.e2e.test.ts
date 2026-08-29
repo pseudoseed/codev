@@ -248,6 +248,66 @@ describe('Phase 7 pairing flow, live server', () => {
     expect(allowed).toContain('x-codev-human-session');
   });
 
+  // CODEX'S ITERATION-3 FINDING, against a live server.
+  //
+  // The revocation test above revokes and then makes a NEW request, which is the
+  // path that already worked. This opens the stream FIRST and revokes underneath
+  // it — the path that did not, and the one success criterion 15 actually
+  // describes, because an already-open stream is the subtree that must fail
+  // closed.
+  it('revocation closes a stream that was already open, and says why', async () => {
+    const pairings = new PairingStore({ root: join(tower!.agentFarmDir, 'pairing') });
+    const machines = new MachineCredentialStore({ root: join(tower!.agentFarmDir, 'machines') });
+    const token = pairings.issue();
+    const redeemed = await fetch(`${base()}${AGENT_ROUTE_PREFIX}/pairing/redeem`, {
+      method: 'POST',
+      headers: keylessHeaders({
+        'content-type': 'application/json',
+        'x-codev-pairing-token': token.token,
+      }),
+      body: JSON.stringify({ machine: 'streaming-ipad' }),
+    });
+    const credential = (await redeemed.json() as { credential: string }).credential;
+
+    const controller = new AbortController();
+    const stream = await fetch(
+      `${base()}${AGENT_ROUTE_PREFIX}/workspaces/${encodeWorkspacePath(workspacePath!)}/stream`,
+      {
+        headers: keylessHeaders({ 'x-codev-machine-credential': credential }),
+        signal: controller.signal,
+      },
+    );
+    expect(stream.status).toBe(200);
+    expect(stream.headers.get('content-type')).toContain('text/event-stream');
+
+    const reader = stream.body!.getReader();
+    const decoder = new TextDecoder();
+    let received = '';
+
+    // The opening snapshot arrives while the credential is good, so the test can
+    // tell "the stream was live and then stopped" from "it never worked".
+    const first = await reader.read();
+    received += decoder.decode(first.value ?? new Uint8Array());
+    expect(received).toContain('protocol-state');
+
+    // Revoke underneath the open connection.
+    expect(machines.revoke('streaming-ipad')).toBe(true);
+
+    // The stream must announce and end within the re-authorize interval.
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline && !received.includes('STREAM_AUTHORIZATION_LOST')) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      received += decoder.decode(chunk.value ?? new Uint8Array());
+    }
+    controller.abort();
+
+    expect(received).toContain('STREAM_AUTHORIZATION_LOST');
+    // Withdrawn, not dropped. A stream that simply went silent would be
+    // indistinguishable from a network failure.
+    expect(received).toContain('MACHINE_CREDENTIAL_REVOKED');
+  }, 30000);
+
   it('refuses an agent request from a disallowed Origin, over the wire', async () => {
     const response = await fetch(`${base()}${AGENT_ROUTE_PREFIX}/session`, {
       headers: towerHeaders({ origin: 'https://evil.example' }),

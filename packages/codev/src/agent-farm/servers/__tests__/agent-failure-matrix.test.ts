@@ -216,6 +216,7 @@ describe('failure matrix signals are distinct', () => {
       // it carries a signal whose code equals the event type.
       PROTOCOL_STATE_SNAPSHOT: 'stream event type, not a failure signal',
       PROTOCOL_STATE_RECONCILED: 'stream event type; the repair is STREAM_PROJECTION_REPAIRED',
+      STREAM_AUTHORIZATION_LOST: 'stream event type announcing WHY a stream closed; the code it carries (e.g. MACHINE_CREDENTIAL_REVOKED) is the matrix row',
       // STATE_STREAM_WATCH_FAILED was excluded here and that was my error, caught by
       // a reviewer: a watcher that cannot be established IS operator-facing, because
       // that root then depends entirely on the reconciliation backstop. It is now a

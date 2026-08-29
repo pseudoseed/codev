@@ -326,11 +326,43 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
   };
 }
 
-/** Adapt the watcher to an authenticated Server-Sent Events response. */
+/** How often an open stream re-checks that its credential is still good. */
+const STREAM_REAUTHORIZE_MS = 5_000;
+
+export interface StreamAuthorization {
+  readonly ok: boolean;
+  /** Why authorization was lost, e.g. MACHINE_CREDENTIAL_REVOKED. */
+  readonly code?: string;
+  readonly message?: string;
+}
+
+/**
+ * Adapt the watcher to an authenticated Server-Sent Events response.
+ *
+ * AUTHENTICATION AT THE HANDSHAKE IS NOT AUTHENTICATION FOR THE CONNECTION.
+ * A stream that checks its credential once and then runs for hours is a
+ * credential that cannot be revoked: success criterion 15 says revoking a machine
+ * makes that subtree fail closed, and an already-open stream IS the subtree. The
+ * `/state` request after a revocation was refused while the `/stream` opened
+ * before it kept delivering the same content.
+ *
+ * So `stillAuthorized` is re-checked on two schedules, and it needs both:
+ * before every write, which covers a busy stream promptly, and on a timer, which
+ * covers an IDLE one — a revoked device holding a quiet stream is still holding a
+ * live channel, and an event-driven check alone would never notice.
+ *
+ * Losing authorization is announced before the socket closes, with the code that
+ * says why. A stream that simply went silent is indistinguishable from a network
+ * failure, and "your access was withdrawn" is not the same instruction as "your
+ * connection dropped".
+ */
 export function openAgentStateSse<T>(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  options: Omit<StateStreamOptions<T>, 'onEvent'>,
+  options: Omit<StateStreamOptions<T>, 'onEvent'> & {
+    readonly stillAuthorized?: () => StreamAuthorization;
+    readonly reauthorizeMs?: number;
+  },
 ): StateSubscription {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -338,10 +370,58 @@ export function openAgentStateSse<T>(
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
   });
-  const subscription = watchAgentState({
+
+  let terminated = false;
+  let reauthorizeTimer: NodeJS.Timeout | undefined;
+  // `watchAgentState` emits its opening snapshot SYNCHRONOUSLY, so `terminate`
+  // can run before the subscription exists — a credential already revoked when
+  // the stream opens hits exactly that. Hold it in a `let` and close on
+  // assignment, rather than reaching into a binding that is still in its dead
+  // zone.
+  let subscription: StateSubscription | undefined;
+
+  /** Announce why, then end. Never just go quiet. */
+  const terminate = (authorization: StreamAuthorization): void => {
+    if (terminated) return;
+    terminated = true;
+    if (!res.destroyed && !res.writableEnded) {
+      res.write('event: protocol-state-unauthorized\n');
+      res.write(`data: ${JSON.stringify({
+        type: 'STREAM_AUTHORIZATION_LOST',
+        code: authorization.code ?? 'MACHINE_CREDENTIAL_REQUIRED',
+        message: authorization.message ?? 'this stream is no longer authorized',
+      })}\n\n`);
+      res.end();
+    }
+    subscription?.close();
+    if (reauthorizeTimer !== undefined) clearInterval(reauthorizeTimer);
+  };
+
+  /** Returns true while the stream may keep delivering. */
+  const authorized = (): boolean => {
+    if (!options.stillAuthorized) return true;
+    let verdict: StreamAuthorization;
+    try {
+      verdict = options.stillAuthorized();
+    } catch (error) {
+      // A store that cannot be read is "I could not tell", and a stream carrying
+      // protocol state is not the place to resolve that optimistically.
+      verdict = {
+        ok: false,
+        code: 'MACHINE_STORE_UNREADABLE',
+        message: `credential could not be re-checked: ${(error as Error).message}`,
+      };
+    }
+    if (verdict.ok) return true;
+    terminate(verdict);
+    return false;
+  };
+
+  subscription = watchAgentState({
     ...options,
     onEvent: (event) => {
-      if (res.destroyed || res.writableEnded) return;
+      if (terminated || res.destroyed || res.writableEnded) return;
+      if (!authorized()) return;
       const sseEvent = event.type === 'PROTOCOL_STATE_SNAPSHOT'
         ? 'protocol-state'
         : event.type === 'PROTOCOL_STATE_RECONCILED'
@@ -352,8 +432,25 @@ export function openAgentStateSse<T>(
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     },
   });
-  const close = (): void => subscription.close();
+
+  // Terminated during the opening snapshot: the subscription exists now, so the
+  // close that could not happen inside `terminate` happens here.
+  if (terminated) subscription.close();
+
+  if (!terminated && options.stillAuthorized) {
+    const interval = options.reauthorizeMs ?? STREAM_REAUTHORIZE_MS;
+    if (interval > 0) {
+      reauthorizeTimer = setInterval(() => { authorized(); }, interval);
+      reauthorizeTimer.unref();
+    }
+  }
+
+  const stream = subscription;
+  const close = (): void => {
+    if (reauthorizeTimer !== undefined) clearInterval(reauthorizeTimer);
+    stream.close();
+  };
   req.once('close', close);
   res.once('close', close);
-  return subscription;
+  return stream;
 }

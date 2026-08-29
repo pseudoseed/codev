@@ -41,6 +41,7 @@ import {
   initAgentRoutes,
   shutdownAgentRoutes,
 } from '../servers/agent-routes.js';
+import { openAgentStateSse } from '../servers/agent-state-stream.js';
 
 const dirs: string[] = [];
 function tmp(): string {
@@ -793,6 +794,121 @@ describe('per-machine credentials', () => {
     expect(JSON.parse(out.body)).toMatchObject({ revoked: true, approvalCapabilitiesRevoked: 1 });
     // The capability is actually dead, not merely reported as revoked.
     expect(h.approvals.verify(capability.presentation, { machine: 'ipad' }).authorized).toBe(false);
+  });
+
+  // AUTHENTICATION AT THE HANDSHAKE IS NOT AUTHENTICATION FOR THE CONNECTION.
+  //
+  // The /state request after a revocation was refused while a /stream opened
+  // BEFORE it kept delivering the same content. Success criterion 15 says the
+  // revoked machine's subtree fails closed, and an open stream is that subtree.
+  describe('an open stream loses authorization when its credential does', () => {
+    function sseHarness(store: MachineCredentialStore, credential: string | undefined) {
+      const captured = fakeRes();
+      const req = Object.assign(new Readable({ read() { this.push(null); } }), {
+        method: 'GET',
+        headers: {},
+      }) as unknown as http.IncomingMessage;
+      const root = tmp();
+      const subscription = openAgentStateSse(req, captured.res, {
+        workspacePath: root,
+        debounceMs: 1,
+        reconcileMs: 0,
+        // Zero means "no timer"; each test drives the schedule it is testing.
+        reauthorizeMs: 0,
+        snapshot: () => ({ artifactRoots: [root], payload: { phase: 'implement' } }),
+        stillAuthorized: () => {
+          const verdict = store.verify(credential);
+          return { ok: verdict.authorized, code: verdict.code, message: verdict.message };
+        },
+      });
+      return { captured, subscription };
+    }
+
+    it('closes with the reason, rather than going quiet', async () => {
+      const store = new MachineCredentialStore({ root: tmp() });
+      const issued = store.issue({ machine: 'ipad' });
+      const { captured, subscription } = sseHarness(store, issued.presentation);
+      // The opening snapshot is delivered while the credential is good.
+      expect(captured.body).toContain('protocol-state');
+      const beforeRevocation = captured.body.length;
+
+      store.revoke('ipad');
+      // Any subsequent delivery re-checks first.
+      subscription.close();
+      const reopened = sseHarness(store, issued.presentation);
+      await flush();
+
+      expect(reopened.captured.body).toContain('protocol-state-unauthorized');
+      expect(reopened.captured.body).toContain('STREAM_AUTHORIZATION_LOST');
+      // The CODE says which, so "withdrawn" is not spelled like "dropped".
+      expect(reopened.captured.body).toContain(MACHINE_SIGNAL.MACHINE_CREDENTIAL_REVOKED);
+      expect(beforeRevocation).toBeGreaterThan(0);
+    });
+
+    it('an unreadable store terminates the stream instead of resolving optimistically', async () => {
+      const store = new MachineCredentialStore({ root: tmp() });
+      const issued = store.issue({ machine: 'ipad' });
+      writeFileSync(store.pathFor('ipad'), '{ not json');
+      const { captured } = sseHarness(store, issued.presentation);
+      await flush();
+      expect(captured.body).toContain('protocol-state-unauthorized');
+      // "I could not tell" is not a reason to keep streaming protocol state.
+      expect(captured.body).toContain(MACHINE_SIGNAL.MACHINE_STORE_UNREADABLE);
+    });
+
+    it('an IDLE stream is closed by the timer, not only by the next event', async () => {
+      // A revoked device holding a quiet stream still holds a live channel, and
+      // an event-driven check alone would never notice.
+      const store = new MachineCredentialStore({ root: tmp() });
+      const issued = store.issue({ machine: 'ipad' });
+      const captured = fakeRes();
+      const req = Object.assign(new Readable({ read() { this.push(null); } }), {
+        method: 'GET',
+        headers: {},
+      }) as unknown as http.IncomingMessage;
+      const root = tmp();
+      openAgentStateSse(req, captured.res, {
+        workspacePath: root,
+        debounceMs: 1,
+        reconcileMs: 0,
+        reauthorizeMs: 5,
+        snapshot: () => ({ artifactRoots: [root], payload: { phase: 'implement' } }),
+        stillAuthorized: () => {
+          const verdict = store.verify(issued.presentation);
+          return { ok: verdict.authorized, code: verdict.code, message: verdict.message };
+        },
+      });
+      store.revoke('ipad');
+      // No further events; only the timer can notice.
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(captured.body).toContain('STREAM_AUTHORIZATION_LOST');
+      expect(captured.body).toContain(MACHINE_SIGNAL.MACHINE_CREDENTIAL_REVOKED);
+    });
+
+    it('a live credential keeps its stream — the check is not simply "always close"', async () => {
+      const store = new MachineCredentialStore({ root: tmp() });
+      const issued = store.issue({ machine: 'ipad' });
+      const captured = fakeRes();
+      const req = Object.assign(new Readable({ read() { this.push(null); } }), {
+        method: 'GET',
+        headers: {},
+      }) as unknown as http.IncomingMessage;
+      const root = tmp();
+      openAgentStateSse(req, captured.res, {
+        workspacePath: root,
+        debounceMs: 1,
+        reconcileMs: 0,
+        reauthorizeMs: 5,
+        snapshot: () => ({ artifactRoots: [root], payload: { phase: 'implement' } }),
+        stillAuthorized: () => {
+          const verdict = store.verify(issued.presentation);
+          return { ok: verdict.authorized, code: verdict.code, message: verdict.message };
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(captured.body).toContain('protocol-state');
+      expect(captured.body).not.toContain('STREAM_AUTHORIZATION_LOST');
+    });
   });
 
   it('an agent holding only a machine credential cannot reach an approval route', async () => {

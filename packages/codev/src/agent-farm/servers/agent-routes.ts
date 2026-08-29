@@ -655,9 +655,19 @@ export function handleAgentRoute(
       if (route.id === 'workspace-state') {
         writeJson(res, 200, buildAgentProtocolSnapshot(context, workspace).payload);
       } else {
+        // The credential presented at the handshake, re-checked for as long as
+        // the stream lives. Authenticating once and then streaming for hours is
+        // a credential that cannot be revoked — and success criterion 15 says a
+        // revoked machine's subtree fails closed, which an open stream is.
+        const presented = req.headers[MACHINE_CREDENTIAL_HEADER];
+        const credential = Array.isArray(presented) ? presented[0] : presented;
         openAgentStateSse(req, res, {
           workspacePath: workspace,
           snapshot: () => buildAgentProtocolSnapshot(context, workspace),
+          stillAuthorized: () => {
+            const verdict = context.machineCredentials.verify(credential);
+            return { ok: verdict.authorized, code: verdict.code, message: verdict.message };
+          },
         });
       }
       return true;
