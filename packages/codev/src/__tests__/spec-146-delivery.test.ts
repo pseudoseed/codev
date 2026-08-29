@@ -265,6 +265,213 @@ describe('spec 146 phase 4: queued while a turn is active', () => {
     }
   });
 
+  it('a duplicate key sent during a turn answers as fast as the first send', async () => {
+    // The iteration-1 hang fix landed on the fresh-send path only. The duplicate
+    // path awaited the `AcceptedByServer` promise, which nothing resolves until the
+    // drain dispatches — so the FIRST send of a key returned immediately and the
+    // SECOND blocked for the whole turn, or forever with no settle signal. Same key,
+    // same queue state, opposite behaviour.
+    const dir = tempDir('queue-dup-hang');
+    try {
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      const dispatcher = recordingDispatcher();
+      // No `awaitSettle`: the supported optional path, and the one where the hang
+      // has nothing at all to end it.
+      const target = (): QueueTarget => ({ threadId: 't1', isTurnActive: true });
+      const queue = new ThreadMessageQueue(target, dispatcher, journal);
+
+      const first = await queue.send(message('only once', 'k-dup'));
+
+      // If this hangs, the race loses and the test fails rather than timing out the
+      // whole file — a hang must be reported as a hang.
+      const second = await Promise.race([
+        queue.send(message('only once', 'k-dup')),
+        new Promise<'HUNG'>((resolve) => setTimeout(() => resolve('HUNG'), 300)),
+      ]);
+
+      expect(second).not.toBe('HUNG');
+      expect(first.kind).toBe('queued-by-porch');
+      expect(typeof second === 'object' && second.kind).toBe('queued-by-porch');
+
+      // A duplicate is the SAME message: same position, not a new place in line.
+      if (typeof second === 'object' && second.kind === 'queued-by-porch' && first.kind === 'queued-by-porch') {
+        expect(second.position).toBe(first.position);
+        expect(second.queuedAt).toBe(first.queuedAt);
+      }
+      // And it never entered the queue twice.
+      expect(queue.depth).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not dispatch into the turn its own previous dispatch just started', async () => {
+    // `isTurnActive` is a PROJECTION fed by the event subscription. Between the
+    // server accepting our `thread.turn.start` and the subscription projecting it,
+    // the flag still reads false — and the drain loops immediately after dispatch,
+    // straight into that window. Polling `isTurnActive` inside `awaitSettle` does
+    // not help: it reads the same stale projection and returns instantly.
+    //
+    // This test models exactly that lag, so it fails against a drain that trusts the
+    // flag and passes against one that waits for the turn it started.
+    const dir = tempDir('queue-projection-race');
+    try {
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+
+      // Two different facts, and the bug lives in the gap between them.
+      //   serverTurnRunning — what is TRUE on the server, the instant it accepts.
+      //   turnActive        — what the client has PROJECTED, 20 ms later.
+      let serverTurnRunning = false;
+      let turnActive = false;
+      const interleaved: string[] = [];
+      let settleCurrentTurn: (() => void) | null = null;
+
+      const dispatcher = {
+        calls: [] as Array<{ method: string; payload: any }>,
+        async call(method: string, payload: any) {
+          // THE ASSERTION THAT MATTERS: was a turn already running when this landed?
+          if (serverTurnRunning) interleaved.push(payload?.message?.text);
+          this.calls.push({ method, payload });
+          // Accepted, so a turn is running NOW...
+          serverTurnRunning = true;
+          // ...but the projection the client reads lags behind it.
+          setTimeout(() => {
+            turnActive = true;
+          }, 20);
+          return {};
+        },
+      };
+
+      const target = (): QueueTarget => ({
+        threadId: 't1',
+        isTurnActive: turnActive,
+        // Reads the same lagging projection, so it returns instantly in the window.
+        awaitSettle: async () => {
+          while (turnActive) await new Promise((r) => setTimeout(r, 5));
+        },
+        // Keyed on the turn this dispatch starts, not on the flag.
+        expectTurn: () => {
+          const settled = new Promise<void>((resolve) => {
+            settleCurrentTurn = () => {
+              serverTurnRunning = false;
+              turnActive = false;
+              resolve();
+            };
+          });
+          return { settled };
+        },
+      });
+
+      const queue = new ThreadMessageQueue(target, dispatcher, journal);
+
+      // The settle driver runs CONCURRENTLY with the sends, because a dispatch now
+      // waits for the turn the previous dispatch started — awaiting each `send` to
+      // completion first would deadlock against that, correctly.
+      let driving = true;
+      const driver = (async () => {
+        while (driving) {
+          if (settleCurrentTurn && serverTurnRunning) {
+            const settle = settleCurrentTurn;
+            settleCurrentTurn = null;
+            settle();
+          }
+          await new Promise((r) => setTimeout(r, 5));
+        }
+      })();
+
+      await Promise.all([
+        queue.send(message('a', 'k-a')),
+        queue.send(message('b', 'k-b')),
+        queue.send(message('c', 'k-c')),
+      ]);
+      await queue.flush();
+      driving = false;
+      await driver;
+
+      // NOTHING was dispatched into a turn that was already running on the server.
+      expect(interleaved).toEqual([]);
+      // And ordering is intact, which was never the part at risk.
+      expect(dispatcher.calls.map((c) => c.payload?.message?.text)).toEqual(['a', 'b', 'c']);
+      expect(queue.depth).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a turn signal that never arrives does not strand the backlog', async () => {
+    // `expectTurn().settled` resolves only after the turn was seen RUNNING. That
+    // latch is correct — it stops a thread-creation event reading as a finished turn
+    // — and it means a turn the subscription never projects as running leaves the
+    // promise pending forever.
+    //
+    // Waiting on it unbounded traded a sub-second race for a permanent stall, and
+    // only the live server showed it: the backlog stopped partway and 300 s never
+    // produced the rest, while every unit test passed because a fake expectation
+    // always resolves. So this test supplies the one thing the real world can and
+    // the fakes never did: a signal that does not come.
+    const dir = tempDir('queue-dead-signal');
+    try {
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      const dispatcher = recordingDispatcher();
+      const target = (): QueueTarget => ({
+        threadId: 't1',
+        isTurnActive: false,
+        // Never resolves, and never rejects.
+        expectTurn: () => ({ settled: new Promise<void>(() => {}) }),
+      });
+      // 20 ms bound so the test does not wait out the real one.
+      const queue = new ThreadMessageQueue(target, dispatcher, journal, 20);
+
+      await Promise.all([
+        queue.send(message('a', 'k-a')),
+        queue.send(message('b', 'k-b')),
+        queue.send(message('c', 'k-c')),
+      ]);
+      await queue.flush();
+
+      // All three delivered, in order, despite no turn ever being reported settled.
+      expect(dispatcher.texts).toEqual(['a', 'b', 'c']);
+      expect(queue.depth).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('tells a departed caller when its queued message later failed to send', async () => {
+    // A caller holding `queued-by-porch` has already returned. If the later dispatch
+    // fails, the rejection lands on `accepted(key)`, which that caller never has to
+    // await — so without a hook the only signal was "recovery re-dispatches after a
+    // restart", which a long-lived process never reaches.
+    const dir = tempDir('queue-drain-signal');
+    try {
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      const failures: string[] = [];
+      let turnActive = true;
+      const dispatcher = {
+        async call() {
+          throw Object.assign(new Error('socket closed'), { name: 'NotConnectedError' });
+        },
+      };
+      const target = (): QueueTarget => ({
+        threadId: 't1',
+        isTurnActive: turnActive,
+        onDrainError: (_error, msg) => failures.push(msg.text),
+      });
+      const queue = new ThreadMessageQueue(target, dispatcher, journal);
+
+      const receipt = await queue.send(message('will fail', 'k-fail'));
+      expect(receipt.kind).toBe('queued-by-porch');
+
+      turnActive = false;
+      await queue.flush();
+
+      expect(failures).toEqual(['will fail']);
+      expect(queue.depth).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('a turn starting mid-drain stops the rest of the backlog', async () => {
     const dir = tempDir('queue-restart');
     try {
@@ -712,6 +919,59 @@ describe('spec 146 phase 4: durable scheduled delivery', () => {
       turnActive = false;
       await queue.flush();
       expect(dispatcher.texts).toEqual(['scheduled while busy']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('repairing a torn tail shortens the file in place and never rewrites it', async () => {
+    // The repair opened the store with 'w', which EMPTIES the file and then writes
+    // every surviving record back. A crash in that window lost every pending
+    // message — in the one function whose premise is fsync discipline, and one only
+    // reached because an earlier crash left a torn tail. The recovery path was the
+    // most dangerous code in the store.
+    //
+    // WHAT THIS TEST DOES AND DOES NOT PROVE — said plainly, because the difference
+    // matters more than the passing tick.
+    //
+    // It proves the repair keeps every intact record and drops the torn bytes,
+    // including when a record holds multi-byte characters, which is where a
+    // character-count truncation would cut in the wrong place.
+    //
+    // It does NOT demonstrate the crash-window improvement, and no in-process test
+    // can: `openSync(path,'w')` empties the file and rewrites it with no await
+    // between, so the window in which the good records are absent never yields to
+    // the event loop and is unobservable from JavaScript on this thread. An earlier
+    // draft of this test watched the file on a timer, and passed against BOTH
+    // implementations — which is the failure mode this project has a rule about, so
+    // it is recorded here rather than quietly deleted.
+    //
+    // The crash-window claim rests on the syscall: `ftruncateSync` shortens the file
+    // and writes none of the retained bytes, so there is no interval in which they
+    // are missing. That is an argument from the operation used, not a demonstration,
+    // and it is labelled as one.
+    const dir = tempDir('sched-torn-inplace');
+    try {
+      const storePath = join(dir, 'scheduled.jsonl');
+      const store = new ScheduleStore(storePath);
+      store.schedule(scheduled('k-keep-1', 1_000));
+      // Multi-byte text in a retained record: the truncation offset is a BYTE count,
+      // and a string length would cut inside this line and destroy it.
+      store.schedule(scheduled('k-keep-2', 2_000, 'ここで改行 — naïve café 🎧'));
+
+      const intact = readFileSync(storePath, 'utf-8');
+      // A crash mid-append: whole records, then half of one.
+      writeFileSync(storePath, intact + '{"kind":"scheduled","mess');
+
+      // Appending is what triggers the repair.
+      new ScheduleStore(storePath).schedule(scheduled('k-keep-3', 3_000));
+
+      const after = new ScheduleStore(storePath).pending();
+      expect(after.map((m) => m.idempotencyKey)).toEqual(['k-keep-1', 'k-keep-2', 'k-keep-3']);
+      // The multi-byte record survived intact, byte for byte.
+      expect(after[1].text).toBe('ここで改行 — naïve café 🎧');
+      // The torn bytes are gone and the file is well-formed again.
+      expect(readFileSync(storePath, 'utf-8').endsWith('\n')).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -190,3 +190,57 @@ chore.
   over the same file with an injected clock, not by killing and restarting a real
   process. Phase 3 used real `SIGKILL`s for its crash windows; this is weaker, and
   it is named here rather than left to be assumed.
+- **The projection race is closed in the unit-tested path and NOT demonstrated
+  live.** `isTurnActive` is fed by the event subscription, so between the server
+  accepting a `thread.turn.start` and the subscription projecting it, the flag still
+  reads false — and a drain that trusts it dispatches the next queued message into
+  the turn it just started. The queue takes an optional `expectTurn` so it can wait
+  on the turn its own dispatch began instead, and a unit test reproduces the
+  interleaving without it.
+
+  Wiring that to `TurnTracker.expectTurn` in this harness **did not work**: every
+  message waited out the drain's bound and scenario 2 failed twice at 300 s.
+
+  **CORRECTION — an earlier version of this section named the wrong cause.** It said
+  `settled` "never resolved for these message-started turns". That is false, and the
+  repro at `codev/experiments/146-phase4-expectturn-repro/run.mjs` disproves it:
+  a message-started turn settles in ~1.5 s with a clean `activeTurnId` non-null →
+  null trace. The record is `codev/research/146-phase4-expectturn-repro.json`,
+  reproduced twice.
+
+  **The actual mechanism is displacement.** `TurnTracker` keeps **one waiter per
+  thread**, and `expectTurn` abandons the previous one with `TurnDisplacedError` —
+  by design, since a waiter that can never resolve should say so rather than hang.
+  The queue called `expectTurn` on the **same tracker its `DriverThread` uses**, so
+  the two registrants destroyed each other's expectations. The turn machinery was
+  never the problem; sharing a single-waiter tracker between two watchers was.
+
+  This is a **design constraint, not a bug to patch in place**: any wiring where the
+  queue and the thread both watch one thread on one tracker is unsound as written.
+  Closing the race properly needs either a tracker that supports multiple waiters per
+  thread, or a queue that observes turns through the thread it already has rather
+  than registering its own expectation. **That is a change to Phase 3 code and it is
+  not being made inside a closed phase 4.**
+
+  So the harness keeps the settle poll that is demonstrated. It preserves ORDER —
+  never at risk, the queue is FIFO and dispatches one at a time — while leaving
+  NON-INTERLEAVING dependent on the projection being current. Scenario 2 measures
+  zero messages reaching the server during the turn and has never observed an
+  interleave, but it does not force the lag, so it is not evidence that the race
+  cannot occur.
+
+  **Status: mechanism diagnosed and reproduced; the fix is designed but not built.**
+  Phase 14 wires the production path and owns it.
+- **The first-ever append's directory entry is not made durable.** `ScheduleStore`
+  and `DispatchJournal` both `fsync` the file descriptor they wrote, which is what
+  makes the *record* durable — but `openSync(path, 'a')` **creates** the file on the
+  first append, and a create is a namespace operation whose durability needs an
+  `fsync` of the containing **directory**. So a crash immediately after the very
+  first `schedule()` can leave no file at all, where a crash after any later append
+  leaves a complete one.
+
+  Narrow, and stated rather than fixed: it is one write per store lifetime, the same
+  pattern appears in `commands.ts` from Phase 3, and changing the journal's durability
+  contract is not phase 4 work. Raised by a reviewer of the post-force-advance diff
+  and recorded here so it is a known gap rather than an assumption that fsync of a
+  file covers its creation. It should be fixed in both places at once.

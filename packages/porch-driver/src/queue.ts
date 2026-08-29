@@ -17,6 +17,13 @@
  * no turn is active the queue drains immediately, which looks like a fast path and
  * is not one — the ordering guarantee does not depend on the caller's timing.
  *
+ * **The one exception, stated rather than left for a reader to find.** `send`'s
+ * `journalHasDispatched` branch dispatches outside the drain chain. It fires only for
+ * a `commandId` the journal already records as dispatched, which the server collapses
+ * to the delivery that already happened, so it cannot reorder anything observable —
+ * but "always" is an absolute claim and an unstated exception to one is how a later
+ * reader learns to distrust the whole comment.
+ *
  * WHY ORDERING IS NOT FREE IN A SINGLE-THREADED RUNTIME
  *
  * Pushing to an array is atomic here; awaiting is not. Two concurrent `send` calls
@@ -72,12 +79,68 @@ export interface QueueTarget {
    * behaviour, kept because it is what a caller with no settle signal can honour.
    */
   readonly awaitSettle?: () => Promise<void>;
+  /**
+   * Watch for the turn the NEXT dispatch will start. Called before dispatching.
+   *
+   * **`isTurnActive` cannot close this race, because it is a projection.** It is
+   * fed by the event subscription, so between "the server accepted our
+   * `thread.turn.start`" and "our subscription has projected that turn as active"
+   * the flag still reads false. The drain loops immediately after a successful
+   * dispatch, re-reads the flag inside that window, believes no turn is running,
+   * and sends the next queued message INTO the turn it just started — the exact
+   * interleaving this queue exists to prevent.
+   *
+   * Polling `isTurnActive` does not fix it either, one level down: an `awaitSettle`
+   * built as "while (isTurnActive) wait" returns instantly in the same window,
+   * because it is reading the same not-yet-updated projection.
+   *
+   * So the drain does not ask "is a turn active now"; it asks "has the turn I just
+   * started finished". Registered BEFORE the dispatch so no event can land in the
+   * gap, and `settled` must resolve only after that turn was seen RUNNING — the
+   * latch `TurnTracker.expectTurn` already implements for exactly this reason.
+   *
+   * Omitted, the drain falls back to `awaitSettle` and the older behaviour. That
+   * fallback keeps ORDER, which is never at risk here: the queue is FIFO and
+   * dispatches one at a time. What it cannot guarantee under a slow projection is
+   * NON-INTERLEAVING, so a caller that needs the phase's full property supplies
+   * this.
+   *
+   * **DO NOT WIRE THIS TO A `TurnTracker` THAT A `DriverThread` IS ALSO USING.**
+   * `TurnTracker` keeps ONE waiter per thread and `expectTurn` abandons the previous
+   * one with `TurnDisplacedError`, so two registrants on one thread destroy each
+   * other's expectations. Doing exactly that stalled the live backlog to 300 s and
+   * looked, wrongly, like the turn machinery failing for message-started turns — it
+   * does not; a sole registrant settles in ~1.5 s. Repro and captured events:
+   * `codev/experiments/146-phase4-expectturn-repro/run.mjs`.
+   *
+   * A sound wiring needs either a tracker that supports multiple waiters per thread,
+   * or a queue that observes turns through the thread it already has instead of
+   * registering its own expectation. Neither exists yet, which is why nothing in
+   * production supplies this today.
+   */
+  readonly expectTurn?: () => { readonly settled: Promise<void> };
+  /**
+   * Called when a message that was already acknowledged fails on drain. Optional.
+   *
+   * A caller holding a `queued-by-porch` receipt has been told the truth — porch has
+   * the message durably — and has already returned. If the later dispatch fails, the
+   * rejection goes to `accepted(key)`, which that caller never has to await, so
+   * without this hook the only signal is that recovery re-dispatches the intent
+   * after a restart. That is a real durability guarantee and a poor liveness one: a
+   * long-lived process never restarts.
+   *
+   * `ScheduledDelivery` is exactly such a caller — it marks a row fired on a queued
+   * receipt and does not await acceptance. The hook is what lets a wiring notice.
+   */
+  readonly onDrainError?: (error: unknown, message: OutboundMessage) => void;
 }
 
 interface QueuedItem {
   readonly message: OutboundMessage;
   readonly commandId: string;
   readonly position: number;
+  /** ISO 8601, when the intent reached the disk. A duplicate send reports this one. */
+  readonly queuedAt: string;
   readonly resolve: (receipt: AcceptedByServer) => void;
   readonly reject: (error: unknown) => void;
 }
@@ -96,11 +159,27 @@ export class ThreadMessageQueue {
   #nextPosition = 1;
   /** Server answers, by idempotency key, for callers that want to await delivery. */
   #accepted = new Map<string, Promise<AcceptedByServer>>();
+  /**
+   * A turn THIS queue started and has not seen finish.
+   *
+   * Held across drain passes on purpose. The race is not confined to one pass: each
+   * `send` schedules its own drain, so the second send's pass re-reads a projection
+   * that the first send's dispatch has not yet updated and dispatches straight into
+   * that turn. A flag re-read per iteration cannot see this; a promise the queue
+   * owns can, because it does not depend on anyone else noticing anything.
+   */
+  #pendingTurn: Promise<void> | null = null;
 
   constructor(
     private readonly target: () => QueueTarget,
     private readonly dispatcher: CommandDispatcher,
     private readonly journal: DispatchJournal,
+    /**
+     * How long the drain waits for a turn it started to be reported settled before
+     * falling back to the projection. Injected so a test can drive it without
+     * waiting out the real bound.
+     */
+    private readonly turnWaitTimeoutMs: number = 30_000,
   ) {}
 
   /** How many messages are waiting. Zero while idle. */
@@ -124,7 +203,33 @@ export class ThreadMessageQueue {
     const commandId = commandIdForKey(message.idempotencyKey);
 
     const existing = this.#accepted.get(message.idempotencyKey);
-    if (existing) return await existing;
+    if (existing) {
+      // THE SAME FIX AS THE FRESH PATH BELOW, AT ITS SECOND SITE.
+      //
+      // `existing` only resolves when the drain dispatches, so awaiting it blocked
+      // a duplicate send for the whole agent turn — and with no `awaitSettle`, for
+      // good. The first send of the same key returned `queued-by-porch` immediately;
+      // the second hung. Two calls, same key, same queue state, wildly different
+      // behaviour, and only one of them honest.
+      //
+      // If the item is still in the queue then nothing has been dispatched and the
+      // truthful answer is already known, so report it now rather than waiting for
+      // a machine that has not been asked anything yet. The original position and
+      // timestamp are reused deliberately: a duplicate is the SAME message, and a
+      // receipt claiming a new position would describe a queue that does not exist.
+      const queued = this.#queue.find((item) => item.commandId === commandId);
+      if (queued) {
+        return {
+          kind: 'queued-by-porch',
+          idempotencyKey: message.idempotencyKey,
+          commandId,
+          threadId: message.threadId,
+          queuedAt: queued.queuedAt,
+          position: queued.position,
+        } satisfies QueuedByPorch;
+      }
+      return await existing;
+    }
     if (journalHasDispatched(this.journal, commandId)) {
       return await sendMessage(this.dispatcher, this.journal, message);
     }
@@ -154,7 +259,7 @@ export class ThreadMessageQueue {
     this.journal.recordIntent(commandId, String(command.type), command);
 
     const queuedAt = new Date().toISOString();
-    this.#queue.push({ message, commandId, position, resolve, reject });
+    this.#queue.push({ message, commandId, position, queuedAt, resolve, reject });
 
     const wasActive = this.target().isTurnActive;
     this.#scheduleDrain();
@@ -219,6 +324,45 @@ export class ThreadMessageQueue {
 
   async #drain(): Promise<void> {
     while (this.#queue.length > 0) {
+      // FIRST, and before consulting any projection: a turn we started ourselves and
+      // have not seen finish. This is the only fact about the turn that is knowable
+      // without waiting for the subscription to catch up.
+      if (this.#pendingTurn) {
+        const pending = this.#pendingTurn;
+        // BOUNDED, and this bound is load-bearing rather than defensive.
+        //
+        // `settled` resolves only after the turn was seen RUNNING — the latch that
+        // stops a thread-creation event being read as a finished turn. That latch
+        // is right, and it means a turn the subscription never projects as running
+        // leaves this promise pending forever. Waiting on it unbounded turned a
+        // sub-second race into a permanent stall: live, the backlog stopped partway
+        // and 300 s never produced the rest. The unit tests could not see it,
+        // because a fake expectation always resolves.
+        //
+        // So this waits for the signal it prefers and then stops waiting. The window
+        // being closed is the projection lag, which is milliseconds; anything past
+        // the bound is not that race, it is a signal that is not coming. After it,
+        // the loop falls through to `isTurnActive`/`awaitSettle` — weaker, but by
+        // then the projection has long since caught up.
+        // The timer is CLEARED when the turn wins the race. Left uncleared it was one
+        // live 30 s timer per waited drain pass — unref'd, so it held nothing open,
+        // but a long-lived queue accumulated them for no reason.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            pending.catch(() => {}),
+            new Promise<void>((resolve) => {
+              timer = setTimeout(resolve, this.turnWaitTimeoutMs);
+              timer.unref?.();
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+        if (this.#pendingTurn === pending) this.#pendingTurn = null;
+        continue;
+      }
+
       // Re-read every iteration. A turn that starts midway through a drain must not
       // be raced by the rest of the backlog.
       if (this.target().isTurnActive) {
@@ -232,10 +376,17 @@ export class ThreadMessageQueue {
       }
 
       const item = this.#queue[0];
+      // Registered BEFORE the dispatch, so the turn this dispatch starts cannot
+      // begin and end in the gap between sending and starting to watch.
+      const expectation = this.target().expectTurn?.();
       try {
         const receipt = await sendMessage(this.dispatcher, this.journal, item.message);
         this.#queue.shift();
         item.resolve(receipt);
+        // A message IS a turn start, so this dispatch started one. Recorded here
+        // rather than awaited here, so a caller blocked in `send` is not held for
+        // the whole turn — the next DISPATCH waits, which is what must not race.
+        if (expectation) this.#pendingTurn = expectation.settled;
       } catch (error) {
         // Loud, at the call site, and OUT OF THE QUEUE — the shift is the half
         // that makes the comment true. Rejecting without removing left the failed
@@ -246,7 +397,15 @@ export class ThreadMessageQueue {
         this.#queue.shift();
         this.#accepted.delete(item.message.idempotencyKey);
         item.reject(error);
+        // The caller may have taken a `queued-by-porch` receipt and gone. Its own
+        // handler must not be able to break the drain for everyone behind it.
+        try {
+          this.target().onDrainError?.(error, item.message);
+        } catch {
+          // A broken notifier is not a delivery failure.
+        }
       }
+
     }
   }
 }

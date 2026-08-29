@@ -77,7 +77,12 @@ function clientCommit() {
 
 function treeDirty() {
   try {
-    return shell('git status --porcelain -- packages/porch-driver packages/t3-client', repoRoot).length > 0;
+    // The harness is included, not just the code under test. An uncommitted change
+    // to the measuring instrument makes the record just as unreproducible as an
+    // uncommitted change to the driver, and this check previously covered only the
+    // latter — so it could report a clean tree for a run nobody else could repeat.
+    const scope = 'packages/porch-driver packages/t3-client codev/experiments/146-phase4-live';
+    return shell(`git status --porcelain -- ${scope}`, repoRoot).length > 0;
   } catch {
     return null;
   }
@@ -264,6 +269,33 @@ async function scenarioQueuedDuringTurn({ thread, journal, primary, seen }) {
           const deadline = Date.now() + 120_000;
           while (thread.isTurnActive && Date.now() < deadline) await sleep(500);
         },
+        // NOT WIRED HERE, DELIBERATELY, AND THE REASON IS RECORDED RATHER THAN THE
+        // WIRING QUIETLY OMITTED.
+        //
+        // The queue supports `expectTurn` so the drain can wait on the turn its own
+        // dispatch started instead of on `isTurnActive`, which is a projection and
+        // lags behind the server. That closes a real race, and it is unit-tested.
+        //
+        // Wiring it to `tracker.expectTurn` here stalled the live backlog: scenario 2
+        // failed twice at 300 s.
+        //
+        // THE CAUSE IS DISPLACEMENT, NOT THE TURN MACHINERY. An earlier version of
+        // this comment blamed `settled` for never resolving on message-started turns.
+        // That was wrong: a sole registrant settles in ~1.5 s with a clean
+        // `activeTurnId` non-null → null trace. `TurnTracker` keeps ONE waiter per
+        // thread and `expectTurn` abandons the previous with `TurnDisplacedError`, so
+        // registering here — on the same tracker this `DriverThread` already uses —
+        // made the two watchers destroy each other's expectations.
+        //
+        // Repro and captured events:
+        //   codev/experiments/146-phase4-expectturn-repro/run.mjs
+        //   codev/research/146-phase4-expectturn-repro.json
+        //
+        // A sound wiring needs a tracker that supports multiple waiters per thread,
+        // or a queue that observes turns through the thread it already holds rather
+        // than registering its own. Both are Phase 3 code and were not changed inside
+        // a closed phase 4. Until one exists, this harness uses the settle poll that
+        // is demonstrated, and the race stays closed only in the unit-tested path.
       }),
       primary.dispatcher,
       journal,
