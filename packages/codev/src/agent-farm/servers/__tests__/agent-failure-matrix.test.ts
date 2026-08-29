@@ -181,8 +181,42 @@ describe('failure matrix', () => {
     expect(viaWorkspace.some((result) => !result.ok && result.signal.code === SIGNAL.ROOT_MISSING)).toBe(true);
   });
 
+  // TWO PATHS REACH STATUS_UNREADABLE, AND THEY MUST BOTH BE PINNED SEPARATELY.
+  //
+  // `readScopedStatus` maps EACCES/EPERM from reading the FILE;
+  // `readStatusesFromArtifactRoot` maps it from reading the projects DIRECTORY.
+  // A single test covering only the directory leaves the file branch free to
+  // collapse into STATUS_MALFORMED — which tells an operator their file is corrupt
+  // when it is a permissions problem. Different diagnosis, different fix.
+  //
+  // This was a coverage REGRESSION, not an original gap: the test once chmod'd the
+  // status file and called `readScopedStatus`, and later refactors moved the target
+  // to the directory while keeping the name. **A test that moves to a different code
+  // path while keeping its name is worse than no test, because it reads as coverage.**
+  // Hence two tests whose names say which path each one holds.
   it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
-    'status.yaml unreadable emits STATUS_UNREADABLE',
+    'an unreadable status.yaml FILE emits STATUS_UNREADABLE, not STATUS_MALFORMED',
+    () => {
+      const root = tmp();
+      const statusPath = writeStatus(root, '1', porchYaml('1'));
+      chmodSync(statusPath, 0o000);
+      try {
+        const result = readScopedStatus(root, statusPath);
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.signal.code).toBe(SIGNAL.STATUS_UNREADABLE);
+        // The collapse this test exists to prevent: a permissions failure reported
+        // as a syntax failure.
+        expect(result.signal.code).not.toBe(SIGNAL.STATUS_MALFORMED);
+        expect(result.signal.code).not.toBe('STATUS_NOT_FOUND');
+      } finally {
+        chmodSync(statusPath, 0o644);
+      }
+    },
+  );
+
+  it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
+    'an unreadable projects DIRECTORY emits STATUS_UNREADABLE, not an empty list',
     () => {
       const root = tmp();
       writeStatus(root, '1', porchYaml('1'));
@@ -196,6 +230,8 @@ describe('failure matrix', () => {
             signal: expect.objectContaining({ code: SIGNAL.STATUS_UNREADABLE }),
           }),
         ]);
+        // An unreadable directory is not "this workspace has no projects".
+        expect(results).not.toEqual([]);
       } finally {
         chmodSync(projects, 0o755);
       }
