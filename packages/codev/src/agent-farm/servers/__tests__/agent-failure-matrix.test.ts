@@ -564,6 +564,13 @@ describe('failure matrix', () => {
   // This is the direction that was BROKEN, so it is the direction that needs its own
   // test: the honest sentinels are terminal_id NULL and pid/port 0, and a row with
   // those is clean no matter what `cmd` says.
+  //
+  // **DO NOT DELETE THIS AS REDUNDANT.** It asserts an absence, so it will look like
+  // it tests nothing next to the two conflict tests below. It is the test holding the
+  // narrowing in place: without it, re-adding `row.cmd !== ''` to the detector passes
+  // the whole suite and every thread-backed architect silently becomes a conflict
+  // again. A test that pins what must NOT happen is the only guard a narrowed
+  // condition has.
   it('a thread-backed architect that kept its cmd is NOT a conflict', () => {
     const root = tmp();
     const database = db();

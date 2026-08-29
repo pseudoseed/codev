@@ -105,3 +105,43 @@ rather than accepting it, which is what the context file asked for:
   the ruling was about. Worth fixing when that file is next open.
 - The plan's test plan asks for a recognised vs unpaired human session end-to-end;
   only `REVOKED` is pinned through the HTTP route today.
+
+---
+
+## THE PATTERN — four instances, one trap, and it is not finished with us
+
+These were fixed as four findings. They are **one defect**, and whoever writes phase 6
+should know the trap exists *before* they name a test.
+
+**A test's name and the code path its body exercises drift apart, and the name is what
+everyone reads.** A green suite cannot show it: the test passes, the name asserts
+coverage, and the uncovered branch is invisible until someone mutates it.
+
+| # | The name claimed | The body actually ran | How it was found |
+|---|---|---|---|
+| 1 | `status.yaml` unreadable → `STATUS_UNREADABLE` | chmod on the projects **directory**, a different function | my mutation, then reproduced by opencode |
+| 2 | codev-agent up / t3code down → `T3CODE_UNREACHABLE` | `readThreadRegistry` injection, not the classifier | opencode |
+| 3 | every code production can emit is classified | matched only `code:` keys, missing `signal:` and a default parameter | claude and opencode, independently |
+| 4 | a **capability** presented after revocation | a human-session credential; capabilities are phase 6's | codex |
+
+Instance 3 was **mine**, in the guard I wrote against instances 1 and 2, in the same
+commit where I criticised a reviewer for the same shape. Instance 4 points **forward**
+at a phase that does not exist yet, which is the most dangerous variant: nobody
+reviewing phase 6 will think to ask whether phase 5 already claimed its coverage.
+
+### What actually catches it
+
+Not review, and not a green suite. Three things did:
+
+1. **Mutation, every time.** Disable the branch the name implies and require *that*
+   test to fail — and to be the only one that fails.
+2. **Deriving from the artefact instead of describing it.** A literal count, a
+   hand-written list, or a regex keyed on a field name all encode an assumption that
+   silently stops being true. Instance 3 was exactly this.
+3. **Mapping names to call sites mechanically.** Reading each test's body for which
+   production function it invokes found instance 2 and produced one false positive,
+   which is the right ratio — a sweep that only ever confirms is not a sweep.
+
+**Phase 6 note:** `CAPABILITY_REVOKED` must be its own code and its own test. Phase 5
+covers `HUMAN_SESSION_REVOKED` only, and instance 4 was this document's own row
+claiming otherwise.
