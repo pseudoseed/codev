@@ -387,3 +387,49 @@ being pinned became **false** through a deliberate contract change, not merely s
 Three review rounds, three real blocking findings, **every one found by looking rather than by
 testing**: the shell target, the inert config fields, and the Alt-encoding. The test suite was
 green for all three.
+
+## ⚠️ PENDING MERGE with #203 — a safety property that must survive resolution
+
+#203 ([Issue #197], the gate-mirror sizing fix) lands before this branch and touches four of
+the same files: `mailbox-hold-policy.ts`, `mailbox-wiring.ts`, `mailbox-delivery.ts`,
+`issue-92-stuck-hold-recovery.test.ts`.
+
+**#203 removes `geometry-mismatch` from `heldRecoveryAction` — it must return `null` for it.**
+This branch still routes it to `escape-screen`, and the two edits are different functions in
+the same file, so git will likely want a hand.
+
+Reinstating it would put an **ESC into a live turn**. #197 measured why: on an 80×24 mirror the
+reflow carries opencode's `esc interrupt` footer off-screen, so the busy *proof* is **destroyed,
+not outranked** — ordering the busy check first does not rescue it, because the evidence is gone.
+And it would land inside a conflict resolution, which nobody reviews as carefully as a diff.
+
+After merging, verify explicitly rather than trusting the diff:
+- `heldRecoveryAction('geometry-mismatch')` → `null`
+- the docblock still carries **both** independent grounds — FUTILITY and DANGER, each sufficient alone
+- #203's `geometry-mismatch` branch in `heldRemedy` and its block in `inbox.ts` are kept
+- this branch's `heldRecoveryKeystroke(action, clearDraft)` signature and `canAutoClear` survive
+
+### The precise trap, found by reading #203's diff before the merge
+
+`issue-92-stuck-hold-recovery.test.ts` is where this goes wrong silently. #203 **deletes** the
+row `['geometry-mismatch', 'escape-screen', '\x1b']` from the `it.each` table and replaces it
+with an explicit `expect(heldRecoveryAction('geometry-mismatch')).toBeNull()`.
+
+This branch **edited that same table** — it now reads
+`['geometry-mismatch', 'escape-screen', 'ctrl-u', '\x1b']`, because the keystroke signature
+gained a clear-key column. So "keep my side" reinstates the mapping *and* keeps a test asserting
+it, which makes the safety regression look **verified**. That is the worst available outcome and
+it is one careless conflict resolution away.
+
+Resolution: take #203's shape for that table (no geometry row, plus its null test) and keep this
+branch's extra column on the rows that remain.
+
+Also from #203, to keep: `isClassifierStuck` gains `geometry-mismatch` so the hold escalates
+rather than starving silently; `classifyAgentScreen` gains a `log?` param and returns early on
+`busy-indicator` so a proven-live turn **outranks** the geometry compare; `heldRemedy` gains a
+`geometry-mismatch` branch. #203 also notes its remedy branches key on `heldRecoveryAction`
+rather than a second list of details — this branch's `canAutoClear` change respects that, since
+it only conditions the existing `user-text` branch.
+
+A scripted check covering all twelve properties lives in the session scratchpad
+(`post-merge-203-check.sh`).
