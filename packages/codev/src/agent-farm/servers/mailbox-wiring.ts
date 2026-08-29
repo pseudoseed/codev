@@ -183,11 +183,79 @@ export function resolveProfileForSession(session: DeliverySession): GateProfile 
  * shared {@link classifyBuffer} reads reflects every byte counted by the change token the
  * delivery path sampled — the property its gate→write TOCTOU relies on.
  */
-export async function classifyAgentScreen(session: DeliverySession, profile: GateProfile): Promise<GateVerdict> {
+export async function classifyAgentScreen(
+  session: DeliverySession,
+  profile: GateProfile,
+  /** Optional sink for the geometry-mismatch diagnostic; omitted by callers without one. */
+  log?: (message: string) => void,
+): Promise<GateVerdict> {
   const screen = (session as PtySession).gateScreen;
   if (!screen) return { clean: false, reason: 'busy', detail: 'no-composer-marker' };
   const { term, cols, rows } = await screen.read();
-  return classifyBuffer(term, cols, rows, profile);
+  const verdict = classifyBuffer(term, cols, rows, profile);
+
+  // A proven-live turn OUTRANKS the geometry compare below (Issue #197 review).
+  //
+  // `busy-indicator` is the one detail `heldRecoveryAction` deliberately refuses to act on:
+  // it proves the agent is generating, so any recovery keystroke corrupts active work.
+  // `geometry-mismatch` maps to `escape-screen` — an ESC. Returning the geometry answer for
+  // a mid-turn screen would therefore route the exact screen that policy protects into the
+  // exact keystroke it withholds, trading a delivery failure for a corruption failure. The
+  // first version of this check ran before `classifyBuffer` and did precisely that.
+  //
+  // Both verdicts hold, so nothing is lost by yielding here: the mismatch is still real, and
+  // it will be reported the moment the turn ends and the busy indicator clears.
+  if (verdict.detail === 'busy-indicator') return verdict;
+
+  // Geometry check by FACT (Issue #197).
+  //
+  // The mirror and the agent's PTY are two grids that must agree, and when they don't every
+  // row boundary the classifier reads is meaningless. `classifyBuffer` can only infer that
+  // disagreement from the frame — the cols direction via `isWrapped`, the rows direction via
+  // the profile's `finalRowAlwaysBlank` — and inference has a measured blind spot: when the
+  // mirror is BOTH narrower and shorter, the frame re-wraps enough that no structural
+  // signal survives and a clipped opencode composer still reads `no-composer-marker`. That
+  // blind spot is not an edge case; 80x24 against a 110x32 agent is exactly the shape a
+  // reborn session had in the field.
+  //
+  // Here the two geometries are simply KNOWN, so compare them. No heuristic, no per-app
+  // assumption, and it covers BOTH axes at once. After attach-time adoption they normally
+  // agree; they diverge when `PtySession.resize` moves the mirror and then DROPS the
+  // app-side resize — the residual path adoption cannot close, and the one this catches.
+  // `ShellperClient.resize` records the new size only on the success path, which is what
+  // makes a dropped resize show up as a disagreement instead of being papered over.
+  //
+  // That divergence is only ever CREATED while the session is non-writable (every branch
+  // that drops the resize also fails `writable`), but writability RETURNS without a
+  // re-attach: `startRestartWait` (#1264) keeps the client and the WebSocket clients across
+  // a child restart, a resize in that window moves the mirror alone, and the respawned
+  // child's first byte clears `exitCode` — so the session is live again on a stale mirror
+  // with no `attachShellper` to re-sync it. That is why this check is reachable at all, and
+  // why it must not outrank the busy signal above.
+  //
+  // SCOPED to bottom-anchored profiles (opencode) on purpose, though the disagreement is
+  // just as real for claude/codex/agy. Their composers sit at the cursor and stay in view,
+  // so a short mirror has never taken them off the air — they survive it by luck, not by
+  // design, and a mismatched mirror could in principle hand them a false CLEAN, which is the
+  // dangerous direction. Widening this check to every harness is the right end state and is
+  // recommended as a follow-up; it is deliberately NOT done here, because it would turn
+  // deliveries that succeed today into holds for harnesses this issue is not about, and that
+  // is a change to weigh on its own rather than smuggle in behind an opencode fix.
+  if (profile.bottomAnchor) {
+    const ptyGeometry = (session as PtySession).shellperPtyGeometry;
+    if (ptyGeometry && (ptyGeometry.cols !== cols || ptyGeometry.rows !== rows)) {
+      // Log BOTH geometries. The Issue #197 incident was diagnosed by curling Tower's live
+      // session API to compare them by hand; the next one should be readable from the log.
+      log?.(
+        `[gate] geometry-mismatch ${(session as PtySession).label}: mirror ${cols}x${rows} ` +
+        `vs pty ${ptyGeometry.cols}x${ptyGeometry.rows} — held. Self-clears only on a ` +
+        `re-attach; a restart-path divergence (#1264) will NOT, and needs a client resize.`,
+      );
+      return { clean: false, reason: 'busy', detail: 'geometry-mismatch' };
+    }
+  }
+
+  return verdict;
 }
 
 /** Convert a delivered-message frame to the WebSocket bus shape and broadcast it. */
@@ -212,7 +280,7 @@ export function makeDeliveryPorts(log: LogFn): DeliveryPorts {
   return {
     getSessionForAgent: (ws, agent) => resolveLiveSessionForAgent(ws, agent),
     resolveProfile: (session) => resolveProfileForSession(session),
-    classify: (session, profile) => classifyAgentScreen(session, profile),
+    classify: (session, profile) => classifyAgentScreen(session, profile, (m) => log('INFO', m)),
     writeMessage: async (session, msg, noEnter) => {
       if (isThreadDeliverySession(session) && session.threadId) {
         try {
@@ -267,9 +335,16 @@ function formatOwnerNoticeBody(info: HeldOwnerNoticeInfo): string {
  * 2026-08-21, each needing manual intervention.
  *
  * `user-text` gets the clearing command. `busy-indicator` is an agent mid-turn:
- * clearing there would corrupt a live turn, and the answer is to wait. Anything
- * else is a screen the gate could not read at all, which is a different problem
- * and says so rather than offering a remedy for the wrong one.
+ * clearing there would corrupt a live turn, and the answer is to wait.
+ * `geometry-mismatch` (Issue #197) is the third shape: nothing is wrong with the
+ * composer, Tower's mirror is simply the wrong SIZE for it, so no keystroke helps
+ * and Tower deliberately sends none — the remedy is a resize, which only a client
+ * can produce. Anything else is a screen the gate could not read at all, which is
+ * a different problem and says so rather than offering a remedy for the wrong one.
+ *
+ * Note the branches key on `heldRecoveryAction`, not on a second list of details.
+ * That is why removing geometry-mismatch's recovery action degraded gracefully here
+ * instead of promising an ESC that would never fire; do not replace it with a list.
  */
 export function heldRemedy(toAgent: string, detail: string | null): string {
   const inspect = `Inspect with 'afx inbox'.`;
@@ -288,6 +363,20 @@ export function heldRemedy(toAgent: string, detail: string | null): string {
       `${inspect} The agent is MID-TURN, not stuck on a leftover prompt. Do not clear its composer — ` +
       `that corrupts a live turn. Delivery resumes on its own when the turn ends; ` +
       `'afx interrupt ${toAgent}' ends the turn if it is genuinely wedged.`
+    );
+  }
+
+  if (detail === 'geometry-mismatch') {
+    // The one detail whose remedy is neither "wait" nor "clear the composer" — and, until
+    // Issue #197, the one an operator was told nothing specific about. Tower's gate mirror
+    // is a different SIZE from the grid the agent paints at, so no keystroke helps: the
+    // repair is a resize, and only a client can produce one.
+    return (
+      `${inspect} Tower's screen mirror is a different SIZE from the terminal the agent is ` +
+      `drawing to, so the gate cannot read the composer and NO keystroke will fix it — ` +
+      `Tower sends none for this state. Open ${toAgent}'s terminal tab: a connected client ` +
+      `sends a resize, which realigns the mirror and delivery resumes. It also clears by ` +
+      `itself the next time the session re-attaches (a Tower restart).`
     );
   }
 

@@ -14,7 +14,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { RingBuffer } from '../../terminal/ring-buffer.js';
@@ -62,8 +64,55 @@ function profileForFixture(name: string): GateProfile {
   return CLAUDE_PROFILE; // claude-* and the marker-less wrapper/boot fixture
 }
 
+/**
+ * Load the fixture corpus, or THROW (Issue #197).
+ *
+ * A fixture suite that silently sweeps zero files reports success while testing nothing —
+ * the same defect one level up from the one it exists to catch, and a shape this repo has
+ * hit repeatedly (#190, #193, #194). `readdirSync` on a missing directory throws, but an
+ * EMPTY or renamed-away directory does not: the `for` loop registers no cases and the file
+ * goes green. So the reach is asserted rather than assumed, and asserted here at load time
+ * where every consumer below inherits it.
+ */
+function loadFixtureNames(dir: string): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch (err) {
+    throw new Error(`gate fixture directory is unreadable: ${dir} (${(err as Error).message})`);
+  }
+  const names = entries.filter((f) => f.endsWith('.txt')).sort();
+  if (names.length === 0) {
+    throw new Error(`gate fixture directory contains no .txt captures: ${dir}`);
+  }
+  return names;
+}
+
+describe('render-gate — fixture-suite reach (Issue #197)', () => {
+  it('a missing fixture directory FAILS the suite instead of sweeping nothing', () => {
+    expect(() => loadFixtureNames(`${FIXTURE_DIR}/does-not-exist`)).toThrow(/unreadable/);
+  });
+
+  it('an EMPTY fixture directory FAILS the suite instead of sweeping nothing', () => {
+    // The case a bare `readdirSync` would pass: the directory resolves, yields nothing, and
+    // every `for`-generated case simply never registers.
+    const empty = mkdtempSync(join(tmpdir(), 'gate-fixtures-empty-'));
+    try {
+      expect(() => loadFixtureNames(empty)).toThrow(/no \.txt captures/);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it('the real fixture directory carries the whole measured corpus', () => {
+    // A floor, not an exact count — new captures should not have to edit this. It exists so
+    // that deleting most of the corpus is a failure rather than a quietly smaller sweep.
+    expect(loadFixtureNames(FIXTURE_DIR).length).toBeGreaterThanOrEqual(20);
+  });
+});
+
 describe('render-gate — real captured fixtures (Spec 1313)', () => {
-  const fixtures = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.txt')).sort();
+  const fixtures = loadFixtureNames(FIXTURE_DIR);
 
   it('the required states are all captured (claude+codex idle/draft/menu/picker, agy idle/draft/trust, wrapper/boot)', () => {
     for (const required of [
@@ -84,6 +133,12 @@ describe('render-gate — real captured fixtures (Spec 1313)', () => {
       'opencode-dialog.busy',
       'opencode-boot.busy',
       'wrapper-boot.busy',
+      // Issue #197 re-captures from opencode 1.18.18, taken to test the profile-drift
+      // hypothesis. They matched, which is the finding: the profile had not drifted.
+      'opencode197-idle.clean',
+      'opencode197-draft.busy',
+      'opencode197-midturn.busy',
+      'opencode197-boot.busy',
     ]) {
       expect(fixtures.some((f) => f.startsWith(required))).toBe(true);
     }
@@ -321,7 +376,12 @@ describe('render-gate — opencode: bottom-anchored composer + two-sided busy/id
   it('an upward scan that never terminates within maxLookback holds rather than reading upward', async () => {
     // Every row a box row: the scan can never prove an upper bound, so it must hold
     // instead of walking into transcript content above.
-    const unbounded = screen(...Array.from({ length: 29 }, () => '  ┃  x'), STATUS, RULE, IDLE_FOOTER);
+    //
+    // 28 box rows, not 29, so the 32-row screen keeps a BLANK final row — which every real
+    // opencode frame has (Issue #197). Filling row 31 would instead trip the rows-direction
+    // geometry check and settle the verdict before the upward scan ever runs, leaving this
+    // branch untested. 28 still exceeds maxLookback (20) by a wide margin.
+    const unbounded = screen(...Array.from({ length: 28 }, () => '  ┃  x'), STATUS, RULE, IDLE_FOOTER);
     expect(await classifyScreen(snapshotFromRaw(unbounded), OPENCODE_PROFILE)).toMatchObject({
       clean: false,
       detail: 'no-region-end',
@@ -410,6 +470,85 @@ describe('render-gate — opencode fixtures across terminal widths (Issue #4)', 
       expect(cleanAt).toEqual([]);
     });
   }
+
+  /**
+   * HEIGHT sweep (Issue #197) — the guard the width sweep does not provide.
+   *
+   * The width sweep pinned the cols direction and missed the rows direction entirely, and
+   * the rows direction is the one that took opencode builders off the air: a bottom-anchored
+   * composer lives in the frame's LAST rows, so a mirror even one row short clips the whole
+   * box out of the viewport and the gate reports `no-composer-marker` — indistinguishable
+   * from "this app has no composer", which is how a geometry bug was filed as profile drift.
+   *
+   * Measured cliff on a real 32-row opencode capture: held at every mirror height 10..30,
+   * clean at 32+, its capture height. The asymmetry is the finding — claude and agy stay clean at every height
+   * 10..40 and codex holds only below 20, so those three survive a short mirror because
+   * their composers happen to sit at the cursor and stay in view, NOT because anything
+   * guarantees it. A claude that grew its composer downward would fail identically, and
+   * nothing in the gate would have said so. This sweep is what would say so.
+   */
+  const HEIGHT_FROM = 10;
+  const HEIGHT_TO = 40;
+  /** The height every committed opencode capture was taken at. */
+  const CAPTURE_ROWS = 32;
+
+  it('opencode idle captures are clean at their capture height and HOLD below it', async () => {
+    for (const name of ['opencode-idle.clean.txt', 'opencode197-idle.clean.txt']) {
+      const raw = readFileSync(`${FIXTURE_DIR}/${name}`, 'utf8');
+      for (let rows = HEIGHT_FROM; rows <= HEIGHT_TO; rows++) {
+        const v = await classifyScreen({ replay: raw, cols: 110, rows }, OPENCODE_PROFILE);
+        // The cliff sits exactly at the capture height, 32, for BOTH the Issue #4 capture
+        // and the Issue #197 re-capture — clean at and above it, `geometry-mismatch` at
+        // every height below. Measured, and the same boundary for two captures taken eight
+        // days apart, which is the profile behaving consistently rather than a coincidence.
+        expect(v.clean, `${name} rows=${rows}`).toBe(rows >= CAPTURE_ROWS);
+      }
+    }
+  });
+
+  it('a short mirror never reads a busy opencode screen as an empty prompt', async () => {
+    // The fail-safe direction, across every height. Clipping must never truncate a draft or
+    // a live turn into a clean verdict — that would deliver a message into a running agent.
+    for (const name of ['opencode197-draft.busy.txt', 'opencode197-midturn.busy.txt', 'opencode197-boot.busy.txt']) {
+      const raw = readFileSync(`${FIXTURE_DIR}/${name}`, 'utf8');
+      for (let rows = HEIGHT_FROM; rows <= HEIGHT_TO; rows++) {
+        const v = await classifyScreen({ replay: raw, cols: 110, rows }, OPENCODE_PROFILE);
+        expect(v.clean, `${name} rows=${rows}`).toBe(false);
+      }
+    }
+  });
+
+  it('a clipped composer reports geometry-mismatch, not no-composer-marker', async () => {
+    // The mis-signal itself, pinned. `no-composer-marker` means "this app has no composer";
+    // saying it about a composer that is merely off-screen is what cost Issue #197 its
+    // hours. Both verdicts hold, so this changes no delivery outcome — it changes what the
+    // next operator reads and therefore where they look.
+    const raw = readFileSync(`${FIXTURE_DIR}/opencode197-idle.clean.txt`, 'utf8');
+    for (const rows of [20, 24, 28, 30]) {
+      const v = await classifyScreen({ replay: raw, cols: 110, rows }, OPENCODE_PROFILE);
+      expect(v.detail, `rows=${rows}`).toBe('geometry-mismatch');
+    }
+  });
+
+  it('claude, codex and agy are unaffected by mirror height — correct by luck, not by design', async () => {
+    // Proof that the Issue #197 changes touch nothing outside opencode: no other profile
+    // declares `bottomAnchor`, so the rows-direction check cannot fire for them. It also
+    // records WHY they were never hit in the field, which is the more useful half — their
+    // composers sit at the cursor and stay in view at any height. Nothing enforces that.
+    const cases: Array<[string, GateProfile, boolean]> = [
+      ['claude-idle.clean.txt', CLAUDE_PROFILE, true],
+      ['agy-idle.clean.txt', AGY_PROFILE, true],
+      ['claude-draft.busy.txt', CLAUDE_PROFILE, false],
+      ['codex-draft.busy.txt', CODEX_PROFILE, false],
+    ];
+    for (const [name, profile, expectClean] of cases) {
+      const raw = readFileSync(`${FIXTURE_DIR}/${name}`, 'utf8');
+      for (let rows = HEIGHT_FROM; rows <= HEIGHT_TO; rows++) {
+        const v = await classifyScreen({ replay: raw, cols: 110, rows }, profile);
+        expect(v.clean, `${name} rows=${rows}`).toBe(expectClean);
+      }
+    }
+  });
 
   it('opencode-idle.clean.txt is clean from its capture width UP, and holds where it wraps', async () => {
     // An idle capture is clean at its own width and every wider mirror, and holds only

@@ -74,6 +74,106 @@ describe('ShellperClient', () => {
     try { fs.rmdirSync(path.dirname(socketPath)); } catch { /* noop */ }
   });
 
+  /**
+   * `ptyGeometry` hydration from a REAL WELCOME frame (Issue #197).
+   *
+   * This is the mechanism the whole geometry fix rests on: `attachShellper` adopts
+   * `client.ptyGeometry` onto the session and the gate mirror, so a builder whose mirror
+   * would otherwise sit at the born-default 80x24 tracks the size the agent actually paints
+   * at. The tests that pin the ADOPTION fake the field, which means without these the one
+   * thing nothing exercised was whether the field is ever populated at all.
+   *
+   * Driven end to end here: a real socket, a real HELLO/WELCOME handshake, a real frame.
+   */
+  describe('ptyGeometry hydration from WELCOME (Issue #197)', () => {
+    it('is null before the handshake completes', () => {
+      const client = new ShellperClient(socketPath);
+      cleanup.push(() => client.disconnect());
+      expect(client.ptyGeometry).toBeNull();
+    });
+
+    it('hydrates from the WELCOME frame the shellper actually sent', async () => {
+      // 108x60 is a real reading off this machine's live fleet, not a round number — the
+      // shape of geometry that a 24-row mirror is wrong about by 36 rows.
+      const shellper = createMiniShellper(socketPath, {
+        version: PROTOCOL_VERSION, pid: 4242, cols: 108, rows: 60, startTime: Date.now(),
+      });
+      cleanup.push(shellper.close);
+
+      const client = new ShellperClient(socketPath);
+      cleanup.push(() => client.disconnect());
+      await client.connect();
+
+      expect(client.ptyGeometry).toEqual({ cols: 108, rows: 60 });
+    });
+
+    it('stays NULL when the shellper reports no geometry (older shellper)', async () => {
+      // The backward-compatibility path, and the one that must not fabricate. "Unknown" has
+      // to stay distinguishable from a real reading, because the adopter treats a value as
+      // permission to overwrite the session's geometry — a guessed 80x24 here would move
+      // every mirror to the wrong size instead of leaving it alone.
+      const shellper = createMiniShellper(socketPath, {
+        version: PROTOCOL_VERSION, pid: 4242, startTime: Date.now(),
+      } as unknown as WelcomeMessage);
+      cleanup.push(shellper.close);
+
+      const client = new ShellperClient(socketPath);
+      cleanup.push(() => client.disconnect());
+      await client.connect();
+
+      expect(client.ptyGeometry).toBeNull();
+    });
+
+    it('rejects a zero or partial reading rather than adopting it', async () => {
+      // cols=0 is not a terminal. Adopting it would resize the gate mirror to nothing and
+      // classify every frame off a zero-width grid.
+      const shellper = createMiniShellper(socketPath, {
+        version: PROTOCOL_VERSION, pid: 4242, cols: 0, rows: 60, startTime: Date.now(),
+      });
+      cleanup.push(shellper.close);
+
+      const client = new ShellperClient(socketPath);
+      cleanup.push(() => client.disconnect());
+      await client.connect();
+
+      expect(client.ptyGeometry).toBeNull();
+    });
+
+    it('tracks a successful resize — WELCOME is the first reading, not the only one', async () => {
+      // After Tower commands a resize, THAT is what the shellper's PTY is. If the getter
+      // kept returning the WELCOME value, the gate's fact-based comparison would report a
+      // mismatch against a size that is no longer real and hold every message forever.
+      const shellper = createMiniShellper(socketPath, {
+        version: PROTOCOL_VERSION, pid: 4242, cols: 108, rows: 60, startTime: Date.now(),
+      });
+      cleanup.push(shellper.close);
+
+      const client = new ShellperClient(socketPath);
+      cleanup.push(() => client.disconnect());
+      await client.connect();
+
+      expect(client.resize(110, 32)).toBe(true);
+      expect(client.ptyGeometry).toEqual({ cols: 110, rows: 32 });
+    });
+
+    it('a DROPPED resize leaves the last known-good reading in place', async () => {
+      // The divergence the gate's fact-based check exists to catch. A disconnected client
+      // never delivers the frame, so the PTY is still at its old size — recording the
+      // requested size would erase the very disagreement we need to detect.
+      const shellper = createMiniShellper(socketPath, {
+        version: PROTOCOL_VERSION, pid: 4242, cols: 108, rows: 60, startTime: Date.now(),
+      });
+      cleanup.push(shellper.close);
+
+      const client = new ShellperClient(socketPath);
+      await client.connect();
+      client.disconnect();
+
+      expect(client.resize(80, 24)).toBe(false);
+      expect(client.ptyGeometry).toEqual({ cols: 108, rows: 60 });
+    });
+  });
+
   describe('connect/disconnect lifecycle', () => {
     it('connects and performs HELLO/WELCOME handshake', async () => {
       const welcomeMsg: WelcomeMessage = { version: PROTOCOL_VERSION, pid: 5678, cols: 120, rows: 40, startTime: 1700000000000 };

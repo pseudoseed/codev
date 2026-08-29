@@ -239,6 +239,36 @@ export class PtySession extends EventEmitter {
     // keeps it bumped going forward via onPtyData.
     this._lastDataAt = client.lastDataAt;
 
+    // Adopt the shellper's LIVE PTY geometry (Issue #197). This must happen BEFORE the
+    // mirror seed is fed below, so the seed renders into the grid the agent actually
+    // painted at rather than being re-flowed later.
+    //
+    // Why this is needed at all: `createSessionRaw` builds every shellper-backed session
+    // at `defaultSessionOptions()` — 80x24 — and nothing but a connected browser client
+    // ever calls `resize()`. The shellper process outlives Tower and keeps its PTY at
+    // whatever size a client last set (a real terminal window is invariably taller than
+    // 24 rows), so after a Tower restart or a re-attach the gate mirror is 24 rows while
+    // the agent is still painting 32+. For an UNATTENDED builder nobody sends a resize,
+    // and the divergence is permanent.
+    //
+    // For claude/codex that is survivable — their composers sit at the cursor and stay in
+    // view. For a BOTTOM-ANCHORED composer (opencode) it is fatal: the box occupies the
+    // frame's last rows, a shorter viewport clips it away entirely, `rulePattern` matches
+    // nothing, and the render gate returns `no-composer-marker` for every message forever.
+    // Measured on a real 32-row opencode capture: held at every mirror height 10..30,
+    // clean at 32+ (its capture height). That is the Issue #197 field failure — holds of 3.5m, 8m and 12m to an
+    // opencode builder while claude and codex in the same workspace delivered first try.
+    //
+    // ADOPT, don't command: we align our mirror to the app's truth and deliberately do NOT
+    // send a RESIZE frame back. A resize into a live TUI forces a repaint mid-turn, and the
+    // shellper is already at this size — there is nothing to correct on its side.
+    const geometry = client.ptyGeometry;
+    if (geometry) {
+      this.cols = geometry.cols;
+      this.rows = geometry.rows;
+      this._gateScreen?.resize(geometry.cols, geometry.rows);
+    }
+
     // Ensure log directory exists. Guarded on logFd: with #1198 re-attach is
     // a routine recovery step, and reopening unconditionally would leak one
     // append handle per reconnect. cleanupShellper() closes and nulls the fd,
@@ -752,6 +782,18 @@ export class PtySession extends EventEmitter {
       lastDataAt: this._lastDataAt,
       writable: this.writable,
     };
+  }
+
+  /**
+   * The shellper's PTY geometry as the shellper itself reports it (Issue #197), or null
+   * for a non-shellper session and for a shellper too old to send the WELCOME fields.
+   *
+   * The gate compares this against the mirror's own geometry: two grids that disagree make
+   * every row boundary on the classified screen meaningless, and that is a fact worth
+   * checking rather than inferring from the frame.
+   */
+  get shellperPtyGeometry(): { cols: number; rows: number } | null {
+    return this.shellperClient?.ptyGeometry ?? null;
   }
 
   get clientCount(): number {

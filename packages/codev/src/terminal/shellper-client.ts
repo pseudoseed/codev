@@ -67,6 +67,15 @@ export interface IShellperClient extends EventEmitter {
    * is an older one that doesn't send the field.
    */
   readonly lastDataAt: number;
+  /**
+   * The shellper's LIVE PTY geometry, as reported on WELCOME (Issue #197).
+   *
+   * `null` until the handshake completes, and for a shellper too old to send the
+   * fields. Never a guessed default: the caller must be able to tell "the shellper
+   * says 32 rows" apart from "I don't know what it says", because the second is not
+   * a licence to overwrite a geometry someone else set.
+   */
+  readonly ptyGeometry: { cols: number; rows: number } | null;
 }
 
 export class ShellperClient extends EventEmitter implements IShellperClient {
@@ -104,6 +113,13 @@ export class ShellperClient extends EventEmitter implements IShellperClient {
   // an older shellper never sends this field, so waitForReplay() must not
   // assume an empty REPLAY is coming for it.
   private _alwaysSendsReplay = false;
+  // Issue #197: the shellper's live PTY geometry, hydrated from WELCOME. Same
+  // lifecycle as `_lastDataAt` — the shellper process outlives Tower and keeps its
+  // PTY at whatever size it was last resized to, so WELCOME is the only place Tower
+  // can learn the size the agent is actually painting at after a restart. Left null
+  // when the shellper doesn't send the fields, so callers can distinguish "unknown"
+  // from a real reading rather than adopting a fabricated 80x24.
+  private _ptyGeometry: { cols: number; rows: number } | null = null;
 
   constructor(
     private readonly socketPath: string,
@@ -135,6 +151,11 @@ export class ShellperClient extends EventEmitter implements IShellperClient {
    */
   get lastDataAt(): number {
     return this._lastDataAt;
+  }
+
+  /** The shellper's live PTY geometry from WELCOME, or null when it didn't report one. */
+  get ptyGeometry(): { cols: number; rows: number } | null {
+    return this._ptyGeometry;
   }
 
   /**
@@ -241,6 +262,15 @@ export class ShellperClient extends EventEmitter implements IShellperClient {
               if (typeof welcome.lastDataAt === 'number') {
                 this._lastDataAt = welcome.lastDataAt;
               }
+              // Issue #197: hydrate the shellper's live PTY geometry, same pattern.
+              // Both fields must be present and positive — a partial or zero reading
+              // is "unknown", and adopting it would resize the mirror to nothing.
+              if (
+                typeof welcome.cols === 'number' && welcome.cols > 0 &&
+                typeof welcome.rows === 'number' && welcome.rows > 0
+              ) {
+                this._ptyGeometry = { cols: welcome.cols, rows: welcome.rows };
+              }
               // #1215: hydrate the REPLAY guarantee flag. Old shellpers omit
               // it (falsy default stands); waitForReplay() uses this to pick
               // its timeout.
@@ -331,6 +361,11 @@ export class ShellperClient extends EventEmitter implements IShellperClient {
   resize(cols: number, rows: number): boolean {
     if (!this._connected || !this.socket) return false;
     this.socket.write(encodeResize({ cols, rows }));
+    // Keep `ptyGeometry` current (Issue #197). WELCOME is only the initial reading; once
+    // we command a resize, THAT is what the shellper's PTY is. Updated only on the success
+    // path — a dropped frame leaves the last known-good value rather than recording a size
+    // the shellper never received.
+    this._ptyGeometry = { cols, rows };
     return true;
   }
 

@@ -76,6 +76,22 @@ encodes the expected verdict: `<app>-<state>.<clean|busy>.txt`.
   and keeping it would mean any dim affordance a future opencode ships — a queued-message
   preview, an inline completion — would be silently skipped and a real draft would read
   empty. agy already showed these attribute conventions do not port between TUIs.
+- **opencode197-*.txt** — **real re-captures** from `opencode` **1.18.18** under a PTY at
+  110x32, taken for Issue #197 to test the hypothesis that the profile's literal glyphs had
+  drifted with a newer opencode release. **They had not.** The binary was unchanged since
+  before the original captures (Homebrew 1.18.18, installed 2026-08-19, binary dated
+  2026-08-12), and all four `bottomAnchor` patterns still matched: `opencode197-boot` →
+  `no-idle-indicator`, `opencode197-draft` → `user-text`, `opencode197-idle` → clean/`empty`,
+  `opencode197-midturn` → `busy-indicator`. Committed anyway, because a hypothesis that was
+  cheap to falsify once should be cheap to falsify again — and because two independent
+  captures eight days apart now pin the same cliff.
+
+  The actual cause of the Issue #197 holds was **mirror geometry, not glyphs**: opencode's
+  composer is bottom-anchored, so a gate mirror shorter than the height opencode paints at
+  clips the whole box out of the viewport, `rulePattern` matches nothing, and the gate says
+  `no-composer-marker` — which reads as "this app has no composer", i.e. profile drift. It
+  was a geometry bug wearing a profile bug's error message.
+
 - **wrapper-boot.busy.txt** — **synthetic** builder launch-loop screen (a born-dirty
   state with no composer marker). App-agnostic: no marker → busy under any profile.
 
@@ -126,6 +142,41 @@ geometry. The two ways to reach a genuine mismatch are both benign: a resize is 
 until the app repaints on SIGWINCH (the drainer retries held mail on its next tick, so it
 self-clears rather than sticking), and a *dropped* resize only happens on the
 `status !== 'running'` branches — a session that cannot receive mail anyway.
+
+### Fixtures are swept across HEIGHTS too (Issue #197)
+
+The width sweep pinned the cols direction and missed the rows direction entirely — and the
+rows direction is the one that took opencode builders off the air for 3.5, 8 and 12 minutes
+on 2026-08-29, the 8-minute message never arriving at all.
+
+A bottom-anchored composer lives in the frame's LAST rows. A mirror even one row short clips
+the whole box away, so the sweep now runs `rows` 10..40 as well. Measured, and identical for
+the Issue #4 capture and the Issue #197 re-capture taken eight days later:
+
+| mirror height (cols=110) | verdict |
+|---|---|
+| 10..31 | `busy` / `geometry-mismatch` |
+| 32 (capture height) .. 40 | `clean` / `empty` |
+
+The asymmetry across apps is the finding, and it is worth stating plainly:
+
+| idle capture | across mirror heights 10..40 |
+|---|---|
+| claude | clean at every height |
+| agy | clean at every height |
+| codex | holds below 20, clean at 20+ |
+| **opencode** | **holds below 32** |
+
+claude, codex and agy survive a short mirror because their composers happen to sit at the
+cursor and stay in view — **not because anything guarantees it**. A claude that grew its
+composer downward would have failed exactly the same way, and nothing in the gate would have
+told us. The height sweep is what would tell us.
+
+**Why the numbers moved.** Before Issue #197 the same sweep put opencode's cliff at 31, with
+`no-composer-marker` below it. The profile's `finalRowAlwaysBlank` check now catches the
+clipped frame one row earlier and names it `geometry-mismatch`. Both verdicts hold, so no
+delivery outcome changed; what changed is that the reason points at the mirror instead of at
+the profile, so the next person to see it does not go hunting glyphs.
 
 opencode adds a case the above cannot cover: an **empty composer does not mean an idle
 agent** there, because its box renders identically mid-turn. Its profile therefore also
