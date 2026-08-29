@@ -115,6 +115,16 @@ const CLI_PROMPT_INLINE_MAX_CHARS = 100_000;
 // tools before producing its verdict, so it needs a generous turn budget.
 const CLAUDE_MAX_TURNS = 200;
 
+// The only tools a Claude review lane gets. Consultation is a read operation, so the lane is
+// given the base tool set rather than a permission hint — see the comment at the query() call.
+export const READ_ONLY_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep'];
+
+// Tools that can mutate the workspace or escape it, named explicitly for SDK builds that do not
+// honour `tools`. Not exhaustive by design: `tools` is the real boundary.
+export const WRITE_CAPABLE_CLAUDE_TOOLS = [
+  'Bash', 'BashOutput', 'KillShell', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit',
+];
+
 // Model aliases
 const MODEL_ALIASES: Record<string, string> = {
   pro: 'gemini',
@@ -909,7 +919,23 @@ export async function runClaudeConsultation(
       prompt: queryText,
       options: {
         systemPrompt: role,
-        allowedTools: ['Read', 'Glob', 'Grep'],
+        // `tools` is the BOUNDARY; `allowedTools` is only auto-approval (#149).
+        //
+        // The SDK's own doc comment on allowedTools: "List of tool names that are auto-allowed
+        // WITHOUT PROMPTING for permission. To restrict which tools are available, use the
+        // `tools` option instead." Passing ['Read','Glob','Grep'] to allowedTools alongside
+        // bypassPermissions therefore restricted nothing — the full Claude Code toolset stayed
+        // in context and auto-approved, so a review lane could Edit the artifact it was
+        // reviewing and Bash its way outside the workspace. Both were observed live.
+        //
+        // A reviewer that can mutate the artifact under review breaks the review: the verdict
+        // stops describing the file on disk, parallel lanes can interleave writes, and the
+        // builder cannot tell its own work from a reviewer's.
+        tools: READ_ONLY_CLAUDE_TOOLS,
+        // Belt for an older resolved SDK that predates `tools`: these are removed from the
+        // model's context "even if they would otherwise be allowed".
+        disallowedTools: WRITE_CAPABLE_CLAUDE_TOOLS,
+        allowedTools: READ_ONLY_CLAUDE_TOOLS,
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         model: choice.id,
@@ -1328,9 +1354,15 @@ async function runAgyConsultation(
   ].join('\n');
 
   const prompt = `${prependConstraints}\n\n${role}\n\n---\n\n${queryText}`;
-  // Grant the sandboxed agent read access to the workspace AND the dedicated consult
-  // sandbox dir (where buildPRQuery writes the diff and, below, a large-prompt file
-  // lands) — NOT the entire OS temp dir, which would over-expose unrelated /tmp files.
+  // Reachability, not permission: name the workspace AND the dedicated consult sandbox dir
+  // (where buildPRQuery writes the diff and, below, a large-prompt file lands) — NOT the entire
+  // OS temp dir, which would over-expose unrelated /tmp files.
+  //
+  // What keeps this lane from WRITING is agy's headless mode, which cannot prompt and so denies
+  // any permission that is not pre-approved. Probed live for #149: a write inside a granted dir
+  // returns `a tool required the "write_file" permission that headless mode cannot prompt for, so
+  // it was auto-denied`. A user allow-rule in agy's own settings.json would undo that, which is
+  // why --dangerously-skip-permissions is never passed here.
   const addDirs = [workspaceRoot, consultSandboxDir()];
   let tempFile: string | null = null;
   let promptArg = prompt;
@@ -1600,6 +1632,26 @@ export function opencodeReviewHeader(choice: LaneModelChoice): string {
 }
 
 /**
+ * Permission overrides handed to `opencode run` through OPENCODE_PERMISSION (#149).
+ *
+ * A consultation is a read operation, but opencode's default `build` agent ships
+ * `permission: "*" → allow`, so a review lane auto-approved its own edits: observed live editing
+ * the very `plan.md` it had been asked to review. `--auto` defaults to false and does not prevent
+ * this — it governs permissions that are not already allowed, and `*` allows them.
+ *
+ * OPENCODE_PERMISSION is preferred over OPENCODE_CONFIG_CONTENT because it overrides only the
+ * permission block; the user's providers, models and auth are left alone. Verified live: with
+ * these denials the lane reports "This session has no Edit tool and no Bash tool" and still reads
+ * files normally.
+ */
+export const OPENCODE_READ_ONLY_PERMISSION = {
+  edit: 'deny',
+  write: 'deny',
+  patch: 'deny',
+  bash: 'deny',
+} as const;
+
+/**
  * The argv for `opencode run`.
  *
  * Extracted so it can be tested. It shipped broken precisely because nothing
@@ -1749,6 +1801,9 @@ export async function runOpencodeConsultation(
   return new Promise<void>((resolve, reject) => {
     const proc = spawn(bin, args, {
       cwd: workspaceRoot,
+      // Deny the write tools for this run only — see OPENCODE_READ_ONLY_PERMISSION. Set on the
+      // child rather than the parent so a caller's own opencode sessions are untouched.
+      env: { ...process.env, OPENCODE_PERMISSION: JSON.stringify(OPENCODE_READ_ONLY_PERMISSION) },
       // stderr is piped, not inherited: opencode writes its banner and its tool-call trace there,
       // and that trace is the only text explaining a rejection, so it is retained rather than
       // spilled into the parent's stream.
