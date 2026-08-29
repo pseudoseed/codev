@@ -1,0 +1,14 @@
+id: bugfix-151
+title: porch-reports-checks-failed-wh
+protocol: bugfix
+phase: investigate
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: pending
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-29T14:49:56.811Z'
+updated_at: '2026-08-29T14:49:56.812Z'
