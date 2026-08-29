@@ -127,3 +127,30 @@ this phase, and iteration 2 re-runs on **codex and opencode only**.
 
 Build exit 0. **6613 tests passed**, 50 skipped, plus 180 in codev-v2. The two e2e suites
 are excluded from `npm test` and were run separately: **13 passed**.
+
+---
+
+## Program-level risk: three seams with no production caller
+
+**Not a complaint about any phase. A thing phase 11 must plan for.**
+
+Spec 146 has now built three mechanisms that have never executed in production, because
+each one's caller lands in a later phase:
+
+| Phase | Seam | Why it has no caller |
+|---|---|---|
+| 6 | `completePairing` | pairing completion was left an internal seam; the browser client that performs it lands later |
+| 7 | `DELETE /api/agent/v1/machines/<machine>` | requires a human-paired session, which only that same unlanded client obtains |
+| 9 | `installThreadSpawnFactory` and the porch-driver engine | deliberately left unregistered (#179) |
+
+Each is defensible in isolation, and phase 9's was an explicit instruction. **The risk is
+the sum.** Phases 11 and 12 inherit all three at once, and not one of them has ever run
+against a real caller. Whoever takes phase 11 is wiring three untested mechanisms, not one,
+and should budget for that rather than discovering it.
+
+The specific shape to watch for: each seam is covered by tests that call it *directly*, so
+every one of them is green. Green unit tests on an uncalled seam say the function works
+when called correctly — they say nothing about whether anything calls it, or whether the
+caller it eventually gets passes what it expects. Phase 7 already produced one instance of
+that gap in miniature: the documented HTTP revocation was tested at the store and passed,
+while the route it documented could not be reached by any person.
