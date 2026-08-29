@@ -327,7 +327,8 @@ export interface DeliveryOutcome {
  * A gate outcome the render gate CANNOT bound to a decision — an unrecognized app
  * (`no-profile`) or a recognized app whose composer region can't be found
  * (`no-region-end`/`no-composer-marker` = a drifted TUI layout or an unrenderable #1047
- * ring). A sustained streak of these means the mail will NEVER deliver on its own, so it
+ * ring, or `geometry-mismatch` = a mirror whose grid disagrees with the agent's, which no
+ * keystroke can repair). A sustained streak of these means the mail will NEVER deliver on its own, so it
  * is the class {@link MailboxDrainer.recordStreak} escalates to liveness telemetry; a
  * `busy`/`user-text` streak is deliberately excluded (a human legitimately at the line).
  * Shared by `recordStreak` and the cooldown branch of {@link MailboxDrainer.tick} so a
@@ -337,7 +338,17 @@ function isClassifierStuck(
   reason: MailboxReason | null,
   detail: GateVerdict['detail'] | undefined
 ): boolean {
-  return reason === 'no-profile' || detail === 'no-region-end' || detail === 'no-composer-marker';
+  return (
+    reason === 'no-profile' ||
+    detail === 'no-region-end' ||
+    detail === 'no-composer-marker' ||
+    // Issue #197: `geometry-mismatch` joins the class because it lost its automatic
+    // recovery. `heldRecoveryAction` no longer returns a keystroke for it (a byte cannot
+    // resize Tower's mirror, and the frame is too untrustworthy to prove the turn is not
+    // live), so without this it would hold FOREVER and SILENTLY — trading an unsafe action
+    // for an invisible starvation, which is the worse of the two. It escalates instead.
+    detail === 'geometry-mismatch'
+  );
 }
 
 /**

@@ -181,11 +181,27 @@ export async function inboxList(options: InboxListOptions = {}): Promise<void> {
   const unreadable = rows.filter(r => heldRecoveryAction(r.holdDetail) === 'escape-screen');
   if (unreadable.length > 0) {
     logger.blank();
-    logger.info(
-      'Rows marked no-region-end, no-composer-marker, or geometry-mismatch are STUCK, not transient:',
-    );
+    // Deliberately does NOT name the details. The filter above already decides membership by
+    // asking `heldRecoveryAction`, and a hand-maintained list beside it is exactly how this
+    // paragraph came to promise an ESC for `geometry-mismatch` after that mapping was
+    // removed (Issue #197): the filter excluded those rows while the prose still claimed
+    // them, so they printed no guidance at all while being told a keystroke was coming.
+    logger.info('Rows the gate cannot read a ready prompt from are STUCK, not transient:');
     logger.info('  Tower sends one automatic ESC after the starvation window; delivery still requires a clean gate.');
     logger.info('  If one remains held, inspect its pane and run: afx interrupt <id> --no-enter');
+  }
+
+  // geometry-mismatch is STUCK too, but it gets NO automatic keystroke — Tower's mirror is
+  // the wrong size and no byte sent to the agent can resize it. Without its own block these
+  // rows print nothing, which is the #190 shape: a state with no guidance reads as a state
+  // with no problem.
+  const mismatched = rows.filter(r => r.holdDetail === 'geometry-mismatch');
+  if (mismatched.length > 0) {
+    logger.blank();
+    logger.info('Rows marked geometry-mismatch are STUCK and get NO automatic keystroke:');
+    logger.info("  Tower's screen mirror is a different SIZE from the terminal the agent draws to.");
+    logger.info('  Open the agent\'s terminal tab — a connected client sends a resize, which realigns it.');
+    logger.info('  It also clears on the next re-attach (a Tower restart). No keystroke will fix it.');
   }
 }
 

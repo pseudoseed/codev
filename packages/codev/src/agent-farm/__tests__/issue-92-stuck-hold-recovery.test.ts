@@ -33,7 +33,10 @@ describe('#92 stuck mailbox hold recovery', () => {
     ['user-text', 'cancel-draft', 'ctrl-u', '\x15'],
     ['no-region-end', 'escape-screen', 'ctrl-c', '\x1b'],
     ['no-composer-marker', 'escape-screen', 'ctrl-c', '\x1b'],
-    ['geometry-mismatch', 'escape-screen', 'ctrl-u', '\x1b'],
+    // NO `geometry-mismatch` row. #197 removed its recovery action, and this table asserts
+    // `heldRecoveryAction(detail) === action` — so a row here would assert the ESC-into-a-
+    // live-turn that #197 removed, and make the regression look VERIFIED. Its absence is
+    // load-bearing; the explicit null assertion below is what covers it now.
   ] as const)('%s has a bounded recovery action', (detail, action, clearKey, key) => {
     expect(heldRecoveryAction(detail)).toBe(action);
     expect(heldRecoveryKeystroke(action, clearKey)).toBe(key);
@@ -43,6 +46,23 @@ describe('#92 stuck mailbox hold recovery', () => {
     '%s is never auto-recovered',
     (detail) => expect(heldRecoveryAction(detail)).toBeNull(),
   );
+
+  it('geometry-mismatch is never auto-recovered (Issue #197)', () => {
+    // It used to map to `escape-screen`. Removed for two independent reasons.
+    //
+    // A keystroke cannot fix it: the mirror is the wrong SIZE for the grid the agent paints
+    // at, and no byte sent to the agent resizes Tower's mirror. ESC was a no-op dressed as a
+    // repair.
+    //
+    // And it cannot be shown to be safe. Every liveness proof the gate has is read off the
+    // same frame whose geometry has just been declared untrustworthy — measured, a real
+    // mid-turn opencode capture classifies `busy-indicator` at its 110x32 capture geometry
+    // and `geometry-mismatch` on an 80x24 mirror, because the reflow carries the `esc
+    // interrupt` footer off-screen. Ordering the busy check first does not rescue that: the
+    // proof is destroyed, not outranked. So ESC here could interrupt a live turn to no
+    // purpose.
+    expect(heldRecoveryAction('geometry-mismatch')).toBeNull();
+  });
 
   it('sends one ESC after no-region-end stays stable, then delivers only after a clean reclassification', async () => {
     let now = 1_000;
