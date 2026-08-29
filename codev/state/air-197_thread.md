@@ -225,3 +225,37 @@ Stated in the PR body as a table, not buried in prose.
 
 Undraft once CI is green and the local suite has run. Lock order set by the architect:
 bugfix-196 first (120 failures across 23 files, cannot move at all), then air-197.
+
+---
+
+## CI green, PR undrafted
+
+All 8 CI jobs pass against the merged base `e845574fa`, including **Unit Tests (2m58s) —
+the full `packages/codev` suite**. #203 is out of draft and ready for review.
+
+The result I was holding the PR closed to obtain arrived without anyone touching port 13999.
+That is the concrete payoff of the correction: the local lock constrains porch's bookkeeping,
+not whether the suite passes, and CI is an independent full-suite run. Holding the PR bought
+nothing and cost the reviewers time.
+
+PR body updated to match, rather than left stale — the verification table now records CI
+green with the job list, and the "NOT RUN" row is gone. The local run is still outstanding
+and the body says so; it is a formality for porch's criteria now, not evidence anyone waits on.
+
+### Consultation config
+
+`porch.consultation.models` changed workspace-wide from `['codex','claude']` to
+`['claude','opencode']` while this was in flight — codex is quota-exhausted account-wide and
+the agy/gemini lane is rate-limited, and both return no review at all. Checked my own
+`status.yaml` rather than assuming: `history: []`, no consultation record, no baked lane
+list. Nothing to work around, and no slot anyone could be tempted to rename.
+
+Worth recording because it is the same defect as the two above, in a third costume: **a lane
+that did not review is not an approval**, exactly as a fixture directory that swept zero
+files is not a pass, and "I could not tell" is not "no". Three spellings of one bug, all met
+in a single afternoon.
+
+### Remaining
+
+- CMAP verdicts (claude + opencode), running.
+- `porch check 197` / `porch done 197` once bugfix-196 clears the 13999 lock. Bookkeeping.
