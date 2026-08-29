@@ -231,3 +231,16 @@ chore.
 
   **Status: mechanism diagnosed and reproduced; the fix is designed but not built.**
   Phase 14 wires the production path and owns it.
+- **The first-ever append's directory entry is not made durable.** `ScheduleStore`
+  and `DispatchJournal` both `fsync` the file descriptor they wrote, which is what
+  makes the *record* durable — but `openSync(path, 'a')` **creates** the file on the
+  first append, and a create is a namespace operation whose durability needs an
+  `fsync` of the containing **directory**. So a crash immediately after the very
+  first `schedule()` can leave no file at all, where a crash after any later append
+  leaves a complete one.
+
+  Narrow, and stated rather than fixed: it is one write per store lifetime, the same
+  pattern appears in `commands.ts` from Phase 3, and changing the journal's durability
+  contract is not phase 4 work. Raised by a reviewer of the post-force-advance diff
+  and recorded here so it is a known gap rather than an assumption that fsync of a
+  file covers its creation. It should be fixed in both places at once.

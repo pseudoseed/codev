@@ -17,6 +17,13 @@
  * no turn is active the queue drains immediately, which looks like a fast path and
  * is not one — the ordering guarantee does not depend on the caller's timing.
  *
+ * **The one exception, stated rather than left for a reader to find.** `send`'s
+ * `journalHasDispatched` branch dispatches outside the drain chain. It fires only for
+ * a `commandId` the journal already records as dispatched, which the server collapses
+ * to the delivery that already happened, so it cannot reorder anything observable —
+ * but "always" is an absolute claim and an unstated exception to one is how a later
+ * reader learns to distrust the whole comment.
+ *
  * WHY ORDERING IS NOT FREE IN A SINGLE-THREADED RUNTIME
  *
  * Pushing to an array is atomic here; awaiting is not. Two concurrent `send` calls
@@ -337,13 +344,21 @@ export class ThreadMessageQueue {
         // the bound is not that race, it is a signal that is not coming. After it,
         // the loop falls through to `isTurnActive`/`awaitSettle` — weaker, but by
         // then the projection has long since caught up.
-        await Promise.race([
-          pending.catch(() => {}),
-          new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, this.turnWaitTimeoutMs);
-            timer.unref?.();
-          }),
-        ]);
+        // The timer is CLEARED when the turn wins the race. Left uncleared it was one
+        // live 30 s timer per waited drain pass — unref'd, so it held nothing open,
+        // but a long-lived queue accumulated them for no reason.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            pending.catch(() => {}),
+            new Promise<void>((resolve) => {
+              timer = setTimeout(resolve, this.turnWaitTimeoutMs);
+              timer.unref?.();
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
         if (this.#pendingTurn === pending) this.#pendingTurn = null;
         continue;
       }

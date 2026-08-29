@@ -276,17 +276,26 @@ async function scenarioQueuedDuringTurn({ thread, journal, primary, seen }) {
         // dispatch started instead of on `isTurnActive`, which is a projection and
         // lags behind the server. That closes a real race, and it is unit-tested.
         //
-        // Wiring it to `tracker.expectTurn` here does NOT work against the live
-        // server: `settled` resolves only after the turn is seen RUNNING, and for
-        // these message-started turns it never resolved, so every message waited out
-        // the drain's bound and scenario 2 failed twice at 300 s. The bound is what
-        // keeps that from being a permanent stall, but a fallback firing on every
-        // message is not a working signal.
+        // Wiring it to `tracker.expectTurn` here stalled the live backlog: scenario 2
+        // failed twice at 300 s.
         //
-        // Why it never resolves is NOT diagnosed, and this comment does not pretend
-        // otherwise. Until it is, this harness uses the settle poll that is actually
-        // demonstrated, and the race stays closed only in the unit-tested path.
-        // Phase 14 wires the production path and should settle this first.
+        // THE CAUSE IS DISPLACEMENT, NOT THE TURN MACHINERY. An earlier version of
+        // this comment blamed `settled` for never resolving on message-started turns.
+        // That was wrong: a sole registrant settles in ~1.5 s with a clean
+        // `activeTurnId` non-null → null trace. `TurnTracker` keeps ONE waiter per
+        // thread and `expectTurn` abandons the previous with `TurnDisplacedError`, so
+        // registering here — on the same tracker this `DriverThread` already uses —
+        // made the two watchers destroy each other's expectations.
+        //
+        // Repro and captured events:
+        //   codev/experiments/146-phase4-expectturn-repro/run.mjs
+        //   codev/research/146-phase4-expectturn-repro.json
+        //
+        // A sound wiring needs a tracker that supports multiple waiters per thread,
+        // or a queue that observes turns through the thread it already holds rather
+        // than registering its own. Both are Phase 3 code and were not changed inside
+        // a closed phase 4. Until one exists, this harness uses the settle poll that
+        // is demonstrated, and the race stays closed only in the unit-tested path.
       }),
       primary.dispatcher,
       journal,
