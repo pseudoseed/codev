@@ -142,7 +142,7 @@ function ensureGlobalDatabase(): Database.Database {
   configurePragmas(db);
 
   // Current migration version — bump when adding new migrations
-  const GLOBAL_CURRENT_VERSION = 20;
+  const GLOBAL_CURRENT_VERSION = 21;
 
   // Detect fresh vs existing database by checking if content tables exist.
   // On existing databases, GLOBAL_SCHEMA must NOT run because it references column names
@@ -686,7 +686,64 @@ function ensureGlobalDatabase(): Database.Database {
     console.log('[info] Added mailbox hold_detail column (#21)');
   }
 
+  // v21 (Spec 146 Phase 5): additive t3code thread identity columns.
+  //
+  // Phase 8 is the first writer. They land here because the codev-agent
+  // registry is the first reader, and postponing the schema to Phase 8 creates
+  // a circular dependency. The migration is intentionally ADD COLUMN only:
+  // previous releases ignore unknown columns and can continue opening the DB.
+  //
+  // This project has no down-migrations. The one real restore mechanism is the
+  // automatic, consistent SQLite backup taken before either ALTER. Never turn
+  // this into a table rebuild to relax architect.pid/port/cmd: Phase 8 writes
+  // sentinel values and enforces the either-terminal-or-thread shape in code.
+  const v21 = db.prepare('SELECT version FROM _migrations WHERE version = 21').get();
+  if (!v21) {
+    applyThreadIdentityMigration(db, dbPath);
+    db.prepare('INSERT INTO _migrations (version) VALUES (21)').run();
+    console.log('[info] Added architect/builders thread_id columns (Spec 146 Phase 5)');
+  }
+
   return db;
+}
+
+/** Stable restore point created once for the additive Spec 146 migration. */
+export function threadIdentityBackupPath(dbPath: string): string {
+  return `${dbPath}.pre-v21.bak`;
+}
+
+/**
+ * Apply v21's schema change to an already-open database.
+ *
+ * `VACUUM INTO` is used instead of copying the main file: global.db runs in WAL
+ * mode, so a byte copy can omit committed pages still resident in `-wal`.
+ */
+export function applyThreadIdentityMigration(
+  db: Database.Database,
+  dbPath: string,
+): { readonly backupPath: string } {
+  const backupPath = threadIdentityBackupPath(dbPath);
+  if (!existsSync(backupPath)) {
+    // SQLite has no bound-parameter form for VACUUM INTO. Quote as a SQL string,
+    // not an identifier; doubling apostrophes is SQLite's literal escape.
+    const quoted = backupPath.replaceAll("'", "''");
+    db.exec(`VACUUM INTO '${quoted}'`);
+    console.log('[info] Backed up global.db before Spec 146 v21 migration:', backupPath);
+  } else {
+    console.log('[info] Reusing pre-v21 global.db backup:', backupPath);
+  }
+
+  const architectColumns = (db.prepare('PRAGMA table_info(architect)').all() as Array<{ name: string }>)
+    .map((column) => column.name);
+  const builderColumns = (db.prepare('PRAGMA table_info(builders)').all() as Array<{ name: string }>)
+    .map((column) => column.name);
+  if (!architectColumns.includes('thread_id')) {
+    db.exec('ALTER TABLE architect ADD COLUMN thread_id TEXT');
+  }
+  if (!builderColumns.includes('thread_id')) {
+    db.exec('ALTER TABLE builders ADD COLUMN thread_id TEXT');
+  }
+  return { backupPath };
 }
 
 // Re-export types and utilities

@@ -1,0 +1,106 @@
+{
+  "criterion": "Spec 146 Phase 2 live integration",
+  "ranAt": "2026-08-28T20:43:09.685Z",
+  "nodeVersion": "v22.22.2",
+  "clientCommit": "2e781ccfa2e70f4f126a496d62a6cf782dce9d7b",
+  "clientTreeDirty": false,
+  "scenarios": [
+    {
+      "scenario": "A: connect, dispatch, subscribe, stream",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "scopes": "orchestration:read orchestration:operate terminal:operate review:write relay:read",
+      "dispatched": true,
+      "worktreeCreated": true,
+      "itemsReceived": 2,
+      "outcome": "ok",
+      "note": "stream synchronized"
+    },
+    {
+      "scenario": "B: acks honoured (with ack-suppressed control)",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "ackedItems": 2,
+      "suppressedItems": 1,
+      "distinguishable": true,
+      "note": "suppressed client fell behind, so the ack is doing work"
+    },
+    {
+      "scenario": "C groundwork: classification against server-issued sequences",
+      "state": "not-demonstrated",
+      "stateMeaning": "The scenario did not run to a verdict — preconditions absent, or nothing to observe. This says NOTHING about whether the code works, and is not a failure.",
+      "observedSequences": [],
+      "sequencesAreSparse": false,
+      "replayed": null,
+      "withSnapshot": null,
+      "alreadyApplied": null,
+      "gapDistinctFromEmpty": false,
+      "note": "no sequenced items observed"
+    },
+    {
+      "scenario": "D: cursor ahead of head forces a real snapshot, classified as a gap",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "requestedAfter": 5000000,
+      "serverSentSnapshot": true,
+      "outcomeKind": "gap",
+      "emptyKind": "empty",
+      "gapDistinctFromEmpty": true,
+      "note": "server answered a past-the-head cursor with a snapshot, and it is reported as a gap"
+    },
+    {
+      "scenario": "E: inbound payloads were shape-checked against the vendored contract",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "methodsExercised": [
+        "orchestration.dispatchCommand",
+        "orchestration.subscribeThread",
+        "vcs.createWorktree"
+      ],
+      "checkedAndMatched": [
+        "orchestration.dispatchCommand",
+        "orchestration.subscribeThread",
+        "vcs.createWorktree"
+      ],
+      "notInGeneratedContract": [],
+      "reportedUnchecked": {},
+      "note": "every exercised method has a generated schema, and every live payload matched it"
+    },
+    {
+      "scenario": "F: ResumingSubscription drives a real subscription and stops on command",
+      "state": "demonstrated",
+      "stateMeaning": "Ran against a live pinned server and passed.",
+      "outcomes": [
+        {
+          "kind": "replayed",
+          "attempt": 1,
+          "resumed": false
+        }
+      ],
+      "itemsSeen": 1,
+      "firstOutcomeIsNotAGap": true,
+      "stopped": "stopped",
+      "note": "subscribed live, reported an outcome, and stopped when told"
+    }
+  ],
+  "limits": {
+    "scenarioC": "Criterion C is NOT checked by the C groundwork scenario, and that scenario is not evidence for it. t3code numbers events on a SINGLE GLOBAL counter (one `sequence` column on orchestration_events, read `WHERE sequence > ? ORDER BY sequence ASC` and then filtered to the subscribed thread), so a sparse range is the normal shape and carries no information about loss. Proving the client replays exactly the missing range needs a second, never-dropped control connection and an eventId comparison, against a thread that is actually generating events. That is Phase 3 work, recorded in Phase 3's exit conditions as Phase 2's criterion.",
+    "scenarioD": "Criterion D IS discharged here, by scenario D. The server chooses the snapshot path itself because the cursor is past its head (ws.ts:1493-1526); nothing about the response is manufactured by this script.",
+    "harness": "The pinned checkout is verified; the `t3` CLI binary running against it is NOT pinned. A divergence between the two is invisible to `verify`.",
+    "doNotRead": "A `not-demonstrated` scenario is not a failing one. Read the per-scenario `stateMeaning`, which is emitted by the run rather than added afterwards."
+  },
+  "summary": {
+    "demonstrated": [
+      "A: connect, dispatch, subscribe, stream",
+      "B: acks honoured (with ack-suppressed control)",
+      "D: cursor ahead of head forces a real snapshot, classified as a gap",
+      "E: inbound payloads were shape-checked against the vendored contract",
+      "F: ResumingSubscription drives a real subscription and stops on command"
+    ],
+    "notDemonstrated": [
+      "C groundwork: classification against server-issued sequences"
+    ],
+    "failed": [],
+    "note": "Three states, not a boolean. 'demonstrated', 'not-demonstrated' and 'failed' are different facts, and an earlier version of this file collapsed the last two into allScenariosPassed:false with a prose note explaining the difference. A boolean plus documentation is a boolean plus a thing nobody reads."
+  }
+}

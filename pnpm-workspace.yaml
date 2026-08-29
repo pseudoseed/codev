@@ -2,6 +2,10 @@ packages:
   - packages/*
   - apps/*
   - '!apps/vscode'
+  # Build-time tooling, never published. Spec 146: the t3code contract codegen
+  # needs `effect` as a devDependency, and without a workspace glob nothing
+  # would install it.
+  - tools/*
 catalog:
   typescript: ^6.0.3
 onlyBuiltDependencies:

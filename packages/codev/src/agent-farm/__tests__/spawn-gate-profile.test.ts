@@ -60,7 +60,16 @@ describe('spawn render-gate-profile preflight (Issue #4)', () => {
     process.chdir(originalCwd);
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
-    rmSync(ws, { recursive: true, force: true });
+    // `maxRetries` because these tests spawn a real terminal session into
+    // `.builders/<id>`, and a session still writing there when the walk reaches
+    // it makes rmSync fail with ENOTEMPTY even under `force`. Intermittent, and
+    // only under a loaded full-suite run -- it passes every time in isolation.
+    //
+    // Budget raised from 250ms (5 x 50) to 2s (20 x 100): 250ms was not enough on
+    // a loaded machine, and the same ENOTEMPTY came back. The retry is bounded and
+    // no assertion changed, so a wider budget costs nothing when the directory is
+    // already quiet.
+    rmSync(ws, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   });
 
   function writeBuilderCommand(builder: string): void {

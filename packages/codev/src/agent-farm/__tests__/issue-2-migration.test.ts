@@ -87,6 +87,8 @@ describe('Issue #2 — builders harness/model migration (v18)', () => {
     // The invariant that matters: the migration and GLOBAL_SCHEMA cannot drift.
     db.exec(PRE_V18_BUILDERS);
     applyV18(db);
+    // Spec 146 Phase 5 (v21) added builders.thread_id to GLOBAL_SCHEMA after v18.
+    db.exec('ALTER TABLE builders ADD COLUMN thread_id TEXT');
 
     const fresh = new Database(resolve(testDir, 'fresh.db'));
     try {

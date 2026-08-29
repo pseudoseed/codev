@@ -1,0 +1,57 @@
+{
+  "spec": 146,
+  "phase": "phase_4",
+  "question": "Why did wiring the queue to TurnTracker.expectTurn stall the live backlog? Specifically: does settled resolve for a turn started by sendMessage, and what happens when two things watch one thread?",
+  "result": "DIAGNOSED: expectTurn works for message-started turns (B settled). The failure is DISPLACEMENT — TurnTracker holds one waiter per thread, so a second registrant abandons the first (A rejected with TurnDisplacedError). The queue called expectTurn on the same tracker its DriverThread uses.",
+  "findingForReviewers": "TurnTracker.expectTurn keeps ONE waiter per thread and abandons the previous with TurnDisplacedError. Any design where the queue and the DriverThread both watch the same thread on the same tracker is therefore unsound as written, regardless of how the turn was started. Please check that reading against turn.ts rather than taking it.",
+  "serverVersion": "t3@0.0.35",
+  "threadId": "e604a55d-4b49-4de6-a730-fb7dd15a886e",
+  "capturedAt": "2026-08-29T04:01:30.139Z",
+  "cases": [
+    {
+      "case": "A: a second registrant (beginTurn) displaces the first waiter",
+      "running": {
+        "state": "rejected",
+        "error": "The turn being awaited on thread e604a55d-4b49-4de6-a730-fb7dd15a886e was displaced by a second turn started on the same thread.\n  Only one turn is tracked per thread, so the first waiter can never be resolved once the second replaces it. This is \"nobody will ever tell you\", not \"it is still running\" — a caller left awaiting the old promises would hang forever with nothing to observe."
+      },
+      "settled": {
+        "state": "rejected",
+        "error": "The turn being awaited on thread e604a55d-4b49-4de6-a730-fb7dd15a886e was displaced by a second turn started on the same thread.\n  Only one turn is tracked per thread, so the first waiter can never be resolved once the second replaces it. This is \"nobody will ever tell you\", not \"it is still running\" — a caller left awaiting the old promises would hang forever with nothing to observe."
+      },
+      "isTurnActiveAfter": false,
+      "activeTurnEvents": []
+    },
+    {
+      "case": "B: sole registrant, turn started by sendMessage",
+      "running": {
+        "state": "resolved",
+        "value": "01a04bad-f4eb-7f13-84d3-6909f7ea6a6f"
+      },
+      "settled": {
+        "state": "resolved",
+        "value": null
+      },
+      "isTurnActiveAfter": false,
+      "activeTurnEvents": [
+        {
+          "at": "2026-08-29T04:01:29.480Z",
+          "type": "thread.session-set",
+          "sequence": 13,
+          "activeTurnId": "01a04bad-f4eb-7f13-84d3-6909f7ea6a6f"
+        },
+        {
+          "at": "2026-08-29T04:01:30.138Z",
+          "type": "thread.session-set",
+          "sequence": 15,
+          "activeTurnId": "01a04bad-f4eb-7f13-84d3-6909f7ea6a6f"
+        },
+        {
+          "at": "2026-08-29T04:01:30.139Z",
+          "type": "thread.session-set",
+          "sequence": 17,
+          "activeTurnId": null
+        }
+      ]
+    }
+  ]
+}

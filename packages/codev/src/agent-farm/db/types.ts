@@ -23,6 +23,7 @@ export interface DbArchitect {
   started_at: string;
   terminal_id: string | null;
   session_id: string | null;   // Issue #832: persisted agent conversation session id (agent-neutral)
+  thread_id: string | null;    // Spec 146: t3code thread join; Phase 8 begins writing it
 }
 
 /**
@@ -43,6 +44,7 @@ export interface DbBuilder {
   protocol_name: string | null;
   issue_number: string | null;
   terminal_id: string | null;
+  thread_id: string | null;                 // Spec 146: t3code thread join; Phase 8 begins writing it
   spawned_by_architect: string | null;   // Spec 755: spawning architect's name; null for legacy rows
   harness: string | null;                // Issue #2: harness this builder was spawned with; null when unrecorded
   model: string | null;                  // Issue #2: model pinned at spawn; null when none was requested

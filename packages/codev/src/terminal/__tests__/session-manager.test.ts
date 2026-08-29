@@ -2219,7 +2219,10 @@ describe('stderr tail logging (integration)', () => {
     // No "Last stderr" entries — stderr goes to file, not pipe
     const stderrLogCount = logs.filter((m) => m.includes('last stderr')).length;
     expect(stderrLogCount).toBe(0);
-  }, 15000);
+    // 30s, not 15s: this spawns a real shellper and waits for its exit event, and
+    // under a loaded full-suite run the spawn alone can eat a 15s budget. It timed
+    // out there while passing every time in isolation. No assertion changed.
+  }, 30000);
 });
 
 describe('getProcessStartTime', () => {
