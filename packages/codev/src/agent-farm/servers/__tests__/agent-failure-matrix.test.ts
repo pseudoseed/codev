@@ -22,6 +22,7 @@ import {
 import { readScopedStatus, readStatusesFromArtifactRoot, readWorkspaceStatuses } from '../status-reader.js';
 import { readThreadRegistry } from '../thread-registry.js';
 import { watchAgentState, type AgentStateStreamEvent } from '../agent-state-stream.js';
+import type { FSWatcher } from 'node:fs';
 
 const SIGNAL = FAILURE_MATRIX_SIGNAL;
 
@@ -73,6 +74,23 @@ function insertBuilder(
   );
 }
 
+function deafWatch(_path: string): FSWatcher {
+  const watcher = {
+    close() {},
+    on() { return watcher; },
+  };
+  return watcher as unknown as FSWatcher;
+}
+
+function phaseSnapshot(root: string): { artifactRoots: string[]; payload: { phase: string } } {
+  const results = readStatusesFromArtifactRoot(root);
+  const ok = results.find((result) => result.ok);
+  return {
+    artifactRoots: [root],
+    payload: { phase: ok && ok.ok ? ok.status.phase : 'missing' },
+  };
+}
+
 function fakeRes(): { statusCode: number; body: string; res: http.ServerResponse } {
   const captured = { statusCode: 0, body: '', res: null as unknown as http.ServerResponse };
   captured.res = {
@@ -111,10 +129,10 @@ afterEach(() => {
 });
 
 describe('failure matrix signals are distinct', () => {
-  it('names eleven unique codes', () => {
+  it('names twelve unique codes', () => {
     const codes = Object.values(SIGNAL);
-    expect(codes).toHaveLength(11);
-    expect(new Set(codes).size).toBe(11);
+    expect(codes).toHaveLength(12);
+    expect(new Set(codes).size).toBe(12);
   });
 });
 
@@ -319,6 +337,78 @@ describe('failure matrix', () => {
     ).get(normalizeWorkspacePath(root), 'air-3') as { thread_id: string };
     expect(row.thread_id).toBe('thread-db');
   });
+
+  it('a missed watch event is repaired as STREAM_PROJECTION_REPAIRED, not a plain snapshot', async () => {
+    const root = tmp();
+    writeStatus(root, '8', porchYaml('8'));
+    const events: AgentStateStreamEvent<{ phase: string }>[] = [];
+    let resolveRepair: (() => void) | undefined;
+    const sawRepair = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('no STREAM_PROJECTION_REPAIRED')), 1_000);
+      resolveRepair = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
+    const subscription = watchAgentState({
+      workspacePath: root,
+      debounceMs: 5,
+      reconcileMs: 30,
+      watchImpl: deafWatch as typeof import('node:fs').watch,
+      snapshot: () => phaseSnapshot(root),
+      onEvent: (event) => {
+        events.push(event);
+        if (event.type === 'PROTOCOL_STATE_RECONCILED') resolveRepair?.();
+      },
+    });
+    try {
+      expect(events[0]?.type).toBe('PROTOCOL_STATE_SNAPSHOT');
+      writeStatus(root, '8', porchYaml('8').replace('phase: implement', 'phase: review'));
+      await sawRepair;
+      const repaired = events.find((event) => event.type === 'PROTOCOL_STATE_RECONCILED');
+      expect(repaired?.signal?.code).toBe(SIGNAL.STREAM_PROJECTION_REPAIRED);
+      expect(repaired?.snapshot?.phase).toBe('review');
+      expect(events.filter((event) => event.type === 'PROTOCOL_STATE_SNAPSHOT')).toHaveLength(1);
+    } finally {
+      subscription.close();
+    }
+  }, 5_000);
+
+  it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
+    'reconciler read failure emits STATUS_UNREADABLE, not no-changes',
+    async () => {
+      const root = tmp();
+      writeStatus(root, '9', porchYaml('9'));
+      const events: AgentStateStreamEvent<{ phase: string }>[] = [];
+      let resolveUnreadable: (() => void) | undefined;
+      const sawUnreadable = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('reconciler swallowed unreadable')), 1_000);
+        resolveUnreadable = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+      const subscription = watchAgentState({
+        workspacePath: root,
+        reconcileMs: 30,
+        watchImpl: deafWatch as typeof import('node:fs').watch,
+        snapshot: () => phaseSnapshot(root),
+        onEvent: (event) => {
+          events.push(event);
+          if (event.signal?.code === SIGNAL.STATUS_UNREADABLE) resolveUnreadable?.();
+        },
+      });
+      const projects = join(root, 'codev', 'projects');
+      chmodSync(projects, 0o000);
+      try {
+        await sawUnreadable;
+        expect(events.some((event) => event.signal?.code === SIGNAL.STATUS_UNREADABLE)).toBe(true);
+      } finally {
+        chmodSync(projects, 0o755);
+        subscription.close();
+      }
+    },
+  );
 });
 
 describe('acceptance extras', () => {

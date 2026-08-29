@@ -1,9 +1,19 @@
 /** Filesystem-backed porch state stream for codev-agent (Spec 146, Phase 5). */
 
-import { existsSync, readdirSync, realpathSync, watch, type FSWatcher } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type http from 'node:http';
 import type { AgentStateSignal } from './status-reader.js';
+
+/**
+ * Server-side re-stat interval. The watcher is the fast path; this backstop
+ * finds a change when watch() returning is not FSEvents being live, which
+ * Node cannot observe. 5s is below human-scale lag on a missed gate badge
+ * and cheap for stat'ing a handful of status.yaml files. The client still
+ * does not poll. This does not close the macOS arming window; it makes a
+ * miss visible and repaired on a bounded schedule.
+ */
+export const RECONCILE_INTERVAL_MS = 5_000;
 
 export interface AgentStreamSnapshot<T> {
   readonly payload: T;
@@ -12,7 +22,7 @@ export interface AgentStreamSnapshot<T> {
 }
 
 export interface AgentStateStreamEvent<T> {
-  readonly type: 'PROTOCOL_STATE_SNAPSHOT' | 'STATE_STREAM_WATCH_FAILED';
+  readonly type: 'PROTOCOL_STATE_SNAPSHOT' | 'PROTOCOL_STATE_RECONCILED' | 'STATE_STREAM_WATCH_FAILED';
   readonly sequence: number;
   readonly at: string;
   readonly snapshot?: T;
@@ -24,6 +34,8 @@ export interface WatchDiagnostics {
   watchErrors: number;
   scheduleCalls: number;
   snapshotCalls: number;
+  reconcilePasses: number;
+  reconcileRepairs: number;
 }
 
 export interface StateSubscription {
@@ -36,6 +48,85 @@ export interface StateStreamOptions<T> {
   readonly snapshot: () => AgentStreamSnapshot<T>;
   readonly onEvent: (event: AgentStateStreamEvent<T>) => void;
   readonly debounceMs?: number;
+  readonly reconcileMs?: number;
+  /** Test seam. Production uses fs.watch. */
+  readonly watchImpl?: typeof watch;
+}
+
+function fingerprintRoots(
+  workspacePath: string,
+  artifactRoots: readonly string[],
+): { ok: true; fingerprint: string } | { ok: false; message: string; source: string } {
+  const parts: string[] = [];
+  const builders = join(resolve(workspacePath), '.builders');
+  try {
+    const st = statSync(builders);
+    parts.push(`builders:${builders}:${st.mtimeMs}:${st.size}`);
+  } catch (error) {
+    const errno = error as NodeJS.ErrnoException;
+    if (errno.code !== 'ENOENT') {
+      return {
+        ok: false,
+        message: `Artifact root cannot be read: ${errno.code ?? String(error)}`,
+        source: builders,
+      };
+    }
+    parts.push(`builders:${builders}:absent`);
+  }
+
+  for (const artifactRoot of artifactRoots) {
+    const root = resolve(artifactRoot);
+    try {
+      statSync(root);
+    } catch (error) {
+      const errno = error as NodeJS.ErrnoException;
+      if (errno.code === 'ENOENT') {
+        parts.push(`missing:${root}`);
+        continue;
+      }
+      return {
+        ok: false,
+        message: `Artifact root cannot be read: ${errno.code ?? String(error)}`,
+        source: root,
+      };
+    }
+    const projects = join(root, 'codev', 'projects');
+    let entries;
+    try {
+      entries = readdirSync(projects, { withFileTypes: true });
+    } catch (error) {
+      const errno = error as NodeJS.ErrnoException;
+      if (errno.code === 'ENOENT') {
+        parts.push(`empty-projects:${root}`);
+        continue;
+      }
+      return {
+        ok: false,
+        message: `Porch projects directory cannot be read: ${errno.code ?? String(error)}`,
+        source: projects,
+      };
+    }
+    for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      const statusPath = join(projects, entry.name, 'status.yaml');
+      try {
+        const st = statSync(statusPath);
+        parts.push(`${statusPath}:${st.mtimeMs}:${st.size}`);
+      } catch (error) {
+        const errno = error as NodeJS.ErrnoException;
+        if (errno.code === 'ENOENT') {
+          parts.push(`${statusPath}:absent`);
+          continue;
+        }
+        return {
+          ok: false,
+          message: `status.yaml cannot be read: ${errno.code ?? String(error)}`,
+          source: statusPath,
+        };
+      }
+    }
+  }
+  return { ok: true, fingerprint: parts.join('|') };
 }
 
 /**
@@ -46,14 +137,21 @@ export interface StateStreamOptions<T> {
 export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscription {
   const watchers = new Map<string, FSWatcher>();
   const debounceMs = options.debounceMs ?? 30;
+  const reconcileMs = options.reconcileMs ?? RECONCILE_INTERVAL_MS;
+  const watchFn = options.watchImpl ?? watch;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let reconcileTimer: ReturnType<typeof setInterval> | undefined;
   let sequence = 0;
   let closed = false;
+  let lastFingerprint: string | undefined;
+  let lastArtifactRoots: readonly string[] = [resolve(options.workspacePath)];
   const diagnostics: WatchDiagnostics = {
     watchStarted: 0,
     watchErrors: 0,
     scheduleCalls: 0,
     snapshotCalls: 0,
+    reconcilePasses: 0,
+    reconcileRepairs: 0,
   };
 
   const closeWatchers = (): void => {
@@ -61,17 +159,27 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
     watchers.clear();
   };
 
-  const emitFailure = (path: string, error: unknown): void => {
+  const emitFailure = (path: string, error: unknown, code = 'STATE_STREAM_WATCH_FAILED'): void => {
     diagnostics.watchErrors += 1;
     options.onEvent({
       type: 'STATE_STREAM_WATCH_FAILED',
       sequence: ++sequence,
       at: new Date().toISOString(),
       signal: {
-        code: 'STATE_STREAM_WATCH_FAILED',
+        code,
         message: `Cannot watch porch state at ${path}: ${error instanceof Error ? error.message : String(error)}`,
         source: path,
       },
+    });
+  };
+
+  const emitUnreadable = (source: string, message: string): void => {
+    diagnostics.watchErrors += 1;
+    options.onEvent({
+      type: 'STATE_STREAM_WATCH_FAILED',
+      sequence: ++sequence,
+      at: new Date().toISOString(),
+      signal: { code: 'STATUS_UNREADABLE', message, source },
     });
   };
 
@@ -122,7 +230,7 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
     for (const path of desired) {
       if (watchers.has(path)) continue;
       try {
-        const watcher = watch(path, () => schedule());
+        const watcher = watchFn(path, () => schedule());
         diagnostics.watchStarted += 1;
         watcher.on('error', (error) => emitFailure(path, error));
         watchers.set(path, watcher);
@@ -132,7 +240,13 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
     }
   };
 
-  const emitSnapshot = (): void => {
+  const recordFingerprint = (artifactRoots: readonly string[]): void => {
+    const fp = fingerprintRoots(options.workspacePath, artifactRoots);
+    if (fp.ok) lastFingerprint = fp.fingerprint;
+    else emitUnreadable(fp.source, fp.message);
+  };
+
+  const emitSnapshot = (type: 'PROTOCOL_STATE_SNAPSHOT' | 'PROTOCOL_STATE_RECONCILED'): void => {
     if (closed) return;
     let current: AgentStreamSnapshot<T>;
     try {
@@ -142,13 +256,27 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
       return;
     }
     diagnostics.snapshotCalls += 1;
+    lastArtifactRoots = current.artifactRoots;
     rebuildWatchers(current.artifactRoots);
-    options.onEvent({
-      type: 'PROTOCOL_STATE_SNAPSHOT',
+    recordFingerprint(current.artifactRoots);
+    const event: AgentStateStreamEvent<T> = {
+      type,
       sequence: ++sequence,
       at: new Date().toISOString(),
       snapshot: current.payload,
-    });
+    };
+    if (type === 'PROTOCOL_STATE_RECONCILED') {
+      diagnostics.reconcileRepairs += 1;
+      options.onEvent({
+        ...event,
+        signal: {
+          code: 'STREAM_PROJECTION_REPAIRED',
+          message: 'Stream projection lagged status.yaml; repaired from disk',
+        },
+      });
+      return;
+    }
+    options.onEvent(event);
   };
 
   function schedule(): void {
@@ -156,17 +284,42 @@ export function watchAgentState<T>(options: StateStreamOptions<T>): StateSubscri
     if (closed || timer !== undefined) return;
     timer = setTimeout(() => {
       timer = undefined;
-      emitSnapshot();
+      emitSnapshot('PROTOCOL_STATE_SNAPSHOT');
     }, debounceMs);
   }
 
-  emitSnapshot();
+  const reconcile = (): void => {
+    diagnostics.reconcilePasses += 1;
+    if (closed) return;
+    const fp = fingerprintRoots(options.workspacePath, lastArtifactRoots);
+    if (!fp.ok) {
+      emitUnreadable(fp.source, fp.message);
+      return;
+    }
+    if (fp.fingerprint === lastFingerprint) return;
+    emitSnapshot('PROTOCOL_STATE_RECONCILED');
+  };
+
+  let probeRoots = lastArtifactRoots;
+  try {
+    probeRoots = options.snapshot().artifactRoots;
+  } catch (error) {
+    emitFailure(options.workspacePath, error);
+  }
+  rebuildWatchers(probeRoots);
+  emitSnapshot('PROTOCOL_STATE_SNAPSHOT');
+  reconcile();
+  if (reconcileMs > 0) {
+    reconcileTimer = setInterval(reconcile, reconcileMs);
+  }
+
   return {
     diagnostics,
     close(): void {
       if (closed) return;
       closed = true;
       if (timer !== undefined) clearTimeout(timer);
+      if (reconcileTimer !== undefined) clearInterval(reconcileTimer);
       closeWatchers();
     },
   };
@@ -188,8 +341,13 @@ export function openAgentStateSse<T>(
     ...options,
     onEvent: (event) => {
       if (res.destroyed || res.writableEnded) return;
+      const sseEvent = event.type === 'PROTOCOL_STATE_SNAPSHOT'
+        ? 'protocol-state'
+        : event.type === 'PROTOCOL_STATE_RECONCILED'
+          ? 'protocol-state-reconciled'
+          : 'protocol-state-error';
       res.write(`id: ${event.sequence}\n`);
-      res.write(`event: ${event.type === 'PROTOCOL_STATE_SNAPSHOT' ? 'protocol-state' : 'protocol-state-error'}\n`);
+      res.write(`event: ${sseEvent}\n`);
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     },
   });

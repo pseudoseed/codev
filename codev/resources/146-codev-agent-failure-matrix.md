@@ -5,9 +5,11 @@ malformed file must never share a code: a partial answer reads as a complete
 negative one. A thread with no matching porch record renders as **unmanaged**,
 never hidden. Disagreement is reported, never auto-resolved.
 
-`Auto-resolved` means the server mutates `status.yaml` or `global.db` to make
-the failure go away. Transient rows clear on the next successful snapshot once
-the cause lifts; that is not a repair.
+`Auto-resolved` for two authorities (`status.yaml` vs thread state) means the
+server picks a winner and writes a store: **never**. For a projection and its
+source (the stream vs `status.yaml`) it means the server re-reads the file and
+emits a visible repair. Transient rows clear on the next successful snapshot
+once the cause lifts; that is not a repair.
 
 | Failure | Signal | Client renders | Auto-resolved |
 |---|---|---|---|
@@ -22,3 +24,4 @@ the cause lifts; that is not a repair.
 | `global.db` locked | `GLOBAL_DB_LOCKED` | Identity maps unavailable. Empty maps are not "no architects". | No |
 | Capability presented after revocation | `HUMAN_SESSION_REVOKED` | Rejected as revoked, not as never-paired (`UNKNOWN` / `HUMAN_SESSION_REQUIRED`). Phase 5's revokeable object is the human-paired session Phase 6 issues against. Phase 6 must emit a distinct `CAPABILITY_REVOKED` rather than reuse this code. | No |
 | `status.yaml` vs thread disagreement | `THREAD_ID_DISAGREEMENT` | Both values shown; porch remains authoritative. Human resolves. | **Never** |
+| Stream lagged `status.yaml` (watcher miss) | `STREAM_PROJECTION_REPAIRED` | Snapshot applied; event type is `PROTOCOL_STATE_RECONCILED`, not a plain snapshot. Repair is visible. Bounded schedule (5s). Does not claim the macOS `watch()` arming window is closed. | **Yes** — projection repaired from its source |

@@ -45,3 +45,10 @@ WATCH_FAILED / WATCHER_NEVER_ARMED / WATCHER_NEVER_FIRED / SNAPSHOT_SWALLOWED /
 SNAPSHOT_STALE. Watch paths go through realpathSync so macOS FSEvents is not
 aimed at the /var/folders symlink. Three full agent-farm runs after that:
 3497 passed, 34 skipped, 0 failed each.
+
+spir-146 ruled option 2 + option 1. Watchers arm before the first emitted
+snapshot. 5s server re-stat backstop. A repair emits PROTOCOL_STATE_RECONCILED
+/ STREAM_PROJECTION_REPAIRED, not a plain snapshot. Reconciler errors are
+STATUS_UNREADABLE. Matrix keeps THREAD_ID_DISAGREEMENT never-resolved and the
+stream-vs-file row as auto-repaired. Does not claim the macOS arming window
+is closed.
