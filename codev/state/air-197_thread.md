@@ -453,3 +453,33 @@ not a skip.
    rows and **both failed**. That makes it a property of how the table was built rather than
    two coincidences: entries were chosen for what they do to a terminal, not for whether they
    repair the state they are keyed to.
+
+### Correction: CI never runs that pack test
+
+I asserted twice — to the architect and in the PR body — that CI was green on
+`spec-146-phase-9-porch-engine.test.ts`. **It is not. CI never executes it.** Verified from
+`.github/workflows/test.yml` and both vitest configs:
+
+- **Unit Tests job** runs vitest with the DEFAULT config, which *does* collect the file. But
+  that job builds sdk, core, types, artifact-canvas and porch-driver — **never**
+  `packages/codev`. So `dist` is absent and `it.skipIf(!distBuilt)` skips it.
+- **Tower Integration job** *does* build `packages/codev`, so `dist` exists. But it runs
+  `vitest.e2e.config.ts`, whose `include` is only `src/commands/porch/__tests__/e2e/**` and
+  `src/**/*.e2e.test.ts`. This file matches neither, so it is not collected.
+
+Skipped in the job that includes it; excluded from the job that has `dist`.
+
+So **porch is the test's only executor anywhere** — not merely its usual one. That completes
+the story of why a 5000ms bound sitting below the loaded cost survived: there was never a
+green signal it could have contradicted, and never a red one either.
+
+And the shape of my error is the day's theme, committed by me in writing, in the PR section
+about that very defect: I read "8/8 green" and concluded the test had passed. **A skipped test
+is not a passing test**, exactly as a lane that did not review is not an approval, and a
+fixture sweep over zero files is not a pass.
+
+spir-146 measured the real cost — 2.3s quiet, 4.6s under four parallel disk writers, against a
+5000ms default — so both my failing runs (361.7s and 539.0s total suite) were the test being
+correct and reported as failing. The 211.6s pass was the quiet case. The raised bound lands as
+its own small PR off `origin/main`; retrying `porch done` before then is waiting for luck
+against a bound below the cost.
