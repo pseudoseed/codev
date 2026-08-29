@@ -2015,3 +2015,45 @@ later.
 Iteration 3's work is complete and pushed regardless: both codex blocking findings
 and all four claude comments fixed, 82 tests, 41 mutation-checked, live evidence
 regenerated at `db6f3d384`.
+
+### Resolved: two causes, one symptom window
+
+The 17:59 boundary had **two** causes, and finding the first hid the second.
+
+**Cause 1 — the build.** Phase 3 added `packages/t3-client` and
+`packages/porch-driver` as workspace packages and wired both into the root build
+script, without re-running `pnpm install`. Neither had a `node_modules/.bin`, so
+pnpm's link graph was stale — a shape that resolves fine from an already-warm
+shell and fails under a fresh spawn, which is exactly why I could not reproduce it
+from mine. The architect's read. `pnpm install` created both `.bin` directories
+and the build went from failing at 0.3 s to passing at 14.4 s.
+
+**Cause 2 — the tests.** A builder worktree `builder/task-gBv6` was created INSIDE
+this worktree at 17:59, branched from `db6f3d384`. It runs the same suite, and this
+repo's harness serialises on shared Tower state: `[codev tests] Another Vitest run
+owns shared Tower state; waiting`. Losing that lock is what failed the tests check.
+
+It is the architect's worktree and their spawn. Not a case of running `afx` from
+inside a worktree: Tower has lost this workspace's registration, so `afx` resolved
+the workspace root to this worktree instead of the main root. The spawn printed
+nothing and read as a failure while having created it. It holds 122 modified files
+and zero commits, so removing it would have destroyed real work — which is the
+whole reason the standing rule says never destroy a builder worktree and never
+decide on your own what is expendable.
+
+**The lesson, and it is the transferable one: when a boundary has two causes,
+fixing the first is what makes the second visible.**
+
+Stated that way it is a method rather than a warning. Neither explanation could
+cover both symptoms, which is why each of us kept finding the other's evidence
+unconvincing: the architect had a mechanism that fully explained a failing build
+and said nothing about a failing test run, and I had a correlation that fully
+explained the timing and named no mechanism at all. I had a clean correlation at
+17:59, found a mechanism that explained the build failure completely, and that
+completeness is exactly what stopped me looking for why the tests were failing
+*differently*. The tell was there and I read past it: the failure mode CHANGED
+between runs — first `tsdown: command not found`, then `No test files found`, then
+a lock-wait. One cause does not change its own symptom.
+
+`pnpm-workspace.yaml` globs only `packages/*`, `apps/*`, `tools/*`, so the nested
+tree never polluted pnpm's resolution. Two independent mechanisms, one window.
