@@ -742,12 +742,6 @@ export function interruptSignalForHarness(
 }
 
 /**
- * The wire byte that safely interrupts a turn on `harnessName` (Issue #196).
- *
- * Callers write THIS instead of a literal `\x03`. A second hardcoded control byte
- * at a call site reintroduces the bug this exists to close.
- */
-/**
  * The human name of a control byte, for logs and API responses (Issue #196).
  *
  * Operators reason in keystrokes, not escapes, and the whole complaint behind this issue
@@ -764,13 +758,6 @@ export function keyName(byte: string): string {
 /** Render a byte sequence as a readable keystroke list, e.g. `ESC then Ctrl+U`. */
 export function describeInterruptBytes(bytes: readonly string[]): string {
   return bytes.length ? bytes.map(keyName).join(' then ') : 'nothing';
-}
-
-export function interruptByteForHarness(
-  harnessName: string | undefined | null,
-  customHarnesses?: Record<string, CustomHarnessConfig>,
-): string {
-  return INTERRUPT_BYTES[interruptSignalForHarness(harnessName, customHarnesses)];
 }
 
 /**

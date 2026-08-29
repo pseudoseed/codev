@@ -206,3 +206,84 @@ Regression proven both directions: reintroducing the hardcoded `\x03` at all thr
 fails exactly 6 tests; restoring the fix goes green. Typecheck clean on every touched file
 (the pre-existing `TowerClient` errors are an unbuilt-dependency artifact, in files untouched
 here). 35/35 on the new file, 148/148 across the three targeted files.
+
+## FIX round 3 — what `--interrupt` is actually for
+
+The architect challenged the round-2 result: after it, on opencode `afx interrupt` sent ESC,
+`afx send --interrupt` sent ESC, and only the *machine's* auto-recovery could clear a draft
+(Ctrl+U). The operator had no way to clear an opencode composer while Tower did. Backwards.
+
+### Established from source, because the sources disagree by era
+
+| source | what `--interrupt` meant |
+|---|---|
+| Spec 0020 (origin) | "Send Ctrl+C first to ensure prompt is ready" — the mitigation for the "Vim trap", i.e. a **running process** to escape |
+| Spec 1273 | gave "end the turn" its own command (`afx interrupt`, ESC) and recorded `--interrupt` as "a different signal… not what was verified to unwedge a builder mid-turn" |
+| Issue #21 | adopted it as the remedy for an **abandoned composer**, because Ctrl+C clears typed text where ESC does not |
+
+So the contract is *make the prompt ready for this message*, and that genuinely decomposes into
+**both** halves. They were never separated because one byte did both on the only harnesses that
+existed. Routing to `clearDraftKey` alone would also have been wrong: on a mid-turn opencode,
+Ctrl+U clears nothing and the message lands inside a live turn.
+
+`promptReadySequence()` derives both from the same table and deduplicates:
+
+| harness | bytes |
+|---|---|
+| claude, codex | `Ctrl+C` — one write, byte-identical to pre-fix |
+| opencode | `ESC` then `Ctrl+U` |
+| unidentifiable | `ESC` alone; no guessed clear byte |
+
+### A regression I introduced, found by self-review
+
+Round 1's `heldRemedy()` rewrite deleted the clause #21 asserts on verbatim —
+`'afx interrupt' sends ESC, which does not` — the line #21's header says cost five manual
+interventions. Found by reading my own diff, before the suite reported it. Fixed rather than
+relaxed: the clause is *more* true now, since ESC clears typed text on no harness at all.
+
+### Dead exports removed
+
+`interruptByteForHarness` and `interruptSignalForSession` became test-only once
+`promptReadySequence` took over their call sites. Removed rather than kept — a registered,
+documented, inert export is the failure mode this codebase already warns about in
+`assertHarnessAcceptsModel`. Tests repointed at the live API, so the coverage survives.
+
+## The suite failures — full attribution
+
+Three separate causes, none of them the fix:
+
+| files / tests | cause | resolution |
+|---|---|---|
+| 3 / 40 | #189 `CODEV_*` env leak (worktree spawned from stale main) | merged `origin/main` |
+| 19 / 39 | unbuilt tree | `pnpm build` |
+| 1 / 1 | my `heldRemedy` regression | fixed |
+
+**23 files / 120 tests, no residue.** Post-build: `6553 passed | 48 skipped`, **zero test failures**.
+
+### Four build artifacts, five error messages
+
+The unbuilt-tree group needed `packages/codev/skeleton/`, `packages/codev/dist/`, and
+`packages/porch-driver/dist/` — a sibling package `pnpm build` in `packages/codev` does not
+produce. One root cause reported five ways:
+
+| message | verdict |
+|---|---|
+| `Cannot find module '…/packages/codev/dist/terminal/shellper-main.js'` | honest |
+| `Cannot find module '…/porch-driver/dist/thread.js'` | honest |
+| `Roles directory not found in .codev/roles/, codev/roles/, or embedded skeleton` | misleading |
+| `Skeleton directory not found. Package may be corrupted.` | wrong |
+| `Unknown review type "pr" in porch.consultation.modelsByType` | wrong subsystem |
+
+The last one cost the most: it names a config file that is **correct**, and a reader follows it
+there and stays. `listReviewTypes()` unions protocol names across all four resolver tiers but
+resolves each `protocol.json` by precedence, so an empty tier 4 silently shrinks the known
+review-type set to whatever the test fixture declares. Filed to #204.
+
+`dist/terminal/shellper-main.js` mtime was **12:13:35** — the build I ran *after* the failing
+suite, so it was never present. spir-146 disproved "a concurrent build deleted it" for its own
+run with the same kind of evidence pointing the other way. Same missing file, opposite
+mechanism, indistinguishable symptom (`Invalid shellper info JSON` after a silent poll timeout).
+Filed to #200.
+
+Root cause of all of it on my side: **I ran the suite before building.** Porch's own check order
+is `regression_test, build, tests`; running by hand out of order is what hid it.

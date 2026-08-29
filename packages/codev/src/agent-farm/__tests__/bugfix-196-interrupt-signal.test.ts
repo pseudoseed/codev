@@ -23,7 +23,6 @@ import {
   getBuiltinHarness,
   clearDraftKeyForHarness,
   describeInterruptBytes,
-  interruptByteForHarness,
   keyName,
   interruptSignalForHarness,
   validateCustomHarnessConfig,
@@ -35,7 +34,6 @@ import { hasGateProfile } from '../servers/gate-profiles.js';
 import { heldRecoveryAction, heldRecoveryKeystroke } from '../servers/mailbox-hold-policy.js';
 import {
   writeHeldRecovery,
-  interruptSignalForSession,
   clearDraftKeyForSession,
   promptReadySequence,
 } from '../servers/mailbox-wiring.js';
@@ -167,16 +165,19 @@ describe('interruptSignalForHarness', () => {
   });
 });
 
-describe('interruptByteForHarness', () => {
-  it('yields Ctrl+C for a ctrl-c harness and ESC for an esc harness', () => {
-    expect(interruptByteForHarness('claude')).toBe(CTRL_C);
-    expect(interruptByteForHarness('codex')).toBe(CTRL_C);
-    expect(interruptByteForHarness('opencode')).toBe(ESC);
+describe('the interrupt byte a harness name resolves to', () => {
+  const byteFor = (name: string | undefined | null) =>
+    INTERRUPT_BYTES[interruptSignalForHarness(name)];
+
+  it('is Ctrl+C for a ctrl-c harness and ESC for an esc harness', () => {
+    expect(byteFor('claude')).toBe(CTRL_C);
+    expect(byteFor('codex')).toBe(CTRL_C);
+    expect(byteFor('opencode')).toBe(ESC);
   });
 
-  it('never yields Ctrl+C for anything it cannot identify', () => {
+  it('is never Ctrl+C for anything it cannot identify', () => {
     for (const name of [undefined, null, '', 'gemini', 'agy', 'a-tui-shipped-tomorrow']) {
-      expect(interruptByteForHarness(name)).not.toBe(CTRL_C);
+      expect(byteFor(name)).not.toBe(CTRL_C);
     }
   });
 });
@@ -354,7 +355,7 @@ describe('automatic stuck-hold recovery never writes Ctrl+C to an esc harness', 
 // Session-level resolution, the seam both interrupt callers share.
 // ============================================================================
 
-describe('interruptSignalForSession', () => {
+describe('session identification (the seam every interrupt caller shares)', () => {
   function sessionRunning(command: string): DeliverySession {
     return {
       bytesWritten: 0,
@@ -367,16 +368,18 @@ describe('interruptSignalForSession', () => {
     };
   }
 
-  it('identifies the agent from the launch command, full path included', () => {
-    expect(interruptSignalForSession(sessionRunning('claude'))).toBe('ctrl-c');
-    expect(interruptSignalForSession(sessionRunning('/opt/homebrew/bin/codex --foo'))).toBe('ctrl-c');
-    expect(interruptSignalForSession(sessionRunning('/usr/local/bin/opencode --prompt x'))).toBe('esc');
+  it('identifies the agent from the launch command, full path and args included', () => {
+    expect(promptReadySequence(sessionRunning('claude'))).toEqual([CTRL_C]);
+    expect(promptReadySequence(sessionRunning('/opt/homebrew/bin/codex --foo'))).toEqual([CTRL_C]);
+    expect(promptReadySequence(sessionRunning('/usr/local/bin/opencode --prompt x')))
+      .toEqual([ESC, CTRL_U]);
   });
 
-  it('fails safe to esc when the command names no known agent', () => {
-    expect(interruptSignalForSession(sessionRunning(''))).toBe('esc');
-    expect(interruptSignalForSession(sessionRunning('bash'))).toBe('esc');
-    expect(interruptSignalForSession(sessionRunning('agy'))).toBe('esc');
+  it('fails safe when the command names no known agent', () => {
+    for (const command of ['', 'bash', 'agy']) {
+      expect(promptReadySequence(sessionRunning(command))).toEqual([ESC]);
+      expect(clearDraftKeyForSession(sessionRunning(command))).toBe('none');
+    }
   });
 });
 

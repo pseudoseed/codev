@@ -27,7 +27,6 @@ import {
   CLEAR_DRAFT_BYTES,
   INTERRUPT_BYTES,
   type ClearDraftKey,
-  type InterruptSignal,
 } from '../utils/harness.js';
 import {
   buildContextFsPort,
@@ -199,16 +198,6 @@ export function resolveHarnessForSession(session: DeliverySession): string | nul
   if (detected) return detected;
   const cwd = typeof session.cwd === 'string' ? session.cwd : '';
   return cwd ? harnessFromLaunchScript(NODE_FS_PORT, cwd) : null;
-}
-
-/**
- * The signal that safely interrupts THIS session's agent (Issue #196).
- *
- * Fail-safe by construction: an unidentifiable session resolves to `esc`, never to
- * the byte that quits opencode.
- */
-export function interruptSignalForSession(session: DeliverySession): InterruptSignal {
-  return interruptSignalForHarness(resolveHarnessForSession(session));
 }
 
 /**
