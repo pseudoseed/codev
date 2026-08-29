@@ -1,0 +1,31 @@
+# Phase 13 — Extension retirement
+
+## 2026-08-28 — Recovery and verification
+
+- Fetched `origin/builder/task-gBv6` as directed. The named tip `3ebc6cc30` was a porch-only
+  status commit; the preserved Phase 13 implementation was its ancestor `dd6af847c`. Read that
+  commit before cherry-picking it. Resolved its lock/workspace conflict against current `main`
+  by retaining current workspace members, adding the required `!apps/vscode` negation, and
+  regenerating `pnpm-lock.yaml` from current `main`.
+- Opened and checked the approved spec's `Extensions and adopters` section and the authoritative
+  Phase 13 plan in the parent `spir-146` worktree. The plan was read only.
+- Audited the recovered changes rather than accepting them on provenance. `apps/streamdeck` is
+  absent; `apps/vscode` remains, has the unsupported warning, and is excluded from pnpm workspace
+  discovery, CI, release versioning, and root packaging. Active Stream Deck-only CI and release
+  paths were removed. Governance changes are in the cold `arch.md` and `lessons-learned.md`; the
+  capped hot files are unchanged.
+- Verified `pnpm list --recursive --depth -1 --json`: `apps/web` and `apps/v2` resolve as workspace
+  members while VS Code and Stream Deck do not.
+- Ran a fresh real `npm pack`, listed the resulting tarball, and found zero
+  `package/apps/{vscode,streamdeck}/` entries. The tarball retained
+  `package/apps/web/package.json` and `package/apps/v2/package.json` (3,160 total entries).
+- The phase regression test passed: 1 file, 3 tests. `pnpm build` passed and built the supported
+  web/v2 apps without VS Code.
+
+## Flaky Tests
+
+- The full `pnpm test` run reached 6,161 passing tests but failed one unrelated pre-existing
+  teardown race: `spawn-gate-profile.test.ts` raised `ENOTEMPTY` while deleting a real spawned
+  builder worktree. The test passed immediately in isolation (6/6). The integration branch already
+  contains the bounded `rmSync(..., maxRetries: 20, retryDelay: 100)` fix from Phase 3, so this
+  Phase 13 branch does not duplicate or conflict with that owned fix.
