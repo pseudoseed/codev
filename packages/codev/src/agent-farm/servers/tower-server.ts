@@ -637,7 +637,12 @@ async function bootSequence(): Promise<void> {
   // never holds the process open.
   terminalPartialMonitorInterval = setInterval(() => {
     try {
-      const partials = getTerminalManager().inspectPartials();
+      const manager = getTerminalManager();
+      const reaped = manager.reconcileDeadSessions();
+      if (reaped > 0) {
+        log('INFO', `Terminal reconciliation: removed ${reaped} dead session(s)`);
+      }
+      const partials = manager.inspectPartials();
       if (partials.length === 0) return;
       let maxBytes = 0;
       for (const p of partials) {

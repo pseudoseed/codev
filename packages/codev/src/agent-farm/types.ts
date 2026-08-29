@@ -16,6 +16,7 @@ export interface Builder {
   protocolName?: string;  // For protocol mode
   issueNumber?: number | string;   // For bugfix mode
   terminalId?: string;    // Terminal session ID
+  threadId?: string;      // Spec 146: t3code thread join; exclusive with terminalId
   spawnedByArchitect?: string;   // Name of the architect that spawned this builder (Spec 755)
   // Issue #2: the (harness, model) this builder was spawned with. Persisted so
   // `afx spawn --resume` re-launches on the same pair instead of silently
@@ -46,6 +47,7 @@ export interface ArchitectState {
   cmd: string;
   startedAt: string;
   terminalId?: string;
+  threadId?: string;     // Spec 146: t3code thread join; exclusive with terminalId
   // Issue #832: the agent's conversation session id, persisted so the architect
   // resumes its prior conversation on restart. Agent-neutral (Claude uses a UUID;
   // other agents may use their own scheme). Undefined until first stored.

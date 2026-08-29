@@ -174,6 +174,12 @@ export function writeState(statusPath: string, state: ProjectState): void {
   fs.renameSync(tmpPath, statusPath);
 }
 
+export function recordThreadId(statusPath: string, threadId: string): void {
+  const state = readState(statusPath);
+  state.thread_id = threadId;
+  writeState(statusPath, state);
+}
+
 /**
  * Write state and commit+push to git.
  * Uses execFile with args array (no shell injection risk).

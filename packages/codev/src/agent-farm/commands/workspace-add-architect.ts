@@ -16,6 +16,8 @@ import { getConfig } from '../utils/index.js';
 import { logger } from '../utils/logger.js';
 import { getTowerClient } from '../lib/tower-client.js';
 import { validateArchitectName } from '../utils/architect-name.js';
+import { getArchitects, setArchitectByName } from '../state.js';
+import { createArchitectThread, tryGetThreadEngine } from '../thread-runtime.js';
 
 export interface WorkspaceAddArchitectOptions {
   name?: string;
@@ -46,6 +48,28 @@ export async function workspaceAddArchitect(
     }
     // Pass the trimmed value through to the Tower client.
     options.name = trimmed;
+  }
+
+  if (tryGetThreadEngine()) {
+    const existing = new Set(getArchitects(workspacePath).map((a) => a.name));
+    let name = options.name;
+    if (!name) {
+      if (!existing.has('main')) name = 'main';
+      else {
+        let n = 2;
+        while (existing.has(`architect-${n}`)) n += 1;
+        name = `architect-${n}`;
+      }
+    }
+    const threadId = await createArchitectThread({ name, workspaceRoot: workspacePath });
+    setArchitectByName(workspacePath, name, {
+      name,
+      cmd: '',
+      startedAt: new Date().toISOString(),
+      threadId,
+    });
+    logger.success(`Started architect '${name}' (thread ${threadId}).`);
+    return;
   }
 
   const client = getTowerClient();

@@ -28,6 +28,7 @@ describe('TerminalManager', () => {
       diskLogEnabled: false,
       maxSessions: 5,
       reconnectTimeoutMs: 500,
+      processExists: () => true,
     });
   });
 
@@ -53,6 +54,39 @@ describe('TerminalManager', () => {
     }
     await expect(manager.createSession({ label: 'too-many' }))
       .rejects.toThrow('Maximum 5 sessions reached');
+  });
+
+  it('reaps dead session records before rejecting at the cap', async () => {
+    manager.shutdown();
+    let alive = true;
+    manager = new TerminalManager({
+      workspaceRoot: '/tmp/test-project',
+      diskLogEnabled: false,
+      maxSessions: 1,
+      processExists: () => alive,
+    });
+
+    await manager.createSession({ label: 'dead-soon' });
+    alive = false;
+
+    await expect(manager.createSession({ label: 'replacement' })).resolves.toBeDefined();
+    expect(manager.listSessions()).toHaveLength(1);
+    expect(manager.listSessions()[0].label).toBe('replacement');
+  });
+
+  it('includes Tower ownership context in cap errors', async () => {
+    manager.shutdown();
+    manager = new TerminalManager({
+      workspaceRoot: '/tmp/test-project',
+      diskLogEnabled: false,
+      maxSessions: 1,
+      processExists: () => true,
+      sessionOwnerSummary: () => 'Top workspaces: /busy/project (1)',
+    });
+
+    await manager.createSession({ label: 'occupied' });
+    await expect(manager.createSession({ label: 'rejected' }))
+      .rejects.toThrow('Maximum 1 sessions reached; Top workspaces: /busy/project (1)');
   });
 
   describe('REST API handler', () => {

@@ -31,6 +31,12 @@ import { logger, fatal } from '../utils/logger.js';
 import { run } from '../utils/shell.js';
 import { hasUncommittedTrackedChanges } from '../utils/git.js';
 import { upsertBuilder, getBuilder } from '../state.js';
+import {
+  allocateSpawnThread,
+  chooseSpawnPath,
+} from '../db/thread-identity.js';
+
+import { findStatusPath, getStatusPath, recordThreadId } from '../../commands/porch/state.js';
 import { DEFAULT_ARCHITECT_NAME } from '../utils/architect-name.js';
 
 /**
@@ -112,12 +118,63 @@ export function discoverResumeSession(
   return undefined;
 }
 
-function logSpawnSuccess(label: string, terminalId: string, mode?: string): void {
+function logSpawnSuccess(
+  label: string,
+  identity: { terminalId?: string; threadId?: string },
+  mode?: string,
+): void {
   const client = getTowerClient();
   logger.blank();
   logger.success(`${label} spawned!`);
   if (mode) logger.kv('Mode', mode === 'strict' ? 'Strict (porch-driven)' : 'Soft (protocol-guided)');
-  logger.kv('Terminal', client.getTerminalWsUrl(terminalId));
+  if (identity.threadId) logger.kv('Thread', identity.threadId);
+  if (identity.terminalId) logger.kv('Terminal', client.getTerminalWsUrl(identity.terminalId));
+}
+
+export async function launchSpawnedBuilder(opts: {
+  existing?: { terminalId?: string; threadId?: string } | null;
+  builderId: string;
+  worktreePath: string;
+  branch: string;
+  harnessName?: string;
+  model?: string;
+  prompt?: string;
+  launchScript?: string;
+  startPty: () => Promise<{ terminalId: string }>;
+}): Promise<{ terminalId?: string; threadId?: string }> {
+  const pathKind = chooseSpawnPath(opts.existing ?? undefined);
+  if (pathKind === 'thread') {
+    const threadId = opts.existing?.threadId ?? await allocateSpawnThread({
+      builderId: opts.builderId,
+      worktreePath: opts.worktreePath,
+      branch: opts.branch,
+      harnessName: opts.harnessName,
+      model: opts.model,
+      prompt: opts.prompt,
+      launchScript: opts.launchScript,
+    });
+    return { threadId };
+  }
+  return opts.startPty();
+}
+
+export function persistSpawnedBuilder(
+  builder: Parameters<typeof upsertBuilder>[0],
+  porch?: { worktreePath: string; projectId: string; projectName: string },
+): void {
+  if (builder.threadId && porch) {
+    const statusPath = findStatusPath(porch.worktreePath, porch.projectId, { alias: false })
+      ?? getStatusPath(porch.worktreePath, porch.projectId, porch.projectName);
+    try {
+      recordThreadId(statusPath, builder.threadId);
+    } catch (err) {
+      throw new Error(
+        `Thread-backed spawn of ${builder.id} could not record thread_id=${builder.threadId} in status.yaml (${statusPath}): ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
+    }
+  }
+  upsertBuilder(builder);
 }
 
 /**
@@ -531,21 +588,27 @@ async function spawnSpec(options: SpawnOptions, config: Config, selection: Agent
 
   const role = options.noRole ? null : loadRolePrompt(config, 'builder');
 
-  const { terminalId } = await startBuilderSession(
-    config, builderId, worktreePath, effective.command,
-    builderPrompt, role?.content ?? null, role?.source ?? null,
-    resume, effective,
-  );
+  const identity = await launchSpawnedBuilder({
+    existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
+    builderId, worktreePath, branch: branchName,
+    harnessName: effective.harnessName, model: effective.modelId,
+    startPty: () => startBuilderSession(
+      config, builderId, worktreePath, effective.command,
+      builderPrompt, role?.content ?? null, role?.source ?? null,
+      resume, effective,
+    ),
+  });
 
-  upsertBuilder({
+  persistSpawnedBuilder({
     id: builderId, name: specName, status: 'implementing', phase: 'init',
-    worktree: worktreePath, branch: branchName, type: 'spec', issueNumber, terminalId,
+    worktree: worktreePath, branch: branchName, type: 'spec', issueNumber,
     spawnedByArchitect: SPAWNING_ARCHITECT_NAME,
     harness: effective.harnessName,
     model: effective.modelId,
-  });
+    ...identity,
+  }, { worktreePath, projectId, projectName: specName.replace(/^[0-9]+-/, '') });
 
-  logSpawnSuccess(`Builder ${builderId}`, terminalId, mode);
+  logSpawnSuccess(`Builder ${builderId}`, identity, mode);
 }
 
 /**
@@ -608,23 +671,29 @@ async function spawnTask(options: SpawnOptions, config: Config, selection: Agent
   const role = options.noRole ? null : loadRolePrompt(config, 'builder');
   const effective = selectionForResume(options, config, builderId, selection);
 
-  const { terminalId } = await startBuilderSession(
-    config, builderId, worktreePath, effective.command,
-    builderPrompt, role?.content ?? null, role?.source ?? null,
-    undefined, effective,
-  );
+  const identity = await launchSpawnedBuilder({
+    existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
+    builderId, worktreePath, branch: branchName,
+    harnessName: effective.harnessName, model: effective.modelId,
+    startPty: () => startBuilderSession(
+      config, builderId, worktreePath, effective.command,
+      builderPrompt, role?.content ?? null, role?.source ?? null,
+      undefined, effective,
+    ),
+  });
 
-  upsertBuilder({
+  persistSpawnedBuilder({
     id: builderId,
     name: `Task: ${taskText.substring(0, 30)}${taskText.length > 30 ? '...' : ''}`,
     status: 'implementing', phase: 'init',
-    worktree: worktreePath, branch: branchName, type: 'task', taskText, terminalId,
+    worktree: worktreePath, branch: branchName, type: 'task', taskText,
     spawnedByArchitect: SPAWNING_ARCHITECT_NAME,
     harness: effective.harnessName,
     model: effective.modelId,
-  });
+    ...identity,
+  }, hasExplicitProtocol ? { worktreePath, projectId: builderId, projectName: worktreeName } : undefined);
 
-  logSpawnSuccess(`Builder ${builderId}`, terminalId);
+  logSpawnSuccess(`Builder ${builderId}`, identity);
 }
 
 /**
@@ -671,22 +740,28 @@ async function spawnProtocol(options: SpawnOptions, config: Config, selection: A
   const role = options.noRole ? null : loadProtocolRole(config, protocolName);
   const effective = selectionForResume(options, config, builderId, selection);
 
-  const { terminalId } = await startBuilderSession(
-    config, builderId, worktreePath, effective.command,
-    prompt, role?.content ?? null, role?.source ?? null,
-    undefined, effective,
-  );
+  const identity = await launchSpawnedBuilder({
+    existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
+    builderId, worktreePath, branch: branchName,
+    harnessName: effective.harnessName, model: effective.modelId,
+    startPty: () => startBuilderSession(
+      config, builderId, worktreePath, effective.command,
+      prompt, role?.content ?? null, role?.source ?? null,
+      undefined, effective,
+    ),
+  });
 
-  upsertBuilder({
+  persistSpawnedBuilder({
     id: builderId, name: `Protocol: ${protocolName}`,
     status: 'implementing', phase: 'init',
-    worktree: worktreePath, branch: branchName, type: 'protocol', protocolName, terminalId,
+    worktree: worktreePath, branch: branchName, type: 'protocol', protocolName,
     spawnedByArchitect: SPAWNING_ARCHITECT_NAME,
     harness: effective.harnessName,
     model: effective.modelId,
-  });
+    ...identity,
+  }, { worktreePath, projectId: builderId, projectName: worktreeName });
 
-  logSpawnSuccess(`Builder ${builderId}`, terminalId);
+  logSpawnSuccess(`Builder ${builderId}`, identity);
 }
 
 /**
@@ -719,7 +794,7 @@ async function spawnShell(options: SpawnOptions, config: Config, selection: Agen
     model: selection.modelId,
   });
 
-  logSpawnSuccess(`Shell ${shellId}`, terminalId);
+  logSpawnSuccess(`Shell ${shellId}`, { terminalId });
 }
 
 /**
@@ -752,27 +827,36 @@ async function spawnWorktree(options: SpawnOptions, config: Config, selection: A
   const scriptPath = resolve(worktreePath, '.builder-start.sh');
   writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
 
-  logger.info('Creating PTY terminal session for worktree...');
-  const { terminalId: worktreeTerminalId } = await createPtySession(
-    config,
-    '/bin/bash',
-    [scriptPath],
-    worktreePath,
-    { workspacePath: config.workspaceRoot, type: 'builder', roleId: builderId },
-  );
-  logger.info(`Worktree terminal session created: ${worktreeTerminalId}`);
+  const identity = await launchSpawnedBuilder({
+    existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
+    builderId, worktreePath, branch: branchName,
+    harnessName: effective.harnessName, model: effective.modelId,
+    launchScript: scriptPath,
+    startPty: async () => {
+      logger.info('Creating PTY terminal session for worktree...');
+      const session = await createPtySession(
+        config,
+        '/bin/bash',
+        [scriptPath],
+        worktreePath,
+        { workspacePath: config.workspaceRoot, type: 'builder', roleId: builderId },
+      );
+      logger.info(`Worktree terminal session created: ${session.terminalId}`);
+      return session;
+    },
+  });
 
-  upsertBuilder({
+  persistSpawnedBuilder({
     id: builderId, name: 'Worktree session',
     status: 'implementing', phase: 'interactive',
     worktree: worktreePath, branch: branchName, type: 'worktree',
-    terminalId: worktreeTerminalId,
     spawnedByArchitect: SPAWNING_ARCHITECT_NAME,
     harness: effective.harnessName,
     model: effective.modelId,
+    ...identity,
   });
 
-  logSpawnSuccess(`Worktree ${builderId}`, worktreeTerminalId);
+  logSpawnSuccess(`Worktree ${builderId}`, identity);
 }
 
 /**
@@ -926,23 +1010,29 @@ async function spawnIssueDrivenBuilder(
   const resume = discoverResumeSession(worktreePath, options.resume, effective.provider);
   const role = options.noRole ? null : loadRolePrompt(config, 'builder');
 
-  const { terminalId } = await startBuilderSession(
-    config, builderId, worktreePath, effective.command,
-    builderPrompt, role?.content ?? null, role?.source ?? null,
-    resume, effective,
-  );
+  const identity = await launchSpawnedBuilder({
+    existing: options.resume ? getBuilder(builderId, config.workspaceRoot) : null,
+    builderId, worktreePath, branch: branchName,
+    harnessName: effective.harnessName, model: effective.modelId,
+    startPty: () => startBuilderSession(
+      config, builderId, worktreePath, effective.command,
+      builderPrompt, role?.content ?? null, role?.source ?? null,
+      resume, effective,
+    ),
+  });
 
-  upsertBuilder({
+  persistSpawnedBuilder({
     id: builderId,
     name: `${protocolLabel} #${issueNumber}: ${issue.title.substring(0, 40)}${issue.title.length > 40 ? '...' : ''}`,
     status: 'implementing', phase: 'init',
-    worktree: worktreePath, branch: branchName, type: prefix, issueNumber, terminalId,
+    worktree: worktreePath, branch: branchName, type: prefix, issueNumber,
     spawnedByArchitect: SPAWNING_ARCHITECT_NAME,
     harness: effective.harnessName,
     model: effective.modelId,
-  });
+    ...identity,
+  }, { worktreePath, projectId: porchProjectId, projectName: slugify(issue.title) });
 
-  logSpawnSuccess(`${protocolLabel} builder for issue #${issueNumber}`, terminalId, mode);
+  logSpawnSuccess(`${protocolLabel} builder for issue #${issueNumber}`, identity, mode);
 }
 
 /** Spawn a BUGFIX builder via the shared issue-driven helper. */

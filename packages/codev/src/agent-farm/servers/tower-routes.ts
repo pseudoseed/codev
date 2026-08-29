@@ -804,8 +804,15 @@ async function handleTerminalCreate(
     // Try shellper if persistence was requested
     const shellperManager = ctx.getShellperManager();
     if (requestPersistence && shellperManager && command && cwd) {
+      let shellperSessionId: string | null = null;
+      let rawSessionId: string | null = null;
       try {
+        // Capacity belongs to TerminalManager, so reject before shellper starts
+        // a detached process. createSessionRaw repeats this after the awaits as
+        // a concurrency backstop.
+        manager.assertCanCreateSession();
         const sessionId = crypto.randomUUID();
+        shellperSessionId = sessionId;
         // Strip CLAUDECODE so spawned Claude processes don't detect nesting
         const sessionEnv = { ...(env || process.env) } as Record<string, string>;
         delete sessionEnv['CLAUDECODE'];
@@ -834,6 +841,7 @@ async function handleTerminalCreate(
           command,
           args,
         });
+        rawSessionId = session.id;
         const ptySession = manager.getSession(session.id);
         if (ptySession) {
           ptySession.attachShellper(client, replayData, shellperInfo.pid, sessionId);
@@ -855,6 +863,11 @@ async function handleTerminalCreate(
           ctx.log('INFO', `Registered shellper terminal ${session.id} as ${termType} "${roleId}" for workspace ${workspacePath}`);
         }
       } catch (shellperErr) {
+        // Any failure after spawn must roll back both halves of the session.
+        // In particular, a concurrent cap fill can still make createSessionRaw
+        // reject even though the preflight above passed.
+        if (shellperSessionId) await shellperManager.killSession(shellperSessionId);
+        if (rawSessionId) manager.killSession(rawSessionId);
         ctx.log('WARN', `Shellper creation failed for terminal, falling back: ${(shellperErr as Error).message}`);
       }
     }
@@ -1896,24 +1909,47 @@ async function handleSend(
     if (result.code === 'NOT_FOUND' && !escape && !interrupt) {
       const reg = resolveAgentInRegistry(to, workspace, from);
       if (!isResolveError(reg)) {
-        holdAndRespond(
-          res,
-          ctx,
-          {
-            workspacePath: reg.workspacePath,
-            toAgent: reg.agent,
-            body: message,
-            formattedMessage: formatMessageForTarget(reg.kind === 'architect', from, message, raw),
-            fromAgent: from ?? null,
-            // #47: identity, not just kind; and the target as TYPED, not as resolved.
-            fromAgentName: fromName ?? null,
-            requestedTo: to,
-            fromWorkspace: senderWorkspace,
-            noEnter,
-            terminalId: null,
-          },
-          'no-live-pty',
-        );
+        const formattedMessage = formatMessageForTarget(reg.kind === 'architect', from, message, raw);
+        const row = enqueueMailbox(db, {
+          workspacePath: reg.workspacePath,
+          toAgent: reg.agent,
+          body: message,
+          formattedMessage,
+          fromAgent: from ?? null,
+          fromAgentName: fromName ?? null,
+          requestedTo: to,
+          fromWorkspace: senderWorkspace,
+          noEnter,
+          terminalId: null,
+        });
+        const ports = makeDeliveryPorts(ctx.log);
+        try {
+          await deliverAgentMailSerialized(ports, db, reg.workspacePath, reg.agent);
+        } catch (err) {
+          ctx.log('ERROR', `Delivery attempt errored for ${reg.agent} (row ${row.id.slice(0, 8)}... stays held): ${(err as Error).message}`);
+        }
+        const stored = getMailboxById(db, row.id);
+        if (stored?.status === 'delivered') {
+          sendJson(res, 200, {
+            ok: true,
+            resolvedTo: reg.agent,
+            deferred: false,
+            delivered: true,
+            held: false,
+            mailboxId: row.id,
+            reason: null,
+          });
+          return;
+        }
+        sendJson(res, 200, {
+          ok: true,
+          resolvedTo: reg.agent,
+          deferred: true,
+          delivered: false,
+          held: true,
+          reason: stored?.reason ?? 'no-live-pty',
+          mailboxId: row.id,
+        });
         return;
       }
       if (reg.code === 'AMBIGUOUS') {
@@ -2968,8 +3004,12 @@ async function handleWorkspaceShellCreate(
     // Try shellper first for persistent shell session
     const shellperManager = ctx.getShellperManager();
     if (shellperManager) {
+      let shellperSessionId: string | null = null;
+      let rawSessionId: string | null = null;
       try {
+        manager.assertCanCreateSession();
         const sessionId = crypto.randomUUID();
+        shellperSessionId = sessionId;
         // Strip CLAUDECODE so spawned Claude processes don't detect nesting
         const shellEnv = { ...process.env } as Record<string, string>;
         delete shellEnv['CLAUDECODE'];
@@ -3002,6 +3042,7 @@ async function handleWorkspaceShellCreate(
           command: shellCmd,
           args: shellArgs,
         });
+        rawSessionId = session.id;
         const ptySession = manager.getSession(session.id);
         if (ptySession) {
           ptySession.attachShellper(client, replayData, shellperInfo.pid, sessionId);
@@ -3022,6 +3063,8 @@ async function handleWorkspaceShellCreate(
           persistent: true,
         }));
       } catch (shellperErr) {
+        if (shellperSessionId) await shellperManager.killSession(shellperSessionId);
+        if (rawSessionId) manager.killSession(rawSessionId);
         ctx.log('WARN', `Shellper creation failed for shell, falling back: ${(shellperErr as Error).message}`);
       }
     }

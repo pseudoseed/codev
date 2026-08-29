@@ -13,6 +13,8 @@ import { currentArchitectName } from '../utils/architect-name.js';
 import type { Builder } from '../types.js';
 import type { OverviewData } from '@cluesmith/codev-types';
 import { overlayBuilderFromPorch } from '../lib/porch-overlay.js';
+import { countPtyDrainFromBuilders } from '../db/thread-identity.js';
+import { isAgentRunning } from '../thread-runtime.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from '../../lib/config.js';
@@ -78,9 +80,9 @@ function sortByOwner(builders: Builder[]): Builder[] {
   });
 }
 
-/** A builder is considered "running" when it has a live terminal session. */
-function isBuilderRunning(builder: Builder): boolean {
-  return !!builder.terminalId;
+/** A builder is running when it has a live terminal or a thread. */
+export function isBuilderRunning(builder: Builder): boolean {
+  return isAgentRunning(builder);
 }
 
 export function collectOrphanStatus(
@@ -229,8 +231,9 @@ function emitStatusJson(params: {
   mailbox: { heldCount: number; escalated: boolean };
   heldByRoleId: Map<string, number>;
   orphans: OrphanStatus;
+  ptyDrain: number;
 }): void {
-  const { towerRunning, workspace, architects, builders, ownerFilter, fleet, mailbox, heldByRoleId, orphans } = params;
+  const { towerRunning, workspace, architects, builders, ownerFilter, fleet, mailbox, heldByRoleId, orphans, ptyDrain } = params;
   const visible = sortByOwner(filterByOwner(builders, ownerFilter));
 
   const payload = {
@@ -239,6 +242,7 @@ function emitStatusJson(params: {
     fleet,
     mailbox,
     orphans,
+    ptyDrain,
     ownerFilter: ownerFilter ?? null,
     architects: architects.map((a) => ({ name: a.name ?? 'main' })),
     builders: visible.map((b) => ({
@@ -291,6 +295,7 @@ export async function status(options: StatusOptions = {}): Promise<void> {
   };
   const sized = !!options.size;
   const orphans = collectOrphanStatus(workspacePath, builders, sized);
+  const ptyDrain = countPtyDrainFromBuilders(builders);
 
   // Machine-readable mode (Spec 1057): gather workspace metadata when Tower is
   // up, then emit JSON and return before any human-facing output.
@@ -325,6 +330,7 @@ export async function status(options: StatusOptions = {}): Promise<void> {
       mailbox: mailboxSummary,
       heldByRoleId,
       orphans,
+      ptyDrain,
     });
     return;
   }
@@ -364,6 +370,7 @@ export async function status(options: StatusOptions = {}): Promise<void> {
       logger.kv('Workspace', workspaceStatus.name);
       logger.kv('  Status', statusText);
       logger.kv('  Terminals', workspaceStatus.terminals.length);
+      logger.kv('PTY drain', ptyDrain === 0 ? chalk.gray('0') : String(ptyDrain));
       renderOrphans(orphans, sized);
 
       if (workspaceStatus.terminals.length > 0) {
@@ -421,6 +428,7 @@ export async function status(options: StatusOptions = {}): Promise<void> {
 
     // Workspace not found in tower, show "not active"
     logger.kv('Workspace', chalk.gray('not active in tower'));
+    logger.kv('PTY drain', ptyDrain === 0 ? chalk.gray('0') : String(ptyDrain));
     renderOrphans(orphans, sized);
     logger.info(`Run 'afx workspace start' to activate this workspace`);
     return;
@@ -429,6 +437,7 @@ export async function status(options: StatusOptions = {}): Promise<void> {
   // Tower not running - show message and fall back to local state
   logger.kv('Tower', chalk.gray('not running'));
   logger.info(`Run 'afx tower start' to start the tower daemon`);
+  logger.kv('PTY drain', ptyDrain === 0 ? chalk.gray('0') : String(ptyDrain));
   renderOrphans(orphans, sized);
 
   showArtifactConfig(workspacePath);

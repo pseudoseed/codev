@@ -21,6 +21,8 @@ import type { InterruptOptions } from '../types.js';
 import { logger, fatal } from '../utils/logger.js';
 import { TowerClient } from '../lib/tower-client.js';
 import { detectWorkspaceRoot, detectCurrentBuilderId } from './send.js';
+import { findBuilderById } from '../lib/builder-lookup.js';
+import { interruptThread, isThreadBacked } from '../thread-runtime.js';
 
 export async function interrupt(options: InterruptOptions): Promise<void> {
   const target = options.builder;
@@ -31,6 +33,25 @@ export async function interrupt(options: InterruptOptions): Promise<void> {
   }
 
   logger.header('Sending Interrupt (ESC)');
+
+  let builder = null;
+  try {
+    builder = findBuilderById(target);
+  } catch {
+    builder = null;
+  }
+  if (builder && isThreadBacked(builder) && builder.threadId) {
+    try {
+      const settled = await interruptThread(builder.threadId);
+      if (settled.activeTurnId !== null) {
+        fatal(`Interrupt of ${builder.id} did not settle activeTurnId`);
+      }
+      logger.success(`Interrupt sent to thread ${builder.threadId}`);
+    } catch (error) {
+      fatal(error instanceof Error ? error.message : String(error));
+    }
+    return;
+  }
 
   const workspace = detectWorkspaceRoot() ?? undefined;
 

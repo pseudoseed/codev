@@ -52,6 +52,10 @@ jobs:
         working-directory: packages/artifact-canvas
         run: pnpm build && pnpm build:smoke
 
+      - name: Build porch-driver package
+        working-directory: packages/porch-driver
+        run: pnpm build
+
       - name: Run sdk unit tests
         working-directory: packages/sdk
         run: pnpm test

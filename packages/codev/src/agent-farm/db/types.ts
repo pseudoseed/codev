@@ -146,6 +146,7 @@ export function dbArchitectToArchitectState(row: DbArchitect): ArchitectState {
     cmd: row.cmd,
     startedAt: row.started_at,
     terminalId: row.terminal_id ?? undefined,
+    threadId: row.thread_id ?? undefined,
     sessionId: row.session_id ?? undefined,
   };
 }
@@ -166,6 +167,7 @@ export function dbBuilderToBuilder(row: DbBuilder): Builder {
     protocolName: row.protocol_name ?? undefined,
     issueNumber: row.issue_number ?? undefined,
     terminalId: row.terminal_id ?? undefined,
+    threadId: row.thread_id ?? undefined,
     spawnedByArchitect: row.spawned_by_architect ?? undefined,
     harness: row.harness ?? undefined,
     model: row.model ?? undefined,

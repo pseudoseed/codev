@@ -9,6 +9,7 @@ import { loadState, clearRuntime, getArchitects } from '../state.js';
 import { logger } from '../utils/logger.js';
 import { getConfig } from '../utils/config.js';
 import { getTowerClient } from '../lib/tower-client.js';
+import { isThreadBacked, THREAD_BACKED_UNSUPPORTED } from '../thread-runtime.js';
 
 /**
  * Stop all agent farm processes
@@ -64,6 +65,10 @@ export async function stop(): Promise<void> {
   if (towerRunning) {
     // Bugfix #826: scoped by workspace_path.
     for (const architect of getArchitects(workspacePath)) {
+      if (isThreadBacked(architect)) {
+        logger.info(`Architect '${architect.name}' ${THREAD_BACKED_UNSUPPORTED}`);
+        continue;
+      }
       if (!architect.terminalId) continue;
       logger.info(`Stopping architect '${architect.name}'...`);
       try {
@@ -75,6 +80,10 @@ export async function stop(): Promise<void> {
 
   // Stop all builders
   for (const builder of state.builders) {
+    if (isThreadBacked(builder)) {
+      logger.info(`Builder ${builder.id} ${THREAD_BACKED_UNSUPPORTED}`);
+      continue;
+    }
     if (towerRunning && builder.terminalId) {
       logger.info(`Stopping builder ${builder.id}...`);
       try {

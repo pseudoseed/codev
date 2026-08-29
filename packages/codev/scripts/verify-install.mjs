@@ -17,7 +17,8 @@
 import { execSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { assertPackedDistRelativeImports } from './packed-dist-imports.mjs';
 
 const targets = process.argv.slice(2);
 if (targets.length === 0) {
@@ -27,7 +28,18 @@ if (targets.length === 0) {
 const prefix = mkdtempSync(join(tmpdir(), 'codev-install-verify-'));
 let failed = false;
 
+function isCodevTarball(target) {
+  return /^cluesmith-codev-\d/.test(basename(target));
+}
+
 try {
+  for (const target of targets) {
+    if (!isCodevTarball(target)) continue;
+    console.log(`Checking packed dist/ relative imports in ${target}...`);
+    assertPackedDistRelativeImports(target);
+    console.log('  OK: packed dist/ relative imports resolve inside the tarball');
+  }
+
   const quoted = targets.map(t => `"${t}"`).join(' ');
   console.log(`Installing ${targets.join(', ')} into ${prefix}...`);
   execSync(`npm install -g --prefix "${prefix}" ${quoted}`, { stdio: 'inherit' });
