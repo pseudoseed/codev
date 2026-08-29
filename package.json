@@ -3,11 +3,15 @@
   "version": "3.3.1",
   "private": true,
   "packageManager": "pnpm@10.33.0",
+  "files": [
+    "*",
+    "!apps/streamdeck",
+    "!apps/vscode"
+  ],
   "scripts": {
     "build": "scripts/check-main-fresh.sh && pnpm --filter @cluesmith/codev-artifact-canvas build && pnpm --filter @cluesmith/t3-client build && pnpm --filter @cluesmith/porch-driver build && pnpm --filter @cluesmith/codev build",
     "test": "pnpm --filter @cluesmith/codev test",
     "local-install": "scripts/local-install.sh",
-    "bump-version": "scripts/bump-all.sh",
-    "bump-vscode-version": "scripts/bump-vscode.sh"
+    "bump-version": "scripts/bump-all.sh"
   }
 }

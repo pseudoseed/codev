@@ -68,6 +68,8 @@ Generalizable wisdom extracted from review documents, ordered by impact. Updated
 
 ## Architecture
 
+- **Retirement strategy should account for future merge cost, not just local deletion cost.** Delete an unsupported component when upstream no longer touches it; when upstream is still actively developing the tree, retaining the source while excluding it from workspace discovery, builds, tests, and packages can prevent the same delete/modify conflict from recurring on every merge.
+
 - **Model permissions as roles/capabilities, not booleans — booleans don't extend.** A boolean answers one question and has to be joined by another the moment a second kind of actor appears; a capability set answers the general question once. (Demoted from the hot tier in PIR #12 to make room for the partial-result rule, which recurs across more subsystems.)
 
 - [From #4] **Do not port a rendering-attribute convention from one TUI to another without

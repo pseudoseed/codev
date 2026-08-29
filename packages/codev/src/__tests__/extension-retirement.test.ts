@@ -1,0 +1,60 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+let packDirectory: string;
+let packedFiles: string[];
+
+beforeAll(() => {
+  packDirectory = mkdtempSync(join(tmpdir(), 'codev-extension-retirement-'));
+  execFileSync('npm', ['pack', '--pack-destination', packDirectory], {
+    cwd: workspaceRoot,
+    stdio: 'pipe',
+  });
+
+  const tarball = readdirSync(packDirectory).find((file) => file.endsWith('.tgz'));
+  expect(tarball).toBeDefined();
+  packedFiles = execFileSync('tar', ['-tzf', join(packDirectory, tarball!)], {
+    encoding: 'utf8',
+  })
+    .trim()
+    .split('\n');
+});
+
+afterAll(() => {
+  rmSync(packDirectory, { recursive: true, force: true });
+});
+
+describe('extension retirement', () => {
+  it('keeps supported apps in the pnpm workspace and excludes the VS Code extension', () => {
+    const members = JSON.parse(
+      execFileSync('pnpm', ['list', '--recursive', '--depth', '-1', '--json'], {
+        cwd: workspaceRoot,
+        encoding: 'utf8',
+      }),
+    ) as Array<{ name?: string }>;
+    const names = members.flatMap(({ name }) => (name ? [name] : []));
+
+    expect(names).toContain('@cluesmith/codev-web');
+    expect(names).toContain('@cluesmith/codev-v2');
+    expect(names).not.toContain('codev-vscode');
+    expect(names).not.toContain('@cluesmith/codev-streamdeck');
+  });
+
+  it('packs neither retired extension while retaining supported apps', () => {
+    expect(packedFiles).toContain('package/apps/web/package.json');
+    expect(packedFiles).toContain('package/apps/v2/package.json');
+    expect(packedFiles.some((file) => file.startsWith('package/apps/vscode/'))).toBe(false);
+    expect(packedFiles.some((file) => file.startsWith('package/apps/streamdeck/'))).toBe(false);
+  });
+
+  it('marks the retained VS Code source unsupported', () => {
+    const readme = readFileSync(join(workspaceRoot, 'apps/vscode/README.md'), 'utf8');
+    expect(readme).toContain('**Unsupported.**');
+    expect(readme).toContain('no longer built, tested, packaged, or released');
+  });
+});
