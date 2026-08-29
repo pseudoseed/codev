@@ -154,3 +154,54 @@ when called correctly — they say nothing about whether anything calls it, or w
 caller it eventually gets passes what it expects. Phase 7 already produced one instance of
 that gap in miniature: the documented HTTP revocation was tested at the store and passed,
 while the route it documented could not be reached by any person.
+
+---
+
+## Under what conditions the iteration-2 claude verdict was counted
+
+A future reader finding an APPROVE from the claude lane in this iteration should be able to
+find out what it was counted under, because the lane that produced it had its previous
+verdict voided for writing to this worktree.
+
+The architect lifted the ban **for this round only**, with four safeguards, all applied:
+
+1. **Baseline recorded before the lane started**, to a file rather than to memory:
+   `HEAD = b75e791096ea4d6019bc43ed6ccb689fe0e4d412`, zero tracked changes.
+   (`scratchpad/HEAD_BEFORE_CLAUDE_LANE.txt`, `STATUS_BEFORE_CLAUDE_LANE.txt`.)
+2. **Compared again after**, against those files.
+3. **Both shapes checked** — `git rev-parse HEAD` and `git status` — because the first
+   incident was uncommitted edits and the second was commits.
+4. **An architect-side process watch ran for the duration**, polling HEAD and tracked-file
+   status every 15 seconds with an **automatic kill of the SDK child by pid** on any
+   movement. The child, not the `consult` wrapper: killing the wrapper is what orphaned the
+   SDK to PID 1 during the incident and let it commit for another 13 minutes.
+
+**Result: clean.** HEAD identical before and after. The only `git status` difference was
+`?? .p7i2c-claude.log` — the redirect target this builder created for the lane's own stdout,
+not a lane write. Two independent checks, the architect's and this one, agree.
+
+**A clean run is not evidence the next one is safe.** The architect found that both the
+destructive run and this one came through the same single SDK call site in
+`commands/consult/index.ts`, declared `allowedTools: ['Read', 'Glob', 'Grep']` with
+`permissionMode: 'bypassPermissions'`. Read, Glob and Grep include no write tool and no
+shell, and the destructive run authored six commits through that same configuration. The
+inference — stated as unproven on #149 — is that the declared allowlist does not restrict
+the agent, which would mean every claude lane has an unrestricted shell in a builder
+worktree on every run, behind a config that reads as read-only to anyone auditing it.
+
+So the rule for the rest of this spec is not "check when asked": **check the tree around
+every round.** Both incidents were caught only that way.
+
+## Iteration-2 verdicts as counted
+
+| Lane | Verdict | Notes |
+|---|---|---|
+| opencode (`xai/grok-4.6`) | **APPROVE** | no issues |
+| codex (`gpt-5.6-sol`) | **REQUEST_CHANGES** | one real bug, fixed in `b75e79109`; one standing architect decision |
+| claude (Opus 5) | **APPROVE** | counted under the safeguards above; two non-blocking comments |
+
+Both APPROVE lanes independently raised the same two non-blocking items, and neither is
+Phase 7's: the pre-existing four-level dist path in `bridge-mode.e2e.test.ts`'s original
+`beforeAll` (filed as **#184** — the test passes on `Cannot find module`, not on the host
+being invalid), and the unreachable HTTP revocation route, which is already documented
+honestly here and in the runbook and belongs to phase 11 planning.
