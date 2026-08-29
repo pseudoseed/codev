@@ -308,6 +308,30 @@ function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown
 }
 
 /**
+ * Last resort for an async route body that threw.
+ *
+ * Every handler below reads its body through a promise, and a store that throws
+ * inside one of those `.then`s becomes an UNHANDLED REJECTION — which Tower's
+ * process-level handler answers with `process.exit(1)`. One route's bad day took
+ * the whole server down, and the caller got no response at all, which is the
+ * worst possible spelling of "I could not tell". This catches the class rather
+ * than one instance of it.
+ */
+function guardRouteFailure(
+  res: http.ServerResponse,
+  context: AgentRouteContext,
+  route: string,
+  error: unknown,
+): void {
+  context.log('ERROR', `agent route ${route} failed: ${error instanceof Error ? error.message : String(error)}`);
+  if (res.writableEnded) return;
+  writeJson(res, 503, {
+    signal: 'AGENT_ROUTE_FAILED',
+    message: 'the request could not be completed; the failure is in this host\'s log',
+  });
+}
+
+/**
  * Approval capability issuance, nonce minting and revocation.
  *
  * Authentication happened before this ran, in `agent-auth.ts`: these routes carry
@@ -357,7 +381,7 @@ function handleApprovalRoute(
         machine: outcome.capability.machine,
         expiresAt: outcome.capability.expiresAt,
       });
-    });
+    }).catch((error: unknown) => guardRouteFailure(res, context, 'approval-capability-issue', error));
     return;
   }
 
@@ -391,7 +415,7 @@ function handleApprovalRoute(
       }
       const nonce = context.approvalNonces.mint({ projectId, gateName, capabilityId });
       writeJson(res, 201, { signal: APPROVAL_SIGNAL.APPROVAL_AUTHORIZED, nonce, projectId, gateName });
-    });
+    }).catch((error: unknown) => guardRouteFailure(res, context, 'approval-nonce-mint', error));
     return;
   }
 
@@ -450,7 +474,37 @@ function handlePairingRedeem(
       writeJson(res, 401, { signal: redemption.code, message: redemption.message });
       return;
     }
-    const credential = context.machineCredentials.issue({ machine });
+    // THE TOKEN IS ALREADY SPENT AT THIS POINT, and it has to be — issuing the
+    // credential first would leave a credential standing against a token nobody
+    // consumed. So an issuance failure here (a contended lock, a full disk) burns
+    // the operator's token and hands back nothing, and before this it also threw
+    // out of a `.then` with no catch, which Tower's `unhandledRejection` handler
+    // turns into `process.exit(1)`: a filesystem hiccup during pairing took the
+    // whole server down.
+    let credential;
+    try {
+      credential = context.machineCredentials.issue({ machine });
+    } catch (error) {
+      // Put the token back so the operator can simply retry, and SAY whether that
+      // worked. "Your token still works" and "your token is gone, mint another"
+      // are different instructions, and reporting one when the other is true is
+      // the failure this spec keeps finding.
+      let released = false;
+      try {
+        released = redemption.pairingId !== undefined && context.pairings.release(redemption.pairingId);
+      } catch (releaseError) {
+        context.log('ERROR', `pairing token release failed: ${(releaseError as Error).message}`);
+      }
+      context.log('ERROR', `machine credential issuance failed for ${machine}: ${(error as Error).message}`);
+      writeJson(res, 503, {
+        signal: PAIRING_SIGNAL.PAIRING_CREDENTIAL_ISSUE_FAILED,
+        message: released
+          ? 'the credential could not be issued; the pairing token was released and can be redeemed again'
+          : 'the credential could not be issued and the pairing token could not be released; mint a new token',
+        tokenReleased: released,
+      });
+      return;
+    }
     context.log('INFO', `paired machine ${machine} via pairing ${redemption.pairingId ?? 'unknown'}`);
     writeJson(res, 201, {
       signal: PAIRING_SIGNAL.PAIRING_TOKEN_ACCEPTED,
@@ -459,7 +513,7 @@ function handlePairingRedeem(
       credential: credential.presentation,
       expiresAt: credential.expiresAt,
     });
-  });
+  }).catch((error: unknown) => guardRouteFailure(res, context, 'pairing-redeem', error));
 }
 
 /**

@@ -278,6 +278,8 @@ describe('failure matrix signals are distinct', () => {
       PAIRING_REQUEST_MALFORMED: '400 for a redemption body with no machine name',
       PAIRING_STORE_LOCKED: 'the store lock could not be taken; a retry succeeds',
       PAIRING_STORE_UNREADABLE: 'the store exists but will not parse; distinct from "no such token"',
+      PAIRING_CREDENTIAL_ISSUE_FAILED: 'the token was spent and issuance then failed; the answer says whether the token was released',
+      AGENT_ROUTE_FAILED: 'last-resort 503 for a route body that threw; without it the throw exits Tower',
       // Phase 7 transport posture. Two are startup outcomes an operator reads in
       // the boot log, not failures reported to a caller; one is a per-request
       // refusal of a browser origin.

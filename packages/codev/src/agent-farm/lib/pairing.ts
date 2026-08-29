@@ -41,6 +41,8 @@ export const PAIRING_SIGNAL = {
   PAIRING_TOKEN_REDEEMED: 'PAIRING_TOKEN_REDEEMED',
   PAIRING_TOKEN_EXPIRED: 'PAIRING_TOKEN_EXPIRED',
   PAIRING_STORE_LOCKED: 'PAIRING_STORE_LOCKED',
+  /** Issuance failed after the token was spent; see `release`. */
+  PAIRING_CREDENTIAL_ISSUE_FAILED: 'PAIRING_CREDENTIAL_ISSUE_FAILED',
   PAIRING_STORE_UNREADABLE: 'PAIRING_STORE_UNREADABLE',
 } as const;
 
@@ -267,6 +269,37 @@ export class PairingStore {
         message: 'pairing token redeemed',
         pairingId,
       };
+    });
+  }
+
+  /**
+   * Undo a redemption, making the token usable again until its TTL passes.
+   *
+   * EXISTS FOR ONE CALLER: redemption spends the token BEFORE the machine
+   * credential is issued, and it has to — issuing first would leave a credential
+   * standing against a token that was never spent. So if issuance then fails, the
+   * operator is holding a token that is gone and a device that is not paired, and
+   * their only recourse is to notice and mint another.
+   *
+   * This does not weaken single-use. The token was consumed and is being put back
+   * because the transaction it was consumed FOR did not happen; a redemption that
+   * returned a credential is never released. The TTL still bounds it.
+   *
+   * Returns false when there was nothing to release — an unknown id, or a token
+   * that was not redeemed — so the caller can tell "your token still works" from
+   * "I could not put it back", which are different instructions to an operator.
+   */
+  release(pairingId: string): boolean {
+    return withStoreLock(this.#path, PAIRING_SIGNAL.PAIRING_STORE_LOCKED, () => {
+      const tokens = this.#read();
+      const index = tokens.findIndex((candidate) => candidate.id === pairingId);
+      if (index < 0) return false;
+      const record = tokens[index];
+      if (record.redeemedAt === undefined) return false;
+      const { redeemedAt: _redeemedAt, redeemedBy: _redeemedBy, ...unspent } = record;
+      tokens[index] = unspent;
+      this.#write(tokens);
+      return true;
     });
   }
 

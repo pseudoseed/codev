@@ -435,6 +435,101 @@ describe('pairing tokens', () => {
     expect(stream).toContain('paired machine ipad');
   });
 
+  // FAILURE INJECTION, because the failure window is the finding.
+  //
+  // Redemption spends the token before the credential is issued. If issuance
+  // throws, the old code threw out of a `.then` with no catch — which Tower's
+  // process-level `unhandledRejection` handler answers with `process.exit(1)`.
+  // A contended lock during pairing took the whole server down and the caller
+  // got no response at all.
+  it('an issuance failure answers the caller and releases the token instead of crashing', async () => {
+    const h = harness();
+    const issued = h.pairings.issue();
+    const injected = new Error('disk full');
+    h.machines.issue = () => { throw injected; };
+
+    const out = fakeRes();
+    // No unhandled rejection: if the promise escapes, this test's own process
+    // reports it, and the response below never arrives.
+    handleAgentRoute(
+      fakeReq('POST', { [PAIRING_TOKEN_HEADER]: issued.token }, JSON.stringify({ machine: 'ipad' })),
+      out.res,
+      url(`${AGENT_ROUTE_PREFIX}/pairing/redeem`),
+    );
+    await flush();
+
+    expect(out.statusCode).toBe(503);
+    const body = JSON.parse(out.body) as { signal: string; tokenReleased: boolean; message: string };
+    expect(body.signal).toBe(PAIRING_SIGNAL.PAIRING_CREDENTIAL_ISSUE_FAILED);
+    // "Your token still works" and "your token is gone" are different
+    // instructions, so the answer says which.
+    expect(body.tokenReleased).toBe(true);
+    expect(body.message).toContain('redeemed again');
+  });
+
+  it('a released token is redeemable again, and only a failed redemption releases one', () => {
+    const store = new PairingStore({ root: tmp() });
+    const issued = store.issue();
+    expect(store.redeem(issued.token, { machine: 'ipad' }).redeemed).toBe(true);
+    expect(store.release(issued.pairingId)).toBe(true);
+    // Single-use is not weakened: the token went back because the transaction it
+    // was spent FOR did not happen.
+    expect(store.redeem(issued.token, { machine: 'ipad' }).redeemed).toBe(true);
+
+    // Releasing twice, or releasing something unspent or unknown, is false —
+    // so a caller can tell "put back" from "there was nothing to put back".
+    expect(store.release(issued.pairingId)).toBe(true);
+    expect(store.release(issued.pairingId)).toBe(false);
+    expect(store.release('no-such-pairing-id')).toBe(false);
+    const fresh = store.issue();
+    expect(store.release(fresh.pairingId)).toBe(false);
+  });
+
+  it('an issuance failure that cannot release the token says so, rather than implying a retry', async () => {
+    const h = harness();
+    const issued = h.pairings.issue();
+    h.machines.issue = () => { throw new Error('disk full'); };
+    h.pairings.release = () => { throw new Error('store gone'); };
+
+    const out = fakeRes();
+    handleAgentRoute(
+      fakeReq('POST', { [PAIRING_TOKEN_HEADER]: issued.token }, JSON.stringify({ machine: 'ipad' })),
+      out.res,
+      url(`${AGENT_ROUTE_PREFIX}/pairing/redeem`),
+    );
+    await flush();
+
+    expect(out.statusCode).toBe(503);
+    const body = JSON.parse(out.body) as { tokenReleased: boolean; message: string };
+    expect(body.tokenReleased).toBe(false);
+    expect(body.message).toContain('mint a new token');
+    // Not the optimistic message. Telling an operator to retry a token that is
+    // gone sends them round a loop that cannot succeed.
+    expect(body.message).not.toContain('redeemed again');
+  });
+
+  it('a store that throws inside an approval body does not become an unhandled rejection', async () => {
+    const h = harness();
+    const credential = h.machines.issue({ machine: 'laptop' });
+    const session = h.sessions.completePairing({ pairingId: 'p', principalKind: 'human-client' });
+    h.approvals.issue = () => { throw new Error('store gone'); };
+
+    const out = fakeRes();
+    handleAgentRoute(
+      fakeReq('POST', {
+        [MACHINE_CREDENTIAL_HEADER]: credential.presentation,
+        [HUMAN_SESSION_HEADER]: `${session.sessionId}.${session.credential}`,
+      }, '{}'),
+      out.res,
+      url(`${AGENT_ROUTE_PREFIX}/approval-capabilities`),
+    );
+    await flush();
+    // The caller gets an answer. Before the guard, this route threw out of its
+    // promise and Tower exited, so the caller got nothing at all.
+    expect(out.statusCode).toBe(503);
+    expect((JSON.parse(out.body) as { signal: string }).signal).toBe('AGENT_ROUTE_FAILED');
+  });
+
   it('the store on disk holds no presentable token', () => {
     const store = new PairingStore({ root: tmp() });
     const issued = store.issue();
