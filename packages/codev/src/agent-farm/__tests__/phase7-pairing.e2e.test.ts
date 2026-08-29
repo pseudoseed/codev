@@ -173,6 +173,40 @@ describe('Phase 7 pairing flow, live server', () => {
     expect(laptopRead.status).toBe(200);
   }, 30000);
 
+  // The state STREAM, credential-only. A client does not poll `/state`; it lives
+  // on this route, so "remote access works" is false if only the one-shot read
+  // does. It is SSE over HTTP rather than a WebSocket, which is why it passes
+  // through the same delegation — the WS upgrade path still requires the host key
+  // and would not have carried a paired device.
+  it('streams protocol state to a paired device with no host key', async () => {
+    const pairings = new PairingStore({ root: join(tower!.agentFarmDir, 'pairing') });
+    const redeemed = await fetch(`${base()}${AGENT_ROUTE_PREFIX}/pairing/redeem`, {
+      method: 'POST',
+      headers: keylessHeaders({
+        'content-type': 'application/json',
+        'x-codev-pairing-token': pairings.issue().token,
+      }),
+      body: JSON.stringify({ machine: 'streamer' }),
+    });
+    const credential = (await redeemed.json() as { credential: string }).credential;
+
+    // SSE holds the connection open, so abort once the headers are in rather than
+    // waiting on a body that is designed never to end.
+    const abort = new AbortController();
+    const streamPath =
+      `${AGENT_ROUTE_PREFIX}/workspaces/${encodeWorkspacePath(workspacePath!)}/stream`;
+    try {
+      const response = await fetch(`${base()}${streamPath}`, {
+        headers: keylessHeaders({ 'x-codev-machine-credential': credential }),
+        signal: abort.signal,
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toContain('text/event-stream');
+    } finally {
+      abort.abort();
+    }
+  }, 20000);
+
   // The runbook's own revocation request, byte for byte in what it carries: a
   // machine credential and a human session, and NO host key. We cannot mint a
   // human session against a separate Tower process from here — the registry is

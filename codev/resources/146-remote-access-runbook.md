@@ -71,6 +71,19 @@ The response carries the machine credential once. The host stores only a hash of
 it, so it cannot be recovered later — if the device loses it, issue a new pairing
 token and redeem again, which replaces the old credential.
 
+From then on the device sends that one header and nothing else:
+
+```
+GET /api/agent/v1/workspaces/<encoded>/state
+x-codev-machine-credential: <credentialId>.<secret>
+```
+
+Check the pairing worked by making that request, not by seeing a credential come
+back — a credential the device cannot then use is not a paired device. Want `200`.
+A `401` with `MACHINE_CREDENTIAL_REQUIRED` means the header did not arrive; a
+`403` with `MACHINE_CREDENTIAL_REVOKED` means this device was revoked and needs
+re-pairing.
+
 **Handling the token.** It is the one secret a person retypes, so its leak surface
 is different in kind from the others:
 

@@ -846,6 +846,14 @@ describe('remote-access runbook', () => {
     expect(text).toContain('still requires the host key');
   });
 
+  it('shows the device using its credential, not just receiving one', () => {
+    const text = runbook();
+    // The step this phase twice shipped without. A runbook that stops at the
+    // credential arriving documents the half that was never broken.
+    expect(text).toContain('x-codev-machine-credential: <credentialId>.<secret>');
+    expect(text).toContain('a credential the device cannot then use is not a paired device');
+  });
+
   it('states the blast radius of one unparseable credential file', () => {
     const text = runbook();
     // One bad file fails EVERY machine closed with 503. Leaving that undocumented
