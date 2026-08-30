@@ -1111,6 +1111,24 @@ loss that reads exactly like a review with nothing to say. Filed as issue #261.
 
 A third run under `OPENCODE_CONFIG_CONTENT='{"permission":{"external_directory":"allow"}}'`
 (scoped to the single invocation, no global config edited) read every external file it wanted and
-**still exited 0 with no review file**. So the permission was one cause and not the only one. The
-`codex` lane was substituted so round 1 is genuinely two independent reviews rather than one, and
-the substitution is recorded here rather than left for a reader to infer from a missing file.
+**still exited 0 with no review file**. The `codex` lane was substituted so round 1 is genuinely
+two independent reviews rather than one, and the substitution is recorded here rather than left
+for a reader to infer from a missing file.
+
+**The porch-level case, which is worse than the one first filed.** A prefix on a `consult` command
+covers only that invocation. When *porch* drives the consultation, the child inherits the
+environment porch was started with, so a per-command prefix never reaches it: the child runs with
+default permissions, dies on the first external-directory read, exits `0` with no verdict, and
+porch — seeing the output file still missing — re-issues the identical task. The loop is
+invisible, because every individual piece reports success. The form that works is an exported
+variable the child inherits:
+
+```bash
+export OPENCODE_CONFIG_CONTENT='{"permission":{"external_directory":"allow"}}'
+porch next 250
+```
+
+**So this plan's opencode review, whenever it lands, ran under a non-default permission**, and a
+reader should know that rather than assume a default lane produced it. The permission is broad —
+it allows *any* external directory for that process, not only the t3code clone — and is accepted
+here because the lane is read-only review on this machine. Both cases are on issue #261.
