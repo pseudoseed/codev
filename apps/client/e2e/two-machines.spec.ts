@@ -291,10 +291,15 @@ test.describe('approving a real gate', () => {
       await expect(approveButton).toBeVisible({ timeout: 20_000 });
       await approveButton.click();
 
-      // WHAT IT IS RUNNING, not a bare spinner. The names come from the server.
-      await expect(row.locator('.gate-progress')).toContainText(/build|tests|Not started|Running/, {
-        timeout: 30_000,
-      });
+      // SOMETHING SPECIFIC IMMEDIATELY, rather than a bare spinner: even before
+      // the first poll the panel says the submit was accepted and it is waiting.
+      await expect(row.locator('.gate-progress')).toBeVisible({ timeout: 30_000 });
+
+      // AND THEN THE SERVER'S OWN CHECK NAMES. The stand's checks take two
+      // seconds, longer than the one-second poll interval, so the running frame
+      // is reached by construction — with instant checks the approval settles
+      // before the first poll and this assertion would be testing scheduling.
+      await expect(row.locator('.gate-progress')).toContainText(/build|tests/, { timeout: 60_000 });
 
       const result = row.locator('.gate-result');
       await expect(result).toBeVisible({ timeout: 120_000 });

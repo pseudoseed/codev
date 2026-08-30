@@ -99,7 +99,17 @@ export function makeWorkspace(label, gate, options = {}) {
   const breakCommit = options.breakCommit === true;
   const config = JSON.stringify(
     passingChecks
-      ? { porch: { checks: { build: { command: 'true' }, tests: { command: 'true' } } } }
+      /*
+       * `sleep 2`, NOT `true`, and the difference is the deliverable.
+       *
+       * With instant checks the approval settles before the first poll, so the
+       * panel never leaves "Submitted" and the running frame — the one carrying
+       * the server's phase and check names — is never observed. The e2e then
+       * asserts a spinner and calls it progress. Two seconds is longer than the
+       * one-second poll interval, so the running state is reached by
+       * construction rather than by luck, and the checks still pass.
+       */
+      ? { porch: { checks: { build: { command: 'sleep 2' }, tests: { command: 'sleep 2' } } } }
       : skipChecks
         ? { porch: { checks: { build: { skip: true }, tests: { skip: true } } } }
         : {},

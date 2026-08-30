@@ -614,3 +614,37 @@ and no browser run happened here. The spec file changes are unverified by execut
 recorded as such.
 
 Suites: client 218 passing, server 7053 passing, 0 failing.
+
+### Phase 6 iteration 1 — two blockers, and the e2e I said I had not run
+
+Both lanes REQUEST_CHANGES.
+
+**opencode: a poll that could not read the state was reported as a refusal.** `pollApproval`
+mapped every non-200 — including the server's own 503 `APPROVAL_OPERATION_STORE_UNREADABLE` — and
+a thrown `fetch` onto a plain refusal, which the panel renders identically to a failed approval.
+So the server took care to say "I could not read the store" and the client told a human their
+gate was **not approved**. The timeout path already knew the rule (this client stopping does not
+stop porch); a transport failure is the same case arriving sooner. Now retried to the deadline
+and reported `unconfirmed`. **403 is the one exception** — this session may not read this
+operation, and retrying will not change that — with a test asserting it does not spin.
+
+**claude: run the e2e.** My own phase-6 acceptance said the split case is "verified by running
+that case, not by asserting it exists", and I had recorded it as not run. Playwright browsers
+were installed; I ran it. **6 passed, 1 failed — mine.**
+
+The failure was worth more than a pass: with `command: 'true'` the checks finished before the
+first poll, so the panel never left "Submitted" and the running frame carrying the server's phase
+and check names was never observed. The test asserted a spinner and would have called it
+progress. The stand's checks now take `sleep 2`, longer than the one-second poll interval, so the
+running state is reached **by construction rather than by luck**. All 7 e2e now pass, in a real
+browser, including the new async approval.
+
+That is the second time this phase that running the thing found what the tests could not: the
+`parseAsync` bug in phase 3 and this one.
+
+Also fixed: the stale comment naming `agent-host` as a host with no operation store, when the
+same change wired one into it. Added panel tests for `failed` and `interrupted` — the second must
+render as **unknown, not refused**, because the host stopping is not evidence the gate is
+unapproved.
+
+Suites: client 225 passing, e2e 7 passing, server 7053 passing.

@@ -222,9 +222,11 @@ export async function approveGate(
    * CLI. The submit returns at once and the work is polled.
    *
    * A HOST THAT DOES NOT OFFER IT ANSWERS 501, and then the synchronous route is
-   * used. That is a real configuration (`tools/codev-agent-host` wires no
-   * operation store), and falling back is right: the older path still approves
-   * everything it ever could.
+   * used. Falling back is right rather than merely kind: the older path still
+   * approves everything it ever could, so a host that has not been upgraded loses
+   * nothing it had. Nothing in this repository wires such a host any more — the
+   * agent-host tool gained an operation store in the same change — so this is for
+   * a host running an older build, which is exactly when a client must not assume.
    */
   const submitted = await send(fetchImpl, api(config, `/workspaces/${workspace}/gates/approvals`), authed, {
     projectId: gate.projectId,
@@ -349,21 +351,48 @@ async function pollApproval(
 
   const url = api(config, `/workspaces/${workspace}/gates/approvals/${encodeURIComponent(operationId)}`);
   const deadline = Date.now() + POLL_LIMIT_MS;
-  let last: Json | null = null;
   while (Date.now() < deadline) {
-    const response = await fetchImpl(url, { headers: authed });
-    let parsed: unknown;
+    /*
+     * A POLL THAT CANNOT READ THE STATE SAYS NOTHING ABOUT THE APPROVAL.
+     *
+     * This mapped every non-200 — and a thrown `fetch` — onto a plain refusal,
+     * which the panel renders identically to `state: 'failed'`. So a 503, which
+     * is the server's own "the operation store could not be read", told a human
+     * their gate was NOT approved. The server took care to distinguish unreadable
+     * from unknown and the client collapsed the two back together.
+     *
+     * The timeout below already knows the rule — this client stopping does not
+     * stop porch — and a transport failure is the same case arriving sooner. So
+     * these are retried until the deadline and then reported as unconfirmed,
+     * never as a refusal.
+     */
+    let polled: Json;
     try {
-      parsed = await response.json();
+      const response = await fetchImpl(url, { headers: authed });
+      let parsed: unknown;
+      try {
+        parsed = await response.json();
+      } catch {
+        parsed = {};
+      }
+      polled = {
+        status: response.status,
+        body: (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>,
+      };
     } catch {
-      parsed = {};
+      // The request never completed. Nothing has been learned about the gate.
+      await new Promise((wait) => setTimeout(wait, POLL_INTERVAL_MS));
+      continue;
     }
-    const polled: Json = {
-      status: response.status,
-      body: (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>,
-    };
-    last = polled;
-    if (polled.status !== 200) return refusal(polled, 'the approval could not be read');
+
+    // 403 IS A DEFINITE ANSWER, and the only one here that is: this session may
+    // not read this operation, and retrying will never change that. Every other
+    // failure is "I could not read it", which is not a verdict on the gate.
+    if (polled.status === 403) return refusal(polled, 'this session may not read that approval');
+    if (polled.status !== 200) {
+      await new Promise((wait) => setTimeout(wait, POLL_INTERVAL_MS));
+      continue;
+    }
 
     const state = text(polled.body, 'state');
     if (state && TERMINAL_STATES.has(state)) return terminalOutcome(polled, state, gate);
@@ -390,7 +419,6 @@ async function pollApproval(
     await new Promise((wait) => setTimeout(wait, POLL_INTERVAL_MS));
   }
 
-  void last;
   return {
     ok: false,
     unconfirmed: true,

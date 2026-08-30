@@ -547,6 +547,80 @@ describe('approveGate, asynchronously', () => {
   }, 20_000);
 
   /*
+   * A POLL THAT CANNOT READ THE STATE IS NOT A VERDICT ON THE GATE.
+   *
+   * This mapped every non-200 onto a plain refusal, rendered identically to a
+   * failed approval — so the server's own 503, which exists to say "the store
+   * could not be read", told a human their gate was not approved. The server
+   * distinguished unreadable from unknown and the client collapsed them back.
+   */
+  it('retries past a 503 rather than calling it a refusal', async () => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-10', state: 'submitted' } },
+        { status: 503, body: { signal: 'APPROVAL_OPERATION_STORE_UNREADABLE' } },
+        {
+          status: 200,
+          body: {
+            state: 'succeeded',
+            record: { machine: 'alpha', sessionId: 's1', approvedAt: '2026-08-30T01:00:00Z' },
+          },
+        },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    // It recovered, and the approval is reported. A refusal here would have been
+    // a wrong answer about a gate that was in fact approved.
+    expect(result).toMatchObject({ ok: true, machine: 'alpha' });
+  }, 20_000);
+
+  it('retries past a thrown fetch rather than calling it a refusal', async () => {
+    let polls = 0;
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (url.includes('/approval-capabilities')) {
+        return new Response(JSON.stringify({ capabilityId: 'cap-1', presentation: 'cap-1.s' }), { status: 201 });
+      }
+      if (url.includes('/approval-nonces')) {
+        return new Response(JSON.stringify({ nonce: 'n-1' }), { status: 201 });
+      }
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({ operationId: 'op-11', state: 'submitted' }), { status: 202 });
+      }
+      polls += 1;
+      // The network drops once. Nothing has been learned about the gate.
+      if (polls === 1) throw new TypeError('Failed to fetch');
+      return new Response(JSON.stringify({
+        state: 'succeeded',
+        record: { machine: 'alpha', sessionId: 's1', approvedAt: '2026-08-30T01:00:00Z' },
+      }), { status: 200 });
+    }) as unknown as typeof globalThis.fetch;
+
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: true, machine: 'alpha' });
+    expect(polls).toBeGreaterThan(1);
+  }, 20_000);
+
+  /*
+   * 403 IS THE ONE DEFINITE ANSWER a poll can get: this session may not read
+   * this operation, and retrying will never change that. Retrying it would spin
+   * for the whole deadline over a question already answered.
+   */
+  it('stops on a 403, because that answer will not change', async () => {
+    const { fetchImpl, calls } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-12', state: 'submitted' } },
+        { status: 403, body: { signal: 'APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION', message: 'another session' } },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, signal: 'APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION' });
+    // Two credential calls, one submit, one poll — it did not keep asking.
+    expect(calls).toHaveLength(4);
+  }, 20_000);
+
+  /*
    * A CONFLICT IS NOT A REFUSAL OF THIS GATE. An approval for this project is
    * already running and the server names it, so the human is told to wait rather
    * than to try again.

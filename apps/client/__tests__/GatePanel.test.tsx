@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GatePanel, type GateApprovalHandle } from '../src/gate/GatePanel.js';
+import { GatePanel, type GateActionResult, type GateApprovalHandle } from '../src/gate/GatePanel.js';
 import { ThreadRowView } from '../src/tree/ThreadRowView.js';
 import type { ThreadRow } from '../src/tree/build.js';
 import type { RowStatus } from '../src/status/derive.js';
@@ -274,5 +274,63 @@ describe('while an approval is running', () => {
     fireEvent.click(screen.getByRole('button', { name: /approve plan-approval/i }));
     // The panel stops claiming work is in flight the moment it is not.
     await waitFor(() => expect(document.querySelector('.gate-progress')).toBeNull());
+  });
+});
+
+/**
+ * FOUR OUTCOMES, THREE APPEARANCES, AND THE MIDDLE ONE IS THE POINT.
+ *
+ * `failed` and `refused` both mean the gate was not approved and share the
+ * refused treatment, their messages carrying which. `interrupted` does NOT: the
+ * host stopped and the gate may well be approved, so it renders as unknown —
+ * rendering it as a refusal would send a human to approve something already
+ * approved.
+ */
+describe('how each terminal outcome reaches the row', () => {
+  function handleReturning(result: GateActionResult): GateApprovalHandle {
+    return {
+      session: { sessionId: 's1' },
+      openSession: async () => ({ ok: true, message: '' }),
+      approve: async () => result,
+    };
+  }
+
+  async function resultClassFor(result: GateActionResult): Promise<string> {
+    const seen: GateActionResult[] = [];
+    render(
+      <GatePanel
+        status={BLOCKED}
+        projectId="146"
+        approval={handleReturning(result)}
+        onResult={(r) => { if (r.message) seen.push(r); }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /approve plan-approval/i }));
+    await waitFor(() => expect(seen).toHaveLength(1));
+    return seen[0].unconfirmed ? 'is-unknown' : seen[0].ok ? 'is-ok' : 'is-refused';
+  }
+
+  it('renders a failed approval as refused, carrying its reason', async () => {
+    expect(await resultClassFor({
+      ok: false, message: 'GATE_APPROVAL_FAILED: ENOSPC writing status.yaml',
+    })).toBe('is-refused');
+  });
+
+  it('renders an interrupted approval as unknown, never as refused', async () => {
+    expect(await resultClassFor({
+      ok: false,
+      unconfirmed: true,
+      message: 'this host stopped while it ran, and status.yaml now shows pr APPROVED.',
+    })).toBe('is-unknown');
+  });
+
+  it('renders a refusal as refused', async () => {
+    expect(await resultClassFor({
+      ok: false, message: 'PHASE_CHECKS_FAILED: the checks did not pass',
+    })).toBe('is-refused');
+  });
+
+  it('renders a success as a success', async () => {
+    expect(await resultClassFor({ ok: true, message: 'approved on alpha' })).toBe('is-ok');
   });
 });
