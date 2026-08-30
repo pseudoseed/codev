@@ -30,8 +30,22 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 1
-build_complete: true
-history: []
+iteration: 2
+build_complete: false
+history:
+  - iteration: 1
+    plan_phase: phase_1
+    build_output: ''
+    reviews:
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_1-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_1-iter1-opencode.txt
+        stated: true
 started_at: '2026-08-30T04:48:34.619Z'
-updated_at: '2026-08-30T05:40:44.814Z'
+updated_at: '2026-08-30T06:01:17.026Z'
