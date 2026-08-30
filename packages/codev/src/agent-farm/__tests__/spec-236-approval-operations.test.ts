@@ -215,6 +215,106 @@ describe('the concurrency bound refuses at submit time', () => {
   });
 });
 
+describe('a record from a host that is never coming back', () => {
+  /*
+   * `resolveInterrupted` will not settle another host's records, and that is
+   * right: this host cannot tell a dead foreign process from a slow one, and
+   * declaring a live one dead would report an approval interrupted while it runs.
+   *
+   * The consequence was a permanent block. A host removed from the fleet leaves
+   * nonterminal records nothing can settle; retention only sweeps TERMINAL
+   * records, so they never expire either. That project's approvals were refused
+   * forever, with no message saying why and no command to clear it.
+   */
+  it('blocks nothing forever — an abandoned foreign record settles after the lease', () => {
+    const root = scratch();
+    const stamp = Date.parse('2026-08-30T00:00:00Z');
+    const foreign = storeAt(root, {
+      owner: { host: 'a-host-that-is-gone', pid: 4242 },
+      now: () => stamp,
+    });
+    submit(foreign, { projectId: 'blocked' });
+
+    // SIX HOURS LATER, on a different host. Before the lease this refused, and
+    // would have gone on refusing for as long as the file existed.
+    const ours = storeAt(root, { now: () => stamp + 6 * 60 * 60 * 1000 + 1 });
+    const accepted = ours.submit({
+      workspacePath: '/w', projectId: 'blocked', gateName: 'pr', sessionId: 's', machine: 'm',
+    });
+    expect(accepted.accepted, 'the abandoned record still blocks').toBe(true);
+
+    // AND THE ABANDONED RECORD SAYS WHAT HAPPENED, rather than vanishing. It is
+    // interrupted, it names the host, and it does NOT claim to know the gate.
+    const abandoned = ours.records().find((operation) => operation.owner.host === 'a-host-that-is-gone');
+    expect(abandoned?.state).toBe('interrupted');
+    expect(abandoned?.gateAfterInterruption).toBe('unreadable');
+    expect(abandoned?.message).toContain('a-host-that-is-gone');
+  });
+
+  /*
+   * AND NOT BEFORE. A slow foreign build is not an abandoned one, and starting a
+   * second run beside a live one is the collision single-flight exists to
+   * prevent.
+   */
+  it('does not expire a foreign record that is merely slow', () => {
+    const root = scratch();
+    const stamp = Date.parse('2026-08-30T00:00:00Z');
+    submit(storeAt(root, { owner: { host: 'busy-host', pid: 4242 }, now: () => stamp }),
+      { projectId: 'slow' });
+
+    // Five hours in: long, and inside the lease.
+    const ours = storeAt(root, { now: () => stamp + 5 * 60 * 60 * 1000 });
+    const refused = ours.submit({
+      workspacePath: '/w', projectId: 'slow', gateName: 'pr', sessionId: 's', machine: 'm',
+    });
+    expect(refused.accepted).toBe(false);
+    if (refused.accepted) return;
+    expect(refused.code).toBe(APPROVAL_OPERATION_SIGNAL.APPROVAL_ALREADY_IN_FLIGHT);
+  });
+
+  /*
+   * THE CONCURRENCY CAP IS THIS MACHINE'S LOAD, so another host's runs must not
+   * count against it. Single-flight is the rule that must see every host, and it
+   * still does — this is about the cap only.
+   */
+  it('does not count another host\'s runs against this host\'s cap', () => {
+    const root = scratch();
+    const stamp = Date.parse('2026-08-30T00:00:00Z');
+    const foreign = storeAt(root, { owner: { host: 'other-host', pid: 4242 }, now: () => stamp });
+    submit(foreign, { projectId: 'theirs-a' });
+    submit(foreign, { projectId: 'theirs-b' });
+
+    // Both of theirs are live and inside the lease, so nothing expired them.
+    const ours = storeAt(root, { now: () => stamp + 1000 });
+    expect(ours.submit({
+      workspacePath: '/w', projectId: 'ours', gateName: 'pr', sessionId: 's', machine: 'm',
+    }).accepted, 'another host\'s runs consumed this host\'s cap').toBe(true);
+  });
+
+  /*
+   * BUT THE MACHINE IS BOUNDED. The per-workspace cap alone is not a bound on the
+   * host: a Tower serving many workspaces would run a build for each and stay
+   * inside it.
+   */
+  it('bounds this host across all workspaces, not only within one', () => {
+    const store = storeAt(scratch());
+    submit(store, { workspacePath: '/w1', projectId: 'a' });
+    submit(store, { workspacePath: '/w1', projectId: 'b' });
+    submit(store, { workspacePath: '/w2', projectId: 'c' });
+    submit(store, { workspacePath: '/w3', projectId: 'd' });
+
+    // A fifth, in a workspace of its own — within every per-workspace cap and
+    // over the host's.
+    const refused = store.submit({
+      workspacePath: '/w4', projectId: 'e', gateName: 'pr', sessionId: 's', machine: 'm',
+    });
+    expect(refused.accepted).toBe(false);
+    if (refused.accepted) return;
+    expect(refused.code).toBe(APPROVAL_OPERATION_SIGNAL.APPROVAL_CONCURRENCY_LIMIT);
+    expect(refused.message).toContain('this host');
+  });
+});
+
 describe('an interrupted operation reports what is true now', () => {
   /** A store whose owner is a DEAD process on this host, ready to be resolved. */
   function withDeadOwner(root: string): { store: ApprovalOperationStore; operation: ApprovalOperation } {

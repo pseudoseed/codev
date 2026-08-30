@@ -1099,6 +1099,26 @@ function handleApprovalSubmit(
         && submission.code === APPROVAL_OPERATION_SIGNAL.APPROVAL_ALREADY_IN_FLIGHT
         && running.sessionId === humanSessionId
         && running.machine === callerMachine
+        /*
+         * THE SAME GATE, THE SAME PROJECT, THE SAME WORKSPACE — ALL THREE.
+         *
+         * Single-flight is PROJECT-wide: one approval per project at a time,
+         * whichever gate it is for. So the in-flight record handed back here may
+         * belong to a DIFFERENT GATE of the same project, and resuming it would
+         * hand this request another gate's operation. The client would then poll
+         * it, see it succeed, and report THIS gate approved on the strength of a
+         * record about a different one.
+         *
+         * That is a false thing reported as true, attributed to the wrong object,
+         * on the approval path — categorically worse than the unknown-reported-
+         * as-false conflations this project has spent its rounds removing.
+         *
+         * A different gate of the same project gets the 409 below, which is
+         * correct: its approval genuinely cannot start yet.
+         */
+        && running.gateName === gateName
+        && running.projectId === projectId
+        && running.workspacePath === workspacePath
       ) {
         writeJson(res, 202, {
           signal: APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_RESUMED,

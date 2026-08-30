@@ -354,6 +354,46 @@ function defaultIsAlive(pid: number): boolean {
  */
 const MAX_CONCURRENT_PER_WORKSPACE = 2;
 
+/**
+ * How many approvals may run at once on THIS HOST, across every workspace.
+ *
+ * The per-workspace cap alone is not a bound on the host: a Tower serving fifty
+ * registered workspaces could run a hundred repository builds at once and stay
+ * inside it. The reason the per-workspace number is small — each operation is a
+ * full build and test suite inside the process also serving everything else —
+ * argues for a host-level number too, and only the host-level one actually
+ * bounds the machine.
+ */
+const MAX_CONCURRENT_PER_HOST = 4;
+
+/**
+ * How long a nonterminal record from ANOTHER host may block before it is treated
+ * as abandoned.
+ *
+ * ## The failure it removes
+ *
+ * `resolveInterrupted` deliberately will not resolve a record owned by another
+ * hostname: this host cannot tell a dead foreign process from a live one, and
+ * declaring a live one dead would report an approval interrupted while it is
+ * running. Correct — and it means a host that is permanently removed leaves
+ * nonterminal records behind that nothing can ever settle. Retention only sweeps
+ * TERMINAL records, so those live forever and block that project's approvals
+ * forever, with no message saying why and no command to clear it.
+ *
+ * ## Why a long lease rather than a short one
+ *
+ * There is no heartbeat, so the only evidence of progress is when the record was
+ * submitted or started. A window shorter than a slow build would declare a
+ * healthy foreign run abandoned and let a second one start beside it, which is
+ * the collision single-flight exists to prevent. Six hours is longer than any
+ * repository check this project has, and still finite — which is the whole
+ * difference from what was there before.
+ *
+ * The record is marked `interrupted` with a message naming the foreign host, so
+ * the recovery is visible in the operator's history rather than silent.
+ */
+const FOREIGN_HOST_LEASE_MS = 6 * 60 * 60 * 1000;
+
 export class ApprovalOperationStore {
   readonly #path: string;
   readonly #now: () => number;
@@ -440,6 +480,17 @@ export class ApprovalOperationStore {
     } {
     return withStoreLock(this.#path, APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_STORE_LOCKED, () => {
       const operations = this.#sweep(this.#read());
+      /*
+       * ABANDONED FOREIGN RECORDS ARE SETTLED BEFORE ANYTHING IS COUNTED.
+       *
+       * `resolveInterrupted` will not touch another host's records, and that is
+       * right — this host cannot distinguish a dead foreign process from a slow
+       * one. The consequence was that a host removed from the fleet left
+       * nonterminal records nothing could ever settle, blocking that project's
+       * approvals permanently with no message and no way out. Retention only
+       * sweeps terminal records, so they never expired either.
+       */
+      if (this.#expireAbandoned(operations) > 0) this.#write(operations);
       const live = operations.filter((operation) => !isTerminal(operation.state));
 
       const inFlight = live.find((operation) =>
@@ -456,15 +507,38 @@ export class ApprovalOperationStore {
         };
       }
 
-      const here = live.filter((operation) => operation.workspacePath === input.workspacePath);
+      /*
+       * COUNTED ON THIS HOST ONLY, and single-flight above is deliberately NOT.
+       *
+       * The two rules protect different things. Single-flight stops two runs of
+       * the same project's checks from racing each other, wherever they run, so
+       * it must see every host's records. The concurrency cap is a bound on THIS
+       * MACHINE's load — the reason it is small is that each operation is a build
+       * and test suite inside this process — so counting another host's runs
+       * against it throttles us for work we are not doing, and a dead foreign
+       * host's leftovers used to throttle us forever.
+       */
+      const mine = live.filter((operation) => operation.owner.host === this.#owner.host);
+      const here = mine.filter((operation) => operation.workspacePath === input.workspacePath);
       if (here.length >= MAX_CONCURRENT_PER_WORKSPACE) {
         return {
           accepted: false as const,
           code: APPROVAL_OPERATION_SIGNAL.APPROVAL_CONCURRENCY_LIMIT,
           message:
-            `${here.length} approval(s) are already running for this workspace, which is the `
-            + `limit. Each one runs the repository's checks inside this host, so they are bounded `
-            + 'rather than queued — wait for one to settle and submit again.',
+            `${here.length} approval(s) are already running for this workspace on this host, `
+            + `which is the limit. Each one runs the repository's checks inside this host, so they `
+            + 'are bounded rather than queued — wait for one to settle and submit again.',
+        };
+      }
+      if (mine.length >= MAX_CONCURRENT_PER_HOST) {
+        return {
+          accepted: false as const,
+          code: APPROVAL_OPERATION_SIGNAL.APPROVAL_CONCURRENCY_LIMIT,
+          message:
+            `${mine.length} approval(s) are already running on this host across all workspaces, `
+            + 'which is the limit. The per-workspace cap alone does not bound the machine — one '
+            + 'host serving many workspaces would run a build for each — so wait for one to '
+            + 'settle and submit again.',
         };
       }
 
@@ -554,6 +628,44 @@ export class ApprovalOperationStore {
    *    every restart that happened to reuse the pid.
    * 4. **Some other pid on this host.** Ask the OS.
    */
+  /**
+   * Settle nonterminal records from ANOTHER host that have outlived the lease.
+   *
+   * Returns how many were settled, so the caller writes only when something
+   * changed. Mutates in place, under the caller's lock.
+   *
+   * THIS HOST'S OWN RECORDS ARE NOT TOUCHED HERE: `resolveInterrupted` settles
+   * those, and it can do better than a clock because it can ask whether the pid
+   * is alive. A time-based rule applied to our own records would declare a slow
+   * local run dead while it is running.
+   */
+  #expireAbandoned(operations: ApprovalOperation[]): number {
+    const now = this.#now();
+    let expired = 0;
+    for (const operation of operations) {
+      if (isTerminal(operation.state)) continue;
+      if (operation.owner.host === this.#owner.host) continue;
+      // The most recent evidence of progress. There is no heartbeat, so this is
+      // when it started, or failing that when it was submitted.
+      const since = Date.parse(operation.startedAt ?? operation.submittedAt);
+      // AN UNPARSEABLE TIMESTAMP IS NOT AN OLD ONE. It says nothing about age,
+      // and expiring on it would let an unreadable field settle a live approval.
+      if (Number.isNaN(since)) continue;
+      if (now - since < FOREIGN_HOST_LEASE_MS) continue;
+
+      operation.state = 'interrupted';
+      operation.settledAt = new Date(now).toISOString();
+      operation.gateAfterInterruption = 'unreadable';
+      operation.message =
+        `this approval was submitted on ${operation.owner.host}, which has not reported on it `
+        + `since ${operation.startedAt ?? operation.submittedAt}. That host is treated as gone `
+        + 'so this project is not blocked forever; whether the gate was approved is unknown, '
+        + 'because only that host could say.';
+      expired += 1;
+    }
+    return expired;
+  }
+
   #ownerIsGone(owner: OperationOwner): boolean {
     if (owner.host !== this.#owner.host) return false;
     if (owner.runId !== undefined && owner.runId === this.#owner.runId) return false;

@@ -267,6 +267,64 @@ before the retry lands, so the retry legitimately starts a new one and the test 
 recovery rather than a claim of one: the outcome observed is the ORIGINAL operation's, and
 exactly one operation exists for the episode, so the checks did not run twice.
 
+## The worst shape, and it was mine for one round
+
+Round 4's recovery matched an in-flight operation on session and machine. Single-flight is
+PROJECT-wide, so the operation found for a request is not necessarily that request's gate — and a
+request to approve gate B could be handed gate A's operation, polled to success, and reported as
+**gate B approved**.
+
+Every other conflation this project removed was a true thing reported as unknown, or an unknown
+reported as false. This one is a false thing reported as true, attributed to the wrong object, on
+the approval path. It is worth recording plainly that it was introduced by a fix for a different
+reporting defect: **making one report honest opened a way for another to lie**, and nothing in the
+change looked like it touched correctness of attribution.
+
+Fixed on both sides on purpose. The server restricts recovery to the same workspace, project and
+gate. The client independently compares the operation's project and gate against the one it asked
+about, on the 202 and on every poll, and reports `unconfirmed` on a mismatch. The client check is
+not redundant with the server's: it is the half that does not depend on the other half being
+right, and an approval outcome is not a place to trust one implementation.
+
+The regression test seeds the in-flight record rather than driving a second real approval — the
+first version drove one for a gate that is not valid for that protocol and phase, so it settled
+instantly and measured nothing.
+
+## The fallback that could not fire
+
+The client fell back to the synchronous route on HTTP 501, under a comment promising compatibility
+with "a host running an older build". A host running an older build has no such route at all: its
+dispatcher answers 404 `AGENT_ROUTE_NOT_FOUND`. 501 is a CURRENT host that recognises the route
+and wires no operation store — a real case, and not the one described.
+
+So an upgraded client lost gate approval entirely against an older Tower, while the code said it
+would not. The fixture was named `NO_ASYNC` and commented "the 501 an older host answers": the
+fixture agreeing with the code, for the fourth time in this project.
+
+Now: 501 **or** 404 carrying that signal. Narrow on the signal rather than the status, because
+other 404s from this route — an unknown workspace, one this host does not serve — are real answers
+that must not silently take the synchronous path.
+
+## A record from a host that never comes back
+
+`resolveInterrupted` refuses to settle another host's records, correctly: this host cannot tell a
+dead foreign process from a slow one, and declaring a live one dead would report an approval
+interrupted while it runs. But retention sweeps only TERMINAL records — so a host permanently
+removed from the fleet left nonterminal records that nothing could ever settle, blocking that
+project's approvals forever, with no message and no command to clear it.
+
+The fix separates two rules that had been one:
+
+- **Single-flight stays cross-host.** Two runs of one project's checks racing is exactly what it
+  exists to prevent, so it must see every host's records. What changed is that a foreign
+  nonterminal record older than a six-hour lease is settled `interrupted`, naming the host, with
+  `gateAfterInterruption: 'unreadable'` — because only that host could say. There is no heartbeat,
+  so the lease is deliberately longer than any check here; the point is that it is finite.
+- **The concurrency cap is per host now.** It bounds this machine's load — each operation is a
+  build and test suite inside this process — so another host's runs must not consume it. A
+  host-wide cap was added alongside the per-workspace one, because per-workspace alone does not
+  bound a Tower serving fifty workspaces.
+
 ## A knob only tests could turn
 
 `submit(…, { maxConcurrent })` was a parameter with a hardcoded default of 2 and no production
@@ -316,7 +374,15 @@ alternative is the read it exists to avoid.
 
 ## Flaky Tests
 
-None. No test was skipped or annotated as flaky during this project.
+No test was skipped or annotated as flaky by this project, and nothing was routed around.
+
+One pre-existing test timed out once, on the round-5 full run:
+`src/terminal/__tests__/session-manager.test.ts > "no stderr tail logged for file-based stderr
+(Bugfix #324)"` — a 30s timeout under a fully parallel suite. It passes running its file alone
+(91/91), it is `it.skipIf(!!process.env.CI)` so CI never runs it, and it touches the PTY session
+manager, which this project does not. Load-sensitive, not caused here. Recorded rather than
+re-annotated: adding a flaky marker to someone else's test on the strength of one timeout would
+be a claim I have not earned.
 
 ## Environment notes for the next builder in a fresh worktree
 

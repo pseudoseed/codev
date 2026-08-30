@@ -260,7 +260,28 @@ export async function approveGate(
         + 'approving again.',
     };
   }
-  if (submitted.status !== 501) {
+  /*
+   * WHAT AN OLDER HOST ACTUALLY ANSWERS, not what this code wished it answered.
+   *
+   * The fallback triggered on 501 alone, and the comment above promised
+   * compatibility with a host running an older build. A host running an older
+   * build has no such route at all: its dispatcher answers **404
+   * AGENT_ROUTE_NOT_FOUND**. 501 is what a CURRENT host says when it recognises
+   * the route and wires no operation store — a real case, and not the one the
+   * comment described.
+   *
+   * So an upgraded client lost gate approval entirely against an older Tower,
+   * while the fixture that was supposed to prove otherwise labelled its 501 "an
+   * older host". The test agreed with the code, which is why it passed.
+   *
+   * NARROW ON THE SIGNAL, NOT ON THE STATUS. Other 404s from this route are real
+   * answers — an unknown workspace, a workspace this host does not serve — and
+   * treating those as "no async route here" would silently run the synchronous
+   * path against a host that would have refused the request outright.
+   */
+  const unrouted = submitted.status === 404
+    && text(submitted.body, 'signal') === 'AGENT_ROUTE_NOT_FOUND';
+  if (submitted.status !== 501 && !unrouted) {
     return await pollApproval(fetchImpl, config, authed, workspace, submitted, gate, onProgress);
   }
 
@@ -440,6 +461,44 @@ async function pollApproval(
    * token; the first draft of this line crossed it.
    */
   const polling = receipt ? { ...authed, [APPROVAL_RECEIPT_HEADER]: receipt } : authed;
+
+  /*
+   * THE OPERATION MUST BE THIS GATE'S, AND THE CLIENT CHECKS RATHER THAN ASSUMES.
+   *
+   * The host may hand back an operation it already had running — that is the
+   * recovery for a lost 202. Single-flight is PROJECT-wide, so "an operation for
+   * this project" is not the same claim as "an operation for this gate", and a
+   * host that got that wrong would have this client report GATE B APPROVED from
+   * gate A's record: a false thing reported as true, attributed to the wrong
+   * object, on the approval path.
+   *
+   * The server now restricts recovery to the same workspace, project and gate.
+   * This check is not redundant with it: it is the half that does not depend on
+   * the other half being right, and the outcome of an approval is not a place to
+   * trust a single implementation.
+   */
+  const identityMismatch = (body: Record<string, unknown>): string | null => {
+    const project = text(body, 'projectId');
+    const named = text(body, 'gateName');
+    if (project && project !== gate.projectId) {
+      return `project ${project} rather than ${gate.projectId}`;
+    }
+    if (named && named !== gate.gateName) return `gate ${named} rather than ${gate.gateName}`;
+    return null;
+  };
+  const submittedMismatch = identityMismatch(submitted.body);
+  if (submittedMismatch) {
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'GATE_APPROVAL_UNCONFIRMED',
+      message:
+        `this host answered the request to approve ${gate.gateName} with an operation for `
+        + `${submittedMismatch}. Nothing here says whether ${gate.gateName} was approved; it was `
+        + 'not reported as approved on the strength of another gate\'s record.',
+    };
+  }
+
   const url = api(config, `/workspaces/${workspace}/gates/approvals/${encodeURIComponent(operationId)}`);
   const deadline = Date.now() + POLL_LIMIT_MS;
   while (Date.now() < deadline) {
@@ -514,6 +573,22 @@ async function pollApproval(
     if (polled.status !== 200) {
       await new Promise((wait) => setTimeout(wait, POLL_INTERVAL_MS));
       continue;
+    }
+
+    /*
+     * AND AGAIN ON EVERY POLL, because the record read is the one reported. A
+     * body naming another gate cannot settle this one, in either direction.
+     */
+    const polledMismatch = identityMismatch(polled.body);
+    if (polledMismatch) {
+      return {
+        ok: false,
+        unconfirmed: true,
+        signal: 'GATE_APPROVAL_UNCONFIRMED',
+        message:
+          `operation ${operationId} describes ${polledMismatch}, so it cannot say whether `
+          + `${gate.gateName} was approved. Check the gate rather than treating this as an answer.`,
+      };
     }
 
     const state = text(polled.body, 'state');

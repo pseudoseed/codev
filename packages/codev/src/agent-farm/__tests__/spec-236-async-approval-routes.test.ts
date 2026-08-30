@@ -132,6 +132,26 @@ function workspaceWithRequestedGate(
   return root;
 }
 
+/**
+ * A project with TWO gates awaiting approval, and a run slow enough to still be
+ * going when the second request lands.
+ *
+ * Single-flight is project-wide, so two pending gates on one project is the
+ * shape where "an operation for this project" and "an operation for this gate"
+ * come apart. One gate cannot show that.
+ */
+function workspaceWithTwoRequestedGates(projectId: string): string {
+  const root = workspaceWithRequestedGate(projectId, { checks: 'slow' });
+  const statusPath = join(root, 'codev', 'projects', `${projectId}-async-approval`, 'status.yaml');
+  const status = yaml.load(readFileSync(statusPath, 'utf8')) as Record<string, unknown>;
+  status.gates = {
+    'plan-approval': { status: 'pending', requested_at: '2026-08-30T00:00:00.000Z' },
+    pr: { status: 'pending', requested_at: '2026-08-30T00:00:00.000Z' },
+  };
+  writeFileSync(statusPath, yaml.dump(status));
+  return root;
+}
+
 interface Host {
   readonly origin: string;
   readonly pairings: PairingStore;
@@ -662,6 +682,70 @@ describe('a submitter that lost its response', () => {
 
     const gate = gateOf(workspace, '917');
     expect(gate.status).toBe('approved');
+  });
+
+  /*
+   * A DIFFERENT GATE MUST NOT BE RESUMED, AND THIS IS THE WORST DEFECT IN THE
+   * PROJECT IF IT IS.
+   *
+   * Single-flight is PROJECT-wide: one approval per project at a time, whichever
+   * gate it is for. So the in-flight record found for a request is not
+   * necessarily this request's gate. Resuming it on session and machine alone
+   * handed the caller ANOTHER GATE's operation — which the client would poll,
+   * see succeed, and report as THIS gate approved.
+   *
+   * Every other conflation removed in this project was a true thing reported as
+   * unknown, or an unknown reported as false. That one is a FALSE thing reported
+   * as TRUE, attributed to the wrong object, on the approval path.
+   */
+  it('never hands a request for one gate the operation of another', async () => {
+    const workspace = workspaceWithRequestedGate('919', { checks: 'slow' });
+    const host = await startHost(workspace);
+    const { authed, capability, nonce, session } = await credentialed(host, '919');
+
+    /*
+     * THE IN-FLIGHT OPERATION IS SEEDED, and that is what makes this test about
+     * the branch rather than about porch.
+     *
+     * It must be for the SAME session and the SAME machine — everything the
+     * resume checked before this fix — and a DIFFERENT gate. Driving a real
+     * approval of a second gate would depend on that gate being valid for the
+     * protocol and phase, which is a different subject and, when it is not, the
+     * operation settles instantly and the test measures nothing.
+     */
+    const running = host.operations.submit({
+      workspacePath: host.workspacePath,
+      projectId: '919',
+      gateName: 'plan-approval',
+      sessionId: session.sessionId,
+      machine: 'laptop',
+    });
+    expect(running.accepted).toBe(true);
+    if (!running.accepted) return;
+
+    const second = await post(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`,
+      authed,
+      { projectId: '919', gateName: 'pr', capability: capability.presentation, nonce: nonce.nonce },
+    );
+
+    // REFUSED, not resumed. Gate pr's approval genuinely cannot start yet, and
+    // saying so is the honest answer; handing back plan-approval's operation so
+    // this client can report pr approved from it is not.
+    expect(second.status, `gate pr was handed another gate's operation: ${JSON.stringify(second.body)}`)
+      .toBe(409);
+    expect(second.body.signal).toBe('APPROVAL_ALREADY_IN_FLIGHT');
+    expect(second.body.operationId).toBe(running.operation.operationId);
+    expect(second.body.receipt, 'the other gate\'s receipt was handed over').toBeUndefined();
+
+    // AND THE RECORD NAMES ITS OWN GATE, which is what lets the client refuse it
+    // independently of the server having got this right.
+    const polled = await get(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals/${running.operation.operationId}`,
+      authed,
+    );
+    expect(polled.body.gateName).toBe('plan-approval');
+    expect(polled.body.projectId).toBe('919');
   });
 
   /*

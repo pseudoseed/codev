@@ -50,8 +50,19 @@ function router(
   return { fetchImpl, calls };
 }
 
-/** The 501 an older host answers, so the synchronous route is used instead. */
+/**
+ * A CURRENT host that recognises the route and wires no operation store.
+ *
+ * This constant was called "the 501 an older host answers", and that label was
+ * wrong in a way that hid a real defect: an older host has no such route and its
+ * dispatcher answers 404 AGENT_ROUTE_NOT_FOUND. The fixture agreed with the code,
+ * so the fallback tested here was never the fallback an older host would take.
+ * `NO_ROUTE` below is that one.
+ */
 const NO_ASYNC = { '/gates/approvals': { status: 501, body: { signal: 'APPROVAL_OPERATIONS_NOT_AVAILABLE' } } };
+
+/** What a host predating this route actually answers: its dispatcher's 404. */
+const NO_ROUTE = { '/gates/approvals': { status: 404, body: { signal: 'AGENT_ROUTE_NOT_FOUND' } } };
 
 describe('openHumanSession', () => {
   it('presents the pairing token alongside the machine credential', async () => {
@@ -826,5 +837,121 @@ describe('approveGate, asynchronously', () => {
     // Nor in the URL of ANY call — the submit's own URL included, since a future
     // convenience could put it there just as easily.
     for (const call of calls) expect(call.url).not.toContain(receipt);
+  }, 20_000);
+
+  /*
+   * THE FALLBACK AN OLDER HOST ACTUALLY TAKES.
+   *
+   * The compatibility promised in this file's comments was reachable only via
+   * 501, which is a CURRENT host with no operation store. A host predating the
+   * route answers 404 AGENT_ROUTE_NOT_FOUND from its dispatcher — so an upgraded
+   * client lost gate approval entirely against an older Tower, and the fixture
+   * calling 501 "an older host" is why nothing said so.
+   */
+  it('falls back to the synchronous route against a host that has no such route', async () => {
+    const { fetchImpl, calls } = router({
+      ...NO_ROUTE,
+      '/approval-capabilities': { status: 201, body: { capabilityId: 'cap-1', presentation: 'cap-1.s' } },
+      '/approval-nonces': { status: 201, body: { nonce: 'n-1' } },
+      '/gates/approve': {
+        status: 200,
+        body: {
+          signal: 'GATE_APPROVED',
+          machine: 'laptop',
+          sessionId: 'session-1',
+          approvedAt: '2026-08-30T13:00:00Z',
+        },
+      },
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: true });
+    // It really used the synchronous route rather than reporting success from
+    // the 404 it just received.
+    expect(calls.some((call) => call.url.endsWith('/gates/approve'))).toBe(true);
+  }, 20_000);
+
+  /*
+   * AND ONLY THAT 404. Other 404s from this route are real answers — an unknown
+   * workspace, one this host does not serve — and treating them as "no async
+   * route here" would run the synchronous path against a host that refused the
+   * request outright.
+   */
+  it('does not treat an unknown workspace as a missing route', async () => {
+    const { fetchImpl, calls } = router({
+      ...credentials,
+      '/gates/approvals': { status: 404, body: { signal: 'WORKSPACE_NOT_REGISTERED' } },
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false });
+    expect(calls.some((call) => call.url.endsWith('/gates/approve')),
+      'the synchronous route was used for a workspace this host does not serve').toBe(false);
+  }, 20_000);
+
+  /*
+   * AN OPERATION FOR ANOTHER GATE CANNOT SETTLE THIS ONE, IN EITHER DIRECTION.
+   *
+   * The host restricts recovery to the same workspace, project and gate. This
+   * client checks anyway: the outcome of an approval is not a place to trust one
+   * implementation, and the failure it guards against is the worst shape there
+   * is — a false thing reported as true, attributed to the wrong object.
+   */
+  it('will not report this gate approved from another gate\'s record', async () => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': [
+        {
+          status: 202,
+          body: {
+            signal: 'APPROVAL_OPERATION_RESUMED',
+            operationId: 'op-other',
+            receipt: 'receipt-other',
+            projectId: '146',
+            // ANOTHER GATE of the same project — what project-wide single-flight
+            // makes reachable.
+            gateName: 'plan-approval',
+            state: 'running',
+          },
+        },
+        {
+          status: 200,
+          body: {
+            projectId: '146',
+            gateName: 'plan-approval',
+            state: 'succeeded',
+            record: { outcome: 'approved', approvedAt: '2026-08-30T13:00:00Z', machine: 'laptop' },
+          },
+        },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+
+    // NOT ok. A succeeded record for plan-approval says nothing about pr.
+    expect(result).toMatchObject({ ok: false, unconfirmed: true });
+    expect((result as { message: string }).message).toContain('plan-approval');
+  }, 20_000);
+
+  /*
+   * AND THE SAME CHECK ON THE POLL, because the record read is the record
+   * reported: a host could answer the submit correctly and the poll wrongly.
+   */
+  it('will not settle this gate from a poll body naming another', async () => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-1', receipt: 'r-1', projectId: '146', gateName: 'pr' } },
+        {
+          status: 200,
+          body: {
+            projectId: '146',
+            gateName: 'plan-approval',
+            state: 'succeeded',
+            record: { outcome: 'approved', approvedAt: '2026-08-30T13:00:00Z', machine: 'laptop' },
+          },
+        },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, unconfirmed: true });
+    expect((result as { message: string }).message).toContain('plan-approval');
   }, 20_000);
 });

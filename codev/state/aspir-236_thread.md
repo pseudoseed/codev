@@ -987,3 +987,61 @@ comparisons in one directory disagreeing is how the weaker one gets copied.
 
 It matches any quoted SCREAMING_SNAKE token, comments included. Writing a bare code name in
 backticks in a docblock reads as an unclassified signal. Both sites now name the code in prose.
+
+## Round 5 — the one that could report a gate approved that was not
+
+Three blockers. The first is mine from round 4 and is the worst defect in the project.
+
+### A retry could resume a different gate
+
+Single-flight is PROJECT-wide: one approval per project at a time, whichever gate. My round-4
+resume matched on session and machine and did not check the gate — so a request to approve gate B
+could be handed gate A's operation, and the client would poll it, watch it succeed, and report
+**gate B approved** on the strength of a record about gate A.
+
+Every other conflation removed in this project was a true thing reported as unknown, or an unknown
+reported as false. This one is a **false thing reported as true, attributed to the wrong object**,
+on the approval path. It existed for exactly one round, and I introduced it while fixing a
+different reporting defect.
+
+Fixed on both sides, deliberately. The server restricts recovery to the same workspace, project
+**and** gate. The client independently checks the operation's `projectId`/`gateName` against the
+gate it asked about — on the 202 and on every poll — and reports `unconfirmed` on a mismatch. The
+second check is not redundant: it is the half that does not depend on the first being right, and
+the outcome of an approval is not a place to trust a single implementation.
+
+The regression test seeds the in-flight record rather than driving a second real approval. My
+first version drove one for `plan-approval`, which is not valid for that protocol and phase, so it
+settled instantly and the test measured nothing — the third time in this project a fixture has
+quietly stopped measuring what it named.
+
+### The documented older-host fallback was unreachable
+
+The fallback to the synchronous route fired on HTTP 501 only, and the comment above it promised
+compatibility with "a host running an older build". A host running an older build has no such
+route: its dispatcher answers **404 AGENT_ROUTE_NOT_FOUND**. 501 is what a CURRENT host says when
+it recognises the route and wires no operation store — a real case, and not the one the comment
+described.
+
+So an upgraded client lost gate approval entirely against an older Tower. And the fixture was
+named `NO_ASYNC` with the comment "the 501 an older host answers" — the fixture agreeing with the
+code, which is why it passed. Now falls back on 501 **or** 404 with that specific signal;
+other 404s (unknown workspace) still fail, with a test for that.
+
+### A dead host could block approvals forever
+
+`resolveInterrupted` will not settle another host's records, and that is right — this host cannot
+tell a dead foreign process from a slow one. But retention only sweeps TERMINAL records, so a host
+permanently removed from the fleet left nonterminal records that nothing could ever settle,
+blocking that project's approvals forever with no message and no command to clear it.
+
+Two changes, and they are deliberately different rules:
+
+- **Single-flight stays cross-host** — two runs of one project's checks racing is the hazard it
+  exists for — but a foreign nonterminal record older than a **six-hour lease** is settled as
+  `interrupted`, naming the host, with `gateAfterInterruption: 'unreadable'` because only that
+  host could say. Six hours is longer than any check here and, crucially, finite.
+- **The concurrency cap is now this host's only.** It bounds THIS machine's load — each operation
+  is a build and test suite in this process — so counting a foreign host's runs throttled us for
+  work we were not doing. Plus a new host-wide cap of 4, because per-workspace alone does not
+  bound a Tower serving many workspaces (claude's finding, the same hole from the other side).
