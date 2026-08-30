@@ -19,6 +19,7 @@ import {
   canonicalWorkspaceKey,
   installThreadSpawnFactory,
   setThreadEngine,
+  setThreadStreamer,
   tryGetThreadEngine,
 } from './thread-runtime.js';
 import { logger } from './utils/logger.js';
@@ -201,6 +202,12 @@ async function connectDispatcher(
   onClosed: () => void,
 ): Promise<{
   dispatcher: { call: (m: string, p: unknown) => Promise<unknown> };
+  /**
+   * The READ side of the same socket, for an observer that never issues a
+   * command. One socket rather than two, because opening a second would spend
+   * the bootstrap token — see `token-refused` below for why that is one-time.
+   */
+  streamer: { stream: (m: string, p: unknown, onValue: (v: unknown) => void) => Promise<unknown> };
   accessToken: string;
   /**
    * Hang up. Every path that abandons this connection before an engine owns it must
@@ -291,6 +298,10 @@ async function connectDispatcher(
   });
   return {
     dispatcher: { call: (method: string, payload: unknown) => client.call(method, payload) },
+    streamer: {
+      stream: (method: string, payload: unknown, onValue: (value: unknown) => void) =>
+        client.stream(method, payload, onValue),
+    },
     accessToken: access.access_token,
     close: () => {
       try {
@@ -544,6 +555,10 @@ async function initialiseThreadBackend(
       closed = true;
       if (registered !== undefined && tryGetThreadEngine(key) === registered) {
         setThreadEngine(undefined, key);
+        // Same socket, same eviction. Guarded by the ENGINE's identity rather
+        // than the streamer's for the same reason the engine is: a close
+        // arriving late must not drop what a later reconnect installed.
+        setThreadStreamer(undefined, key);
       }
     });
   } catch (err) {
@@ -580,7 +595,7 @@ async function initialiseThreadBackend(
 
   const { createProject } = await import('@cluesmith/porch-driver/thread');
   const journal = new DispatchJournal(join(config.workspaceRoot, '.codev', 'commands.jsonl'));
-  const { dispatcher, accessToken } = connection;
+  const { dispatcher, streamer, accessToken } = connection;
 
   /**
    * Nothing owns this socket until an engine is registered on it.
@@ -657,11 +672,16 @@ async function initialiseThreadBackend(
     defaultModel: config.defaultModel,
   });
   setThreadEngine(registered, key);
+  // Registered WITH the engine and evicted WITH it, because they are one socket:
+  // a streamer outliving its engine would hand an observer a connection nothing
+  // is keeping alive, and it would report "watching" while reading a dead wire.
+  setThreadStreamer(streamer, key);
   // And after, because the close could have landed between the check above and this
   // write. The handler evicts when it can see `registered`; this covers the case where
   // it could not. Both are cheap, and only one of them has to be right.
   if (closed) {
     setThreadEngine(undefined, key);
+    setThreadStreamer(undefined, key);
     registered = undefined;
     abandonConnection();
     throw closedDuringInit(config.serverUrl, config.workspaceRoot);

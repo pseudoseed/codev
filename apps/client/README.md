@@ -201,15 +201,35 @@ sees the claim an approval was made under rather than a verification nobody
 performed. Tokens are also bound to one ceremony, so a token minted to pair a
 device cannot open a session.
 
-## Known gap: session state
+## Session state
 
-`t3codeSnapshot` is not wired in `tower-server.ts`, so every snapshot from a real
-Tower carries `t3code: 'not-provided'` and no row can report **working**,
-**turning** or **settled**. Blocked rows work, because gates come from porch. The
-client states this once per machine rather than inventing a status, and
-`spec-146-phase-11-production-wiring.test.ts` asserts it, so the gap stays
-recorded. Spec 146 criterion 3 is **unmet** for that reason.
+`tower-server.ts` wires a `t3codeSnapshot` provider (spec 236). The obstacle that
+kept it unwired was real — the provider is synchronous and a t3 connection is not
+— and it is resolved by splitting the halves: a background maintainer owns the
+connect, the per-thread `orchestration.subscribeThread` subscriptions and the
+`global.db` rescan, and the synchronous reader returns what it last wrote plus
+how old that is. The read path performs no I/O.
 
-The obstacle is real: `t3codeSnapshot` is synchronous, a t3 connection is not, so
-a provider needs a cached background subscription plus per-workspace t3 config
-Tower does not hold. That is phase 10 or 12 work.
+**What a row can now say, and what it still cannot.**
+
+`t3code` carries eight statuses rather than three, so a machine distinguishes
+*never asked* (`not-provided`) from *no server configured here*
+(`not-configured`), *half-configured* (`misconfigured`), *connecting*,
+*cooling-down* after a failed connect, *unreachable*, *observed*
+(`available`) and *observed but no longer watched* (`stale`). `stale` carries an
+age, and a row whose last-known content read as finished reports the age instead
+of `SETTLED` — "it had finished when I last looked" is not "it has finished".
+
+Per row, session status and thread settledness travel separately, because t3code
+keeps them apart: a `stopped` session on a settled thread finished, and on an
+unsettled one it did not. The client maps every value in the contract's enum,
+adds `STOPPED` and `ERROR` so a crashed or torn-down session is never rendered as
+`SETTLED`, and still reports `UNKNOWN` naming any value it does not recognise.
+
+**The bound that remains, stated because criterion 3 is easy to over-read.** A
+row with no `thread_id` has no session to observe, and every architect and builder
+row in `global.db` is terminal-backed today. Those rows report *this row has no
+t3code thread* — which is a third answer, distinct from "not provided" and from
+"t3code returned nothing for this thread". Being able to tell the three apart is
+what was actually missing; a `WORKING` stamp on a row with nothing running would
+have been the older failure wearing a newer word.

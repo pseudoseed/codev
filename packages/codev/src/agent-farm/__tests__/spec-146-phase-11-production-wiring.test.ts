@@ -85,32 +85,47 @@ function towerInitCall(): string {
     .join('\n');
 }
 
-describe('criterion 3 is NOT met by the production path, and this records why', () => {
+describe('criterion 3 and what wiring the provider does and does not buy', () => {
   /*
-   * SPEC 146 CRITERION 3 IS UNMET AND DELIBERATELY UNTICKED.
+   * THIS TEST INVERTED IN SPEC 236, AND THE INVERSION IS THE RECORD.
    *
-   * "Correct live status on every row" includes working / turning / settled,
-   * and those three come from t3code's session state. Tower passes no
-   * `t3codeSnapshot`, so the registry takes its `not-provided` branch and no row
-   * can ever derive to any of the three from a real Tower. Blocked rows work,
-   * because those come from porch.
+   * It used to assert that Tower passed NO `t3codeSnapshot` — a tripwire on a
+   * stated gap, written so that a later phase wiring a provider would have to
+   * update the record rather than discover it. Spec 236 phase 2 wired one, so it
+   * now asserts the opposite, and this comment is what it updated to.
    *
-   * If a later phase wires a provider, this test fails and has to be rewritten —
-   * which is the point. It is a tripwire on a stated gap, not a blessing of it.
+   * WHAT THE WIRING GUARANTEES: a workspace with a t3code server configured
+   * reports each thread-backed row's live session, sourced from a background
+   * subscription, with an age on the wire.
+   *
+   * WHAT IT STILL DOES NOT: a row with no `thread_id` has no session to observe,
+   * and every architect and builder row in `global.db` is terminal-backed today.
+   * Those rows report that they have no thread. That is a different answer from
+   * "not provided" and from "t3code returned nothing", and being able to tell the
+   * three apart is what criterion 3 actually asked for — not a WORKING stamp on
+   * every row regardless of whether anything is running.
    */
-  it('Tower passes no t3codeSnapshot, so session state is never observable', () => {
+  it('Tower passes a t3codeSnapshot, so session state is observable at all', () => {
     const call = towerInitCall();
     // A sanity anchor: if the extraction goes blind, this fails FIRST and says so,
-    // rather than the absence check passing on an empty string.
+    // rather than the presence check passing on some unrelated substring.
     expect(call, 'the extracted call is missing options it certainly passes; the reader has gone blind')
       .toContain('isKnownWorkspace');
     expect(
       call,
-      'tower-server.ts now passes t3codeSnapshot. Criterion 3 may finally be reachable — '
-      + 'update this test and the README rather than deleting it.',
-    ).not.toContain('t3codeSnapshot');
+      'tower-server.ts no longer passes t3codeSnapshot. If that is deliberate, criterion 3 is '
+      + 'unmet again and apps/client/README.md has to say so; if it is not, the wiring regressed.',
+    ).toContain('t3codeSnapshot');
   });
 
+  /*
+   * THE NO-PROVIDER PATH IS STILL REACHED, AND STILL HAS TO DEGRADE HONESTLY.
+   *
+   * `initAgentRoutes`'s `t3codeSnapshot` is optional and `tools/codev-agent-host`
+   * passes none, so this is not a hypothetical branch kept for symmetry — it is
+   * what a second host actually does. Asserted by calling the registry with no
+   * snapshot argument rather than by reading Tower's source, which now passes one.
+   */
   it('a snapshot built without a provider reports not-provided, never an empty session', () => {
     const db = new Database(':memory:');
     db.exec(GLOBAL_SCHEMA);

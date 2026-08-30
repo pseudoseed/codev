@@ -175,6 +175,48 @@ export function clearCanonicalWorkspaceKeys(): void {
   canonicalKeys.clear();
 }
 
+/**
+ * The streaming half of a workspace's t3code connection.
+ *
+ * WHY THIS IS SEPARATE FROM `ThreadEngine`. The engine is a command surface —
+ * create a thread, start a turn, interrupt one. Observing a thread is a
+ * *subscription*, it belongs to a reader that never issues a command, and giving
+ * the engine a `subscribe` would let any holder of a command surface open
+ * streams. This is the read side, registered from the same socket.
+ *
+ * ONE SOCKET, NOT TWO. The obvious alternative — let the observer open its own
+ * connection — is wrong here for a concrete reason: opening one costs a bootstrap
+ * token exchange, and a pairing-issued token is ONE-TIME (`thread-backend.ts`
+ * says so at the `token-refused` message). A second connection would spend the
+ * credential the first one needs.
+ */
+export interface ThreadStreamer {
+  /**
+   * Call a streaming t3code method, invoking `onValue` per streamed value.
+   * Resolves when the server ends the stream; rejects when the socket does.
+   */
+  stream(method: string, payload: unknown, onValue: (value: unknown) => void): Promise<unknown>;
+}
+
+const streamers = new Map<string, ThreadStreamer>();
+
+export function setThreadStreamer(next: ThreadStreamer | undefined, workspaceRoot?: string): void {
+  const key = workspaceRoot === undefined ? UNKEYED : canonicalWorkspaceKey(workspaceRoot);
+  if (next === undefined) streamers.delete(key);
+  else streamers.set(key, next);
+}
+
+/**
+ * The streamer for a workspace, or nothing.
+ *
+ * Deliberately has no throwing counterpart. A caller that cannot observe a
+ * workspace reports that it could not, rather than failing — the whole point of
+ * the status vocabulary this feeds is that "not watching" is an answer.
+ */
+export function tryGetThreadStreamer(workspaceRoot?: string): ThreadStreamer | undefined {
+  return streamers.get(workspaceRoot === undefined ? UNKEYED : canonicalWorkspaceKey(workspaceRoot));
+}
+
 export function setThreadEngine(next: ThreadEngine | undefined, workspaceRoot?: string): void {
   const key = workspaceRoot === undefined ? UNKEYED : canonicalWorkspaceKey(workspaceRoot);
   if (next === undefined) engines.delete(key);
@@ -184,6 +226,7 @@ export function setThreadEngine(next: ThreadEngine | undefined, workspaceRoot?: 
 /** Every registered engine is dropped. For a test's teardown, not for production. */
 export function clearThreadEngines(): void {
   engines.clear();
+  streamers.clear();
   canonicalKeys.clear();
 }
 

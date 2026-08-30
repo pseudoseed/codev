@@ -200,3 +200,55 @@ knowing before trusting a green `tsc` there); added render tests for the six mac
 and the two new stamps. The note test initially passed on one sentence repeated six times
 because `renderMachine` leaves earlier renders in the document — scoped to the returned
 container.
+
+## Phase 2 — the t3code session cache and the production provider
+
+Landed. Criterion 3 is now reachable: `tower-server.ts` passes a `t3codeSnapshot`, and the
+phase-11 tripwire is inverted in place with a comment recording what the wiring does and does
+not buy.
+
+### The seam I had to build, and why one socket
+
+`ResumingSubscription` in `packages/t3-client` looked like the obvious tool and is the wrong
+one here: it takes a `connect()` that returns a transport it OWNS, opening fresh ones across
+drops. Opening a t3 connection costs a bootstrap-token exchange, and a pairing-issued token is
+**one-time** — `thread-backend.ts` says so in its own `token-refused` message. A second
+connection would spend the credential the engine needs.
+
+So the read side rides the engine's existing socket. `T3Client.stream(method, payload, onValue)`
+already exists; `connectDispatcher` was returning only `dispatcher.call`. Added a
+`ThreadStreamer` registry in `thread-runtime.ts` beside the engine registry, registered and
+evicted with the engine and guarded by the **engine's** identity, so a late close cannot drop
+what a later reconnect installed.
+
+### Two contract facts I got wrong first and fixed by reading the schema
+
+1. **`settledOverride` is `'settled' | 'active' | null`, not a boolean.** My first cut tested
+   `=== true`. An explicit `'active'` means the thread is NOT settled even though `settledAt`
+   carries a timestamp, so treating `settledAt` as decisive would report a thread its owner
+   deliberately un-settled as finished. The override now wins in both directions.
+2. **The subscription is a fold, not a read.** The snapshot frame arrives once; everything after
+   it is events — `thread.session-set`, `thread.settled`, `thread.unsettled`. Reading only the
+   snapshot would have frozen each session at subscription time and gone on reporting it as
+   current, which is the exact "it had finished when I last looked" failure this phase exists to
+   prevent, produced from inside the mechanism built to prevent it.
+
+   The corollary matters as much: an unreadable or unrelated frame returns what is already
+   known rather than `undefined`. Silence about a fact is not evidence against it, and erasing
+   the session on every unrelated event would flip a row to UNKNOWN whenever its agent was busy.
+
+### Freshness
+
+`observedAt` is stamped from subscription **liveness**, so a watched-but-silent session stays
+`available` however quiet it is, and ageing starts at the drop. The window is 60s because
+`requestThreadBackend` will not retry a failed connect for 60s — anything shorter flaps every
+entry through `stale` on an ordinary reconnect. Content is discarded after 10 minutes: an
+hours-old status is a wrong answer with a disclaimer on it, and the disclaimer stops being read
+long before the content stops being wrong.
+
+Subscribing happens synchronously inside the sweep rather than on a microtask. The deferred
+version made "subscribed" true one turn of the event loop after the pass that decided it, which
+is a distinction nothing benefits from; a try/catch buys the same protection against a
+synchronous throw escaping the maintenance pass.
+
+Suite: 6967 passing, 0 failing. Client 205 passing.
