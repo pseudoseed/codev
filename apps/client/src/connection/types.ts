@@ -130,8 +130,14 @@ const T3CODE_REACHABILITY: readonly string[] = [
  * content is must not derive "finished" from it.
  */
 export interface T3codeObservation {
-  readonly observedAt: string;
-  readonly ageMs: number;
+  /** Present only when content was actually observed. */
+  readonly observedAt?: string;
+  /** Present only alongside `observedAt`. An absent age is UNKNOWN, never small. */
+  readonly ageMs?: number;
+  /** The server's own words, for a status that has some. */
+  readonly message?: string;
+  /** `cooling-down` only: when the failure that started the timer happened. */
+  readonly since?: string;
 }
 
 export interface ThreadRegistrySnapshot {
@@ -222,9 +228,23 @@ function session(value: unknown): value is ThreadSessionState {
     && optionalStr(value.lastError);
 }
 
+/**
+ * Every member is optional, and a PRESENT one must still be well formed.
+ *
+ * `observedAt` and `ageMs` are checked as a PAIR: half of them is a payload this
+ * build cannot read, not a partial answer to make the best of. An age without a
+ * time it was taken cannot be sanity-checked, and a time without an age would
+ * invite the consumer to subtract it from its own clock — which is a different
+ * clock, and the reason the server computes the age at all.
+ */
 function observation(value: unknown): value is T3codeObservation {
-  return isRecord(value) && str(value.observedAt) && typeof value.ageMs === 'number'
-    && Number.isFinite(value.ageMs);
+  if (!isRecord(value)) return false;
+  if (!optionalStr(value.observedAt)) return false;
+  if (value.ageMs !== undefined && (typeof value.ageMs !== 'number' || !Number.isFinite(value.ageMs))) {
+    return false;
+  }
+  if ((value.observedAt === undefined) !== (value.ageMs === undefined)) return false;
+  return optionalStr(value.message) && optionalStr(value.since);
 }
 
 function signal(value: unknown): value is AgentStateSignal {

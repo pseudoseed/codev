@@ -34,6 +34,7 @@ function machine(over: Partial<MachineState> = {}): MachineState {
 }
 
 const architect: ThreadIdentity = {
+  backing: 'thread',
   threadId: 'th-arch',
   role: 'architect',
   roleId: 'main',
@@ -44,6 +45,7 @@ const architect: ThreadIdentity = {
 
 function builder(id: string, over: Partial<ThreadIdentity> = {}): ThreadIdentity {
   return {
+    backing: 'thread',
     threadId: `th-${id}`,
     role: 'builder',
     roleId: id,
@@ -77,6 +79,7 @@ describe('buildTree', () => {
   it('renders a thread with no porch record as unmanaged rather than hiding it', () => {
     const tree = buildTree([machine({
       snapshot: snapshot([{
+        backing: 'thread',
         threadId: 'th-loose',
         role: 'unmanaged',
         workspacePath: '/w',

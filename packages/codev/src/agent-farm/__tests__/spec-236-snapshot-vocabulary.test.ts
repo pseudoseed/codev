@@ -100,15 +100,52 @@ describe('the observation travels with the content', () => {
     expect(snapshot.t3codeObservation).toEqual({ observedAt: '2026-08-29T10:00:00Z', ageMs: 240_000 });
   });
 
-  it.each(['not-provided', 'not-configured', 'connecting', 'unreachable'] as const)(
-    'publishes no observation for %s, which has no content to date',
+  it.each(['not-provided', 'not-configured', 'connecting'] as const)(
+    'publishes no observation for %s, which has nothing to add beyond the word',
     (status) => {
-      const t3code = (status === 'unreachable'
-        ? { status, message: 'down' }
-        : { status }) as T3codeThreadSnapshot;
-      expect(read(t3code).snapshot.t3codeObservation).toBeUndefined();
+      expect(read({ status }).snapshot.t3codeObservation).toBeUndefined();
     },
   );
+
+  /*
+   * THE FAILURE STATUSES CARRY THEIR OWN WORDS, and this is a regression test
+   * for a real gap rather than coverage of a feature. The provider computed a
+   * message and this boundary threw it away, so `cooling-down` reached the client
+   * as a bare word — waiting, with no when and no why — and `misconfigured`'s
+   * account of WHICH part of the config is half-written reached it nowhere at
+   * all. A status word with its evidence stripped off sends an operator nowhere.
+   */
+  it('carries when the cooling-down timer started, and why', () => {
+    const { snapshot } = read({
+      status: 'cooling-down',
+      message: 'ECONNREFUSED 127.0.0.1:3799',
+      since: '2026-08-29T10:00:00Z',
+    });
+    expect(snapshot.t3codeObservation)
+      .toEqual({ message: 'ECONNREFUSED 127.0.0.1:3799', since: '2026-08-29T10:00:00Z' });
+  });
+
+  it('carries the unreachability message', () => {
+    expect(read({ status: 'unreachable', message: 'socket closed' }).snapshot.t3codeObservation)
+      .toEqual({ message: 'socket closed' });
+  });
+
+  it('carries which part of the configuration is half-written', () => {
+    expect(read({ status: 'misconfigured', message: 'serverUrl without bootstrapToken' })
+      .snapshot.t3codeObservation).toEqual({ message: 'serverUrl without bootstrapToken' });
+  });
+
+  it('never publishes an age on a status that observed nothing', () => {
+    for (const t3code of [
+      { status: 'cooling-down', message: 'm', since: 's' },
+      { status: 'unreachable', message: 'm' },
+      { status: 'misconfigured', message: 'm' },
+    ] as const) {
+      const observation = read(t3code).snapshot.t3codeObservation;
+      expect(observation?.observedAt).toBeUndefined();
+      expect(observation?.ageMs).toBeUndefined();
+    }
+  });
 });
 
 describe('per-row session content', () => {

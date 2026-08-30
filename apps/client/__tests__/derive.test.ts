@@ -20,6 +20,7 @@ function porch(gates: PorchStatusProjection['gates']): PorchStatusProjection {
 
 function identity(over: Partial<ThreadIdentity> = {}): ThreadIdentity {
   return {
+    backing: 'thread',
     threadId: 'th-1',
     role: 'builder',
     roleId: 'builder-air-220',
@@ -27,6 +28,18 @@ function identity(over: Partial<ThreadIdentity> = {}): ThreadIdentity {
     management: 'managed',
     ...over,
   };
+}
+
+/**
+ * A terminal-backed row: no thread, and therefore no session to attach one to.
+ *
+ * THE SHAPE EVERY REAL ROW HAS TODAY. Every architect and builder row in
+ * `global.db` is terminal-backed, so this is not an edge case — it is the case,
+ * and it went untested because the helper above always supplied a `threadId`.
+ */
+function terminalRow(over: Partial<ThreadIdentity> = {}): ThreadIdentity {
+  const { threadId: _drop, ...rest } = identity(over);
+  return { ...rest, backing: 'terminal' };
 }
 
 describe('deriveRowStatus', () => {
@@ -293,6 +306,55 @@ describe('deriveRowStatus', () => {
     for (const t3code of statuses) {
       expect(deriveRowStatus(identity(), t3code).whyIsRowSpecific).toBeUndefined();
     }
+  });
+
+  /*
+   * CRITERION 5. A row with no thread is a THIRD fact, distinct from every
+   * machine-level cause and from "t3code returned no state for this thread".
+   */
+  describe('a row with no t3code thread', () => {
+    it('says so, rather than reporting a thread t3code lost', () => {
+      const status = deriveRowStatus(terminalRow(), 'available');
+      expect(status.kind).toBe('unknown');
+      expect(status.why).toBe('this row has no t3code thread, so there is no session to observe');
+      expect(status.whyIsRowSpecific).toBe(true);
+    });
+
+    it('gives that reason under every snapshot status, because it is about the row', () => {
+      const reasons = new Set(([
+        'not-provided', 'not-configured', 'misconfigured', 'connecting',
+        'cooling-down', 'unreachable', 'available', 'stale',
+      ] as const).map((t3code) => deriveRowStatus(terminalRow(), t3code).why));
+      expect(reasons.size).toBe(1);
+    });
+
+    it('is distinct from a thread-backed row whose thread returned no state', () => {
+      const noThread = deriveRowStatus(terminalRow(), 'available');
+      const noState = deriveRowStatus(identity(), 'available');
+      expect(noState.whyIsRowSpecific).toBe(true);
+      expect(noThread.why).not.toBe(noState.why);
+    });
+
+    it('is distinct from all six machine-level reasons', () => {
+      const noThread = deriveRowStatus(terminalRow(), 'available').why;
+      for (const t3code of [
+        'not-provided', 'not-configured', 'misconfigured', 'connecting', 'cooling-down', 'unreachable',
+      ] as const) {
+        expect(deriveRowStatus(identity(), t3code).why).not.toBe(noThread);
+      }
+    });
+
+    it('still blocks on a porch gate, which is the only live signal such a row has', () => {
+      // Terminal-backed rows are every real row today, and their gates come from
+      // porch rather than t3code. Reporting them as merely thread-less would
+      // hide the one thing about them that is current.
+      const status = deriveRowStatus(
+        terminalRow({ porch: porch({ pr: { status: 'pending', requested_at: '2026-08-29T10:00:00Z' } }) }),
+        'available',
+      );
+      expect(status.kind).toBe('blocked');
+      expect(status.gate).toBe('pr');
+    });
   });
 
   it('separates "t3code returned nothing for this thread" from every machine-wide cause', () => {

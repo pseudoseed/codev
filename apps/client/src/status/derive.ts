@@ -178,7 +178,7 @@ function sessionUnobservable(t3code: T3codeReachability): RowStatus {
  * small.
  */
 function agePhrase(observation: T3codeObservation | undefined): string {
-  if (!observation) return 'an unknown length of time ago';
+  if (observation?.ageMs === undefined) return 'an unknown length of time ago';
   const seconds = Math.max(0, Math.round(observation.ageMs / 1000));
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.round(seconds / 60);
@@ -223,6 +223,30 @@ export function deriveRowStatus(
 ): RowStatus {
   const gate = pendingGate(identity);
   if (gate) return gate;
+  /*
+   * A ROW WITH NO THREAD IS A THIRD FACT, and today it is the COMMON one.
+   *
+   * Every architect and builder row in `global.db` is terminal-backed right now,
+   * and a terminal-backed row has no t3code thread for a session to be attached
+   * to. Without this branch such a row fell through to `sessionUnobservable` and,
+   * on a machine reporting `available`, rendered "t3code returned no state for
+   * this thread" — about a thread it does not have. That sends a reader to look
+   * for a thread t3code lost, when nothing is wrong and nothing is missing.
+   *
+   * Keyed on `threadId` because that is the field a session is JOINED on
+   * server-side; `backing: 'terminal'` is the same fact stated the other way and
+   * the two cannot disagree in anything the registry emits.
+   *
+   * Row-specific, so it prints under the row rather than being mistaken for a
+   * statement about the machine.
+   */
+  if (identity.threadId === undefined) {
+    return {
+      kind: 'unknown',
+      why: 'this row has no t3code thread, so there is no session to observe',
+      whyIsRowSpecific: true,
+    };
+  }
   if (identity.session === undefined) return sessionUnobservable(t3code);
   const status = fromSession(identity.session);
   return t3code === 'stale' ? stale(status, observation) : status;

@@ -166,3 +166,37 @@ loop silently verify nothing.
    `Unknown review type "pr" ... protocols available here: "impl"` is what it looks like. `pnpm
    --filter @cluesmith/codev run copy-skeleton` fixes it. I nearly recorded those 80 as a
    regression; they are not.
+
+### Phase 1 iteration 1 — consultation
+
+Both lanes REQUEST_CHANGES, both HIGH, both blocking on the same two items. Both were real and
+both were mine.
+
+1. **Criterion 5 was not implemented.** `deriveRowStatus` checked only
+   `identity.session === undefined` and never looked at `threadId` or `backing`, so a
+   terminal-backed row — which is *every real row today* — rendered "t3code returned no state for
+   this thread" about a thread it does not have, sending a reader to look for something t3code
+   lost when nothing is missing. Added the branch, keyed on `threadId` (the field a session is
+   joined on server-side), placed after the porch gate so a terminal row still reports its gate,
+   which is the only live signal such a row has.
+
+   Claude then sharpened it in a second pass: `multi-machine.test.tsx` was the suite's only
+   terminal-backed fixture and it gave those rows a `session` while omitting `threadId` — **a
+   shape the server cannot produce**, since the registry attaches a session by joining on the
+   thread id. The one fixture modelling production's real row was masking the gap. Fixed, and
+   `derive.test.ts` gained a `terminalRow()` helper so the case is constructible at all.
+
+2. **The observation dropped `message` and `since`.** `observationOf` emitted only for
+   `available` and `stale`, so `cooling-down` reached the client as a bare word with no when and
+   no why, and `misconfigured`'s account of which half of the config is written reached it
+   nowhere. The plan said to carry them and I did not. `T3codeObservation`'s members are now all
+   optional — different statuses have different things to say — with `observedAt`/`ageMs`
+   validated as a pair, because half of them is a payload the client cannot read rather than a
+   partial answer to make the best of.
+
+Also from review: fixtures annotated `ThreadIdentity` while omitting the required `backing`
+(`apps/client/tsconfig.json` has `include: ["src"]`, so tests are not typechecked — worth
+knowing before trusting a green `tsc` there); added render tests for the six machine-level notes
+and the two new stamps. The note test initially passed on one sentence repeated six times
+because `renderMachine` leaves earlier renders in the document — scoped to the returned
+container.

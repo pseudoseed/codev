@@ -128,20 +128,30 @@ function sessionVisibilityNote(
       return 'This workspace has no t3code server configured, so no row has a session to report.'
         + porchIsCurrent;
     case 'misconfigured':
+      // The server's own words say WHICH part is half-written. Dropping them
+      // leaves an operator to go and diff their config to learn what this
+      // process already knew.
       return 'This workspace\u2019s t3code configuration is incomplete, so no session could be '
-        + 'observed. This is a configuration fault, not an unreachable server.' + porchIsCurrent;
+        + `observed${observation?.message ? `: ${observation.message}` : ''}. `
+        + 'This is a configuration fault, not an unreachable server.' + porchIsCurrent;
     case 'connecting':
       return 'This server is still connecting to t3code. Session state should appear shortly.'
         + porchIsCurrent;
     case 'cooling-down':
-      return 'This server\u2019s last t3code connection failed and it is waiting before it '
-        + 'retries, so session state is unavailable until then.' + porchIsCurrent;
+      // WHEN it failed and WHY, not just that it is waiting. "Waiting before it
+      // retries" with neither is a status with its evidence removed.
+      return 'This server\u2019s last t3code connection failed'
+        + `${observation?.since ? ` at ${observation.since}` : ''}`
+        + `${observation?.message ? ` (${observation.message})` : ''}`
+        + ' and it is waiting before it retries, so session state is unavailable until then.'
+        + porchIsCurrent;
     case 'unreachable':
       return 'This machine cannot reach t3code, so no row can say whether its session is '
-        + 'working, turning or settled.' + porchIsCurrent;
+        + `working, turning or settled${observation?.message ? `: ${observation.message}` : ''}.`
+        + porchIsCurrent;
     case 'stale':
       return 'This server has stopped watching t3code. Session words below are last-known, '
-        + `observed ${observation ? `${Math.max(0, Math.round(observation.ageMs / 1000))}s` : 'an unknown length of time'} `
+        + `observed ${observation?.ageMs === undefined ? 'an unknown length of time' : `${Math.max(0, Math.round(observation.ageMs / 1000))}s`} `
         + 'ago, and a row that looked settled is reported as unknown rather than finished.'
         + porchIsCurrent;
     default:

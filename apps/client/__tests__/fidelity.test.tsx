@@ -23,6 +23,7 @@ const config: MachineConfig = {
 
 const IDENTITIES: ThreadIdentity[] = [
   {
+    backing: 'thread',
     threadId: 'th-arch',
     role: 'architect',
     roleId: 'main',
@@ -31,6 +32,7 @@ const IDENTITIES: ThreadIdentity[] = [
     session: { status: 'ready', settled: false },
   },
   {
+    backing: 'thread',
     threadId: 'th-220',
     role: 'builder',
     roleId: 'air-220',
@@ -51,6 +53,7 @@ const IDENTITIES: ThreadIdentity[] = [
     },
   },
   {
+    backing: 'thread',
     threadId: 'th-146',
     role: 'builder',
     roleId: 'spir-146',
@@ -197,6 +200,97 @@ describe('honest degradation', () => {
     expect(document.querySelector('.workspace.is-stale')).toBeTruthy();
     // And it does NOT go blank: the rows are still there, labelled stale.
     expect(document.querySelectorAll('.thread-row')).toHaveLength(3);
+  });
+
+  /*
+   * SIX WORDS, SIX SENTENCES, AND THE DETAIL THE SERVER TOOK THE TROUBLE TO SEND.
+   *
+   * A status word with its evidence stripped off is a diagnosis with the
+   * reasoning removed: "waiting before it retries" with no when and no why sends
+   * an operator nowhere. `message` and `since` previously died at the registry,
+   * so these two assertions are the record of that gap rather than coverage of a
+   * feature.
+   */
+  describe('the machine-level session note', () => {
+    function noteFor(t3code: string, t3codeObservation?: Record<string, unknown>) {
+      const base = snapshot();
+      // Scoped to THIS render's container: `renderMachine` leaves previous
+      // renders in the document, so a document-wide query returns the first
+      // note every time and the comparison below would pass on one sentence
+      // repeated six times.
+      const { container } = renderMachine({
+        snapshot: {
+          ...base,
+          protocol: { ...base.protocol, t3code, ...(t3codeObservation ? { t3codeObservation } : {}) },
+        } as typeof base,
+      });
+      return container.querySelector('.session-note')?.textContent ?? '';
+    }
+
+    it('gives every unobservable status a different sentence', () => {
+      const notes = [
+        'not-provided', 'not-configured', 'misconfigured', 'connecting', 'cooling-down', 'unreachable',
+      ].map((t3code) => noteFor(t3code));
+      for (const note of notes) expect(note.length).toBeGreaterThan(0);
+      expect(new Set(notes).size).toBe(notes.length);
+    });
+
+    it('says nothing at all when session state is available', () => {
+      expect(noteFor('available', { observedAt: '2026-08-30T01:00:00Z', ageMs: 0 })).toBe('');
+    });
+
+    it('carries when the cooling-down timer started, and why', () => {
+      const note = noteFor('cooling-down', {
+        message: 'ECONNREFUSED 127.0.0.1:3799',
+        since: '2026-08-30T00:58:00Z',
+      });
+      expect(note).toContain('2026-08-30T00:58:00Z');
+      expect(note).toContain('ECONNREFUSED 127.0.0.1:3799');
+    });
+
+    it('names which part of the configuration is half-written', () => {
+      const note = noteFor('misconfigured', { message: 'serverUrl without bootstrapToken' });
+      expect(note).toContain('serverUrl without bootstrapToken');
+    });
+
+    it('reports a stale age rather than implying the content is current', () => {
+      const note = noteFor('stale', { observedAt: '2026-08-30T00:56:00Z', ageMs: 240_000 });
+      expect(note).toContain('240s');
+      expect(note).toContain('last-known');
+    });
+
+    it('says the age is unknown rather than guessing when the server sent none', () => {
+      expect(noteFor('stale')).toContain('an unknown length of time');
+    });
+  });
+
+  /* Both new stamps must be visually distinct, not two spellings of one class. */
+  it('renders STOPPED and ERROR as their own stamps rather than as SETTLED', () => {
+    const base = snapshot();
+    // `porch` is stripped from both rows on purpose: a requested gate outranks
+    // every session signal, and spir-146 carries one — so leaving it in would
+    // test the gate precedence a second time instead of the two new words.
+    const { container } = renderMachine({
+      snapshot: {
+        ...base,
+        protocol: {
+          ...base.protocol,
+          identities: base.protocol.identities.map(({ porch: _drop, ...identity }) =>
+            identity.roleId === 'air-220'
+              ? { ...identity, session: { status: 'stopped', settled: false } }
+              : identity.roleId === 'spir-146'
+                ? { ...identity, session: { status: 'error', settled: true, lastError: 'provider crashed' } }
+                : identity),
+        },
+      },
+    });
+    const stopped = container.querySelector('[data-id="air-220"] .status-stamp')!;
+    const errored = container.querySelector('[data-id="spir-146"] .status-stamp')!;
+    expect(stopped.textContent).toBe('STOPPED');
+    expect(errored.textContent).toBe('ERROR');
+    expect(stopped.className).not.toBe(errored.className);
+    // The settled thread must NOT launder the error into a completion.
+    expect(container.querySelector('[data-id="spir-146"]')!.getAttribute('data-status')).toBe('error');
   });
 
   it('does not render disconnected and connected the same way', () => {

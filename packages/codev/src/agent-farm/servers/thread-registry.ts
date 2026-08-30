@@ -41,17 +41,34 @@ export interface LiveThread {
 }
 
 /**
- * When a cached observation was taken, and how old it is now.
+ * What the provider can say about its own answer, beyond the status word.
  *
  * ON THE WIRE AS A SIBLING OF `t3code`, NOT FOLDED INTO IT. A cached snapshot
  * that cannot say how old it is reintroduces exactly the failure the STALE band
  * exists to prevent: "it had finished when I last looked" rendered as "it has
  * finished". `ageMs` is computed where the snapshot is built rather than by the
  * consumer, because the consumer's clock is a different clock.
+ *
+ * EVERY MEMBER IS OPTIONAL BECAUSE DIFFERENT STATUSES HAVE DIFFERENT THINGS TO
+ * SAY, and the alternative was worse: `message` and `since` previously died at
+ * this boundary, so `cooling-down` reached the client as a bare word with no
+ * when and no why, and `misconfigured`'s explanation of what is half-written
+ * reached it nowhere at all — an operator told only "your configuration is
+ * incomplete" has to go and diff it themselves. A status with nothing to add
+ * carries no observation, which is not the same as carrying an empty one.
+ *
+ * `observedAt` and `ageMs` travel together or not at all. Absence of `ageMs` is
+ * an UNKNOWN age, and a consumer must not read that as a small one.
  */
 export interface T3codeObservation {
-  readonly observedAt: string;
-  readonly ageMs: number;
+  /** Present only when content was actually observed. */
+  readonly observedAt?: string;
+  /** Present only alongside `observedAt`. */
+  readonly ageMs?: number;
+  /** The provider's own words, for a status that has some. */
+  readonly message?: string;
+  /** `cooling-down` only: when the failure that started the timer happened. */
+  readonly since?: string;
 }
 
 /**
@@ -196,15 +213,30 @@ function sessionOf(
  * `available` is fresh by construction — the provider only calls it that while
  * it is still watching — so its age is zero rather than absent. Publishing no
  * age there would make "fresh" and "age unknown" the same payload.
+ *
+ * The failure statuses publish their MESSAGE, and `cooling-down` also publishes
+ * `since`. This function used to return `{}` for all of them, which meant the
+ * provider computed a reason and the wire threw it away: the client could say
+ * "this server is waiting before it retries" and never why, or for how long.
+ * A status word with the detail stripped off is a diagnosis with the evidence
+ * removed.
  */
 function observationOf(t3code: T3codeThreadSnapshot): { t3codeObservation?: T3codeObservation } {
-  if (t3code.status === 'available') {
-    return { t3codeObservation: { observedAt: t3code.observedAt, ageMs: 0 } };
+  switch (t3code.status) {
+    case 'available':
+      return { t3codeObservation: { observedAt: t3code.observedAt, ageMs: 0 } };
+    case 'stale':
+      return { t3codeObservation: { observedAt: t3code.observedAt, ageMs: t3code.ageMs } };
+    case 'cooling-down':
+      return { t3codeObservation: { message: t3code.message, since: t3code.since } };
+    case 'unreachable':
+    case 'misconfigured':
+      return { t3codeObservation: { message: t3code.message } };
+    default:
+      // `not-provided`, `not-configured` and `connecting` have nothing to add
+      // beyond the word itself. Carrying an empty object would say they did.
+      return {};
   }
-  if (t3code.status === 'stale') {
-    return { t3codeObservation: { observedAt: t3code.observedAt, ageMs: t3code.ageMs } };
-  }
-  return {};
 }
 
 function dbSignal(error: unknown): AgentStateSignal {
