@@ -86,8 +86,16 @@ export const NONCE_ENV_VAR = 'CODEV_APPROVAL_NONCE';
 export interface StoredCapability {
   readonly id: string;
   readonly machine: string;
-  /** The human-paired session that requested issuance. */
+  /** The paired client session that requested issuance. */
   readonly sessionId: string;
+  /**
+   * What the token that paired that session claimed as its authority, verbatim.
+   *
+   * Recorded and never interpreted. The host cannot verify a human was present —
+   * a same-uid process can mint its own pairing token — so an approval records
+   * the claim it was made under rather than a verification nothing performed.
+   */
+  readonly authority?: string;
   /** Hex SHA-256 of the secret. */
   readonly verifier: string;
   readonly issuedAt: string;
@@ -99,6 +107,7 @@ export interface IssuedCapability {
   readonly capabilityId: string;
   readonly sessionId: string;
   readonly machine: string;
+  readonly authority?: string;
   /** Returned exactly once. Never persisted by this module in any form. */
   readonly presentation: string;
   readonly expiresAt: string;
@@ -111,6 +120,7 @@ export interface CapabilityVerification {
   readonly capabilityId?: string;
   readonly sessionId?: string;
   readonly machine?: string;
+  readonly authority?: string;
 }
 
 function sha256Hex(value: string): string {
@@ -207,7 +217,12 @@ export class ApprovalCapabilityStore {
     writeJsonFile(this.#path, { version: 1, capabilities });
   }
 
-  issue(options: { sessionId: string; lifetimeMs?: number; machine?: string }): IssuedCapability {
+  issue(options: {
+    sessionId: string;
+    lifetimeMs?: number;
+    machine?: string;
+    authority?: string;
+  }): IssuedCapability {
     const requested = options.lifetimeMs ?? DEFAULT_CAPABILITY_LIFETIME_MS;
     const lifetime = Math.min(Math.max(requested, 1), MAX_CAPABILITY_LIFETIME_MS);
     const now = this.#now();
@@ -217,6 +232,7 @@ export class ApprovalCapabilityStore {
       id,
       machine: options.machine ?? this.#machine,
       sessionId: options.sessionId,
+      ...(options.authority ? { authority: options.authority } : {}),
       verifier: sha256Hex(secret),
       issuedAt: new Date(now).toISOString(),
       expiresAt: new Date(now + lifetime).toISOString(),
@@ -226,6 +242,7 @@ export class ApprovalCapabilityStore {
       capabilityId: id,
       sessionId: record.sessionId,
       machine: record.machine,
+      ...(record.authority ? { authority: record.authority } : {}),
       presentation: `${id}${PRESENTATION_SEPARATOR}${secret}`,
       expiresAt: record.expiresAt,
     };
@@ -320,6 +337,7 @@ export class ApprovalCapabilityStore {
       authorized: true,
       code: APPROVAL_SIGNAL.APPROVAL_AUTHORIZED,
       message: 'capability verified',
+      ...(record.authority ? { authority: record.authority } : {}),
       capabilityId,
       sessionId: record.sessionId,
       machine: record.machine,
@@ -660,7 +678,11 @@ export function attributeApprovalCaller(input: {
 
 export interface IssuanceRequest {
   /** Recognition from `HumanPairedSessionRegistry.recognize`, passed by value. */
-  readonly humanSession: { readonly paired: boolean; readonly sessionId?: string };
+  readonly humanSession: {
+    readonly paired: boolean;
+    readonly sessionId?: string;
+    readonly authority?: string;
+  };
   /** What the caller says it is. A lying caller is not caught here; see the threat model. */
   readonly declaredPrincipal?: string;
   readonly machine?: string;
@@ -701,6 +723,7 @@ export function issueApprovalCapability(
       sessionId: request.humanSession.sessionId,
       machine: request.machine,
       lifetimeMs: request.lifetimeMs,
+      authority: request.humanSession.authority,
     }),
   };
 }

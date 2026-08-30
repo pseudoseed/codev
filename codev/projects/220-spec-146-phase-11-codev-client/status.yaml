@@ -1,0 +1,27 @@
+id: '220'
+title: spec-146-phase-11-codev-client
+protocol: air
+phase: pr
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: approved
+    requested_at: '2026-08-30T02:19:31.623Z'
+    approved_at: '2026-08-30T03:23:24.165Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-30T03:23:24.165Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-30T00:32:39.201Z'
+updated_at: '2026-08-30T03:23:24.961Z'
+pr_history:
+  - phase: implement
+    pr_number: 224
+    branch: builder/air-220
+    created_at: '2026-08-30T01:36:18.697Z'
+pr_ready_for_human: false

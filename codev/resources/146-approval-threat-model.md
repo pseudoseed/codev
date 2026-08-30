@@ -48,18 +48,58 @@ secret is absent from what a builder reads through it.
 ### Issuance root of trust
 
 A capability exists only if `codev-agent` issued it, and `codev-agent` issues only to a
-**human-paired session** — `HumanPairedSessionRegistry`, whose sessions are created solely
-by the `human-client` pairing completion path, live in memory, die on restart, expire after
-at most 8 hours and after 30 idle minutes.
-
-The root of trust is therefore the pairing ceremony, not the machine and not the process.
+**paired client session** — `HumanPairedSessionRegistry`, whose sessions are created solely
+by the pairing completion path, live in memory, die on restart, expire after at most 8 hours
+and after 30 idle minutes.
 
 `issueApprovalCapability` also refuses a caller that **declares itself** a builder or an
 architect. That is defence in depth and nothing more. **Over loopback TCP the peer process
 is not attributable**: `remoteAddress` is `127.0.0.1` for a builder, an architect and a
-browser alike, and there is no peer-credential mechanism for TCP on macOS. A builder that
-declares itself a human client is not caught by that check. What stops it is that it has no
-paired session.
+browser alike, and there is no peer-credential mechanism for TCP on macOS.
+
+### What the pairing ceremony does NOT establish
+
+**An earlier version of this section said the root of trust was the pairing ceremony, and
+that what stopped a builder declaring itself a human client was having no paired session.
+Both statements were false**, and they were the more dangerous kind of false: a document
+asserting a property its code never had, which the next person builds on.
+
+Minting a pairing token requires nothing but write access to the pairing store
+(`PairingStore.issue`). Every agent on this host runs as the same user as the operator, so a
+builder can construct that store, mint a token, redeem it at
+`POST /api/agent/v1/human-sessions`, hold a session this surface cannot distinguish from a
+browser's, and approve its own gate through the advertised path.
+
+**This is not fixable on a single-uid host by anything in this design.** Every channel
+available to the operator — a file, a TTY, a spawned process, an environment variable — is
+available to a builder running as that operator. A mechanism that merely *looked* like
+out-of-band authority would be a second false guarantee stacked on the first, and harder to
+see than the one it replaced.
+
+`agent-approval-path.test.ts` pins the residual under the name *"lets anything with
+filesystem access complete the ceremony — the stated residual"*: it constructs the store the
+way a builder would, completes the whole ceremony, and asserts what the record says
+afterwards. A future design that adds real authority makes that test fail, which is where
+the change belongs.
+
+### What the ceremony DOES establish, and what is recorded
+
+Three things, all real, all enforced, none of them human presence:
+
+| Established | Enforced by |
+|---|---|
+| A live, scoped, revocable per-machine credential | `MachineCredentialStore`; revoking one machine leaves the others untouched (criterion 15) |
+| One session per deliberate mint, countable and single-use | The pairing token is spent on redemption and tombstoned |
+| A token cannot be diverted between ceremonies | `PairingPurpose` — a token minted for `machine-credential` cannot open a `client-session`, and the reverse. A token refused for the wrong purpose is **not** consumed |
+
+On top of that the system **records rather than asserts**. Every mint names an `authority`:
+the minter's own account of what authorized it, required and non-empty. That string travels
+verbatim from the token to the session, to the capability, and into
+`status.yaml` as `gates.<name>.approval.authority`.
+
+So a reader of `status.yaml` sees the claim an approval was made under. What they must never
+read into it is that a person was there: `authorization: 'capability'` means a verified
+**credential** and a spent single-use nonce, and nothing about who held it.
 
 ### Storage
 
@@ -239,14 +279,18 @@ writes. Do not build a phase-7 claim on a boundary this phase proved is not ther
 
 ## Where the boundary actually is
 
-The verifier-not-credential property, plus issuance gated on a human-paired session, removes
+The verifier-not-credential property, plus issuance gated on a paired client session, removes
 the **replay** of a legitimately issued credential by anything that can read the machine. It
-does not survive a same-uid writer, and the *Storage* section says so.
+does not survive a same-uid writer, and the *Storage* section says so — nor does the pairing
+ceremony itself, which *What the pairing ceremony does NOT establish* sets out above.
 
 So the boundary is smaller than a boundary. What this phase actually delivers is that porch is
-no longer the instrument of a self-approval, and that an approval which went through porch
-carries evidence of which capability and which human session made it — where before, every
-approval looked identical and none of them proved anything.
+no longer the instrument of an *unrecorded* self-approval, and that an approval which went
+through porch carries evidence of which capability, which session and which stated authority
+made it — where before, every approval looked identical and none of them recorded anything.
+
+That is provenance, not prevention. Against a same-uid adversary the difference is that the
+approval is **visible in `status.yaml` afterwards**, not that it was stopped.
 
 Everything else — the declared-principal refusal, the environment and cwd attribution — is
 defence in depth, and is described that way here because describing it as more is what got the
