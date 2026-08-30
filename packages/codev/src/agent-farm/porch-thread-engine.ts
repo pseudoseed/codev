@@ -22,7 +22,7 @@ import {
   type CommandDispatcher,
 } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
-import type { ThreadEngine, ThreadRecord } from './thread-runtime.js';
+import type { AttachThreadInput, ThreadEngine, ThreadRecord } from './thread-runtime.js';
 import type { SpawnThreadFactory } from './db/thread-identity.js';
 
 export interface PorchThreadEngineOptions {
@@ -38,17 +38,22 @@ export interface PorchThreadEngineOptions {
 /**
  * Why a thread this engine has never heard of is not the same as a thread that does not exist.
  *
- * The engine holds its threads in process-local maps and cannot rehydrate one from the
- * server. Every `afx` invocation is a fresh process, so a thread created by `afx spawn` is
- * unknown to the `afx interrupt` that follows it — and `Unknown thread <id>` reads as "no
- * such thread", which is a different and wrong diagnosis. The limitation is real and is not
- * fixed here; the message at least names it.
+ * The engine holds its threads in process-local maps. Every `afx` invocation is a fresh
+ * process, so a thread created by `afx spawn` is unknown to the `afx interrupt` that
+ * follows it — and `Unknown thread <id>` reads as "no such thread", which is a different
+ * and wrong diagnosis.
+ *
+ * `attach` is now the way out, and the message says so. It is not automatic: the worktree
+ * and branch are not derivable from a thread id here, so a caller that holds the row must
+ * hand them over. Until it does, this remains "I have not been told about it".
  */
 function unknownThread(threadId: string): string {
   return (
-    `Thread ${threadId} was not created by this process. This engine keeps threads in memory `
-    + `and cannot yet re-attach to one from a previous process or after a server restart, so `
-    + `this is not evidence that the thread does not exist.`
+    `Thread ${threadId} was not created by this process and has not been attached. This engine `
+    + `keeps threads in memory, so a thread from a previous process or from before a server `
+    + `restart is unknown here until \`attach\` adopts it — this is not evidence that the thread `
+    + `does not exist. The caller holds the worktree and branch that \`attach\` needs; this engine `
+    + `cannot recover them from the id alone.`
   );
 }
 
@@ -132,6 +137,54 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
       // read idle while the first one runs.
       if (input.prompt) track(record, await thread.beginTurn(input.prompt));
       return thread.threadId;
+    },
+
+    /**
+     * Adopt a thread that already exists on the server.
+     *
+     * `DriverThread.attach` rather than `create`: creating would dispatch a second
+     * `thread.create` and re-apply the worktree setup, so "resume the thread from
+     * before the restart" would silently become "make a new one and overwrite the
+     * worktree".
+     *
+     * Idempotent, because the caller cannot always know whether this process has
+     * already adopted the thread and a second attach must not replace a
+     * `DriverThread` that is tracking a live turn.
+     */
+    async attach(input: AttachThreadInput) {
+      const existing = records.get(input.threadId);
+      if (existing) return existing;
+      const thread = DriverThread.attach(
+        {
+          dispatcher: options.dispatcher,
+          journal: options.journal,
+          tracker: options.tracker,
+        },
+        {
+          threadId: input.threadId,
+          harnessName: input.harnessName ?? options.defaultHarness ?? 'codex',
+          model: input.model,
+          defaultModel: options.defaultModel,
+          worktreePath: input.worktreePath,
+          branch: input.branch,
+        },
+      );
+      threads.set(thread.threadId, thread);
+      const record: ThreadRecord = {
+        threadId: thread.threadId,
+        worktreePath: input.worktreePath,
+        branch: input.branch,
+        builderId: input.builderId,
+        // Whether a turn is running on the server right now is not knowable from
+        // here — this process holds no subscription to the thread. `null` means
+        // "this engine is not following a turn", and no caller may read it as
+        // "the thread is idle".
+        activeTurnId: null,
+        merged: false,
+        launched: true,
+      };
+      records.set(thread.threadId, record);
+      return record;
     },
 
     async startTurn(threadId, text) {

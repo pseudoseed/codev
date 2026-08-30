@@ -151,6 +151,28 @@ export interface CreateThreadOptions {
 }
 
 /**
+ * Inputs for `DriverThread.attach`.
+ *
+ * Deliberately NOT `Partial<CreateThreadOptions>`: attaching needs no
+ * `projectId` (the thread has one), no `title` (it has one), and no role — and a
+ * shape that accepted them would invite a caller to pass a role that is silently
+ * dropped.
+ */
+export interface AttachThreadOptions {
+  /** The existing thread's id, as recorded at spawn. */
+  readonly threadId: string;
+  /** Codev harness name — mapped to a driver kind, exactly as `create` does. */
+  readonly harnessName: string;
+  readonly model?: string;
+  readonly defaultModel?: string;
+  readonly instanceId?: string;
+  readonly worktreePath: string;
+  readonly branch: string;
+  readonly guardFiles?: ReadonlyArray<WorktreeFile>;
+  readonly retainEvents?: number;
+}
+
+/**
  * A thread was requested with no model.
  *
  * Separate from `ModelUnsupportedForDriverError`, which is "this harness cannot
@@ -271,7 +293,16 @@ export class DriverThread {
       modelSelection: mapping.modelSelection,
       runtimeMode: options.runtimeMode ?? 'full-access',
       interactionMode: options.interactionMode ?? 'default',
-      branch: options.branch,
+      // `thread.create` types `branch` as NullOr(TrimmedNonEmptyString), so the
+      // empty string is not "no branch" on the wire — it is a value the server
+      // refuses, and it refuses it as a `Die` that names a schema path rather
+      // than anything a caller can act on.
+      //
+      // Codev's architect has no branch and says so with `''` (`ThreadRecord.branch`
+      // is a plain string). Every architect thread therefore failed at creation
+      // against a real server, which is why spec 146's "an architect is a thread
+      // whose worktree is the workspace root" could not be true in production.
+      branch: options.branch === '' ? null : options.branch,
       worktreePath: options.worktreePath,
       createdAt: new Date().toISOString(),
     });
@@ -288,6 +319,57 @@ export class DriverThread {
     );
     thread.#pendingRole = options.roleContent ?? null;
     return thread;
+  }
+
+  /**
+   * Re-attach to a thread that already exists on the server.
+   *
+   * `create` is the wrong verb for this and using it would be a bug, not a
+   * shortcut: it dispatches `thread.create` and lays down the worktree files, so
+   * "resume the thread I made before the restart" would create a second thread
+   * and overwrite a worktree that is already set up.
+   *
+   * WHAT ATTACHING DOES NOT GIVE YOU
+   *
+   * The returned thread has an EMPTY event log. Prior turns live on the server
+   * and are replayed through `observe`, so `events`, `lastSequence` and any
+   * `assistantText` over an earlier range read as if nothing had happened. That
+   * is "I have not been told", not "there was nothing" — a caller that needs the
+   * history must resubscribe and feed it in.
+   *
+   * There is no pending role. A thread that exists has already had its first
+   * turn, so re-delivering the role would repeat instructions the agent has.
+   */
+  static attach(deps: DriverThreadDeps, options: AttachThreadOptions): DriverThread {
+    // The same mapping `create` does, and it must fail the same way: an attached
+    // thread whose harness cannot be mapped is not a thread this driver can drive,
+    // and finding that out at the first turn instead of here would report it as a
+    // turn failure.
+    const model = options.model ?? options.defaultModel;
+    const mapping = mapHarness(options.harnessName, {
+      model,
+      instanceId: options.instanceId,
+    });
+    if (!mapping.modelSelection) {
+      throw new ModelSelectionRequiredError(options.harnessName);
+    }
+    // Planned, never applied. The plan is what `runCheck` and the mapping read;
+    // applying it would rewrite harness config files under a worktree an agent has
+    // been working in since.
+    const setup = planWorktreeSetup(mapping.driverKind, {
+      worktreePath: options.worktreePath,
+      guardFiles: options.guardFiles,
+    });
+    return new DriverThread(
+      options.threadId,
+      options.worktreePath,
+      options.branch,
+      mapping,
+      setup,
+      [],
+      deps,
+      options.retainEvents ?? 5_000,
+    );
   }
 
   /** The driver kind this thread runs under. */

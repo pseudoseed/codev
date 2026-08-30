@@ -26,10 +26,27 @@ that treats a missing checkout as a pass reports green for tests that never ran.
 ```bash
 node tools/t3-server/t3-server.mjs acquire   # fetch the pinned commit
 node tools/t3-server/t3-server.mjs verify    # assert checkout == pin.json, and clean
-node tools/t3-server/t3-server.mjs start     # verify, then serve on 127.0.0.1
+node tools/t3-server/t3-server.mjs start     # verify, then serve on 127.0.0.1 (COLD: wipes the data dir)
+node tools/t3-server/t3-server.mjs restart   # stop and start again, KEEPING the data dir
 node tools/t3-server/t3-server.mjs status    # what is running, does it match
 node tools/t3-server/t3-server.mjs stop
 ```
+
+## `restart` exists because `stop` + `start` is not one
+
+`start` deletes the data dir before spawning, and that is correct for the cold-start evidence
+below: a start-twice proof is only a proof if each run begins with an empty database. It means
+`stop` then `start` is a **new server**, not the same one restarted.
+
+Spec 146 phase 9's item 4 — "an architect thread survives a server restart and resumes with
+context" — cannot be evaluated that way at all. The harness would delete the thread, and the
+result would read as the criterion failing.
+
+`restart` keeps the data dir, and refuses with exit `3` (`NO_DATA_TO_KEEP`) when there is none
+to keep, rather than silently performing a cold start under a restart's name.
+
+Each server lifetime prints **one** pairing token, and a pairing grant is one-time, so a client
+that reconnects after a restart needs the new token `ready` reports.
 
 Environment: `T3CODE_ROOT` (default `/Users/chris/dev/t3code`), `T3_HARNESS_PORT` (default 3799),
 `T3_HARNESS_DIR` (default `tools/t3-server/.runtime`), and required `T3_NODE` (the Node binary used
@@ -72,7 +89,7 @@ this checkout even though the declared range is `^24.13.1`. Server readiness is 
 ## Live test opt-in
 
 `T3_NODE` configures the harness; it does **not** opt the default unit suite into a real provider
-turn. The Phase 9 live test additionally requires `T3_LIVE=1`:
+turn. The Phase 9 live tests additionally require `T3_LIVE=1`:
 
 ```bash
 pnpm --filter @cluesmith/codev-types build
@@ -83,6 +100,15 @@ T3_NODE=/absolute/path/to/node T3_LIVE=1 pnpm --filter @cluesmith/codev exec vit
 
 The build steps are required because the live block imports the packages' `dist` artifacts. A
 plain `pnpm test` never dispatches this paid provider turn, even when `T3_NODE` is configured.
+
+The second live test — issue #219, `#179` items 3 and 4 — starts, **restarts** and stops a server,
+so point it at a port nobody else is using:
+
+```bash
+T3_NODE=/absolute/path/to/node T3_HARNESS_PORT=3801 T3_LIVE=1 \
+  pnpm --filter @cluesmith/codev exec vitest run \
+  src/agent-farm/__tests__/spec-146-phase-9-live-architect-thread.test.ts
+```
 
 ## CI
 

@@ -28,8 +28,34 @@ export interface ThreadRecord {
   launched: boolean;
 }
 
+/**
+ * What `ThreadEngine.attach` needs to adopt a thread it did not create.
+ *
+ * The worktree and branch are NOT re-derivable from the thread id by this
+ * process — they come from the row that recorded them at spawn. An architect's
+ * worktree is the workspace root and its branch is empty, which is the shape
+ * `createArchitectThread` writes.
+ */
+export interface AttachThreadInput {
+  readonly threadId: string;
+  readonly worktreePath: string;
+  readonly branch: string;
+  readonly builderId: string;
+  readonly harnessName?: string;
+  readonly model?: string;
+}
+
 export interface ThreadEngine {
   create(input: Parameters<SpawnThreadFactory>[0]): Promise<string>;
+  /**
+   * Adopt a thread that already exists on the server.
+   *
+   * This is the difference between "the thread is gone" and "this process has
+   * never heard of it", and until it existed the engine could only say the
+   * second in the first's words. A thread survives a server restart; the
+   * in-process map that knew about it does not.
+   */
+  attach(input: AttachThreadInput): Promise<ThreadRecord>;
   startTurn(threadId: string, text: string): Promise<void>;
   interrupt(threadId: string): Promise<{ activeTurnId: null }>;
   worktreePath(threadId: string): string | undefined;
@@ -78,6 +104,24 @@ export function createMemoryThreadEngine(): ThreadEngine {
         launched: Boolean(input.launchScript || input.prompt || input.role === 'architect'),
       });
       return threadId;
+    },
+    async attach(input) {
+      const existing = threads.get(input.threadId);
+      if (existing) return existing;
+      const record: ThreadRecord = {
+        threadId: input.threadId,
+        worktreePath: input.worktreePath,
+        branch: input.branch,
+        builderId: input.builderId,
+        activeTurnId: null,
+        merged: false,
+        // An attached thread was launched before this process existed. Reporting
+        // `false` would say "it was never given anything to do", which is a claim
+        // about the thread rather than about this engine's memory of it.
+        launched: true,
+      };
+      threads.set(input.threadId, record);
+      return record;
     },
     async startTurn(threadId, _text) {
       const record = threads.get(threadId);

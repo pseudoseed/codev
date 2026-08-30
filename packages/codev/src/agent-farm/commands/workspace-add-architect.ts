@@ -18,6 +18,7 @@ import { getTowerClient } from '../lib/tower-client.js';
 import { validateArchitectName } from '../utils/architect-name.js';
 import { getArchitects, setArchitectByName } from '../state.js';
 import { createArchitectThread, tryGetThreadEngine } from '../thread-runtime.js';
+import { ensureThreadBackendReady } from '../thread-backend.js';
 
 export interface WorkspaceAddArchitectOptions {
   name?: string;
@@ -49,6 +50,20 @@ export async function workspaceAddArchitect(
     // Pass the trimmed value through to the Tower client.
     options.name = trimmed;
   }
+
+  // Without this the thread branch below is dead code in production. Every `afx`
+  // invocation is a fresh process, and nothing else in this command registers an
+  // engine — so `tryGetThreadEngine()` was always undefined here and a workspace
+  // configured for threads still got a Tower terminal. `afx spawn` already calls
+  // this for the same reason; `add-architect` is the command that makes an
+  // architect a thread, so it is the one place the omission made spec 146's
+  // "an architect is a thread whose worktree is the workspace root" unreachable.
+  //
+  // Returns `not-configured` and registers nothing when no server is named, which
+  // leaves the Tower path below byte-for-byte unchanged. It throws when a server IS
+  // configured and cannot be reached, which is the module's standing rule: an
+  // unreachable server must not be spelled the same way as an unconfigured one.
+  await ensureThreadBackendReady(workspacePath);
 
   if (tryGetThreadEngine()) {
     const existing = new Set(getArchitects(workspacePath).map((a) => a.name));

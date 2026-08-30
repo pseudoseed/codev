@@ -345,12 +345,46 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
     }
   });
 
+  /**
+   * Issue #219. `stop` then `start` is not a restart: `start` wipes the data dir,
+   * so the pair is a cold start wearing a restart's shape. Spec 146 phase 9's item
+   * 4 — "an architect thread survives a server restart" — cannot be evaluated
+   * against that at all, because the harness deletes the thread and the result
+   * reads as the criterion failing.
+   */
+  it('separates a restart from a cold start, and refuses to fake one', () => {
+    const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
+    const src = readFileSync(harness, 'utf8');
+    // `start` still wipes by default: the phase-1 cold-start evidence is only
+    // evidence if each run begins with an empty database.
+    expect(src).toContain('function start({ keepData = false } = {})');
+    expect(src).toContain('start({ keepData: true })');
+
+    // And a restart with nothing to preserve exits "could not determine" rather
+    // than quietly cold-starting — which would report the wipe as the thread's fate.
+    const emptyDir = mkdtempSync(join(tmpdir(), 't3-restart-'));
+    try {
+      const refused = spawnSync(process.execPath, [harness, 'restart'], {
+        encoding: 'utf8',
+        env: { ...process.env, T3_HARNESS_DIR: emptyDir },
+      });
+      expect(refused.status).toBe(3);
+      expect(refused.stderr).toContain('NO_DATA_TO_KEEP: could not check:');
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+    }
+  });
+
   it('requires a second opt-in before the unit suite can dispatch a live provider turn', () => {
-    const src = readFileSync(
-      join(repoRoot, 'packages', 'codev', 'src', 'agent-farm', '__tests__', 'spec-146-phase-9-live-harness.test.ts'),
-      'utf8',
-    );
-    expect(src).toContain("process.env.T3_LIVE === '1'");
-    expect(src).toContain('status.ok && runtime.ok && liveOptIn');
+    // Every live file, not one of them. The gate is only a gate if a new live
+    // test cannot be added without it, and #219 added a second.
+    for (const file of ['spec-146-phase-9-live-harness.test.ts', 'spec-146-phase-9-live-architect-thread.test.ts']) {
+      const src = readFileSync(
+        join(repoRoot, 'packages', 'codev', 'src', 'agent-farm', '__tests__', file),
+        'utf8',
+      );
+      expect(src, file).toContain("process.env.T3_LIVE === '1'");
+      expect(src, file).toContain('status.ok && runtime.ok && liveOptIn');
+    }
   });
 });

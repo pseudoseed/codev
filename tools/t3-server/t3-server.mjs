@@ -15,6 +15,7 @@
  *   acquire   clone/fetch the pinned commit into a checkout
  *   verify    assert the checkout, and any running server, match pin.json
  *   start     start a server from the pinned checkout on a private data dir
+ *   restart   stop and start again, KEEPING the data dir
  *   stop      stop it
  *   status    report what is running and whether it matches the pin
  *
@@ -297,7 +298,19 @@ function assertChildSurvived(pid, runtime) {
   }
 }
 
-function start() {
+/**
+ * Start the pinned server.
+ *
+ * `keepData` is the whole difference between a cold start and a restart, and it
+ * defaults to false because every existing caller wants a cold one: the phase-1
+ * cold-start evidence is only evidence if the database is empty each time.
+ *
+ * A restart passes `true`, because a server that comes back with an erased
+ * database is not the same server. Testing "does a thread survive a restart"
+ * against a wiped data dir measures the wipe, and reports it as the thread's
+ * fate.
+ */
+function start({ keepData = false } = {}) {
   verify();
   const runtime = serverRuntime();
 
@@ -306,10 +319,20 @@ function start() {
 
   mkdirSync(runtimeDir, { recursive: true });
   const dataDir = join(runtimeDir, 'data');
-  rmSync(dataDir, { recursive: true, force: true });
+  if (keepData) {
+    // Refuse rather than quietly cold-start. "There was nothing to preserve" and
+    // "the state was preserved" must not exit the same way — a restart that
+    // silently began from an empty database is exactly the false negative this
+    // flag exists to prevent.
+    if (!existsSync(dataDir)) {
+      die(UNDETERMINED, `NO_DATA_TO_KEEP: could not check: ${dataDir} does not exist, so there is no server state to preserve. This would have been a cold start wearing a restart's name.`);
+    }
+  } else {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
   mkdirSync(dataDir, { recursive: true });
 
-  say(`starting on 127.0.0.1:${port} with data dir ${dataDir}`);
+  say(`starting on 127.0.0.1:${port} with data dir ${dataDir}${keepData ? ' (preserved)' : ''}`);
 
   const log = join(runtimeDir, 'server.log');
   // 0600: the server prints a pairing token on stdout and this file receives it
@@ -468,6 +491,24 @@ function stop() {
   say(`stopped pid ${pid}`);
 }
 
+/**
+ * Restart the running server without erasing its state.
+ *
+ * `stop` then `start` is not this: `start` wipes the data dir, so the pair is a
+ * cold start with a restart's shape. Spec 146 phase 9's item 4 — "an architect
+ * thread survives a server restart" — cannot be evaluated against that at all,
+ * because the thread is deleted by the harness rather than by anything the
+ * criterion is about.
+ */
+function restart() {
+  const dataDir = join(runtimeDir, 'data');
+  if (!existsSync(dataDir)) {
+    die(UNDETERMINED, `NO_DATA_TO_KEEP: could not check: ${dataDir} does not exist. Nothing has run here, so there is no restart to perform.`);
+  }
+  stop();
+  start({ keepData: true });
+}
+
 function status() {
   const pid = readPid();
   if (!existsSync(t3Root)) {
@@ -497,11 +538,12 @@ switch (command) {
   case 'acquire': acquire(); break;
   case 'verify': verify(); break;
   case 'start': start(); break;
+  case 'restart': restart(); break;
   case 'ready': await ready(); break;
   case 'stop': stop(); break;
   case 'status': status(); break;
   case 'runtime': console.log(JSON.stringify(serverRuntime(), null, 2)); break;
   default:
-    console.error('usage: t3-server.mjs <acquire|verify|start|ready|stop|status|runtime>');
+    console.error('usage: t3-server.mjs <acquire|verify|start|restart|ready|stop|status|runtime>');
     process.exit(UNDETERMINED);
 }
