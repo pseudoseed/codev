@@ -21,6 +21,19 @@
  * prerequisite is missing, in the vocabulary the phase-9 live tests already use: a
  * green suite absorbs an honest "could not check" exactly as completely as it
  * absorbs a pass.
+ *
+ * ## `T3_HARNESS_DIR`, WHICH COSTS TWO RUNS TO LEARN THE HARD WAY
+ *
+ * `tools/t3-server/t3-server.mjs:39` resolves its runtime directory as
+ * `T3_HARNESS_DIR ?? <the script's own dir>/.runtime` — relative to the SCRIPT, and
+ * every builder worktree carries its own copy of that script. So from
+ * `.builders/<id>/` the harness looks in `.builders/<id>/tools/t3-server/.runtime`,
+ * which is empty, while a server started from the main checkout is still answering on
+ * port 3799. The harness then reports `printed no pairing token`, which reads as "the
+ * server is broken" and is actually "I looked somewhere else".
+ *
+ * `harnessRuntimeStatus` below turns that into a named skip that says the variable's
+ * name, because a wrong diagnosis delivered confidently is worse than a missing one.
  */
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -50,6 +63,37 @@ function harnessStatus(): { ok: boolean; reason: string } {
   }
 }
 
+/**
+ * Whether the harness will look for its server where the server actually is.
+ *
+ * Checked BEFORE the run rather than inferred from its failure. Without this the
+ * symptom is `printed no pairing token` from a harness that is working correctly,
+ * against a server that is running correctly, and the reader is sent to look at both.
+ */
+function harnessRuntimeStatus(): { ok: boolean; reason: string } {
+  const explicit = process.env.T3_HARNESS_DIR?.trim();
+  if (explicit) {
+    if (existsSync(explicit)) return { ok: true, reason: 'T3_HARNESS_DIR is set and exists' };
+    return {
+      ok: false,
+      reason: `NO_HARNESS_RUNTIME: could not check: T3_HARNESS_DIR is set to ${explicit}, which does not exist.`,
+    };
+  }
+  // The default the harness itself computes, from ITS OWN directory.
+  const implied = join(repoRoot, 'tools', 't3-server', '.runtime');
+  if (existsSync(implied)) return { ok: true, reason: 'the default runtime directory exists' };
+  return {
+    ok: false,
+    reason:
+      `NO_HARNESS_RUNTIME: could not check: T3_HARNESS_DIR is unset and ${implied} does not exist. `
+      + `The harness resolves its runtime directory relative to its own script, and every builder `
+      + `worktree carries a copy of that script — so from a worktree it looks here, finds nothing, `
+      + `and reports "printed no pairing token" about a server that may be running fine somewhere `
+      + `else. Set T3_HARNESS_DIR to the runtime directory of the checkout whose harness owns the `
+      + `server (usually <main checkout>/tools/t3-server/.runtime).`,
+  };
+}
+
 function runtimeStatus(): { ok: boolean; reason: string } {
   try {
     execFileSync(process.execPath, [harness, 'runtime'], { encoding: 'utf8', timeout: 15_000 });
@@ -68,11 +112,12 @@ function runtimeStatus(): { ok: boolean; reason: string } {
 describe('Issue #241 live — a turn settles through the production subscriber', () => {
   const status = harnessStatus();
   const runtime = runtimeStatus();
+  const harnessRuntime = harnessRuntimeStatus();
   const liveOptIn = process.env.T3_LIVE === '1';
-  const canRunLive = status.ok && runtime.ok && liveOptIn;
+  const canRunLive = status.ok && runtime.ok && harnessRuntime.ok && liveOptIn;
 
   it.skipIf(!canRunLive)(
-    '[live: requires T3_LIVE=1 + T3_NODE] the record activeTurnId returns to null on its own',
+    '[live: requires T3_LIVE=1 + T3_NODE + T3_HARNESS_DIR] the record activeTurnId returns to null on its own',
     async () => {
       execFileSync(process.execPath, [harness, 'stop'], { encoding: 'utf8', timeout: 30_000 });
       execFileSync(process.execPath, [harness, 'start'], { encoding: 'utf8', timeout: 60_000 });
@@ -197,6 +242,14 @@ describe('Issue #241 live — a turn settles through the production subscriber',
     }
     if (!runtime.ok) {
       expect(runtime.reason).toMatch(/could not check:/);
+      return;
+    }
+    if (!harnessRuntime.ok) {
+      // Named, and it names the VARIABLE. The failure this replaces was the harness
+      // reporting "printed no pairing token" while looking in a worktree's empty copy
+      // of its own runtime directory.
+      expect(harnessRuntime.reason).toMatch(/^NO_HARNESS_RUNTIME: could not check:/);
+      expect(harnessRuntime.reason).toContain('T3_HARNESS_DIR');
       return;
     }
     expect(status.reason).toBe('verified');
