@@ -15,6 +15,7 @@ gates:
       caller: pre-approval frontmatter on codev/specs/250-t3code-front-end-customization.md
   plan-approval:
     status: pending
+    requested_at: '2026-08-30T20:06:28.609Z'
   pr:
     status: pending
   verify-approval:
@@ -23,4 +24,4 @@ iteration: 1
 build_complete: true
 history: []
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-30T19:36:30.880Z'
+updated_at: '2026-08-30T20:06:28.610Z'
