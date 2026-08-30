@@ -19,7 +19,8 @@
 import { DriverThread } from '@cluesmith/porch-driver/thread';
 import {
   DispatchJournal,
-  recoverPendingCommands,
+  DISPATCH_METHOD,
+  isServerRefusal,
   type CommandDispatcher,
 } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
@@ -192,39 +193,65 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
      * Replay this thread's unanswered turn under its original command id.
      *
      * The journal is the durable record — an in-process map does not survive the Tower
-     * restart this is most likely to follow — so the pending intent is found by thread and
-     * exact message text rather than by anything held in memory.
+     * restart this is most likely to follow — so the pending intent is found by the
+     * caller's `ref` rather than by anything held in memory. NOT by message text: two
+     * identical messages to one agent are ordinary, and text matching made a stale intent
+     * answer for the current one, reporting delivered without delivering.
      *
-     * `recoverPendingCommands` does the replay, and this is the production caller it never
-     * had: the function existed, was tested, and nothing outside tests ever ran it. It
-     * replays EVERY pending command, which is right — all of them are equally ambiguous,
-     * and every one of them is collapsed by the server if it already landed.
+     * ONLY this intent is replayed. `recoverPendingCommands` — which drains the whole
+     * workspace journal — is deliberately NOT used, and the reason is worth stating
+     * because an earlier version of this did use it: replaying a sibling agent's intent
+     * marks it dispatched while its mailbox row is still held, so that row's next tick
+     * finds nothing pending and submits a fresh command id. Draining the journal to
+     * prevent a duplicate turn produced one, one agent over.
+     *
+     * That leaves `recoverPendingCommands` still without a production caller, which is
+     * an honest outcome rather than a gap to paper over: whole-journal replay is a
+     * process-startup operation, and doing it from a per-row delivery is what makes it
+     * wrong here.
      */
-    async recoverTurn(threadId: string, text: string) {
+    async recoverTurn(threadId: string, ref: string) {
       const mine = options.journal.pending().find((intent) => {
-        if (intent.type !== 'thread.turn.start') return false;
-        const command = intent.command as { threadId?: unknown; message?: { text?: unknown } };
-        return command.threadId === threadId && command.message?.text === text;
+        if (intent.type !== 'thread.turn.start' || intent.ref !== ref) return false;
+        // The thread too, so a ref reused across threads — which nothing does today, and
+        // which a future caller might — cannot match the wrong one.
+        return (intent.command as { threadId?: unknown }).threadId === threadId;
       });
       if (!mine) return 'none';
-      const replayed = await recoverPendingCommands(options.dispatcher, options.journal);
-      // Only if OUR intent was among the ids it actually replayed.
+
+      // MINE, and nothing else.
       //
-      // Being precise about why, because the obvious reason is wrong: a replay that fails
-      // makes `recoverPendingCommands` THROW, and that throw propagates out of here — so
-      // it is not the case that a normal return can silently have skipped ours for that
-      // reason. What this does catch is the intent being settled by something else between
-      // the `pending()` read above and the one inside the replay, after which this call
-      // re-dispatched nothing of ours. Reporting `recovered` there would mark a message
-      // delivered that nothing re-sent, and the caller would never try again.
-      return replayed.includes(mine.commandId) ? 'recovered' : 'none';
+      // The first version of this called `recoverPendingCommands`, which replays EVERY
+      // pending intent in the workspace journal and marks them all dispatched. Since
+      // round 6 submissions are concurrent across agents — the per-agent guard does not
+      // serialise them and the tick does not await — so two lost acknowledgements in one
+      // workspace is a state this code can produce. Draining the journal then marked the
+      // SIBLING's intent dispatched while its mailbox row stayed held: on the next tick
+      // its `recoverTurn` found nothing pending, `startTurn` minted a fresh id, and the
+      // duplicate turn this whole path exists to prevent appeared one agent over. A
+      // mid-loop throw was worse, because the intents replayed before it were already
+      // marked dispatched.
+      //
+      // So this is `recoverPendingCommands`' per-intent body, scoped to one intent. The
+      // split is the same and it is the load-bearing part: a REFUSAL is settled and is
+      // journalled, an UNANSWERED replay stays pending so the next attempt can try again.
+      try {
+        await options.dispatcher.call(DISPATCH_METHOD, mine.command);
+        options.journal.recordOutcome(mine.commandId, 'dispatched');
+        return 'recovered';
+      } catch (error) {
+        if (isServerRefusal(error)) {
+          options.journal.recordOutcome(mine.commandId, 'failed', (error as Error).message);
+        }
+        throw error;
+      }
     },
 
-    async startTurn(threadId, text) {
+    async startTurn(threadId, text, ref) {
       const thread = threads.get(threadId);
       if (!thread) throw new Error(unknownThread(threadId));
       const record = records.get(threadId);
-      const started = await thread.beginTurn(text);
+      const started = await thread.beginTurn(text, ref);
       if (record) track(record, started);
     },
 

@@ -1586,6 +1586,57 @@ describe('tower-routes', () => {
       expect(mailbox.findHeldForAgent(sendDbHolder.db, '/tmp/ws', 'spir-thread')).toHaveLength(0);
     });
 
+    /**
+     * Round 8. The drainer writes a reason when it REFUSES something and deliberately
+     * leaves it null when nothing was refused — a thread submission in flight is "pending,
+     * not stuck". The route substituted a PTY word for that state, so `afx send` to a
+     * HEALTHY thread-backed agent reported `no-live-pty`: a diagnosis from a vocabulary
+     * that does not apply, for a state that already had a true answer.
+     */
+    it('a held row with no reason is reported with no reason, not a PTY word', async () => {
+      sendDbHolder.db
+        .prepare(
+          `INSERT INTO builders (id, workspace_path, name, status, phase, worktree, branch, type, thread_id, started_at)
+           VALUES (?, ?, ?, 'implementing', 'implement', ?, ?, 'task', ?, ?)`,
+        )
+        .run('spir-thread', '/tmp/ws', 'spir-thread', '/tmp/ws/.builders/spir-thread', 'builder/spir-thread', 'thr-9', new Date().toISOString());
+      mockParseJsonBody.mockResolvedValue({ to: 'spir-thread', message: 'hello', workspace: '/tmp/ws' });
+      mockResolveTarget.mockReturnValue({ code: 'NOT_FOUND', message: 'no live terminal' });
+      mockResolveAgentInRegistry.mockReturnValue({ workspacePath: '/tmp/ws', agent: 'spir-thread', kind: 'builder' });
+      const req = makeReq('POST', '/api/send');
+      const { res, statusCode, body } = makeRes();
+
+      await handleRequest(req, res, makeCtx());
+
+      expect(statusCode()).toBe(200);
+      const parsed = JSON.parse(body());
+      expect(parsed.held).toBe(true);
+      // Let the un-awaited submission's continuation run: the tick does not wait for it,
+      // so without this the row is read before the delivery path has finished with it and
+      // the assertion would pass for the wrong reason.
+      await new Promise((r) => setTimeout(r, 10));
+      // The row genuinely carries no reason — nothing refused it.
+      expect(mailbox.getById(sendDbHolder.db, parsed.mailboxId)?.reason).toBeNull();
+      // So neither does the report. The CLI renders this as "pending".
+      expect(parsed.reason).toBeNull();
+      expect(parsed.reason).not.toBe('no-live-pty');
+    });
+
+    it('a genuinely PTY-held row still reports its PTY reason', async () => {
+      // The control. Without it the assertion above would hold just as well if every
+      // held report had been emptied of its reason.
+      mockParseJsonBody.mockResolvedValue({ to: 'spir-9', message: 'hello', workspace: '/tmp/ws' });
+      mockResolveTarget.mockReturnValue({ code: 'NOT_FOUND', message: 'no live terminal' });
+      mockResolveAgentInRegistry.mockReturnValue({ workspacePath: '/tmp/ws', agent: 'spir-9', kind: 'builder' });
+      const req = makeReq('POST', '/api/send');
+      const { res, statusCode, body } = makeRes();
+
+      await handleRequest(req, res, makeCtx());
+
+      expect(statusCode()).toBe(200);
+      expect(JSON.parse(body()).reason).toBe('no-live-pty');
+    });
+
     it('an ordinary send to the same thread-backed agent is still held, not refused', async () => {
       // The control. Without it the assertion above would hold just as well if every
       // thread-backed send had been turned into a refusal.

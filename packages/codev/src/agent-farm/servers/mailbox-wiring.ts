@@ -465,6 +465,7 @@ async function deliverToThread(
   msg: string,
   noEnter: boolean,
   log: LogFn,
+  rowId?: string,
 ): Promise<boolean> {
   const where = `thread ${threadId}`;
   // `--no-enter` means "put this in the composer and leave it for a human". A thread has
@@ -507,12 +508,21 @@ async function deliverToThread(
   // (1.5 s later) finds the engine ready.
   const availability = requestThreadBackend(context.workspaceRoot);
   if (availability.kind !== 'ready') {
-    log(
-      availability.kind === 'connecting' ? 'INFO' : 'ERROR',
-      threadBackendNotReady(where, context, availability),
-    );
+    // The TRANSITION, not the state. Tower ticks every 1.5 s, so a 60 s cooldown emitted
+    // forty identical ERROR lines saying the same stable fact — which trains people to
+    // stop reading the log, and the next line that matters is in there somewhere.
+    if (lastNotReady.get(context.workspaceRoot) !== availability.kind) {
+      lastNotReady.set(context.workspaceRoot, availability.kind);
+      log(
+        availability.kind === 'connecting' ? 'INFO' : 'ERROR',
+        threadBackendNotReady(where, context, availability),
+      );
+    }
     return false;
   }
+  // Ready again: forget the last complaint so the NEXT time it goes wrong is reported,
+  // rather than suppressed as a repeat of something that has since resolved.
+  lastNotReady.delete(context.workspaceRoot);
   try {
     // For THIS workspace. Tower serves every workspace in `global.db` from one process,
     // and an engine registered for another one holds another server and another project.
@@ -531,7 +541,7 @@ async function deliverToThread(
     return false;
   }
   try {
-    const outcome = await deliverThreadTurn(threadId, msg, context.workspaceRoot);
+    const outcome = await deliverThreadTurn(threadId, msg, context.workspaceRoot, rowId);
     if (outcome === 'recovered') {
       // Not a new turn. A previous attempt's acknowledgement was lost, the intent was
       // still pending in the journal, and it has now been re-dispatched under its
@@ -591,14 +601,27 @@ function threadBackendNotReady(
  * drainer one at boot; the shared state that matters (the per-agent write
  * serializer) lives in `mailbox-delivery.ts`, not here.
  */
+/**
+ * The last not-ready state reported per workspace, so a stable one is logged once.
+ *
+ * Deleted when the workspace goes ready, so a later failure is reported rather than
+ * suppressed as a repeat of a state that has since resolved.
+ */
+const lastNotReady = new Map<string, ThreadBackendAvailability['kind']>();
+
+/** Forget every suppressed state. For a test's teardown, not for production. */
+export function clearThreadBackendNotices(): void {
+  lastNotReady.clear();
+}
+
 export function makeDeliveryPorts(log: LogFn): DeliveryPorts {
   return {
     getSessionForAgent: (ws, agent) => resolveLiveSessionForAgent(ws, agent, log),
     resolveProfile: (session) => resolveProfileForSession(session),
     classify: (session, profile) => classifyAgentScreen(session, profile, (m) => log('INFO', m)),
-    writeMessage: async (session, msg, noEnter) => {
+    writeMessage: async (session, msg, noEnter, rowId) => {
       if (isThreadDeliverySession(session) && session.threadId) {
-        return await deliverToThread(session.threadId, session.threadContext, msg, noEnter, log);
+        return await deliverToThread(session.threadId, session.threadContext, msg, noEnter, log, rowId);
       }
       return writeMessagePaced(session, msg, noEnter);
     },

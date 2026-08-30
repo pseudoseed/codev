@@ -475,8 +475,8 @@ export class DriverThread {
   }
 
   /** Start a turn without waiting for it. The caller owns the returned promises. */
-  async beginTurn(text: string) {
-    return await this.#startTurnWithRole(text);
+  async beginTurn(text: string, ref?: string) {
+    return await this.#startTurnWithRole(text, ref);
   }
 
   /** True until the role prompt has actually been carried by a turn. */
@@ -493,12 +493,13 @@ export class DriverThread {
    * — only the second leaves it working without instructions. So the role stays
    * pending until something confirms it went.
    */
-  async #startTurnWithRole(text: string) {
+  async #startTurnWithRole(text: string, ref?: string) {
     const role = this.#pendingRole;
     const started = await startTurn(this.deps.dispatcher, this.deps.journal, this.deps.tracker, {
       threadId: this.threadId,
       text: role === null ? text : joinRoleAndText(role, text),
       ...(this.mapping.modelSelection === undefined ? {} : { modelSelection: this.mapping.modelSelection }),
+      ...(ref === undefined ? {} : { ref }),
     });
     this.#pendingRole = null;
     return started;

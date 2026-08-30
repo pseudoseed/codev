@@ -20,7 +20,7 @@
  * The live counterpart is `spec-146-phase-9-live-architect-thread.test.ts`, which
  * runs this same port in a real child process against a real server.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const requestThreadBackend = vi.fn();
 const deliverThreadTurn = vi.fn();
@@ -40,7 +40,7 @@ vi.mock('../thread-runtime.js', async (importOriginal) => {
   };
 });
 
-const { makeDeliveryPorts } = await import('../servers/mailbox-wiring.js');
+const { makeDeliveryPorts, clearThreadBackendNotices } = await import('../servers/mailbox-wiring.js');
 const { threadDeliverySession } = await import('../servers/mailbox-delivery.js');
 
 const CONTEXT = {
@@ -59,7 +59,14 @@ function deliver(session: ReturnType<typeof threadDeliverySession>) {
 }
 
 describe('thread delivery registers an engine and adopts the thread', () => {
+  afterEach(() => {
+    // The suppressed-state map is module-level and outlives a test, like every other
+    // process-global in this subsystem.
+    clearThreadBackendNotices();
+  });
+
   beforeEach(() => {
+    clearThreadBackendNotices();
     vi.clearAllMocks();
     getThreadEngine.mockReturnValue({ attach });
     attach.mockResolvedValue({});
@@ -80,7 +87,7 @@ describe('thread delivery registers an engine and adopts the thread', () => {
     );
     // For THIS workspace. Tower serves every workspace in `global.db` from one process.
     expect(getThreadEngine).toHaveBeenCalledWith('/ws');
-    expect(deliverThreadTurn).toHaveBeenCalledWith('thr-1', 'hello', '/ws');
+    expect(deliverThreadTurn).toHaveBeenCalledWith('thr-1', 'hello', '/ws', undefined);
     // A success that logs a failure sentence is the shape this replaced.
     expect(logs).toEqual([]);
   });
@@ -203,10 +210,73 @@ describe('thread delivery registers an engine and adopts the thread', () => {
     expect(logs.join('\n')).not.toContain('row stays held rather than being executed');
   });
 
+  /**
+   * Round 8. Tower ticks every 1.5 s, so a 60 s cooldown emitted forty identical ERROR
+   * lines stating the same stable fact. A log that repeats itself trains people to stop
+   * reading it, and the next line that matters is in there somewhere.
+   */
+  it('logs a stable not-ready state once, not once per tick', async () => {
+    requestThreadBackend.mockReturnValue({
+      kind: 'cooling-down', since: Date.now() - 5_000, message: 'ECONNREFUSED',
+    });
+    const lines: string[] = [];
+    const ports = makeDeliveryPorts((_level, message) => lines.push(message));
+
+    for (let tick = 0; tick < 10; tick += 1) {
+      await ports.writeMessage(threadDeliverySession('thr-1', CONTEXT), 'hello', false);
+    }
+
+    expect(lines).toHaveLength(1);
+  });
+
+  it('a CHANGE of not-ready state is reported, so a new fault is never suppressed', async () => {
+    const lines: string[] = [];
+    const ports = makeDeliveryPorts((_level, message) => lines.push(message));
+
+    requestThreadBackend.mockReturnValue({ kind: 'connecting' });
+    await ports.writeMessage(threadDeliverySession('thr-1', CONTEXT), 'hello', false);
+    await ports.writeMessage(threadDeliverySession('thr-1', CONTEXT), 'hello', false);
+    requestThreadBackend.mockReturnValue({
+      kind: 'cooling-down', since: Date.now(), message: 'ECONNREFUSED',
+    });
+    await ports.writeMessage(threadDeliverySession('thr-1', CONTEXT), 'hello', false);
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('still connecting');
+    expect(lines[1]).toContain('ECONNREFUSED');
+  });
+
+  it('a fault AFTER a recovery is reported, not suppressed as a repeat', async () => {
+    // The one that makes "log the transition" safe rather than merely quiet: a workspace
+    // that failed, recovered, and failed again the same way must say so the second time.
+    const lines: string[] = [];
+    const ports = makeDeliveryPorts((_level, message) => lines.push(message));
+
+    requestThreadBackend.mockReturnValue({ kind: 'cooling-down', since: Date.now(), message: 'down' });
+    await ports.writeMessage(threadDeliverySession('thr-1', CONTEXT), 'hello', false);
+    requestThreadBackend.mockReturnValue({ kind: 'ready' });
+    await ports.writeMessage(threadDeliverySession('thr-1', CONTEXT), 'hello', false);
+    requestThreadBackend.mockReturnValue({ kind: 'cooling-down', since: Date.now(), message: 'down' });
+    await ports.writeMessage(threadDeliverySession('thr-1', CONTEXT), 'hello', false);
+
+    expect(lines).toHaveLength(2);
+  });
+
+  it('the mailbox row id is carried into delivery so a retry can recognise its own attempt', async () => {
+    const { run } = deliver(threadDeliverySession('thr-1', CONTEXT));
+    await run();
+    // Text is not an identity: two identical messages to one agent are ordinary.
+    expect(deliverThreadTurn).toHaveBeenCalledWith('thr-1', 'hello', '/ws', undefined);
+
+    const ports = makeDeliveryPorts(() => {});
+    await ports.writeMessage(threadDeliverySession('thr-1', CONTEXT), 'hello', false, 'row-42');
+    expect(deliverThreadTurn).toHaveBeenLastCalledWith('thr-1', 'hello', '/ws', 'row-42');
+  });
+
   it('an ordinary message is unaffected by that refusal', async () => {
     const { logs, run } = deliver(threadDeliverySession('thr-1', CONTEXT));
     await expect(run()).resolves.toBe(true);
-    expect(deliverThreadTurn).toHaveBeenCalledWith('thr-1', 'hello', '/ws');
+    expect(deliverThreadTurn).toHaveBeenCalledWith('thr-1', 'hello', '/ws', undefined);
     expect(logs).toEqual([]);
   });
 

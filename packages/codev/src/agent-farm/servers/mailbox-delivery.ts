@@ -173,7 +173,20 @@ export interface DeliveryPorts {
    * holds the row (`no-live-pty`) instead of falsely reporting delivery (Spec 1313
    * integration review — the silent-loss finding).
    */
-  writeMessage(session: DeliverySession, formattedMessage: string, noEnter: boolean): boolean | Promise<boolean>;
+  writeMessage(
+    session: DeliverySession,
+    formattedMessage: string,
+    noEnter: boolean,
+    /**
+     * The mailbox row this write is for.
+     *
+     * Carried so a thread transport can recognise its OWN previous, unacknowledged
+     * attempt after a Tower restart. It cannot be recovered from the message text: two
+     * identical messages to one agent are ordinary, and matching on text let a stale
+     * intent answer for the current one. The PTY path ignores it.
+     */
+    rowId?: string,
+  ): boolean | Promise<boolean>;
   /** Emit the delivered-message broadcast frame. */
   broadcast(frame: DeliveredBroadcast): void;
   /**
@@ -547,12 +560,23 @@ export async function deliverAgentMail(
     const submission = (async () => {
       let written = false;
       try {
-        written = await ports.writeMessage(session, current.formatted_message, current.no_enter === 1);
+        written = await ports.writeMessage(session, current.formatted_message, current.no_enter === 1, row.id);
       } catch {
         written = false;
       }
       if (!written) {
-        if (current.reason !== 'no-live-pty') setHeldReason(db, row.id, 'no-live-pty', ports.now());
+        // NO REASON IS WRITTEN, and that is the honest answer rather than a missing one.
+        //
+        // `MailboxReason` is `busy | no-profile | no-live-pty` — three words about a PTY,
+        // pinned by a CHECK constraint on the mailbox table. Not one of them describes any
+        // state a thread transport can be in: there is no profile, no prompt to be busy,
+        // and no PTY to be missing. Writing `no-live-pty` here put a PTY diagnosis on a
+        // healthy thread-backed agent and the route then repeated it to the sender.
+        //
+        // So the row stays held with no reason, `afx send` renders that as "pending", and
+        // the four states this actually distinguishes are named in the log by
+        // `deliverToThread`. The missing word is #226's migration; inventing the nearest
+        // wrong one until then is what this used to do.
         return;
       }
       if (!markDelivered(db, row.id, ports.now())) {

@@ -246,3 +246,36 @@ Also: single-sourced the --no-enter rule into `servers/thread-no-enter.ts` with 
 that fails if any of the three sites restates it (third time that duplication bit here);
 reattached two docblocks that came adrift when new functions were inserted above them; and
 removed the stray blank lines.
+
+## Review round 9 (claude round 8: 3 blockers; opencode round 8: a 4th, independently)
+
+Both lanes found holes in the SAME round-7 fix without seeing each other, and both produced the
+duplicate-turn outcome it existed to prevent. Reworked rather than patched twice.
+
+1. **Matched on message text.** Two identical messages to one agent are ordinary; a stale intent
+   answered for the current one and reported delivered without delivering — worse than the
+   duplicate it replaced. The mailbox row id now rides the journal intent as `ref` (new optional
+   journal field, never sent to the server) and recovery matches on that.
+2. **Drained the whole workspace journal.** `recoverPendingCommands` replays every pending intent
+   and settles them all; with concurrent submissions that marked a sibling's intent dispatched
+   while its row was still held, so its next tick minted a fresh id. Now replays only its own,
+   under its own id, same unanswered/refusal split. **This leaves recoverPendingCommands without
+   a production caller again — my round-7 claim to the contrary was wrong and the doc says so.**
+3. **PTY vocabulary on a healthy thread row.** Deeper than the review placed it: the SUBMISSION
+   wrote `no-live-pty` whenever the write did not happen, and the route also defaulted a
+   reasonless row to it. Both fixed — a thread row carries no reason, the CLI renders "pending",
+   the log names the state.
+4. **realpathSync per engine lookup** on the drain loop. Cached.
+Plus: log the transition, not the state (40 identical lines per 60s cooldown).
+
+Also caught myself: my first M4 mutation silently no-op'd because the anchor did not match and I
+had not asserted on it. Re-ran with an assert; it fails correctly. A mutation check that cannot
+fail is worth nothing, and I nearly recorded one.
+
+**Live re-run after round 8: item 4 NOT EVALUATED.** `COULD_NOT_TELL: FIRST_TURN_TIMEOUT` — the
+pre-restart turn never ran within 300s. Item 3 WAS re-observed (the throw is after the
+shell-snapshot assertions). Most likely the codex account quota that also took the codex review
+lane out this evening (reset stated 21:53; run was 21:26); the server log is clean, so that is
+inference, not confirmation. Ruled out as a cause: the round-8 changes — `ref` rides
+DispatchOptions so the wire payload is unchanged, and stage A calls engine.startTurn directly,
+never deliverThreadTurn.

@@ -58,7 +58,11 @@ export interface ThreadEngine {
    * in-process map that knew about it does not.
    */
   attach(input: AttachThreadInput): Promise<ThreadRecord>;
-  startTurn(threadId: string, text: string): Promise<void>;
+  /**
+   * `ref` is the caller's identity for this turn — the mailbox row id — journalled with
+   * the intent so `recoverTurn` can find exactly this attempt after a restart.
+   */
+  startTurn(threadId: string, text: string, ref?: string): Promise<void>;
   /**
    * Replay an unanswered turn for this thread under ITS ORIGINAL command id, instead of
    * issuing a new one.
@@ -78,15 +82,20 @@ export interface ThreadEngine {
    * Replaying under the original id is what makes it safe: the server returns the
    * original receipt if it already applied it, and applies it once if it did not.
    *
-   * Matched on the thread and the exact message text, because the journal on disk is the
-   * only record of the attempt that survives a Tower restart — the in-process map does
-   * not.
+   * Matched on the caller's `ref`, because the journal on disk is the only record of the
+   * attempt that survives a Tower restart — an in-process map does not.
+   *
+   * NOT on the message text, which is what this replaced. Two identical messages to one
+   * agent are ordinary — a retried instruction, a repeated nudge, any templated notice —
+   * and text matching let a STALE intent answer for the current message, reporting it
+   * delivered when it had never been submitted. That trade goes the wrong way: a
+   * duplicate turn is visible and recoverable, a false "delivered" is neither.
    *
    * Three answers, and `none` is not `recovered`: `none` means there is nothing pending
-   * that could be this message, so a fresh submit is safe. A caller must not read it as
-   * "the replay failed".
+   * for this ref, so a fresh submit is safe. A caller must not read it as "the replay
+   * failed".
    */
-  recoverTurn(threadId: string, text: string): Promise<'recovered' | 'none'>;
+  recoverTurn(threadId: string, ref: string): Promise<'recovered' | 'none'>;
   interrupt(threadId: string): Promise<{ activeTurnId: null }>;
   worktreePath(threadId: string): string | undefined;
   removeWorktree(threadId: string, opts?: { force?: boolean }): Promise<'removed' | 'refused-unmerged'>;
@@ -260,10 +269,16 @@ export async function deliverThreadTurn(
   threadId: string,
   text: string,
   workspaceRoot?: string,
+  ref?: string,
 ): Promise<'delivered' | 'recovered'> {
   const engine = getThreadEngine(workspaceRoot);
-  if ((await engine.recoverTurn(threadId, text)) === 'recovered') return 'recovered';
-  await engine.startTurn(threadId, text);
+  // Without a ref there is nothing to recognise a previous attempt BY, so recovery is
+  // not attempted rather than attempted on something weaker. A caller that can retry
+  // must pass one; one that cannot (a one-shot CLI send) has nothing to recover.
+  if (ref !== undefined && (await engine.recoverTurn(threadId, ref)) === 'recovered') {
+    return 'recovered';
+  }
+  await engine.startTurn(threadId, text, ref);
   return 'delivered';
 }
 

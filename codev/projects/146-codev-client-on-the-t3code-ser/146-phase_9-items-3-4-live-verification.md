@@ -492,6 +492,99 @@ thing and both real functions were undocumented. The same comment-lies pattern a
 handler and `ownsProcess`, in its most mundane form: **inserting a function is enough to cause
 it.** Both reattached.
 
+## Review round 8 — the round-7 fix had two independent holes
+
+Two lanes that did not see each other found two different ways the idempotency fix was wrong, and
+**both produced the outcome it existed to prevent**. It was reworked rather than patched twice.
+The shape is now: *this delivery recovers its own intent, identified unambiguously, and touches
+nothing else.*
+
+### It matched on message text
+
+Two identical messages to one agent are ordinary — a retried instruction, a repeated nudge, any
+templated notice. Text matching let a STALE intent answer for the current message, so delivery
+reported `recovered` and the row was marked delivered for a message that had never been submitted.
+
+That trade goes the wrong way. A duplicate turn is visible and recoverable; a false "delivered" is
+neither.
+
+The mailbox row id is now carried through to the journal as the intent's `ref` — a new optional
+field on the journal record, never sent to the server, because the wire payload is t3code's schema
+and this is the caller's bookkeeping. Recovery matches on that.
+
+### It drained the whole workspace journal
+
+`recoverTurn` called `recoverPendingCommands`, which replays EVERY pending intent and marks them
+all dispatched. Round 6 made submissions concurrent across agents, so two lost acknowledgements in
+one workspace is a state this PR can now produce — and draining the journal marked the sibling's
+intent dispatched while its mailbox row was still held. Its next tick found nothing pending,
+`startTurn` minted a fresh id, and the duplicate appeared one agent over. A mid-loop throw was
+worse: the intents replayed before it were already settled.
+
+It now replays only its own intent, under its own command id, with the same unanswered/refusal
+split — `recoverPendingCommands`' per-intent body, scoped to one intent.
+
+**That leaves `recoverPendingCommands` without a production caller again, and this document said
+otherwise last round.** The correction is worth stating: whole-journal replay is a
+process-startup operation, and doing it from a per-row delivery is precisely what made it wrong.
+Claiming it as the caller that function never had was a claim about the code's shape, not about
+what it does.
+
+### `afx send` to a healthy thread-backed agent reported a PTY diagnosis
+
+Two places, and the deeper one was not where the review expected it. `MailboxReason` is
+`busy | no-profile | no-live-pty` — three words about a PTY, pinned by a CHECK constraint. **Not
+one of them describes any state a thread transport can be in**: no profile, no prompt to be busy,
+no PTY to be missing.
+
+The submission wrote `no-live-pty` onto the row whenever the write did not happen, and the route
+then defaulted a reasonless row to `no-live-pty` as well. Both are fixed: a thread row that was
+not written carries **no** reason, the route reports the row's reason as-is, and `afx send`
+renders that as "pending". The four states this actually distinguishes are named in the log. The
+missing word is #226's migration; inventing the nearest wrong one until then is what this did.
+
+### `realpathSync` ran on every engine lookup
+
+A synchronous filesystem syscall, once per agent per 1.5 s tick, inside the sequential drain loop
+that three rounds of this issue went into clearing of blocking work. A network call and a blocking
+syscall on that loop differ in magnitude, not in kind. Cached on the raw input, with the trade
+stated: a symlink repointed under a running Tower keeps its old resolution for the life of the
+process.
+
+### Forty identical log lines per cooldown
+
+`deliverToThread` logged at ERROR every 1.5 s for a stable `cooling-down` or `misconfigured`
+state. It logs the **transition** now, and forgets the last complaint when the workspace goes
+ready — so a fault after a recovery is reported rather than suppressed as a repeat of something
+that had resolved.
+
+## The round-8 live re-run did NOT evaluate item 4, and that is not a failure
+
+Recorded because it is exactly the distinction this whole document is about.
+
+The live test was re-run after the round-8 changes and threw:
+
+```
+COULD_NOT_TELL: FIRST_TURN_TIMEOUT — the pre-restart turn never ran, so nothing was
+established for the restart to preserve. Item 4 was NOT evaluated.
+```
+
+**Item 3 was re-observed** — the throw is at the ack wait, after the shell-snapshot assertions,
+so the architect thread was created and the server's own record showed it rooted at the workspace
+root. **Item 4 was not evaluated**: no pre-restart turn ran, so there was nothing for a restart to
+preserve. That is neither "it passed" nor "it failed", and the test spells it as neither.
+
+**Most likely cause, stated as likely rather than known:** the live test drives the `codex`
+harness, and the same account's codex quota was exhausted this evening — the codex review lane
+printed "You've hit your usage limit" and produced no review, with a stated reset at 21:53. The
+run was at 21:26. The pinned server's log shows a clean start and no error, so this is
+inference from the account state, not something confirmed at the server.
+
+**Ruled out:** the round-8 changes cannot have caused it. The `ref` travels in `DispatchOptions`
+and is journalled beside the intent — the wire payload is byte-identical — and stage A calls
+`engine.startTurn` directly, never `deliverThreadTurn`, so the recovery path is not on it at all.
+Items 3 and 4 were both observed on earlier runs of the same test against the same pinned server.
+
 ## Recorded, not fixed
 
 - **An architect's `attach` passes no harness or model**, so it depends on the engine's
@@ -551,7 +644,7 @@ Mutation-checked: reverting the branch normalisation fails the item-3 payload te
 `ensureThreadBackendReady` call fails two of the three add-architect tests; replacing `restart`
 with `stop` + `start` fails the live test.
 
-Full suite green with these changes: `348 passed | 3 skipped` files, `6873 passed | 52 skipped`
+Full suite green with these changes: `348 passed | 3 skipped` files, `6882 passed | 52 skipped`
 tests, plus the v2 suite's `180 passed`. Run with `env -u CODEV_WORKTREE_ROOT -u CODEV_BUILDER_ID
 -u CODEV_ARCHITECT_NAME`, the workaround #189 still requires.
 
