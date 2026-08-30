@@ -33,8 +33,14 @@ pnpm dev
 ```
 
 `pair-dev.mjs` mints a pairing token, redeems it for a **real** machine
-credential, and appends the machine to `.dev-machines.json`. Revoke it with
-`DELETE /api/agent/v1/machines/<name>`.
+credential, and appends the machine to `.dev-machines.json`.
+
+**Revoke it with `afx pair revoke <name>`.** This used to say
+`DELETE /api/agent/v1/machines/<name>`, which is the instruction that does not
+work: that route is `human-session`, `human-session` includes
+`machine-credential`, and so revoking required already holding the credential you
+were trying to withdraw. `afx pair revoke` writes the store directly, needs no
+session, and works with Tower stopped.
 
 ## `.dev-machines.json`
 

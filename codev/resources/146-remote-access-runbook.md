@@ -22,22 +22,52 @@ way you would treat handing out an SSH key.
 
 ## Pair a new device
 
-Issue a token on the **host** (the Mac or Mac Studio running Tower). There is no
-`afx` subcommand for this yet — the operator surface lands with the client phase —
-so issue it directly from the store, which is the same code path the server uses:
+Issue a token on the **host** (the Mac or Mac Studio running Tower):
 
 ```bash
-node --input-type=module -e "
-  const { PairingStore } = await import('@cluesmith/codev/dist/agent-farm/lib/pairing.js');
-  const issued = new PairingStore().issue();
-  console.log(issued.token);
-  console.log('expires', issued.expiresAt);
-"
+afx pair issue --purpose machine-credential
 ```
+
+**`--purpose` is required and has no default.** There are two ceremonies and a
+token is bound to one: `machine-credential` pairs a device, `client-session` opens
+the session that authorizes gate approvals. A token presented at the wrong one is
+refused — and, deliberately, not consumed, so it still works at its own.
+
+`--authority <text>` records what authorized the mint, verbatim, and travels to
+the session, the capability and `status.yaml`. Omit it and the command records
+itself and the invoking account, which claims **no** human presence — nothing
+here can verify that, because anything able to write the pairing store can mint a
+token.
 
 That prints a token of the form `<pairingId>.<secret>`, valid for **10 minutes**
 and redeemable **once**. Run it in a terminal you are looking at; do not redirect
-it to a file. Then on the device, the client exchanges it:
+it to a file and do not pass it as an argument to anything — argv is world-readable
+through `ps` and lands in shell history. Then on the device, the client exchanges
+it:
+
+> This used to say there was no `afx` subcommand and showed a direct
+> `new PairingStore().issue()` call. That call now **throws**: `purpose` and
+> `authority` are both required. The runbook is the operator surface, so it says
+> what an operator runs.
+
+## Withdraw a device
+
+```bash
+afx pair list                 # what is outstanding, and which machines are paired
+afx pair revoke <machine>     # withdraw its credential AND its approval capabilities
+```
+
+`revoke` writes the stores directly, so it works **holding nothing** and with
+Tower stopped — which is when you most want it. Over HTTP the revoke routes are
+`human-session`, which includes `machine-credential`, so revoking there required
+already holding the credential being withdrawn; that is why the CLI exists. The
+trade this makes is recorded in `146-approval-threat-model.md` under *Who can
+revoke, and the trade that decides it* — it is an availability trade, not a
+confidentiality one, and it is stated as a trade.
+
+Revocation is a tombstone: that machine's every request then fails closed with
+`MACHINE_CREDENTIAL_REVOKED`, no other machine is touched, and the old secret can
+never be revived. Re-pair with `afx pair issue` if it was a mistake.
 
 ```
 POST /api/agent/v1/pairing/redeem
@@ -209,9 +239,15 @@ node --input-type=module -e "
 " -- '<machine>'
 ```
 
-**The HTTP route, for when the client lands.** It does both in one call, which is
-why it exists — an operator asked to remember two commands will eventually run
-one. No host key: this surface authenticates itself.
+**The HTTP route, for a client that holds a session.** It does both in one call,
+which is why it exists — an operator asked to remember two commands will
+eventually run one. No host key: this surface authenticates itself.
+
+**It is not the route to reach for at a terminal.** It is `human-session`, which
+includes `machine-credential`, so it requires already holding the kind of
+credential you are usually trying to withdraw. Use `afx pair revoke <machine>`
+instead (above); this route is for the client, which has a session by the time it
+offers you the button.
 
 ```
 DELETE /api/agent/v1/machines/<machine>

@@ -296,15 +296,17 @@ Stated plainly, because a threat model that only lists wins is a marketing docum
 - **A same-uid process can forge a capability record** by appending to the store, because the
   store has no integrity protection and no local mechanism could give it one. See *Storage*.
   The verifier split defeats reading, not writing.
-- **`flag-only` is the only practical human approval path until the client exists.** Issuance
-  is reachable only over the `codev-agent` HTTP route with a paired session, and the client
-  that would hold one arrives in a later phase. Until then every real approval is `flag-only`,
-  and an agent that clears its environment and leaves the worktree can take that path. This is
-  a deliberate interim state, recorded here rather than discovered later.
+- **`flag-only` is still not a control**, and it is still reachable: an agent that clears its
+  environment and leaves the worktree takes that path, and every CLI approval takes it too.
+  What has changed since this bullet was written (spec 236) is that it is no longer the ONLY
+  practical path — the client exists, `afx pair issue --purpose client-session` mints the token
+  a session costs, and a capability-backed approval is reachable by a person. The earlier text
+  said flag-only was the only practical path "until the client exists"; that sentence has
+  expired, and this document's rule is that a claim survives only as far as the verb in it.
 - **A builder that daemonizes or otherwise sheds its environment** defeats the attribution
   layer. It does not defeat the verifier property, which is the boundary that carries weight.
 
-## For phase 7, stated here so it is not inherited by accident
+## For spec 146 phase 7, stated here so it is not inherited by accident
 
 Phase 7 is the transport and service security posture, and the natural assumption to carry
 into it is "the capability store is the boundary". **It is not.** The capability layer buys

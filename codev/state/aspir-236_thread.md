@@ -728,3 +728,33 @@ with why it must never become a suite step: it writes outside `CODEV_AGENT_FARM_
 presence was added anywhere in this project.
 
 Suite: 7053 passing, 0 failing.
+
+### Phase 7 iteration 1 — opencode REQUEST_CHANGES, claude APPROVE
+
+Same class of finding from both: **documentation still describing the pre-command world**, which
+is precisely what this phase exists to fix. I updated the threat model and the matrix and left
+three other files asserting the opposite.
+
+1. **The threat model's own "What this does not stop"** still said flag-only was the only
+   practical human approval path and that "the client arrives in a later phase". True when phase
+   6 wrote it; false after this spec. That document's rule is that every claim is one the code
+   makes true, and I edited the section above it while leaving this one expired. Rewritten:
+   flag-only is still reachable and still not a control — it is no longer the *only* path.
+2. **`apps/client/README.md`** told operators to revoke with the session-gated HTTP DELETE — the
+   instruction that does not work, and the reason this whole command exists.
+3. **`146-remote-access-runbook.md`** (opencode; not in the plan's file list) said there is no
+   `afx` subcommand and showed a `new PairingStore().issue()` call with no `purpose` or
+   `authority` — **that call now throws**. The operator runbook and the threat model were
+   asserting opposite things about the same command. Rewritten with `afx pair issue`, and a
+   *Withdraw a device* section added.
+
+Two more the reviews did not reach, found by grepping for the stale instruction across the repo:
+the runbook's HTTP-route section (now labelled "for a client that holds a session", with a note
+saying it is not the route to reach for at a terminal) and `pair-dev.mjs`'s header.
+
+claude's nit taken too: the threat model's "For phase 7" heading now says "For spec 146 phase 7",
+since two specs now have one.
+
+The lesson is the one from phase 6 in a different costume: I fixed the documents the plan listed
+and not the adjacent ones. Grepping for the stale instruction — rather than editing the files I
+had in mind — is what found the last two.
