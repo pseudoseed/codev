@@ -181,9 +181,30 @@ interface Entry {
 
 export interface ThreadSubscriptionPool {
   /**
-   * Open a subscription for `threadId` if none is held, and resolve once it has
-   * attached. Idempotent: `attach` is called on every mailbox delivery, so a second
-   * call must return the first subscription rather than opening another.
+   * Open a subscription for `threadId` if none is held, and return at once.
+   *
+   * For ADOPTION, which is not dispatch. The sweeper reconciles every thread in
+   * `global.db` on an interval, so a thread whose subscription cannot come up would
+   * otherwise cost `ensure`'s whole budget on every pass, forever, and delay the
+   * adoption of every thread behind it.
+   *
+   * Throws synchronously for an id that cannot be a cursor filename and for a cursor
+   * file that cannot be read — both are refusals to subscribe from the wrong place,
+   * and neither improves by being deferred.
+   */
+  start(threadId: string): void;
+  /**
+   * Open a subscription if none is held, and resolve once it has ATTACHED.
+   *
+   * For DISPATCH. A turn started before the first subscription attaches can have its
+   * `running` transition land inside the server's snapshot frame, which carries no
+   * observable events.
+   *
+   * Note what this does NOT need to guard: a subscription that has attached once and
+   * later dropped. Every resubscription after the first sends `afterSequence`, so the
+   * events emitted during the drop are REPLAYED rather than compacted away. Only the
+   * cold first subscription can lose history into a snapshot, and that is the case
+   * this waits for.
    */
   ensure(threadId: string): Promise<void>;
   /** Stop and forget one subscription. Idempotent. */
@@ -344,6 +365,12 @@ export function createThreadSubscriptionPool(
   }
 
   return {
+    start(threadId: string): void {
+      if (stopped) throw new Error(`The thread subscription pool for ${options.workspaceRoot} is stopped.`);
+      if (entries.has(threadId)) return;
+      entries.set(threadId, open(threadId));
+    },
+
     async ensure(threadId: string): Promise<void> {
       if (stopped) throw new Error(`The thread subscription pool for ${options.workspaceRoot} is stopped.`);
       let entry = entries.get(threadId);

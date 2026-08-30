@@ -217,11 +217,14 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
         launched: true,
       };
       records.set(thread.threadId, record);
-      // Idempotent, and called on every adoption. `attach` runs on every mailbox
-      // delivery, so this is the ordinary path by which a thread acquires its
-      // subscription after a Tower restart — the cursor on disk is what makes that a
-      // resume rather than a cold resubscribe.
-      await options.subscriptions?.ensure(thread.threadId);
+      // `start`, not `ensure`: adoption is not dispatch.
+      //
+      // This runs on every mailbox delivery AND on every sweeper pass, so awaiting
+      // attachment here would charge a thread whose subscription cannot come up the
+      // whole attach budget on every pass, forever, and delay every thread behind it
+      // in the same pass. The guard that matters is at dispatch, and `startTurn` and
+      // `create` hold it.
+      options.subscriptions?.start(thread.threadId);
       return record;
     },
 
