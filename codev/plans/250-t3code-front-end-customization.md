@@ -23,6 +23,38 @@ consumes the regenerated one. The two-identity harness is built **first** (phase
 HEAD still equals `upstreamBase`, so its own correctness is provable against a no-op diff before
 any customization exists to confuse it.
 
+### "Fork" here means a private repo, not a GitHub fork
+
+**Ruled by the architect on 2026-08-30, and the reasoning matters because the next reader will
+reach for `gh repo fork` as the obvious verb.**
+
+A GitHub fork of a public repository **inherits that repository's visibility**. There is no
+"fork it and make it private" — so forking `pingdotgg/t3code` would publish every customization we
+make to anyone who looks, t3code's own authors included. That is the direct opposite of this
+spec's ruling, which is *private* customization.
+
+So `pseudoseed/t3code` is a **private repository with upstream as a remote**, not a fork in
+GitHub's sense. It does not need to be one: rebasing onto upstream works identically either way,
+which is the only capability the plan actually depends on.
+
+```bash
+gh repo create pseudoseed/t3code --private
+git -C /Users/chris/dev/t3code-codev remote add origin   git@github.com:pseudoseed/t3code.git
+git -C /Users/chris/dev/t3code-codev remote add upstream https://github.com/pingdotgg/t3code.git
+```
+
+**`gh repo fork` is never run.** Recorded as a prohibition rather than a preference, because the
+mistake is one command and is not reversible by deleting the repo afterwards — a public repo that
+existed has been indexable.
+
+t3code is **MIT** (`LICENSE`, `Copyright (c) 2026 T3 Tools Inc.` — verified, not assumed), so the
+private copy keeps the licence file and its attribution intact. Nothing about keeping the work
+private removes that obligation.
+
+The word "fork" is kept everywhere else in this plan, and in `pin.json`'s field names, for the
+tree that carries our commits. It is a description of the git relationship, not a claim about
+GitHub's fork feature.
+
 ### The added columns do not go through upstream's migrator
 
 Plan review round 1 found this and I verified it in
@@ -157,14 +189,19 @@ Make the vendoring machinery able to hold **two** checkouts with two different m
 either diverges. Built first on purpose: while fork HEAD still equals `upstreamBase`, every new
 assertion has a known answer, so a harness bug cannot hide inside a real customization diff.
 
-This phase is **outward-facing**: it creates a public fork under `pseudoseed`. Flag it to the
-architect before running `gh repo fork`.
+This phase creates a repository under `pseudoseed`. It is **private**, and it is created with
+`gh repo create --private`, never `gh repo fork` — see the executive summary for why the two are
+not interchangeable here.
 
 #### Files to Create / Modify
 
 Fork side (new repository state, no Codev commit):
-- `github.com/pseudoseed/t3code`, branch `codev`, cloned to `/Users/chris/dev/t3code-codev`,
-  branched from `082e6ea521861fff37b90fcd789b5eaa5ef5d6a6`.
+- `github.com/pseudoseed/t3code` — **created private via `gh repo create --private`**, not forked.
+  Branch `codev`, checked out at `/Users/chris/dev/t3code-codev`, based on
+  `082e6ea521861fff37b90fcd789b5eaa5ef5d6a6`. Remotes: `origin` is the private repo, `upstream` is
+  `https://github.com/pingdotgg/t3code.git`.
+- `/Users/chris/dev/t3code` is **not touched by this phase or any other**. It stays the read-only
+  upstream clone at the pin, because every piece of spec 146 and 236 evidence verifies against it.
 
 This repository:
 - `packages/types/src/t3/pin.json` — add `upstreamBase`, `forkRepo`, `forkBranch`; `commit`
@@ -189,7 +226,14 @@ This repository:
 
 #### Deliverables
 
-- [ ] Fork created and checked out at `/Users/chris/dev/t3code-codev` on branch `codev`.
+- [ ] **Private** repository created at `pseudoseed/t3code` and checked out at
+      `/Users/chris/dev/t3code-codev` on branch `codev`, with `origin` and `upstream` remotes set.
+      Its visibility is asserted (`gh repo view pseudoseed/t3code --json visibility`) rather than
+      assumed from the create command having succeeded.
+- [ ] The MIT `LICENSE` and its attribution are present and unmodified in the private copy.
+- [ ] `/Users/chris/dev/t3code` is byte-identical to how the phase found it — same HEAD, clean
+      tree. Asserted at the end of the phase, because two of this plan's worst findings were about
+      something writing into that clone by accident.
 - [ ] `pin.json` carries `{ "commit": "<fork head>", "upstreamBase": "082e6ea5…" }`.
 - [ ] `t3-server.mjs verify` asserts, per identity:
       - `upstreamBase`: `/Users/chris/dev/t3code` HEAD equals `upstreamBase`, tree clean;
@@ -1072,7 +1116,8 @@ This repository:
 | **Stale gate write recreates an approved gate** | Medium | High | Server-allocated high-water mark that survives the clear; criterion 10 delivers a stale revision after approval |
 | **`codev-agent` restart resets a client-side counter** and silently renders every later gate as "none pending" | Medium | High | The counter is the server's, never the publisher's. Phase 4 makes this the mechanism, phase 6 asserts it across a restart |
 | The generator's source-hash becomes a tautology once generation is fork-sourced | High | Medium | Phase 1 hashes the upstream closure at `upstreamBase` alongside the fork's |
-| **Creating a public fork is outward-facing** and cannot be undone quietly | Certain | Low | Flagged to the architect before `gh repo fork` in phase 1; the spec bakes the destination |
+| **A GitHub fork would publish the whole customization** — a fork inherits the source repo's visibility, so there is no private fork of a public repo | Was Certain | Severe | Ruled 2026-08-30: `gh repo create --private` with upstream as a remote, never `gh repo fork`. Visibility asserted after creation rather than assumed |
+| MIT attribution lost in a private copy | Low | Medium | The `LICENSE` file and its attribution are carried unmodified; a phase-1 deliverable checks it |
 | The fork's commits cannot appear in this repository's PR, leaving a reviewer with no diff | High | Medium | `pin.commit` names it, `FORK.md` logs it, phase 5 exports patches as a review aid |
 | **`acquire` writes the fork SHA into the read-only upstream clone** once `pin.commit` moves — and `smoke.mjs` and `live/integration.mjs` both call it, so it fires from an ordinary test run | Was High | Severe | Phase 1 rewires `acquire`, `start` and `status` to `upstreamBase`, not `verify` alone |
 | **A new RPC method that does not compile** — the authorization map is `satisfies Record<WsRpcMethod, …>` and `WsRpcMethod` derives from the unvendored `rpc.ts` | Was High | Medium | Phase 4 names all four registration points; phase 5 adds the method to `pin.methods`, following the `vcs.*` precedent |
@@ -1094,7 +1139,10 @@ This repository:
 
 - `tools/t3-codegen/REFRESH.md` — the two-identity refresh and the rebase procedure (phases 1
   and 11).
-- `tools/t3-fork/FORK.md` — new: remote, branch, checkout path, a **per-phase commit log**
+- `tools/t3-fork/FORK.md` — new: **that `pseudoseed/t3code` is a private repo and not a GitHub
+  fork, and why** (a fork inherits the source's visibility, so `gh repo fork` would publish the
+  customization); the MIT licence obligation the private copy still carries; the `origin` and
+  `upstream` remotes, branch and checkout path; a **per-phase commit log**
   (phases 2, 3, 4, 7, 8, 9 change only the fork, so this entry is their sole artifact in this
   repository and what makes them committable here), the statement that the exported patches are a
   review aid rather than the build mechanism, the **abandonment procedure** (revert `pin.commit`

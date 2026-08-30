@@ -293,3 +293,29 @@ Commits this phase:
 - `987c5a416` porch-level lane note
 - `46285ad8c` opencode round
 - rebuttals committed separately
+
+## Architect ruling — private repo, not a GitHub fork
+
+2026-08-30, at the plan-approval gate. My phase 1 said `gh repo fork pingdotgg/t3code`, which was
+wrong in a way I had flagged as merely "outward-facing" rather than as contradicting the spec.
+
+**A GitHub fork inherits the source repository's visibility.** There is no private fork of a
+public repo, so forking would have published every customization to anyone looking, t3code's
+authors included — the exact opposite of this spec's "private customization" ruling.
+
+Amended: `gh repo create pseudoseed/t3code --private`, with `origin` as the private repo and
+`upstream` as `pingdotgg/t3code`. Rebasing works identically, which is the only capability the
+plan actually needs. `gh repo fork` is recorded as a prohibition rather than a preference: it is
+one command, and deleting the repo afterwards does not un-publish something that was indexable.
+
+Verified rather than assumed: t3code is MIT, `Copyright (c) 2026 T3 Tools Inc.`, so the private
+copy keeps the licence and attribution intact. Phase 1 has a deliverable checking it, plus one
+asserting the created repo's visibility instead of trusting the create command's exit code.
+
+Also added a phase-1 deliverable asserting `/Users/chris/dev/t3code` is byte-identical at the end
+of the phase — same HEAD, clean tree. Two of this round's worst findings were about something
+writing into that clone by accident, so it is worth checking rather than intending.
+
+The word "fork" is kept elsewhere in the plan and in `pin.json`'s field names, describing the git
+relationship rather than GitHub's feature. Noted in the plan so it does not read as a
+contradiction.
