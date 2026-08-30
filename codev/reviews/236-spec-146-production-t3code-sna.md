@@ -14,7 +14,7 @@ defect is code that passes its tests and production never reaches.
 | `afx pair issue / list / revoke` | Driven through `runAgentFarm(['pair', …])` against a scratch `CODEV_AGENT_FARM_DIR`: both purposes, list showing outstanding/redeemed/expired, revoke on a name with nothing live, exit code 1 for missing and unknown `--purpose` |
 | **Revoking the real `dev-check` credential** | `afx pair revoke dev-check` against the operator's actual `~/.agent-farm`, once, by hand — see below |
 | The client's whole approval path | Playwright/Chromium, 7 e2e passing, including a checks-enabled project approved from the UI |
-| Every server and client unit path | 7053 + 232 passing |
+| Every server and client unit path | 7132 + 265 passing |
 
 | Not verified live | Why, and what stands in |
 |---|---|
@@ -130,6 +130,29 @@ Nineteen review rounds across seven phases. The findings worth carrying forward:
 Poll but not submit. 403 but not 401. Element but not its CSS rule. Thrown fetch but not 5xx.
 401/403 but not 404. Each fix was correct and each was too narrow by exactly one step.
 
+**A second shape, and it is the more dangerous one: the fixture sharing the code's premise.**
+Three findings in the final round were invisible to a green suite because the test agreed with
+the bug.
+
+- `pair revoke` had a passing test in which the capability store's host and the paired device
+  were both `'ipad'`. Capabilities key on the *verifying host*, so `revokeMachine('laptop')`
+  matched nothing: the command reported `0 capability record(s) revoked` — truthfully — while the
+  device kept a live capability. It worked only where the operator's laptop and the Tower host
+  share a name, which is a fixture and never a deployment.
+- The subscription-cancellation test called the fake stream's `forget()` itself, so it passed
+  while production never called it. It asserted the effect and skipped the caller.
+- Ownership of an approval operation persisted the *host's* name, which is the same string for
+  every paired device — and the tests could not see it, because they configured one name.
+
+The fix in each case is the same and it is not "add a test": make the fixture stop agreeing.
+Two names where the code assumes one, and the test starts measuring what the operator does.
+
+**And a fix can be correct while the request never reaches it.** Round 1 fixed a 403 in the
+authorisation check; round 2 showed the same request now died at 401, one layer earlier, at route
+authentication. Both rounds the durable record survived and the client still could not read it.
+What broke the loop was the architect's instruction to write the *real* restart test first and let
+it name each stop, rather than fixing the rejection in front of me.
+
 ## What running the real thing found that tests could not
 
 Twice, and both times it was the decisive check:
@@ -169,6 +192,28 @@ have reviewed nothing — and the phase was implemented before any review ran, s
 misled. But writing the lesson down after the first did not prevent the second. The rule that
 replaced the resolution: after any approval, run `porch status` and read which phase is open
 before running anything else.
+
+## What the sweep cost while nothing was wrong
+
+`requestThreadBackend` answers `ready`, `connecting` and `cooling-down` from memory. The two
+verdicts that needed the config read — `not-configured` and `misconfigured` — are the verdicts of
+every workspace that never opted into threads. So Tower's 5s sweep ran a full five-layer
+`loadConfig` per unconfigured workspace per pass: four reads, four deep merges and the validators,
+twelve times a minute each, on the event loop, **scaling with accumulated `known_workspaces`
+rather than with active use.** #221 spent three rounds getting a network call and then a sync
+syscall off that loop.
+
+Cached against a signature (mtime and size of the config layers, plus the env vars that
+short-circuit them), not a TTL. A TTL makes an operator who has just written their t3 config wait
+it out, and the number becomes something to argue about; a signature invalidates on the pass after
+the edit and has no dial. `configLayerPaths` is extracted so `loadConfig` and the cache walk one
+list — a second copy of the layer order would go stale silently the moment a sixth layer is added,
+and the cache would keep answering from before it existed.
+
+Measured at `fs.readFileSync` rather than asserted: 12 reads per workspace per minute to 0, with
+the test failing at 12 when the cache is disabled. The known limit is stated in the code: identical
+size *and* identical mtime read as unchanged, which every mtime cache carries and which the
+alternative is the read it exists to avoid.
 
 ## Flaky Tests
 
