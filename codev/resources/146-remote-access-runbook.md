@@ -224,23 +224,35 @@ Revocation is a tombstone: that machine's every request then fails closed with
 `MACHINE_CREDENTIAL_REVOKED`, no other machine is touched, and the old secret can
 never be revived. Re-pair with `afx pair issue` if it was a mistake.
 
+<details>
+<summary><strong>Superseded:</strong> the two <code>node -e</code> one-liners this replaced</summary>
+
+**Do not run these.** They are kept only so an operator who finds them in an
+older copy of this runbook, or in their shell history, can see what replaced
+them and why. `afx pair revoke <machine>` does both, in one command, holding
+nothing.
+
+They are also the reason the CLI exists. The split was the hazard: the first
+revokes the machine credential *only*, so an operator who ran it and stopped —
+which is what an operator asked to remember two commands eventually does — left
+a withdrawn device still able to present a live approval capability to
+`porch approve`.
+
 ```bash
+# SUPERSEDED by: afx pair revoke <machine>
 node --input-type=module -e "
   const { MachineCredentialStore } = await import('@cluesmith/codev/dist/agent-farm/lib/machine-credentials.js');
   console.log(new MachineCredentialStore().revoke(process.argv[1]) ? 'revoked' : 'nothing live to revoke');
 " -- '<machine>'
-```
 
-That revokes the machine credential only. **Revoke its approval capabilities in
-the same breath**, or a revoked device can still present a live capability to
-`porch approve`:
-
-```bash
+# SUPERSEDED — and the half that was forgotten.
 node --input-type=module -e "
   const { ApprovalCapabilityStore } = await import('@cluesmith/codev/dist/agent-farm/lib/approval-capability.js');
   console.log('capabilities revoked:', new ApprovalCapabilityStore().revokeMachine(process.argv[1]));
 " -- '<machine>'
 ```
+
+</details>
 
 **The HTTP route, for a client that holds a session.** It does both in one call,
 which is why it exists — an operator asked to remember two commands will
