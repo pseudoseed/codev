@@ -447,3 +447,29 @@ fork commit or stay put until phase 5.
 **Consult lane note:** the opencode lane timed out at 360s on its first attempt and produced no
 verdict (exit 1, loudly). `consult` has no timeout flag — `OPENCODE_TIMEOUT_MS` is hard-coded to
 6 minutes at `packages/codev/src/commands/consult/index.ts:1561`. A plain retry completed.
+
+### Architect ruling on `pin.commit`, implemented
+
+**`pin.commit` stays at `upstreamBase` until phase 5.** It means "the vendored contract was
+generated from this commit", and only regeneration moves it. Advancing it per fork commit would
+make the file assert something false.
+
+So `FORK_CHECKOUT_MISMATCH` through phases 2-4 is the truth. But a signal that fires for three
+phases straight is one people learn to ignore, so the two cases are now spelled differently:
+
+| `pin.contractSource` | Fork HEAD descends from `pin.commit` | Does not descend |
+|---|---|---|
+| `upstream` (phases 1-4) | `FORK_AHEAD_OF_CONTRACT`, exit 0 | `FORK_CHECKOUT_MISMATCH`, exit 1 |
+| `fork` (phase 5 on) | `FORK_AHEAD_OF_CONTRACT`, exit 1 | `FORK_CHECKOUT_MISMATCH`, exit 1 |
+
+Tolerated does not mean silent — it prints on every run.
+
+A contract commit the fork repository does not contain is `NO_FORK_ANCESTRY`, exit 3. Whether
+HEAD descends from a commit that is not there is not a question git can answer, and the old
+blanket exit 1 was answering it anyway.
+
+`pin.contractSource` is the switch. Phase 5 flips it to `"fork"`, and the plan now carries a
+deliverable that the flip must be asserted by a test which fails if ahead still exits 0.
+
+Plan edited at `codev/plans/250-*.md` phase 5 deliverables and acceptance criteria. 63 tests in
+the spec 250 suite; `pnpm -w test` 7274 passed, 54 skipped, 0 failed.

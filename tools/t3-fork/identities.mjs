@@ -65,9 +65,62 @@ export function resolveIdentities(pin, env = process.env) {
       base: upstreamBase,
       repo: pin.forkRepo ?? null,
       branch: pin.forkBranch ?? null,
+      contractSource: contractSource(pin),
     },
     /** True while the fork has not diverged. Phases 1-4 run in this state on purpose. */
     diverged: pin.commit !== upstreamBase,
+  };
+}
+
+/**
+ * Where the VENDORED CONTRACT was generated from — not where the fork checkout is.
+ *
+ * `pin.commit` means "the vendored contract came from this commit", and only
+ * regeneration is allowed to move it. So between the fork's first customization
+ * commit and the regeneration that follows, the fork checkout is legitimately
+ * AHEAD of `pin.commit`, and that state has to be distinguishable from a fork
+ * sitting on the wrong commit.
+ *
+ * `'upstream'`  the contract has not been regenerated from the fork yet, so a
+ *               fork head that DESCENDS from `pin.commit` is expected.
+ * `'fork'`      regeneration has happened; the fork head must equal `pin.commit`,
+ *               and being ahead is an error like any other mismatch.
+ *
+ * Absent means `'upstream'`: a pin that has never named a fork cannot have been
+ * generated from one.
+ */
+export function contractSource(pin) {
+  const declared = pin?.contractSource;
+  if (declared === 'fork' || declared === 'upstream') return declared;
+  return 'upstream';
+}
+
+/**
+ * Classify a fork HEAD against `pin.commit`, given how the two relate in git.
+ *
+ * `descendant` is the caller's answer to "is HEAD a descendant of pin.commit?",
+ * which only git can answer; passing it in keeps this decidable without a
+ * subprocess and therefore unit-testable.
+ *
+ * Three outcomes, deliberately not two:
+ *   at-contract     HEAD === pin.commit. Always fine.
+ *   ahead           HEAD descends from pin.commit. Expected while the contract is
+ *                   upstream-sourced; an error once it is fork-sourced.
+ *   wrong-commit    HEAD does not descend from pin.commit. An error at any time.
+ */
+export function classifyForkHead({ head, commit, descendant, contractSource: source }) {
+  if (head === commit) return { state: 'at-contract', ok: true, signal: null };
+  if (!descendant) {
+    return {
+      state: 'wrong-commit',
+      ok: false,
+      signal: 'FORK_CHECKOUT_MISMATCH',
+    };
+  }
+  return {
+    state: 'ahead',
+    ok: source !== 'fork',
+    signal: 'FORK_AHEAD_OF_CONTRACT',
   };
 }
 

@@ -647,9 +647,22 @@ This repository:
       `pin.upstreamBase`, not `pin.commit`. Re-collecting it against the fork would be the wrong
       fix — it would silently change what the evidence is evidence *of*, and spec 146's criteria
       about the pinned harness would stop meaning what they said.
+- [ ] **`pin.contractSource` flips from `"upstream"` to `"fork"`, and a test asserts that the flip
+      turns "ahead of the contract" into an error.** Architect ruling during phase 1:
+      `pin.commit` means "the vendored contract was generated from this commit", and only
+      regeneration moves it. So through phases 2-4 the fork checkout is legitimately AHEAD of
+      `pin.commit`, and `verify` reports `FORK_AHEAD_OF_CONTRACT` at exit `0` rather than
+      spelling it the same as a real error — a signal that fires for three phases straight is one
+      people learn to ignore, and then it fires for a real reason and nobody looks. This phase is
+      where that stops being true. Once regeneration has happened, a fork HEAD that descends from
+      `pin.commit` means the checkout moved past the contract, which is an error. The deliverable
+      is not just the field: it is a test that fails if `FORK_AHEAD_OF_CONTRACT` still exits `0`
+      with `contractSource: "fork"`. (A HEAD that does NOT descend from `pin.commit` is
+      `FORK_CHECKOUT_MISMATCH` and an error at any time; that half is already enforced.)
 - [ ] `FORK.md` gains the **abandonment procedure**, because the spec keeps `apps/client` as the
-      fallback and never says how to fall back to it: set `pin.commit` to `upstreamBase`,
-      regenerate, re-run `verify`. Three lines, written while the mechanism is fresh.
+      fallback and never says how to fall back to it: set `pin.commit` to `upstreamBase`, set
+      `contractSource` back to `"upstream"`, regenerate, re-run `verify`. Four lines, written
+      while the mechanism is fresh.
 - [ ] Tests for this phase.
 
 #### Acceptance Criteria
@@ -658,7 +671,9 @@ This repository:
       `shape-check` is green.
 - [ ] `role`, `parentThreadId`, `codevGate` and `gateRevision` are present in `schema.json` and
       typed (not `unknown`) in `types.d.ts`.
-- [ ] `verify` passes both identities with the new `pin.commit`.
+- [ ] `verify` passes both identities with the new `pin.commit`, and with `contractSource` now
+      `"fork"` a checkout one commit ahead of it fails rather than reporting a tolerated
+      `FORK_AHEAD_OF_CONTRACT`.
 - [ ] `pnpm -w test` green, `spec-146-t3-contract.test.ts` included and **not** skipped.
 
 #### Test Plan

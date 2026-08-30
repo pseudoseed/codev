@@ -82,6 +82,25 @@ Exit `0` with both checkouts clean on their pins. Exit `1` names which identity 
 `3` is "could not determine" — a missing checkout, an unreadable HEAD, an unresolvable
 merge-base — and it is never spelled the same way as `1`.
 
+### Ahead of the contract is not the same as on the wrong commit
+
+`pin.commit` means **the vendored contract was generated from this commit**, and only
+regeneration moves it. Phase 5 is where regeneration happens, so from the fork's first
+customization commit until then the checkout is legitimately ahead of the pin. `pin.contractSource`
+records which state we are in:
+
+| `contractSource` | Fork HEAD descends from `pin.commit` | Fork HEAD does not descend |
+|---|---|---|
+| `upstream` (phases 1-4) | `FORK_AHEAD_OF_CONTRACT`, exit `0` | `FORK_CHECKOUT_MISMATCH`, exit `1` |
+| `fork` (phase 5 onward) | `FORK_AHEAD_OF_CONTRACT`, exit `1` | `FORK_CHECKOUT_MISMATCH`, exit `1` |
+
+The tolerated case is reported, not silenced — it prints on every run. It is spelled differently
+from a real error on purpose: a signal that fires for three phases straight is one people learn to
+ignore, and then it fires for a real reason and nobody looks.
+
+A contract commit the fork repository does not contain at all is `NO_FORK_ANCESTRY`, exit `3`.
+Whether HEAD descends from a commit that is not there is not a question git can answer.
+
 `verify` also asserts `git merge-base <commit> <upstreamBase> == <upstreamBase>`. A rebase or
 a squash that drops the base leaves a fork that is clean at a commit nothing can be measured
 against, and without that check it verifies green.

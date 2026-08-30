@@ -6,6 +6,7 @@
   "upstreamBase": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
   "forkRepo": "https://github.com/pseudoseed/t3code.git",
   "forkBranch": "codev",
+  "contractSource": "upstream",
   "commitDate": "2026-08-25",
   "cliVersion": "0.0.36",
   "effectVersion": "4.0.0-beta.103",
@@ -61,5 +62,6 @@
       "output": "VcsStatusResult",
       "source": "git.ts"
     }
-  }
+  },
+  "_contractSource": "Where the VENDORED CONTRACT under packages/types/src/t3/generated was generated from, which is not the same question as where the fork checkout is. 'upstream' means the contract has not been regenerated from the fork yet, so a fork HEAD that DESCENDS from `commit` is expected and verify reports FORK_AHEAD_OF_CONTRACT at exit 0. Phase 5 regenerates and sets this to 'fork', after which being ahead is an error. A fork HEAD that does not descend from `commit` is FORK_CHECKOUT_MISMATCH and an error either way."
 }

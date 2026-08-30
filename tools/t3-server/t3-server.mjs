@@ -46,7 +46,7 @@ import {
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { MISMATCH, OK, UNDETERMINED, resolveIdentities } from '../t3-fork/identities.mjs';
+import { MISMATCH, OK, UNDETERMINED, classifyForkHead, resolveIdentities } from '../t3-fork/identities.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
@@ -142,12 +142,12 @@ function acquire() {
 // ------------------------------------------------------------------ verify
 
 /**
- * Assert one checkout sits clean on the commit its identity pins it to.
+ * Resolve one identity's HEAD, or die with the right code.
  *
- * Every failure names WHICH identity failed. With one checkout "CHECKOUT_MISMATCH"
- * was unambiguous; with two it is a sentence that does not say what to fix.
+ * Split out of `verifyCheckout` because the fork answers a different question
+ * about its HEAD than the upstream clone does.
  */
-function verifyCheckout(identity, mismatchSignal) {
+function headOf(identity) {
   const label = identity.name;
   if (!existsSync(identity.root)) {
     die(
@@ -156,27 +156,20 @@ function verifyCheckout(identity, mismatchSignal) {
         `Set ${identity.rootVar} or create the checkout. This is "unknown", not "fine".`,
     );
   }
-
-  let head;
   try {
-    head = gitIn(identity.root, 'rev-parse', 'HEAD');
+    return gitIn(identity.root, 'rev-parse', 'HEAD');
   } catch (error) {
     die(
       UNDETERMINED,
       `NO_${label.toUpperCase()}_HEAD: could not check: could not read HEAD of ${identity.root}: ${error.message}`,
     );
   }
+  return null; // unreachable; `die` exits
+}
 
-  if (head !== identity.commit) {
-    die(
-      MISMATCH,
-      `${mismatchSignal} (identity: ${label})\n` +
-        `  pin.json: ${identity.commit}\n` +
-        `  ${identity.root}: ${head}\n` +
-        `Any phase that tested against this was not testing the pinned contract.`,
-    );
-  }
-
+/** Assert a checkout's tree is clean, or die. Never returns "clean" for unknown. */
+function assertClean(identity) {
+  const label = identity.name;
   let dirty = '';
   try {
     dirty = gitIn(identity.root, 'status', '--porcelain');
@@ -199,7 +192,98 @@ function verifyCheckout(identity, mismatchSignal) {
         `Results from it are not reproducible.`,
     );
   }
+}
 
+/**
+ * The fork's HEAD against `pin.commit`, in three outcomes rather than two.
+ *
+ * `pin.commit` means "the vendored contract was generated from this commit", and
+ * only regeneration moves it. So between the fork's first customization commit
+ * and that regeneration, the fork checkout is legitimately AHEAD of the pin.
+ *
+ * Spelling that the same as a wrong commit would fire a mismatch for several
+ * phases straight, and a signal that fires constantly is one people stop reading
+ * — then it fires for a real reason and nobody looks. So:
+ *
+ *   descends from pin.commit   FORK_AHEAD_OF_CONTRACT. Exit 0 while
+ *                              `contractSource` is `upstream`; exit 1 once
+ *                              regeneration has set it to `fork`.
+ *   does not descend           FORK_CHECKOUT_MISMATCH, exit 1, always.
+ */
+function verifyForkHead() {
+  const head = headOf(fork);
+  if (head === fork.commit) return head;
+
+  let descendant = false;
+  try {
+    gitIn(fork.root, 'merge-base', '--is-ancestor', fork.commit, head);
+    descendant = true;
+  } catch (error) {
+    // Exit 1 from `--is-ancestor` is the answer "no". Anything else is the tool
+    // failing, which is not an answer at all.
+    if (error.status !== 1) {
+      die(
+        UNDETERMINED,
+        `NO_FORK_ANCESTRY: could not check: could not decide whether ${head.slice(0, 12)} descends ` +
+          `from ${fork.commit.slice(0, 12)} in ${fork.root}: ${error.message}`,
+      );
+    }
+  }
+
+  const verdict = classifyForkHead({
+    head, commit: fork.commit, descendant, contractSource: fork.contractSource,
+  });
+
+  if (verdict.state === 'wrong-commit') {
+    die(
+      MISMATCH,
+      `${verdict.signal} (identity: fork)\n` +
+        `  pin.json: ${fork.commit}\n` +
+        `  ${fork.root}: ${head}\n` +
+        `The fork is not on the contract commit and does not descend from it.`,
+    );
+  }
+
+  if (!verdict.ok) {
+    die(
+      MISMATCH,
+      `${verdict.signal} (identity: fork)\n` +
+        `  contract commit: ${fork.commit}\n` +
+        `  fork HEAD:       ${head}\n` +
+        `pin.contractSource is "fork", so the vendored contract was generated from ${fork.commit.slice(0, 12)} ` +
+        `and the checkout has moved past it. Regenerate and move the pin together, or check the ` +
+        `contract commit back out.`,
+    );
+  }
+
+  say(
+    `${verdict.signal}: fork is ${head.slice(0, 12)}, ahead of contract commit ` +
+      `${fork.commit.slice(0, 12)}. Expected while pin.contractSource is "upstream" — the contract ` +
+      `has not been regenerated from the fork yet (that is phase 5).`,
+  );
+  return head;
+}
+
+/**
+ * Assert one checkout sits clean on the commit its identity pins it to.
+ *
+ * Every failure names WHICH identity failed. With one checkout "CHECKOUT_MISMATCH"
+ * was unambiguous; with two it is a sentence that does not say what to fix.
+ */
+function verifyCheckout(identity, mismatchSignal) {
+  const head = headOf(identity);
+
+  if (head !== identity.commit) {
+    die(
+      MISMATCH,
+      `${mismatchSignal} (identity: ${identity.name})\n` +
+        `  pin.json: ${identity.commit}\n` +
+        `  ${identity.root}: ${head}\n` +
+        `Any phase that tested against this was not testing the pinned contract.`,
+    );
+  }
+
+  assertClean(identity);
   return head;
 }
 
@@ -220,8 +304,9 @@ function verifyUpstream(mismatchSignal = 'CHECKOUT_MISMATCH') {
  * from it is meaningless. An unresolvable merge-base is `3`, not `1`: we could
  * not tell, which is not the same as "it failed".
  */
-function verifyFork(mismatchSignal = 'FORK_CHECKOUT_MISMATCH') {
-  const head = verifyCheckout(fork, mismatchSignal);
+function verifyFork() {
+  const head = verifyForkHead();
+  assertClean(fork);
 
   let mergeBase;
   try {
@@ -255,14 +340,15 @@ function verifyFork(mismatchSignal = 'FORK_CHECKOUT_MISMATCH') {
 /**
  * Both identities. `start` and `acquire` deliberately verify only upstream.
  *
- * The signal is threaded through to both halves. `ready` passes
- * `CHECKOUT_MOVED_DURING_RUN`, which is a different fact from a checkout that was
- * wrong before the server started, and dropping it on the way to the fork half
- * would have made the two indistinguishable.
+ * The signal is the UPSTREAM half's. `ready` passes `CHECKOUT_MOVED_DURING_RUN`,
+ * which is a different fact from a checkout that was wrong before the server
+ * started. The fork half has its own three-outcome vocabulary and does not take
+ * a caller's signal, because "ahead of the contract" and "wrong commit" are not
+ * the same event and neither is the caller's to name.
  */
 function verify(mismatchSignal) {
   const upstreamHead = verifyUpstream(mismatchSignal ?? 'CHECKOUT_MISMATCH');
-  const forkHead = verifyFork(mismatchSignal ?? 'FORK_CHECKOUT_MISMATCH');
+  const forkHead = verifyFork();
   return { upstream: upstreamHead, fork: forkHead };
 }
 
@@ -812,12 +898,24 @@ function status() {
   if (existsSync(fork.root)) {
     try {
       const forkHead = gitIn(fork.root, 'rev-parse', 'HEAD');
+      let descendant = false;
+      try {
+        gitIn(fork.root, 'merge-base', '--is-ancestor', fork.commit, forkHead);
+        descendant = true;
+      } catch { /* exit 1 is the answer "no"; anything else leaves state below */ }
+      const verdict = classifyForkHead({
+        head: forkHead, commit: fork.commit, descendant, contractSource: fork.contractSource,
+      });
       forkStatus = {
         root: fork.root,
         available: true,
         head: forkHead,
         pin: fork.commit,
         matchesPin: forkHead === fork.commit,
+        contractSource: fork.contractSource,
+        state: verdict.state,
+        ok: verdict.ok,
+        signal: verdict.signal,
       };
     } catch {
       /* left as available:false / matchesPin:'unknown' — an unreadable HEAD is not a "no" */

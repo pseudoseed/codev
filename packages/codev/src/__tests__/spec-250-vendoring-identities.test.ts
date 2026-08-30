@@ -31,6 +31,8 @@ import {
   OK,
   UNDETERMINED,
   churnRange,
+  classifyForkHead,
+  contractSource,
   resolveIdentities,
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore — a dependency-free .mjs helper shared with the build tools, not a package
@@ -371,19 +373,53 @@ describe('spec 250: verify asserts each checkout against its own pin', () => {
     }
   });
 
-  it('exits 1 and names the FORK identity when the fork moved', () => {
+  it('exits 1 and names the FORK identity when the fork moved off the contract commit', () => {
     const scratch = mkdtempSync(join(tmpdir(), 't3-verify-fork-'));
     const upstream = makeRepo('up-2');
-    const fork = makeRepo('fork-moved');
+    const forkDir = join(scratch, 'fork');
+    try {
+      // Two real commits in the fork. The pin names the second; the checkout is
+      // on the first, so HEAD does not descend from the contract commit.
+      execFileSync('git', ['clone', '-q', upstream.dir, forkDir]);
+      gitIn(forkDir, 'checkout', '-q', '-b', 'codev');
+      writeFileSync(join(forkDir, 'ours.txt'), 'ours\n');
+      gitIn(forkDir, 'add', 'ours.txt');
+      gitIn(forkDir, 'commit', '-qm', 'contract commit');
+      const contract = gitIn(forkDir, 'rev-parse', 'HEAD');
+      gitIn(forkDir, 'checkout', '-q', '--detach', upstream.head);
+
+      const result = runVerify({
+        pinFile: writePin(scratch, contract, upstream.head),
+        upstreamRoot: upstream.dir,
+        forkRoot: forkDir,
+      });
+      expect(result.status).toBe(MISMATCH);
+      expect(result.stderr).toContain('FORK_CHECKOUT_MISMATCH');
+      expect(result.stderr).toContain('identity: fork');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+      rmSync(upstream.dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * A contract commit the fork repository does not even contain. Whether HEAD
+   * descends from it is not a question git can answer, so it is `3`. Reporting
+   * `1` here would say "the fork is on the wrong commit" when what happened is
+   * that nobody could tell.
+   */
+  it('exits 3 when the contract commit does not exist in the fork at all', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 't3-verify-nocommit-'));
+    const upstream = makeRepo('up-2b');
+    const fork = makeRepo('fork-nocommit');
     try {
       const result = runVerify({
         pinFile: writePin(scratch, 'd'.repeat(40), upstream.head),
         upstreamRoot: upstream.dir,
         forkRoot: fork.dir,
       });
-      expect(result.status).toBe(MISMATCH);
-      expect(result.stderr).toContain('FORK_CHECKOUT_MISMATCH');
-      expect(result.stderr).toContain('identity: fork');
+      expect(result.status).toBe(UNDETERMINED);
+      expect(result.stderr).toContain('NO_FORK_ANCESTRY');
     } finally {
       rmSync(scratch, { recursive: true, force: true });
       rmSync(upstream.dir, { recursive: true, force: true });
@@ -566,6 +602,149 @@ describe('spec 250: verify asserts each checkout against its own pin', () => {
     // they are three, not two with an alias.
     expect(new Set([OK, MISMATCH, UNDETERMINED]).size).toBe(3);
     expect(UNDETERMINED).not.toBe(MISMATCH);
+  });
+});
+
+// ---------------------------------------------------------------- ahead vs wrong
+
+/**
+ * The architect's ruling: `pin.commit` means "the vendored contract was generated
+ * from this commit", and only regeneration moves it. Phase 5 is where
+ * regeneration happens, so through phases 2-4 the fork checkout is legitimately
+ * ahead of the pin.
+ *
+ * That state is the truth and must not be silenced. It must also not be spelled
+ * the same as a real error: a signal that fires for three phases straight is one
+ * people learn to ignore, and then it fires for a real reason and nobody looks.
+ */
+describe('spec 250: ahead of the contract is not the same as on the wrong commit', () => {
+  it('reads a pin with no contractSource as upstream-sourced', () => {
+    expect(contractSource({ commit: 'a'.repeat(40) })).toBe('upstream');
+    expect(contractSource({ contractSource: 'fork' })).toBe('fork');
+    expect(contractSource({ contractSource: 'nonsense' })).toBe('upstream');
+    expect(contractSource(undefined)).toBe('upstream');
+  });
+
+  it('carries contractSource on the fork identity', () => {
+    expect(resolveIdentities({ ...pin, contractSource: 'fork' }, {}).fork.contractSource).toBe('fork');
+    expect(resolveIdentities({ commit: 'a'.repeat(40) }, {}).fork.contractSource).toBe('upstream');
+  });
+
+  it('classifies the three fork-head states', () => {
+    const at = classifyForkHead({ head: 'a', commit: 'a', descendant: true, contractSource: 'upstream' });
+    expect(at).toEqual({ state: 'at-contract', ok: true, signal: null });
+
+    const aheadBefore = classifyForkHead({ head: 'b', commit: 'a', descendant: true, contractSource: 'upstream' });
+    expect(aheadBefore.state).toBe('ahead');
+    expect(aheadBefore.ok).toBe(true);
+    expect(aheadBefore.signal).toBe('FORK_AHEAD_OF_CONTRACT');
+
+    const aheadAfter = classifyForkHead({ head: 'b', commit: 'a', descendant: true, contractSource: 'fork' });
+    expect(aheadAfter.state).toBe('ahead');
+    expect(aheadAfter.ok, 'once the contract is fork-sourced, ahead is an error').toBe(false);
+
+    const wrong = classifyForkHead({ head: 'b', commit: 'a', descendant: false, contractSource: 'upstream' });
+    expect(wrong.state).toBe('wrong-commit');
+    expect(wrong.ok).toBe(false);
+    expect(wrong.signal).toBe('FORK_CHECKOUT_MISMATCH');
+  });
+
+  it('the shipped pin says the contract is still upstream-sourced', () => {
+    // Phase 5 flips this. Until it does, phases 2-4 can commit to the fork
+    // without every `verify` reporting a mismatch.
+    expect(pin.contractSource).toBe('upstream');
+  });
+
+  /** Builds a fork whose HEAD is a real descendant of the contract commit. */
+  function forkAheadFixture(label: string) {
+    const scratch = mkdtempSync(join(tmpdir(), `t3-${label}-`));
+    const upstream = makeRepo(`up-${label}`);
+    const forkDir = join(scratch, 'fork');
+    execFileSync('git', ['clone', '-q', upstream.dir, forkDir]);
+    gitIn(forkDir, 'checkout', '-q', '-b', 'codev');
+    writeFileSync(join(forkDir, 'ours.txt'), `ours ${label}\n`);
+    gitIn(forkDir, 'add', 'ours.txt');
+    gitIn(forkDir, 'commit', '-qm', 'a phase 2 customization');
+    return { scratch, upstream, forkDir, forkHead: gitIn(forkDir, 'rev-parse', 'HEAD') };
+  }
+
+  it('exits 0 with FORK_AHEAD_OF_CONTRACT while the contract is upstream-sourced', () => {
+    const f = forkAheadFixture('ahead-ok');
+    try {
+      const pinFile = join(f.scratch, 'pin.json');
+      writeFileSync(pinFile, JSON.stringify({
+        ...pin, commit: f.upstream.head, upstreamBase: f.upstream.head, contractSource: 'upstream',
+      }, null, 2));
+      const result = runVerify({ pinFile, upstreamRoot: f.upstream.dir, forkRoot: f.forkDir });
+      expect(result.stderr).toContain('FORK_AHEAD_OF_CONTRACT');
+      expect(result.stderr).not.toContain('FORK_CHECKOUT_MISMATCH');
+      expect(result.status).toBe(OK);
+    } finally {
+      rmSync(f.scratch, { recursive: true, force: true });
+      rmSync(f.upstream.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('exits 1 with FORK_AHEAD_OF_CONTRACT once the contract is fork-sourced', () => {
+    const f = forkAheadFixture('ahead-err');
+    try {
+      const pinFile = join(f.scratch, 'pin.json');
+      writeFileSync(pinFile, JSON.stringify({
+        ...pin, commit: f.upstream.head, upstreamBase: f.upstream.head, contractSource: 'fork',
+      }, null, 2));
+      const result = runVerify({ pinFile, upstreamRoot: f.upstream.dir, forkRoot: f.forkDir });
+      expect(result.stderr).toContain('FORK_AHEAD_OF_CONTRACT');
+      expect(result.status).toBe(MISMATCH);
+    } finally {
+      rmSync(f.scratch, { recursive: true, force: true });
+      rmSync(f.upstream.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still exits 1 with FORK_CHECKOUT_MISMATCH for a head that does not descend', () => {
+    const f = forkAheadFixture('not-descendant');
+    try {
+      const pinFile = join(f.scratch, 'pin.json');
+      // The contract commit is the fork head itself; the checkout is moved BACK
+      // to the base, so it does not descend from the pin.
+      gitIn(f.forkDir, 'checkout', '-q', '--detach', f.upstream.head);
+      writeFileSync(pinFile, JSON.stringify({
+        ...pin, commit: f.forkHead, upstreamBase: f.upstream.head, contractSource: 'upstream',
+      }, null, 2));
+      const result = runVerify({ pinFile, upstreamRoot: f.upstream.dir, forkRoot: f.forkDir });
+      expect(result.stderr).toContain('FORK_CHECKOUT_MISMATCH');
+      expect(result.stderr).not.toContain('FORK_AHEAD_OF_CONTRACT');
+      expect(result.status).toBe(MISMATCH);
+    } finally {
+      rmSync(f.scratch, { recursive: true, force: true });
+      rmSync(f.upstream.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('status reports the fork state and which way the contract is sourced', () => {
+    const f = forkAheadFixture('status-ahead');
+    try {
+      const pinFile = join(f.scratch, 'pin.json');
+      writeFileSync(pinFile, JSON.stringify({
+        ...pin, commit: f.upstream.head, upstreamBase: f.upstream.head, contractSource: 'upstream',
+      }, null, 2));
+      const result = spawnSync(process.execPath, [harness, 'status'], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          T3_PIN_FILE: pinFile, T3CODE_ROOT: f.upstream.dir, T3CODE_FORK_ROOT: f.forkDir,
+        },
+      });
+      const report = JSON.parse(result.stdout);
+      expect(report.fork.state).toBe('ahead');
+      expect(report.fork.ok).toBe(true);
+      expect(report.fork.signal).toBe('FORK_AHEAD_OF_CONTRACT');
+      expect(report.fork.contractSource).toBe('upstream');
+      expect(report.fork.matchesPin).toBe(false);
+    } finally {
+      rmSync(f.scratch, { recursive: true, force: true });
+      rmSync(f.upstream.dir, { recursive: true, force: true });
+    }
   });
 });
 
