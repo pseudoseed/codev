@@ -834,7 +834,9 @@ This repository:
 #### Objective
 
 The gate is approved from t3code's web app, over `codev-agent`'s existing capability path,
-same-origin, with no widening of `connect-src`.
+same-origin — so the page never makes a cross-origin request in the first place, which is the
+guarantee that actually holds here. (There is no page-level CSP in t3code to widen or keep
+narrow; see the deliverables.)
 
 #### Files to Create / Modify
 
