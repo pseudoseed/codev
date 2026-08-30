@@ -78,6 +78,30 @@ if ! node tools/t3-server/t3-server.mjs start >"$RUNS/$LABEL.server.log" 2>&1; t
   exit 3
 fi
 
+# OPT THE DRIVER IN. t3code ships some drivers OFF.
+#
+# `OpenCodeSettings.enabled` defaults to false at the pinned commit — "Off by
+# default (like Cursor and Grok): the binding is not yet stable enough to probe
+# on every install. Users opt in from Settings." Every run here gets its own
+# `--base-dir`, so every run gets a state directory nobody has opted in for, and
+# a turn on that driver is refused at `startSession` with
+#
+#   Provider instance 'opencode' is disabled in T3 Code settings.
+#
+# `start` wipes the state directory, so the file has to be written after it and
+# picked up by a `restart` that preserves it. This writes only inside the data
+# directory THIS run owns; the user's own T3 Code settings are never touched.
+SETTINGS="$T3_HARNESS_DIR/data/userdata/settings.json"
+mkdir -p "$(dirname "$SETTINGS")"
+printf '{"providers":{"%s":{"enabled":true}}}\n' \
+  "$(node -e 'const m={claude:"claudeAgent",codex:"codex",opencode:"opencode"};process.stdout.write(m[process.argv[1]]??process.argv[1])' "$HARNESS")" \
+  > "$SETTINGS"
+if ! node tools/t3-server/t3-server.mjs restart >>"$RUNS/$LABEL.server.log" 2>&1; then
+  node tools/t3-server/t3-server.mjs stop >/dev/null 2>&1
+  echo "SETTINGS_NOT_APPLIED: could not check: the restart that loads $SETTINGS failed." >&2
+  exit 3
+fi
+
 TOKEN=$(node tools/t3-server/t3-server.mjs ready 2>/dev/null | sed -n 's/.*"token": "\(.*\)".*/\1/p')
 if [ -z "$TOKEN" ]; then
   node tools/t3-server/t3-server.mjs stop >/dev/null 2>&1

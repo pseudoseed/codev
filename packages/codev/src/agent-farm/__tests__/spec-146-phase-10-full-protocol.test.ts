@@ -195,6 +195,115 @@ describe('Spec 146 Phase 10 — the PTY witness has an intact window', () => {
   });
 });
 
+describe('Spec 146 Phase 10 — a refusal is not a timeout', () => {
+  /**
+   * THE FINDING THIS PHASE EXISTS TO PRODUCE, AND THE ONE PART OF IT CI CAN GUARD.
+   *
+   * Running the protocol on a second driver did surface a driver-specific
+   * failure while it was still cheap, exactly as the plan predicted — but the
+   * failure worth keeping was not the driver's.
+   *
+   * t3code ships `OpenCodeSettings.enabled` defaulting to false ("Off by default
+   * (like Cursor and Grok) ... Users opt in from Settings"), so a thread on the
+   * opencode driver in a state directory nobody opted in for is refused at
+   * `startSession`. The server says so, by name, twelve milliseconds after the
+   * dispatch:
+   *
+   *   status: "error", lastError: "ProviderValidationError: ... Provider
+   *   instance 'opencode' is disabled in T3 Code settings."
+   *
+   * `TurnTracker` read `activeTurnId` and nothing else. The refusal event
+   * carries `activeTurnId: null`, which falls through the `seenRunning` latch
+   * and does nothing — so the caller waited out its entire budget and reported
+   * `Timed out after 599950ms waiting for the turn to start`. Ten minutes to not
+   * learn something already on the wire, and the message named the wrong thing:
+   * a definite refusal presented as "I stopped waiting".
+   *
+   * That is this project's own rule running backwards. "I could not tell" must
+   * never be spelled like "no" — and here "no" was spelled like "I could not
+   * tell", which is the more expensive direction, because it looks like patience.
+   */
+  const sessionEvent = (
+    threadId: string,
+    session: Record<string, unknown>,
+    sequence: number,
+  ) => ({
+    kind: 'event',
+    event: { sequence, aggregateId: threadId, type: 'thread.session-set', payload: { session } },
+  });
+
+  it('fails a not-yet-running turn with the server sentence, not a timeout', async () => {
+    const { TurnTracker, SessionStartFailedError } = await import('@cluesmith/porch-driver/turn');
+    const tracker = new TurnTracker();
+    const started = tracker.expectTurn('t1');
+    // Verbatim from the live run, including the `activeTurnId: null` that made
+    // the old code ignore it.
+    tracker.observe(sessionEvent('t1', { status: 'starting', activeTurnId: null, lastError: null }, 1));
+    tracker.observe(
+      sessionEvent(
+        't1',
+        {
+          status: 'error',
+          activeTurnId: null,
+          lastError:
+            "ProviderValidationError: Provider validation failed in ProviderService.startSession: "
+            + "Provider instance 'opencode' is disabled in T3 Code settings.",
+        },
+        2,
+      ),
+    );
+    await expect(started.running).rejects.toThrow(SessionStartFailedError);
+    await expect(started.running).rejects.toThrow(/disabled in T3 Code settings/);
+    // Both promises, not just the one being awaited. A caller holding `settled`
+    // and not `running` would otherwise hang on exactly the event that explains
+    // why it never will.
+    await expect(started.settled).rejects.toThrow(SessionStartFailedError);
+  });
+
+  it('says an unexplained failure differently from an explained one', async () => {
+    const { TurnTracker } = await import('@cluesmith/porch-driver/turn');
+    const tracker = new TurnTracker();
+    const started = tracker.expectTurn('t2');
+    tracker.observe(sessionEvent('t2', { status: 'error', activeTurnId: null, lastError: null }, 1));
+    // WHY is unknown; THAT it failed is not. Those are different facts and the
+    // message has to carry which one this is.
+    await expect(started.running).rejects.toThrow(/gave no reason, so WHY is unknown/);
+  });
+
+  it('does not turn a turn that ENDED in error into a start failure', async () => {
+    /*
+     * The guard on the guard. A session error AFTER the turn is running is the
+     * turn ending, and the caller wants its result rather than an exception —
+     * so the fix has to be scoped to before `seenRunning`, and a version that
+     * was not would break every failed turn in the opposite direction.
+     */
+    const { TurnTracker } = await import('@cluesmith/porch-driver/turn');
+    const tracker = new TurnTracker();
+    const started = tracker.expectTurn('t3');
+    tracker.observe(sessionEvent('t3', { status: 'running', activeTurnId: 'turn-1', lastError: null }, 1));
+    await expect(started.running).resolves.toBe('turn-1');
+    tracker.observe(sessionEvent('t3', { status: 'error', activeTurnId: null, lastError: 'the model errored' }, 2));
+    await expect(started.settled).resolves.toBeUndefined();
+  });
+
+  it('the launcher opts the driver in, because t3code ships some drivers off', () => {
+    /*
+     * The other half of the same finding. Every run gets its own `--base-dir`,
+     * so every run gets a state directory with no opt-in, and the default for
+     * opencode is off. A harness that does not write the opt-in tests nothing on
+     * that driver — and, before the fix above, took ten minutes per turn to say
+     * so in the wrong words.
+     */
+    const launcher = readFileSync(join(repoRoot, 'tools', 't3-server', 'full-protocol-run.sh'), 'utf8');
+    expect(launcher).toContain('"providers"');
+    expect(launcher).toContain('"enabled":true');
+    // Written after `start` and loaded by a `restart`: `start` wipes the state
+    // directory, so a settings file written before it does not survive.
+    expect(launcher.indexOf('SETTINGS=')).toBeGreaterThan(launcher.indexOf('t3-server.mjs start'));
+    expect(launcher.indexOf('t3-server.mjs restart')).toBeGreaterThan(launcher.indexOf('SETTINGS='));
+  });
+});
+
 describe('Spec 146 Phase 10 — live', () => {
   const status = harnessStatus();
   const liveOptIn = process.env.T3_LIVE === '1';
