@@ -458,3 +458,191 @@ html, body, #root {
  * difference is a duplicate gate approval.
  */
 .gate-result.is-unknown { border-left-color: var(--ochre); }
+
+/* ==========================================================================
+   The tiled grid — criteria 4, 4b and 5.
+
+   Geometry is set inline by `Grid.tsx` from `responsive/layout.ts`, because the
+   column count is arithmetic CSS cannot express: `auto-fill` maximises columns
+   and would tile six builders 4 + 2 at 1440, not the 3x2 the criterion names.
+   What lives here is appearance, plus the two floors.
+   ========================================================================== */
+
+.tiling { display: flex; flex-direction: column; gap: 12px; }
+
+/* The grid may scroll DOWN — panes hold their 240px floor rather than shrink to
+   fit — but never sideways. Criterion 5 is measured on documentElement. */
+.tile-grid { min-width: 0; }
+
+/*
+ * 13px is criterion 4's floor for body text, and it is set on the pane so every
+ * descendant that does not override it inherits a compliant size. The uppercase
+ * micro-labels below are chrome (`.stamp`), not body text.
+ */
+.pane {
+  border: var(--rule) solid var(--ink);
+  background: var(--chalk);
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  min-height: 240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.pane.needs-attn { border-left: 3px solid var(--rust); background: rgba(181, 80, 42, 0.06); }
+.pane.is-stale { opacity: 0.62; filter: grayscale(45%); }
+.pane.role-architect { border-left: 3px solid var(--ink); }
+.pane.role-unmanaged { border-left: 3px dashed var(--ochre); }
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Body text, so it carries the floor rather than the 11px the tree row uses. */
+.pane .pane-name { font-size: 13px; font-weight: 600; }
+.pane .status-stamp { font-size: 13px; }
+.pane .gate-question { font-size: 14px; }
+
+.pane-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+
+.pane-machine {
+  font-size: 10px;
+  text-transform: uppercase;
+  border: 1px solid var(--concrete);
+  padding: 1px 5px;
+  color: var(--graphite);
+}
+
+.pane-section {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--graphite);
+  border-bottom: 1px solid var(--concrete);
+  padding-bottom: 3px;
+  margin-bottom: 5px;
+}
+
+.pane-messages { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+/* ---------- the message log ---------- */
+
+.msg-log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+
+.msg { border-left: 2px solid var(--concrete); padding-left: 7px; }
+.msg.is-held { border-left-color: var(--ochre); }
+
+.msg-head { display: flex; gap: 7px; align-items: baseline; flex-wrap: wrap; }
+.msg-from { font-size: 11px; font-weight: 600; }
+.msg-at { font-size: 11px; color: var(--graphite); }
+.msg-held { font-size: 9px; color: var(--ochre); letter-spacing: 0.08em; }
+
+/* The body is the message. It carries the floor, and it wraps rather than
+   clipping — a message cut by a container is a message misreported, the same
+   defect the server's own `truncated` flag exists to prevent. */
+.msg-body {
+  margin: 2px 0 0;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Said out loud, in ochre, because a cut body that looks whole is the failure. */
+.msg-truncated { margin: 2px 0 0; font-size: 10px; color: var(--ochre); letter-spacing: 0.08em; }
+
+/*
+ * Three absences, three appearances. `is-empty` is a fact; `is-unknown` is not.
+ *
+ * The `is-empty` rule was MISSING — the comment promised three appearances and
+ * the stylesheet defined two, so a known-empty log rendered identically to the
+ * base note. Found by `styled.test.ts` when spec 236 merged main: a comment
+ * asserting a difference the code does not make is the pattern this repo keeps
+ * finding, and it is why that guard exists.
+ *
+ * Muted rather than ochre, because that is the distinction the comment draws: we
+ * KNOW there are none, which is settled, not a caution.
+ */
+.msg-note { margin: 0; font-size: 12px; color: var(--graphite); }
+.msg-note.is-empty { color: var(--concrete); font-style: italic; }
+.msg-note.is-unknown { color: var(--ochre); }
+
+/* ---------- the architect strip (criterion 4b) ---------- */
+
+/* Same missing rule as `.msg-note.is-empty`, same reason: an absence stated as a
+ * fact reads muted, not as a fault. */
+.architect-strip.is-empty { color: var(--graphite); font-style: italic; }
+
+.architect-strip {
+  border: var(--rule) solid var(--ink);
+  background: var(--chalk);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.strip-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.strip-label { font-size: 13px; font-weight: 600; }
+
+.strip-detail {
+  font-size: 13px;
+  color: var(--graphite);
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strip-expand,
+.pager-step,
+.view-button {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  border: var(--rule) solid var(--ink);
+  background: var(--chalk);
+  color: var(--ink);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.strip-expand:hover, .pager-step:hover:not(:disabled), .view-button:hover { background: var(--bone); }
+.pager-step:disabled { opacity: 0.4; cursor: default; }
+
+.view-switch { display: flex; margin-left: auto; }
+.view-button.is-current { background: var(--ink); color: var(--chalk); }
+
+.expanded-architect { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.expanded-architect .pane { align-self: stretch; }
+
+/* ---------- the paged layout (criterion 5) ---------- */
+
+/*
+ * ONE PANE, AND NO FLOOR ON ITS WIDTH.
+ *
+ * The 340px minimum that holds the grid together is exactly what puts a
+ * horizontal scrollbar under a 390px phone, so it is absent here by
+ * construction rather than overridden: `Grid.tsx` renders a single pane with no
+ * grid container at all below 700px.
+ */
+.paged { display: flex; flex-direction: column; gap: 10px; max-width: 100%; }
+.paged .pane { min-width: 0; }
+
+.pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pager-position { font-size: 12px; color: var(--graphite); }
+
+/* Nothing on the page is allowed to be wider than the page. */
+@media (max-width: 699px) {
+  .app-body { padding: 12px; }
+  html, body { overflow-x: hidden; }
+  .pane, .msg-body, .strip-detail { max-width: 100%; }
+  .strip-detail { white-space: normal; }
+}

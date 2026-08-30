@@ -3,8 +3,23 @@ import { loadMachines, type MachineConfigLoad } from './config.js';
 import { connectMachine, type MachineConfig, type MachineState } from './connection/machine.js';
 import { approveGate, openHumanSession, type HumanSession } from './gate/approval.js';
 import type { GateApprovalHandle } from './gate/GatePanel.js';
+import { Grid } from './grid/Grid.js';
 import { buildTree } from './tree/build.js';
 import { Tree } from './tree/Tree.js';
+
+export type ClientView = 'grid' | 'tree';
+
+/**
+ * The view, from the URL rather than from storage.
+ *
+ * A tiled grid is what this client is for, so it is the default. The tree is
+ * kept — it is the only view that shows machine boundaries, connection bands and
+ * unattributed groupings, and none of that survives flattening — and it is
+ * addressable, so a link can open either.
+ */
+export function viewFromSearch(search: string): ClientView {
+  return new URLSearchParams(search).get('view') === 'tree' ? 'tree' : 'grid';
+}
 
 /**
  * One connection per machine, each independently live.
@@ -24,6 +39,8 @@ export function App() {
    * approval stand in for another's. Kept in memory only, never in storage.
    */
   const [sessions, setSessions] = useState<Record<string, HumanSession>>({});
+  const [view, setView] = useState<ClientView>(() =>
+    viewFromSearch(typeof window === 'undefined' ? '' : window.location.search));
 
   useEffect(() => {
     let cancelled = false;
@@ -143,6 +160,35 @@ export function App() {
         <span className="header-register stamp">
           {machines.length} machine{machines.length === 1 ? '' : 's'} · {live} live
         </span>
+        <div className="view-switch" role="group" aria-label="View">
+          {(['grid', 'tree'] as const).map((option) => (
+            <button
+              type="button"
+              key={option}
+              className={`view-button${view === option ? ' is-current' : ''}`}
+              data-view={option}
+              aria-pressed={view === option}
+              onClick={() => {
+                setView(option);
+                /*
+                 * THE URL FOLLOWS THE CLICK. Without this a link could open the
+                 * tree but a person who clicked to it copied an address bar
+                 * still pointing at the grid — the view they were looking at was
+                 * not the view they shared. `replaceState` rather than push, so
+                 * Back leaves the client instead of walking a toggle history.
+                 */
+                if (typeof window !== 'undefined') {
+                  const next = new URL(window.location.href);
+                  if (option === 'tree') next.searchParams.set('view', 'tree');
+                  else next.searchParams.delete('view');
+                  window.history.replaceState(null, '', next);
+                }
+              }}
+            >
+              {option === 'grid' ? 'Grid' : 'Tree'}
+            </button>
+          ))}
+        </div>
       </header>
       <main className="app-body">
         {load === null ? (
@@ -157,7 +203,11 @@ export function App() {
                 and {load.dropped === 1 ? 'is' : 'are'} not shown.
               </p>
             ) : null}
-            <Tree machines={machines} nowMs={nowMs} approvalFor={approvalFor} />
+            {view === 'grid' ? (
+              <Grid machines={machines} nowMs={nowMs} approvalFor={approvalFor} />
+            ) : (
+              <Tree machines={machines} nowMs={nowMs} approvalFor={approvalFor} />
+            )}
           </>
         )}
       </main>

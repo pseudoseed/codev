@@ -420,6 +420,7 @@ describe('failure matrix signals are distinct', () => {
     expect(emitted).toContain('THREAD_UNMANAGED');
     expect(emitted).toContain('WORKSPACE_NOT_REGISTERED');
     expect(emitted).toContain('STATE_STREAM_WATCH_FAILED');
+    expect(emitted).toContain('MESSAGE_LOG_UNREADABLE');
 
     const matrix = new Set<string>(Object.values(SIGNAL));
     const unclassified = [...emitted].filter((code) => !matrix.has(code) && !(code in NON_MATRIX)).sort();
@@ -1026,6 +1027,40 @@ describe('failure matrix', () => {
   // coverage of a phase that has not been built — the same name-versus-path drift
   // that produced the STATUS_UNREADABLE regression, here pointing at a future phase
   // instead of a neighbouring function.
+  // MATRIX ROW, Spec 146 Phase 12. A MAILBOX THAT WILL NOT READ IS NOT AN EMPTY ONE.
+  //
+  // Every pane shows the last three messages sent to its agent. If the mailbox
+  // throws and the snapshot answers with no messages, an operator reads "nobody
+  // has written to this builder" for a builder that may have a queue of unread
+  // instructions — the same words for two opposite situations, which is what
+  // this matrix exists to stop.
+  //
+  // Its own row rather than GLOBAL_DB_LOCKED: this degrades ONE part of the
+  // snapshot while identities, statuses and gates on it stay current, so an
+  // operator told the database is locked would go looking for a workspace that
+  // is fine.
+  it('a mailbox that will not read emits MESSAGE_LOG_UNREADABLE, and the rows survive', () => {
+    const database = db();
+    const workspace = normalizeWorkspacePath(tmp());
+    database.prepare(`
+      INSERT INTO architect (workspace_path, id, pid, port, cmd, terminal_id)
+      VALUES (?, 'main', 0, 0, 'seeded', 'term-main')
+    `).run(workspace);
+    // The real failure, not a mocked one: the table the snapshot needs and the
+    // identities do not.
+    database.exec('DROP TABLE mailbox');
+
+    const snapshot = readThreadRegistry(database, workspace, []);
+
+    expect(snapshot.signals.map((signal) => signal.code)).toContain(SIGNAL.MESSAGE_LOG_UNREADABLE);
+    // DEGRADED, NOT BROKEN. The identities are still published, and the flag says
+    // which of "no messages" and "could not read them" this is.
+    expect(snapshot.messageLog).toBe('unreadable');
+    expect(snapshot.identities.map((identity) => identity.roleId)).toEqual(['main']);
+    // And it does not collapse into the coarser database row.
+    expect(snapshot.signals.map((signal) => signal.code)).not.toContain(SIGNAL.GLOBAL_DB_LOCKED);
+  });
+
   // A WATCHER THAT CANNOT BE ESTABLISHED SAYS SO.
   //
   // I had excluded this code from the matrix as "not operator-facing". A reviewer

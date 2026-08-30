@@ -41,6 +41,16 @@ import { normalizeWorkspacePath } from '../../packages/codev/src/agent-farm/util
 interface Seed {
   readonly architect: string;
   readonly builders: ReadonlyArray<{ readonly id: string; readonly worktree: string }>;
+  /**
+   * Mailbox rows, so a harness can stand up the messages criterion 4 requires
+   * each pane to show. Seeded here rather than inserted later because this host
+   * reopens the database READ-ONLY once it is built.
+   */
+  readonly messages?: ReadonlyArray<{
+    readonly to: string;
+    readonly from: string;
+    readonly body: string;
+  }>;
 }
 
 /**
@@ -65,6 +75,19 @@ function seedDatabase(dbPath: string, workspace: string, seedPath: string): void
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(workspace, builder.id, builder.id, builder.worktree,
       `builder/${builder.id}`, `term-${builder.id}`, seed.architect);
+  }
+  let messageAt = Date.now() - 60_000;
+  for (const message of seed.messages ?? []) {
+    messageAt += 1_000;
+    db.prepare(`
+      INSERT INTO mailbox (
+        id, workspace_path, to_agent, from_agent, from_agent_name,
+        body, formatted_message, status, created_at, updated_at
+      ) VALUES (?, ?, ?, 'architect', ?, ?, ?, 'delivered', ?, ?)
+    `).run(
+      `seed-${messageAt}-${message.to}`, workspace, message.to, message.from,
+      message.body, message.body, messageAt, messageAt,
+    );
   }
   db.prepare('INSERT OR IGNORE INTO known_workspaces (workspace_path, name) VALUES (?, ?)')
     .run(workspace, workspace.split('/').pop() ?? workspace);

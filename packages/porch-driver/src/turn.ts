@@ -61,6 +61,36 @@ export function sequenceOf(value: unknown): number | null {
   return asThreadEvent(value)?.sequence ?? null;
 }
 
+/**
+ * The session's failure from a `thread.session-set`, or `undefined` when it is
+ * not one or the session is not in error.
+ *
+ * Three values, because there are three facts. `undefined` is "this event says
+ * nothing about failure". `null` is "the session failed and the server gave no
+ * reason" — WHY is unknown, THAT it failed is not. A string is the server's own
+ * sentence.
+ *
+ * Spec 146 Phase 10 found the reason this exists. t3code ships
+ * `OpenCodeSettings.enabled` defaulting to false — "users opt in from Settings" —
+ * so a thread on the opencode driver in a state directory nobody opted in for is
+ * refused at `startSession`:
+ *
+ *   ProviderValidationError: Provider instance 'opencode' is disabled in T3 Code
+ *   settings.
+ *
+ * The server emits that as `status: "error"`, `lastError: <the sentence>`, twelve
+ * milliseconds after the dispatch. Nothing read it, so the caller waited out its
+ * whole budget and reported `Timed out after 599950ms waiting for the turn to
+ * start`. Ten minutes to not learn something that was already on the wire, and
+ * the failure named the wrong thing: a refusal presented as "I stopped waiting".
+ */
+export function sessionFailureOf(event: ThreadEvent): string | null | undefined {
+  if (event.type !== 'thread.session-set') return undefined;
+  const session = event.payload?.session as { status?: unknown; lastError?: unknown } | undefined;
+  if (!session || session.status !== 'error') return undefined;
+  return typeof session.lastError === 'string' && session.lastError.length > 0 ? session.lastError : null;
+}
+
 /** `session.activeTurnId` from a `thread.session-set` event, or `undefined` for other events. */
 export function activeTurnIdOf(event: ThreadEvent): string | null | undefined {
   if (event.type !== 'thread.session-set') return undefined;
@@ -71,6 +101,16 @@ export function activeTurnIdOf(event: ThreadEvent): string | null | undefined {
 
 interface Waiter {
   seenRunning: boolean;
+  /**
+   * The thread's sequence when this waiter was registered.
+   *
+   * Delivery is at-least-once by design, so a `status: "error"` from a PREVIOUS
+   * turn can be redelivered after a new `expectTurn` — and without this it would
+   * abandon a healthy turn's waiter with a refusal that belongs to history. The
+   * cursor advances after the handler, which is exactly what makes such a replay
+   * ordinary rather than exotic.
+   */
+  startSequence: number;
   resolveRunning(turnId: string): void;
   resolveSettled(): void;
   abandon(reason: Error): void;
@@ -78,7 +118,7 @@ interface Waiter {
   readonly settled: Promise<void>;
 }
 
-function makeWaiter(): Waiter {
+function makeWaiter(startSequence: number): Waiter {
   let resolveRunning!: (turnId: string) => void;
   let resolveSettled!: () => void;
   let rejectRunning!: (reason: Error) => void;
@@ -97,6 +137,7 @@ function makeWaiter(): Waiter {
   settled.catch(() => {});
   return {
     seenRunning: false,
+    startSequence,
     resolveRunning,
     resolveSettled,
     abandon: (reason: Error) => {
@@ -106,6 +147,32 @@ function makeWaiter(): Waiter {
     running,
     settled,
   };
+}
+
+/**
+ * The session failed before the turn ever started.
+ *
+ * Distinct from a timeout on purpose, and that distinction is the whole point:
+ * a timeout says "I stopped waiting" and leaves open that the turn is still
+ * running. This says the server refused, and carries what it said.
+ */
+export class SessionStartFailedError extends Error {
+  constructor(
+    readonly threadId: string,
+    /** The server's own sentence, or null when it reported an error and no reason. */
+    readonly serverMessage: string | null,
+  ) {
+    super(
+      `The session for thread ${threadId} failed before the turn started.\n` +
+        (serverMessage === null
+          ? `  The server reported status "error" and gave no reason, so WHY is unknown — but THAT it ` +
+            `failed is not, and those are different facts.\n`
+          : `  The server said: ${serverMessage.split('\n')[0]}\n`) +
+        `  This is a refusal, not a timeout. Waiting out the caller's budget here would spell an answer ` +
+        `the server gave in milliseconds as "I could not tell".`,
+    );
+    this.name = 'SessionStartFailedError';
+  }
 }
 
 /** A waiter was displaced by a second turn started on the same thread. */
@@ -153,6 +220,31 @@ export class TurnTracker {
     const previous = this.#lastSequence.get(event.aggregateId) ?? 0;
     if (event.sequence > previous) this.#lastSequence.set(event.aggregateId, event.sequence);
 
+    // A refusal is read BEFORE the activeTurnId path, because the refusal event
+    // carries `activeTurnId: null` and would otherwise fall through the
+    // `seenRunning` latch and do nothing at all — which is exactly how a
+    // definite "no" became a ten-minute silence.
+    const failure = sessionFailureOf(event);
+    if (failure !== undefined) {
+      const failed = this.#waiters.get(event.aggregateId);
+      // Only before the turn is running, and only for a refusal that happened
+      // AFTER this waiter was registered. Two guards, for two different mistakes:
+      //
+      //  - After running, a session error is the turn ENDING, and the
+      //    `activeTurnId: null` below settles it normally. A caller that already
+      //    holds a turn id wants its result, not an exception.
+      //  - At or below `startSequence`, the error predates this waiter. Delivery
+      //    is at-least-once, so a refusal from a previous turn WILL be
+      //    redelivered on any resubscription, and killing a healthy turn with a
+      //    stale refusal would be a worse failure than the one this guard fixes.
+      if (failed && !failed.seenRunning && event.sequence > failed.startSequence) {
+        this.#waiters.delete(event.aggregateId);
+        this.#active.delete(event.aggregateId);
+        failed.abandon(new SessionStartFailedError(event.aggregateId, failure));
+        return;
+      }
+    }
+
     const activeTurnId = activeTurnIdOf(event);
     if (activeTurnId === undefined) return;
 
@@ -186,9 +278,10 @@ export class TurnTracker {
     // promises it handed out would then never settle either way. Rejecting them
     // is the difference between a caller that learns and a caller that hangs.
     this.#waiters.get(threadId)?.abandon(new TurnDisplacedError(threadId));
-    const waiter = makeWaiter();
+    const startSequence = this.lastSequence(threadId);
+    const waiter = makeWaiter(startSequence);
     this.#waiters.set(threadId, waiter);
-    return { startSequence: this.lastSequence(threadId), running: waiter.running, settled: waiter.settled };
+    return { startSequence, running: waiter.running, settled: waiter.settled };
   }
 }
 

@@ -1,7 +1,9 @@
 import type { MachineState } from '../connection/machine.js';
 import { deriveRowStatus, type RowStatus } from '../status/derive.js';
 import type {
+  AgentMessage,
   AgentStateSignal,
+  MessageLogReachability,
   PorchStatusProjection,
   T3codeObservation,
   T3codeReachability,
@@ -20,6 +22,10 @@ export interface ThreadRow {
   readonly worktree?: string;
   readonly porch?: PorchStatusProjection;
   readonly status: RowStatus;
+  /** Newest first. Absent means none; `WorkspaceNode.messageLog` says whether any could be read. */
+  readonly messages?: readonly AgentMessage[];
+  /** Which machine this row came from. Shown on a pane once more than one is configured. */
+  readonly machine: string;
 }
 
 export interface ArchitectGroup {
@@ -37,12 +43,20 @@ export interface WorkspaceNode {
    * the machine, rather than repeated on every row — and never omitted, because
    * a tree full of UNKNOWN with no stated cause reads as a broken client.
    */
+  // Spec 236 widened this from three values to eight; phase 12's `messageLog`
+  // is the same idea for a different subsystem and both are reported once, at
+  // the machine, rather than repeated under every row.
   readonly sessionVisibility: T3codeReachability;
   /**
    * How old the reported session content is, when the server said. Absent on a
    * server that predates the field, and on every status that carries no content.
    */
   readonly sessionObservation?: T3codeObservation;
+  /**
+   * Whether this machine's message log could be read. Reported once, like
+   * `sessionVisibility`, and never collapsed into "this agent has no messages".
+   */
+  readonly messageLog: MessageLogReachability;
   readonly architects: readonly ArchitectGroup[];
   /**
    * Builders `global.db` does not attribute to an architect present here. They
@@ -81,6 +95,8 @@ function rowFrom(
     ...(identity.worktree ? { worktree: identity.worktree } : {}),
     ...(identity.porch ? { porch: identity.porch } : {}),
     status: deriveRowStatus(identity, t3code, observation),
+    ...(identity.messages && identity.messages.length > 0 ? { messages: identity.messages } : {}),
+    machine: machineKey,
   };
 }
 
@@ -135,6 +151,7 @@ function buildWorkspace(connection: MachineState, machineKey: string): Workspace
     generatedAt: snapshot.generatedAt,
     sessionVisibility: t3code,
     ...(protocol.t3codeObservation ? { sessionObservation: protocol.t3codeObservation } : {}),
+    messageLog: protocol.messageLog ?? 'not-provided',
     architects: architectRows.map((architect) => ({
       key: architect.key,
       architect,

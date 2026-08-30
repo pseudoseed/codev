@@ -45,6 +45,13 @@ export const FAILURE_MATRIX_SIGNAL = {
   APPROVAL_OPERATION_INTERRUPTED: 'APPROVAL_OPERATION_INTERRUPTED',
   APPROVAL_OPERATION_UNKNOWN: 'APPROVAL_OPERATION_UNKNOWN',
   APPROVAL_OPERATION_STORE_UNREADABLE: 'APPROVAL_OPERATION_STORE_UNREADABLE',
+  // Spec 146 Phase 12. The mailbox would not read, so no pane can show the
+  // messages criterion 4 asks for. Operator-facing and its own row rather than
+  // a reuse of GLOBAL_DB_LOCKED: this failure degrades ONE part of the snapshot
+  // while every identity, status and gate on it stays current, and an operator
+  // told the database is locked would go looking for a workspace that is in
+  // fact fine. Emitted from servers/thread-registry.ts.
+  MESSAGE_LOG_UNREADABLE: 'MESSAGE_LOG_UNREADABLE',
 } as const;
 
 export type FailureMatrixSignal =

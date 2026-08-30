@@ -502,6 +502,25 @@ export class DriverThread {
       ...(ref === undefined ? {} : { ref }),
     });
     this.#pendingRole = null;
+    // ...unless the SESSION then refuses the turn.
+    //
+    // The rule above is "the role stays pending until something confirms it
+    // went", and an accepted dispatch used to be the only confirmation
+    // available. `SessionStartFailedError` is a second, later one, in the other
+    // direction: the command was accepted and the turn never ran, so the role
+    // reached nobody. Leaving it consumed means a caller that retries — which is
+    // the natural response to "the provider is disabled in settings", once
+    // somebody enables it — gets an agent working without its instructions.
+    //
+    // That is the worse of the two ways to be wrong, and it is the one this
+    // class already chose against.
+    if (role !== null) {
+      started.running.catch((error: unknown) => {
+        if ((error as { name?: unknown } | null)?.name === 'SessionStartFailedError') {
+          this.#pendingRole = role;
+        }
+      });
+    }
     return started;
   }
 

@@ -38,6 +38,10 @@ export type MachineConfigLoad =
  * read at all is its own outcome — "we could not tell what to connect to" is not
  * "there is nothing to connect to".
  */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 export async function loadMachines(
   fetchImpl: typeof globalThis.fetch = globalThis.fetch,
   url = 'machines.json',
@@ -51,6 +55,27 @@ export async function loadMachines(
     parsed = await response.json();
   } catch (error) {
     return { ok: false, message: `machine configuration could not be read: ${(error as Error).message}` };
+  }
+  /*
+   * TOWER'S ENVELOPE, AND WHY IT IS READ HERE RATHER THAN REJECTED.
+   *
+   * `scripts/serve.mjs` and the dev server answer a bare array. Tower's mount
+   * answers `{ signal, message, machines: [] }` when it cannot serve a list —
+   * absent file, wrong mode, unparseable — because a bare empty array with no
+   * reason reads as "you have no machines" for four different situations.
+   *
+   * Rejecting the object as "not a list of machines" threw that reason away and
+   * replaced four specific sentences with one generic one, ON THE FIRST-RUN
+   * PATH: no `client-machines.json` is the normal state for a fresh install, so
+   * this was the message most operators would ever see from the mount. The
+   * server's own words are the ones worth showing.
+   */
+  if (isRecord(parsed) && Array.isArray((parsed as { machines?: unknown }).machines)) {
+    const envelope = parsed as { signal?: unknown; message?: unknown; machines: unknown[] };
+    if (typeof envelope.message === 'string' && envelope.message !== '') {
+      return { ok: false, message: envelope.message };
+    }
+    parsed = envelope.machines;
   }
   if (!Array.isArray(parsed)) {
     return { ok: false, message: 'machine configuration is not a list of machines' };

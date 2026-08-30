@@ -545,6 +545,16 @@ describe('spec 146 phase 3: the persisted cursor', () => {
 });
 
 // ------------------------------------------------------- settle detection
+//
+// `TurnTracker`'s REFUSAL behaviour is tested elsewhere, and this pointer exists
+// so the split is discoverable rather than accidental:
+// `agent-farm/__tests__/spec-146-phase-10-full-protocol.test.ts`, under
+// "a refusal is not a timeout". Phase 10 added `SessionStartFailedError` — a
+// session that fails before the turn is running abandons the waiter with the
+// server's own sentence instead of letting the caller time out — plus the
+// sequence guard that stops a REPLAYED refusal killing a healthy turn, and the
+// role-prompt restore. Those tests live with the phase that found the defect and
+// carries the evidence for it; these cover the settle latch this phase built.
 
 describe('spec 146 phase 3: settle detection', () => {
   it('does NOT report settled on the thread-creation event', async () => {

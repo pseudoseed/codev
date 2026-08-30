@@ -74,7 +74,7 @@ function statusYaml(projectId, title, gate) {
 /**
  * @param {string} label
  * @param {object|null} gate
- * @param {{ skipChecks?: boolean, passingChecks?: boolean }} [options]
+ * @param {{ skipChecks?: boolean, passingChecks?: boolean, extraBuilders?: number, messagesPerAgent?: number }} [options]
  *   THREE SETTINGS, and the middle one is what spec 236 added.
  *
  *   `skipChecks: false` leaves the phase's real checks in place, which a
@@ -86,6 +86,18 @@ function statusYaml(projectId, title, gate) {
  *   approved. Without this setting the only success path an e2e could drive was
  *   one with the checks removed — which is the case that already worked before
  *   any of this, so a green suite would have proved nothing about the new path.
+ *   `skipChecks: false` leaves the phase's real checks in place, which is what
+ *   production has. The route then refuses rather than running a build inside an
+ *   HTTP request, and the e2e exercises that branch instead of only the one
+ *   where checks are skipped.
+ *
+ *   `extraBuilders` appends plain, ungated builders to the two this always
+ *   makes. Criterion 4 is stated for SIX, and six is not an arbitrary number:
+ *   it is the count at which a near-square grid is 3x2 and the arithmetic the
+ *   plan corrected (400x300 was impossible, 340x240 is not) actually binds.
+ *
+ *   `messagesPerAgent` seeds mailbox rows, because criterion 4 asks each pane
+ *   for its last three messages and a pane with none cannot demonstrate it.
  */
 export function makeWorkspace(label, gate, options = {}) {
   const root = scratch(`codev-e2e-${label}-`);
@@ -126,6 +138,13 @@ export function makeWorkspace(label, gate, options = {}) {
     { id: `builder-${label}-quiet`, projectId: `${label}-quiet`, gate: null },
     { id: `builder-${label}-gated`, projectId: `${label}-gated`, gate },
   ];
+  for (let index = 0; index < (options.extraBuilders ?? 0); index += 1) {
+    builders.push({
+      id: `builder-${label}-n${index}`,
+      projectId: `${label}-n${index}`,
+      gate: null,
+    });
+  }
   for (const builder of builders) {
     builder.worktree = join(root, '.builders', builder.id);
     const projectDir = join(builder.worktree, 'codev', 'projects', builder.projectId);
@@ -159,10 +178,25 @@ export function makeWorkspace(label, gate, options = {}) {
     }
   }
 
+  const perAgent = options.messagesPerAgent ?? 0;
+  const messages = [];
+  for (const agent of ['main', ...builders.map((builder) => builder.id)]) {
+    for (let index = 0; index < perAgent; index += 1) {
+      messages.push({
+        to: agent,
+        from: agent === 'main' ? 'human' : 'main',
+        // Numbered oldest-to-newest so a spec can assert the ORDER a pane shows
+        // them in, not merely that three of something rendered.
+        body: `${agent} message ${index + 1}`,
+      });
+    }
+  }
+
   const seedPath = join(root, 'seed.json');
   writeFileSync(seedPath, JSON.stringify({
     architect: 'main',
     builders: builders.map(({ id, worktree }) => ({ id, worktree })),
+    messages,
   }));
   return { root, builders, seedPath, dbPath: join(root, 'global.db') };
 }
