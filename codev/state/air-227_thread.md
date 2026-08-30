@@ -118,3 +118,29 @@ prints one per server lifetime, while every `afx` process exchanges it again. Th
 `restart`s between commands (data dir kept, new token) so each child has a credential it can
 spend — and the side effect is that each command acts on a thread that outlived the server
 it was created on.
+
+## Round 3 — rebase onto main after #258
+
+`git rebase origin/main` applied all six commits with **no conflicts**, which is the part
+worth distrusting. Git merged both sets of edits to `thread-backend.ts` textually and left a
+real gap underneath.
+
+- **No migration collision.** #258 added none, so v22 stands.
+- **The gap.** #258 gave the socket a subscription pool, stopped by `abandonConnection`
+  BEFORE the socket closes — stated reason: closing out from under a running
+  `ResumingSubscription` leaves it retrying against a shut client. My `closeThreadBackend`
+  handed out the raw `connection.close`, so the pool was only stopped by the socket's
+  `close` EVENT, asynchronously. Now `hangUp.set(key, abandonConnection)`, with a source
+  guard in `issue-227-thread-seams.test.ts`.
+- **A false warning my teardown caused.** A cancelled stream ends unsynchronized, which the
+  pool cannot tell from a server dropping mid-catch-up — so `afx interrupt` succeeded and
+  then printed *"ended before the server signalled catch-up was complete"* about a
+  subscription it had just asked to stop. `Entry.isStopping`, set by `stop`/`stopAll` before
+  teardown, silences it. The refusal to mark that attempt attached is unchanged.
+
+**This last one is a behaviour change inside #258's module**, so it is flagged to the
+architect rather than merged on my own judgement — the standing rule is no further review
+round for the rebase *unless it changes behaviour*.
+
+`render-gate.test.ts` failed once in the full run on a perf budget (322ms against 250ms) and
+passed 80/80 on its own; it is load-sensitive and unrelated.

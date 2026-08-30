@@ -209,6 +209,27 @@ describe('a command can adopt a thread it did not create', () => {
     expect(src.indexOf('adoptThreadInThisProcess({')).toBeLessThan(src.indexOf('engine.interrupt('));
   });
 
+  /**
+   * The hang-up added for the live run has to take #241's subscription pool with it.
+   *
+   * The live test is the behavioural proof — a pool left retrying keeps its timers, and
+   * timers keep Node's loop alive, so `afx interrupt` would exit 143 at the caller's
+   * timeout exactly as it did before `closeThreadBackend` existed. This guard is the
+   * durable half: the pool is a local inside `initialiseThreadBackend`, so what a reader
+   * can check here is that the closer we hand out is the one that stops it.
+   */
+  it('a deliberate hang-up stops the subscription pool before closing the socket', () => {
+    const src = source('../thread-backend.ts');
+    // `abandonConnection`, not `connection.close`. Closing the socket out from under a
+    // running `ResumingSubscription` leaves it retrying against a client that is shut.
+    expect(src).toContain('hangUp.set(key, abandonConnection)');
+    expect(src).not.toContain('hangUp.set(key, connection.close)');
+    // And that closer really is the pool-stopping one, in that order.
+    expect(src).toMatch(
+      /const abandonConnection = \(\): void => \{[\s\S]*?pool\?\.stopAll\(\);[\s\S]*?connection\.close\(\);/,
+    );
+  });
+
   it('afx cleanup adopts the thread before removing its worktree', () => {
     const src = source('../commands/cleanup.ts');
     expect(src).toContain('adoptThreadInThisProcess');

@@ -911,7 +911,16 @@ async function initialiseThreadBackend(
   installThreadSpawnFactory(key);
   // Remembered so a one-shot command can hang up when it is done — see
   // `closeThreadBackend`. Registered alongside the engine and dropped with it.
-  hangUp.set(key, connection.close);
+  //
+  // `abandonConnection`, NOT `connection.close`. Since #241 this socket also owns a
+  // subscription pool, and `abandonConnection` stops it BEFORE closing — for the reason
+  // stated there: closing the socket out from under a running `ResumingSubscription`
+  // leaves it retrying, and its retry loop opens a stream on a client whose socket is
+  // shut. A deliberate hang-up is the same situation as an abandon and takes the same
+  // order. Closing the raw socket instead left the pool to be stopped by the socket's
+  // `close` EVENT, which is asynchronous — so a caller that hangs up and keeps running
+  // had a live pool against a dead socket in between.
+  hangUp.set(key, abandonConnection);
   lastFailure.delete(key);
   return 'installed';
 }
@@ -941,6 +950,11 @@ const hangUp = new Map<string, () => void>();
  *
  * Idempotent, and a no-op for a workspace that never connected: a command that took the PTY
  * path must be able to call it without asking whether it needs to.
+ *
+ * WHAT IT TEARS DOWN, since #241 gave the socket a subscription pool: the registered engine,
+ * the streamer, and — through `abandonConnection` — the pool, in that order, before the
+ * socket goes. A pool outliving its socket is the dead-engine bug one layer out: every
+ * `ResumingSubscription` in it keeps retrying against a client that is shut.
  */
 export function closeThreadBackend(workspaceRoot: string): void {
   const key = canonicalWorkspaceKey(workspaceRoot);

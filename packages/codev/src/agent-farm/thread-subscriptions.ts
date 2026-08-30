@@ -175,6 +175,17 @@ interface Entry {
   readonly attached: Promise<void>;
   /** Set when `onResume` first fires. Read by `attached(threadId)`. */
   isAttached: boolean;
+  /**
+   * Set by `stop`/`stopAll` before the subscription is torn down.
+   *
+   * A cancelled stream ends UNSYNCHRONIZED, which is indistinguishable at the callback
+   * from a server that dropped mid-catch-up — so a deliberate teardown reported itself
+   * as an anomaly. Measured on the #227 live run: `afx interrupt` succeeded, hung up its
+   * connection, and printed "ended before the server signalled catch-up was complete"
+   * about a subscription it had just asked to stop. The refusal to mark it attached is
+   * still right; the warning is the part that was false.
+   */
+  isStopping: boolean;
   /** The `run()` loop, kept so `stopAll` can await a clean teardown. */
   readonly running: Promise<void>;
 }
@@ -299,7 +310,10 @@ export function createThreadSubscriptionPool(
     // an unhandled rejection. The `ensure` caller still sees it.
     attached.catch(() => {});
 
-    const entry: Partial<Entry> & { isAttached: boolean } = { isAttached: false };
+    const entry: Partial<Entry> & { isAttached: boolean; isStopping: boolean } = {
+      isAttached: false,
+      isStopping: false,
+    };
 
     const subscription = new ResumingSubscription(
       async () => makeTransport(threadId),
@@ -333,12 +347,19 @@ export function createThreadSubscriptionPool(
            * would turn a recoverable condition into a permanent refusal to dispatch.
            */
           if (!info.synchronized) {
-            options.log(
-              'WARN',
-              `t3code subscription for thread ${threadId} ended before the server signalled ` +
-                `catch-up was complete (attempt ${info.attempt}). This attempt never came up, so it ` +
-                `does NOT count as attached and the next one is a fresh subscribe.`,
-            );
+            // Silent when WE stopped it. The attempt still does not count as attached —
+            // that rule is unchanged and the `return` below is the same one — but a
+            // teardown we asked for is not an anomaly to report, and saying so on the
+            // happy path of a command that just succeeded trains people to ignore the
+            // line that matters.
+            if (!entry.isStopping) {
+              options.log(
+                'WARN',
+                `t3code subscription for thread ${threadId} ended before the server signalled ` +
+                  `catch-up was complete (attempt ${info.attempt}). This attempt never came up, so it ` +
+                  `does NOT count as attached and the next one is a fresh subscribe.`,
+              );
+            }
             return;
           }
           entry.isAttached = true;
@@ -443,6 +464,9 @@ export function createThreadSubscriptionPool(
       const entry = entries.get(threadId);
       if (!entry) return;
       entries.delete(threadId);
+      // Flagged BEFORE the teardown, because the callback that would warn about an
+      // unsynchronized end runs as a result of it.
+      entry.isStopping = true;
       entry.subscription.stop();
     },
 
@@ -450,6 +474,7 @@ export function createThreadSubscriptionPool(
       stopped = true;
       for (const [threadId, entry] of [...entries]) {
         entries.delete(threadId);
+        entry.isStopping = true;
         entry.subscription.stop();
       }
     },
