@@ -41,11 +41,26 @@ export async function interrupt(options: InterruptOptions): Promise<void> {
     builder = null;
   }
   if (builder && isThreadBacked(builder) && builder.threadId) {
+    // A workspace we could not detect is NOT a workspace with no engine.
+    //
+    // `?? undefined` sent an undetectable root to the unkeyed slot, so the lookup missed
+    // and the user was told "no thread engine is registered" — which is a statement about
+    // the engine map, when the truth was that this command never worked out which
+    // workspace it was in. Two causes, one sentence: the defect this whole issue is
+    // about, in the code written to fix it.
+    const workspaceRoot = detectWorkspaceRoot();
+    if (!workspaceRoot) {
+      fatal(
+        `Cannot interrupt ${builder.id}: it is thread-backed, and this command could not work out `
+        + `which workspace it is running in — so there is no engine to look up rather than no engine `
+        + `registered. Run it from inside the workspace, or from a builder worktree under it.`,
+      );
+    }
     try {
       // Named, so the keyed engine map is read for THIS workspace rather than for
       // whichever one happened to register first. (This command registers no engine of
       // its own, so it still throws — but it throws about the right workspace.)
-      const settled = await interruptThread(builder.threadId, detectWorkspaceRoot() ?? undefined);
+      const settled = await interruptThread(builder.threadId, workspaceRoot!);
       if (settled.activeTurnId !== null) {
         fatal(`Interrupt of ${builder.id} did not settle activeTurnId`);
       }

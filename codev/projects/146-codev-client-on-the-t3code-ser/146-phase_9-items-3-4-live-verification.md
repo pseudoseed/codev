@@ -631,6 +631,24 @@ and is journalled beside the intent — the wire payload is byte-identical — a
 `engine.startTurn` directly, never `deliverThreadTurn`, so the recovery path is not on it at all.
 Items 3 and 4 were both observed on earlier runs of the same test against the same pinned server.
 
+## A thread-backed architect receives NO GATE NOTICE
+
+Stated plainly rather than left to be derived from two facts in different files.
+
+Porch's gate notifications are sent with `--no-enter` — that is the whole point of them: the
+message sits in the composer and a **human** decides. A thread has no composer, so a thread-backed
+agent refuses `--no-enter` messages terminally.
+
+**Therefore an architect that has been moved onto a thread will not be told when a gate opens.**
+Not "will be told late" — will not be told. The row is dismissed, the sender is told it was
+refused and why, and nothing arrives at the architect.
+
+That is correct behaviour for a composer-less transport and it is a real hole in the workflow. It
+is not a regression today, because thread-backed spawning is opt-in and is not enabled anywhere.
+The standing instruction, adopted from #221's round-9 review: **do not enable thread-backing on
+any workspace that receives porch `--no-enter` gate notifications until that path has an owner
+decision.** #226 is where the decision belongs.
+
 ## Recorded, not fixed
 
 - **An architect's `attach` passes no harness or model**, so it depends on the engine's
@@ -682,16 +700,19 @@ made about either.
 | `tower-routes.test.ts` | +2 — a terminally refused row is reported `refused`, not `held`, with an ordinary send to the same thread-backed agent as the control |
 | `spec-146-phase-9-render-gate.test.ts` | +3 — a stale thread id beside a live PTY delivers to the PTY and logs the contradiction, with a thread-only control and a not-writable-PTY control |
 | `spec-146-phase-9-thread-backend.test.ts` | +6 — the project lookup's three answers, driven against a real HTTP server, and the symlink-normalised match |
-| `spec-146-phase-9-architect-thread-resume.test.ts` | 9 — the branch normalisation, `attach` vs `create`, idempotence, the unattached-thread message, and `DriverThread.attach` |
+| `spec-146-phase-9-architect-thread-resume.test.ts` | 17 — branch normalisation, `attach` vs `create`, idempotence, the unattached-thread message, `DriverThread.attach`, and the replay-not-repeat set: an unacknowledged turn replays under its ORIGINAL id, a refusal is not replayed, an identical-text second row is not answered by the first row's stale intent, and recovering one thread does not settle another's |
 | `spec-146-phase-9-add-architect-thread-path.test.ts` | 6 — the backend is registered before the engine is read; the collision refusal; auto-numbering; unconfigured still uses Tower; unreachable propagates |
+| `spec-146-phase-9-no-enter-rule.test.ts` | 8 — the `--no-enter`-on-a-thread rule has one encoding, and a site that restates it instead of importing it fails |
+| `spec-146-phase-9-spawn-factory-dormancy.test.ts` | 3 — `chooseSpawnPath` has exactly one production consumer and it is the CLI spawn path; nothing under `servers/` reads it; and the install still happens, so this is dormancy rather than absence |
 | `spec-146-t3-contract.test.ts` | +5 — `restart` is distinct from a cold start and refuses to fake one; `stop` refuses to signal a live pid it cannot prove it owns, and refuses a live `tail -f` whose argv merely mentions the runtime directory; an `lsof` that cannot answer is `PORT_STATE_UNKNOWN` rather than a free port; the live opt-in check now covers both live files rather than one |
 
 Mutation-checked: reverting the branch normalisation fails the item-3 payload test; removing the
 `ensureThreadBackendReady` call fails two of the three add-architect tests; replacing `restart`
 with `stop` + `start` fails the live test.
 
-Full suite green with these changes: `348 passed | 3 skipped` files, `6882 passed | 52 skipped`
-tests, plus the v2 suite's `180 passed`. Run with `env -u CODEV_WORKTREE_ROOT -u CODEV_BUILDER_ID
+Full suite green **on the merged tree** — this branch with `origin/main` merged in, which is what
+will actually land: `352 passed | 3 skipped` files, `6911 passed | 52 skipped` tests, plus the v2
+suite's `180 passed`, 0 failed. Run with `env -u CODEV_WORKTREE_ROOT -u CODEV_BUILDER_ID
 -u CODEV_ARCHITECT_NAME`, the workaround #189 still requires.
 
 The cold-start evidence in `codev/research/146-harness-coldstart-evidence.json` was regenerated,

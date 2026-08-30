@@ -949,6 +949,22 @@ export class MailboxDrainer {
       for (const key of this.recoveryState.keys()) {
         if (!agents.has(key)) this.recoveryState.delete(key);
       }
+      // NOTHING ON THIS LOOP MAY BE AWAITED THAT WAITS ON A NETWORK, A DISK, OR A
+      // PROVIDER.
+      //
+      // This walks every agent in every workspace SEQUENTIALLY, so anything slow here is
+      // slow for all of them — including PTY-only workspaces that opted into none of it.
+      // Issue #219 removed three such things in three separate rounds, each found only
+      // after it had been added: a t3code connect (bounded at 15 s per stage, which is
+      // what made the stall long), a `thread.turn.start` (bounded at 30 s by the RPC
+      // client), and a `realpathSync` on every engine lookup.
+      //
+      // The shapes that are safe here: a map lookup, a synchronous DB read, a config read
+      // from disk when nothing else will do. The shape that is not: an await whose
+      // duration is set by something outside this process. Start that work in the
+      // background, hold the row, and let a later tick find it done — the row is held for
+      // exactly this, and `requestThreadBackend` is synchronous by construction so that
+      // this rule cannot be broken by forgetting it.
       for (const [key, { workspacePath, toAgent }] of agents) {
         if (this.generation !== gen) return; // stop() ran mid-tick → bail before more work
         // Isolate each agent's pass (CMAP round 3 — Claude): a throw from classify/writeMessage/DB

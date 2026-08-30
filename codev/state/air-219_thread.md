@@ -333,3 +333,24 @@ named the six doc files #226 must carry.
 4. PR body carries the disclosure for the 220 pair and the reason the merge mattered more.
 
 Phase 11 and phase 9 do not interact badly. Phase 11's three new test files run alongside mine.
+
+## Round 10 (claude COMMENT/HIGH, no blockers) — five cheap items, all done
+
+1. `interrupt.ts` mapped an undetectable workspace root to the UNKEYED slot, so a
+   root-detection failure reported as "no thread engine is registered" — a statement about
+   the engine map when the truth was that the command never worked out where it was. Two
+   causes, one sentence, in the code written to fix exactly that. Now refused separately.
+2. The `dismiss()` dual-meaning warning moved to the DEFINITION in `db/mailbox.ts`. It now
+   means both "an operator cleared this" and "the system refused this", told apart only by
+   `refusedReasonFor` sniffing `no_enter === 1` — so the next system refusal added will
+   mislabel itself, and whoever adds it reads the definition, not the call site.
+3. The verification record now states plainly that a thread-backed architect receives NO
+   gate notice — porch gates use `--no-enter`, threads refuse it terminally. Not "told
+   late": not told.
+4. `installThreadSpawnFactory`'s dormancy is pinned by a TEST, not a comment: `chooseSpawnPath`
+   has exactly one production consumer and nothing under `servers/` reads it. Mutation-checked
+   by adding a Tower-side consumer — 2 of 3 fail. A third assertion keeps the install present,
+   so the guard cannot pass by the factory simply being gone.
+5. A comment at the DRAINER naming the rule nothing on that loop may break, with the three
+   things #219 removed from it in three separate rounds as the evidence. It helps there
+   because the next writer is editing the drainer, not the callee.

@@ -411,9 +411,26 @@ export function dismissHeldForAgent(
 }
 
 /**
- * Transition a held row to `dismissed` (operator-cleared via `afx inbox dismiss`).
- * The why-held reason is preserved for audit. Returns true if it transitioned;
- * a dismissed row is never delivered.
+ * Transition a held row to `dismissed`. Returns true if it transitioned; a dismissed row
+ * is never delivered. The why-held reason is preserved for audit.
+ *
+ * **`dismissed` NOW MEANS TWO THINGS, and the row does not say which.**
+ *
+ * It was one: an operator cleared the row with `afx inbox dismiss`. Since #219 the
+ * delivery path also calls this for a message it will never be able to deliver — today,
+ * a `--no-enter` message to a thread-backed agent, which a thread cannot honour because
+ * it has no composer. Both land here, and nothing on the row distinguishes a human's
+ * decision from the system's refusal.
+ *
+ * The only thing that currently tells them apart is `refusedReasonFor` in
+ * `tower-routes.ts` sniffing `no_enter === 1`, which works because there is exactly one
+ * system refusal. **The next one added will mislabel itself**, and whoever adds it will
+ * be reading this definition rather than that call site — which is why the warning is
+ * here and not only there.
+ *
+ * Giving the two a distinguishable state is #226's migration, together with the
+ * `MailboxReason` vocabulary. Until then: if you add a system refusal, add its case to
+ * `refusedReasonFor` in the same change, or it will be reported as the `--no-enter` one.
  */
 export function dismiss(db: Database.Database, id: string, now: number = Date.now()): boolean {
   const info = db
