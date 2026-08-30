@@ -161,6 +161,16 @@ function sessionUnobservable(t3code: T3codeReachability): RowStatus {
       };
     case 'unreachable':
       return { kind: 'unknown', why: 'this machine cannot reach t3code, so session state is unknown' };
+    case 'stale':
+      // The machine says it stopped watching, and this row is not in what it last
+      // saw. Answering the plain "t3code returned no state for this thread" here
+      // would state a fact about a live observation that was never made — the row
+      // is absent from STALE content, which is a weaker thing to know.
+      return {
+        kind: 'unknown',
+        why: 'this server stopped watching t3code, and this row was not in what it last saw',
+        whyIsRowSpecific: true,
+      };
     default:
       return {
         kind: 'unknown',
@@ -177,13 +187,17 @@ function sessionUnobservable(t3code: T3codeReachability): RowStatus {
  * because a consumer that cannot see the age must not be allowed to assume it is
  * small.
  */
-function agePhrase(observation: T3codeObservation | undefined): string {
-  if (observation?.ageMs === undefined) return 'an unknown length of time ago';
-  const seconds = Math.max(0, Math.round(observation.ageMs / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
+export function ageWords(ageMs: number | undefined): string {
+  if (ageMs === undefined) return 'an unknown length of time';
+  const seconds = Math.max(0, Math.round(ageMs / 1000));
+  if (seconds < 60) return `${seconds}s`;
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  return `${Math.round(minutes / 60)}h ago`;
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.round(minutes / 60)}h`;
+}
+
+function agePhrase(observation: T3codeObservation | undefined): string {
+  return `${ageWords(observation?.ageMs)} ago`;
 }
 
 /**

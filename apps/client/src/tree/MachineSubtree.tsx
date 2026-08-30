@@ -1,5 +1,10 @@
 import type { GateApprovalHandle } from '../gate/GatePanel.js';
 import type { MachineNode } from './build.js';
+// ONE age formatter for the whole client. There were two, and they disagreed:
+// the same 240,000 ms read "4m ago" under a row and "240s" at the machine, and a
+// one-hour stale entry read "3600s". Two spellings of one number in one view is
+// a reader doing arithmetic to check whether they are the same fact.
+import { ageWords } from '../status/derive.js';
 import type { T3codeObservation, T3codeReachability } from '../connection/types.js';
 import { ThreadRowView } from './ThreadRowView.js';
 
@@ -151,7 +156,7 @@ function sessionVisibilityNote(
         + porchIsCurrent;
     case 'stale':
       return 'This server has stopped watching t3code. Session words below are last-known, '
-        + `observed ${observation?.ageMs === undefined ? 'an unknown length of time' : `${Math.max(0, Math.round(observation.ageMs / 1000))}s`} `
+        + `observed ${ageWords(observation?.ageMs)} `
         + 'ago, and a row that looked settled is reported as unknown rather than finished.'
         + porchIsCurrent;
     default:

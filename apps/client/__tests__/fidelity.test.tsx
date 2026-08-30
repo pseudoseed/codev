@@ -255,8 +255,20 @@ describe('honest degradation', () => {
 
     it('reports a stale age rather than implying the content is current', () => {
       const note = noteFor('stale', { observedAt: '2026-08-30T00:56:00Z', ageMs: 240_000 });
-      expect(note).toContain('240s');
+      expect(note).toContain('4m ago');
       expect(note).toContain('last-known');
+    });
+
+    /*
+     * ONE AGE FORMATTER FOR THE WHOLE CLIENT. There were two, and they
+     * disagreed: 240,000 ms read "4m ago" under a row and "240s" at the machine,
+     * and an hour-old entry read "3600s". Two spellings of one number in one
+     * view make a reader do arithmetic to check whether they are the same fact.
+     */
+    it('spells an age the same way at the machine as under a row', () => {
+      const note = noteFor('stale', { observedAt: '2026-08-30T00:00:00Z', ageMs: 3_600_000 });
+      expect(note).toContain('1h ago');
+      expect(note).not.toContain('3600s');
     });
 
     it('says the age is unknown rather than guessing when the server sent none', () => {

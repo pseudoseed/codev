@@ -277,6 +277,16 @@ describe('deriveRowStatus', () => {
       expect(status.why).toContain('an unknown length of time ago');
     });
 
+    it('says the content is stale when a stale snapshot has nothing for this thread', () => {
+      // Not the plain "t3code returned no state for this thread": that states a
+      // fact about a live observation nobody made. The row is absent from
+      // last-known content, which is a weaker thing to know and reads differently.
+      const status = deriveRowStatus(identity(), 'stale', observation);
+      expect(status.kind).toBe('unknown');
+      expect(status.why).toContain('stopped watching');
+      expect(status.why).not.toBe(deriveRowStatus(identity(), 'available').why);
+    });
+
     it('leaves a porch gate outranking staleness', () => {
       const status = deriveRowStatus(
         identity({

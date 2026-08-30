@@ -217,8 +217,14 @@ html, body, #root {
 .stamp-working { color: var(--graphite); }
 .stamp-settled { color: var(--graphite); border-style: dashed; }
 .stamp-stopped { color: var(--ochre); border-style: dashed; }
-/* Solid, not dotted: an errored session is a definite observation, not an absent one. */
-.stamp-error { color: var(--chalk); background: var(--rust); border-color: var(--rust); }
+/*
+ * Solid, not dotted: an errored session is a definite observation, not an absent
+ * one. `rustdark` rather than `rust` so it is not byte-identical to `.stamp-gate`
+ * — two statuses that mean different things must not be one treatment with two
+ * words, which is the #112 lesson (a status carried only by colour) read the
+ * other way round.
+ */
+.stamp-error { color: var(--chalk); background: var(--rustdark); border-color: var(--rustdark); }
 .stamp-unknown { color: var(--ochre); border-style: dotted; }
 
 /* ---------- signals ---------- */
