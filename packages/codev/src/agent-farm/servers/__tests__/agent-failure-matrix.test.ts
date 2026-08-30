@@ -233,6 +233,7 @@ describe('failure matrix signals are distinct', () => {
       APPROVAL_OPERATION_ALREADY_SETTLED: 'a caller tried to change a settled record; a caller bug, distinct from UNKNOWN',
       APPROVAL_OPERATIONS_NOT_AVAILABLE: '501 from a host that wires no operation store; a capability statement, not a failure',
       APPROVAL_OPERATION_SUBMITTED: 'the SUCCESS case of submitting an approval',
+      APPROVAL_OPERATION_SETTLED: 'an operation reached a terminal state; `state` says which, and none of them is a service failure',
       APPROVAL_ALREADY_IN_FLIGHT: 'a second submit for one project; a caller error, and it names the live one',
       APPROVAL_CONCURRENCY_LIMIT: 'a bound deliberately refusing work; not a failure of anything',
       // Spec 236 phase 3: `afx pair`. Operator-facing command outcomes, all of

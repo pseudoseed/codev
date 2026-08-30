@@ -391,6 +391,120 @@ describe('what a running operation tells an operator', () => {
     expect(operation.checks).toContain('build');
     expect(operation.checks).toContain('tests');
   });
+
+  /*
+   * `verify-approval` IS THE ONE GATE THIS DISPLAY COULD BE CONFIDENTLY WRONG
+   * ABOUT. `approve()` enters `verify` BEFORE computing the checks — so that the
+   * checks it runs are verify's, which are none — and reading the phase off
+   * `status.yaml` names the phase the project is leaving. That would report the
+   * review phase's build and tests for a run that executes neither.
+   */
+  it('names the phase verify-approval will actually run in, not the one it leaves', async () => {
+    const workspace = workspaceWithRequestedGate('913', { checks: 'passing' });
+    const host = await startHost(workspace);
+    const { authed, capability } = await credentialed(host, '913');
+    const nonce = (await post(`${host.origin}/api/agent/v1/approval-nonces`, authed,
+      { projectId: '913', gateName: 'verify-approval', capabilityId: capability.capabilityId })).body;
+
+    const submitted = await post(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`,
+      authed,
+      {
+        projectId: '913',
+        gateName: 'verify-approval',
+        capability: capability.presentation,
+        nonce: nonce.nonce,
+      },
+    );
+    expect(submitted.status).toBe(202);
+    await settled(host, authed, submitted.body.operationId);
+
+    const operation = host.operations.describe(submitted.body.operationId)!;
+    // NOT `implement`, which is what the file says, and not the review phase's
+    // check set — verify declares none.
+    expect(operation.phase).toBe('verify');
+    expect(operation.checks).toEqual([]);
+  });
+});
+
+describe('what a settled operation reports', () => {
+  /*
+   * A LABEL THAT CONTRADICTS THE FIELD BESIDE IT IS THE ONE THAT GETS READ. The
+   * poll answered `APPROVAL_OPERATION_SUBMITTED` for every state but
+   * `interrupted`, so a succeeded operation carried a signal saying it had just
+   * been submitted.
+   */
+  it('signals settled rather than submitted once it has finished', async () => {
+    const workspace = workspaceWithRequestedGate('914', { checks: 'skipped' });
+    const host = await startHost(workspace);
+    const { authed, capability, nonce } = await credentialed(host, '914');
+    const submitted = await post(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`,
+      authed,
+      { projectId: '914', gateName: 'pr', capability: capability.presentation, nonce: nonce.nonce },
+    );
+    expect(submitted.body.signal).toBe('APPROVAL_OPERATION_SUBMITTED');
+
+    const done = await settled(host, authed, submitted.body.operationId);
+    expect(done.body.state).toBe('succeeded');
+    expect(done.body.signal).toBe('APPROVAL_OPERATION_SETTLED');
+  });
+
+  /*
+   * `delivery` IS A CAVEAT ON A REAL APPROVAL, and the asynchronous path dropped
+   * it while the synchronous route forwarded it. A `committed-not-pushed`
+   * approval reported plain success on the path ordinary projects must use.
+   *
+   * Driven at the store, because making a real push fail is not reachable from
+   * this harness — `writeStateAndCommit` skips git entirely under VITEST. What is
+   * asserted here is that the record CARRIES the field and the route reports it.
+   */
+  it('carries porch\'s delivery caveat through to the poll response', async () => {
+    const workspace = workspaceWithRequestedGate('915', { checks: 'skipped' });
+    const host = await startHost(workspace);
+    const { authed, session, capability, nonce } = await credentialed(host, '915');
+    const submitted = await post(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`,
+      authed,
+      { projectId: '915', gateName: 'pr', capability: capability.presentation, nonce: nonce.nonce },
+    );
+    await settled(host, authed, submitted.body.operationId);
+
+    // A SECOND operation, settled directly with the caveat porch would attach,
+    // then POLLED THROUGH THE ROUTE. Asserting the shape of a record built in
+    // the test would be a tautology; what has to be true is that the route
+    // reports the field, which is exactly what was missing.
+    const seeded = host.operations.submit({
+      workspacePath: host.workspacePath,
+      projectId: '915-delivery',
+      gateName: 'pr',
+      sessionId: session.sessionId,
+    });
+    expect(seeded.accepted).toBe(true);
+    if (!seeded.accepted) return;
+    host.operations.settle(seeded.operation.operationId, {
+      state: 'succeeded',
+      record: {
+        machine: 'test-machine',
+        sessionId: session.sessionId,
+        approvedAt: '2026-08-30T10:00:00Z',
+        outcome: 'approved',
+        delivery: 'committed-not-pushed',
+        deliveryMessage: 'the commit was made and the push was refused',
+      },
+    });
+
+    const polled = await get(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals/${seeded.operation.operationId}`,
+      authed,
+    );
+    expect(polled.status).toBe(200);
+    expect(polled.body.state).toBe('succeeded');
+    // The caveat reaches the client. Without it, an approval that was committed
+    // and not pushed reads as plain success, and the operator never pushes.
+    expect(polled.body.record.delivery).toBe('committed-not-pushed');
+    expect(polled.body.record.deliveryMessage).toContain('push was refused');
+  });
 });
 
 describe('an already-approved gate reports the approval that exists', () => {

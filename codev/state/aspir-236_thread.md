@@ -537,3 +537,28 @@ One assertion of mine was wrong and the code was right: I asserted the running r
 `review` when the fixture declares `implement`. `describeWork` reported what the file says.
 
 Suite: 7050 passing, 0 failing.
+
+### Phase 5 iteration 2 — APPROVE + COMMENT, three notes taken
+
+opencode APPROVE, claude COMMENT. No blockers; all three notes fixed because each is a
+report-vs-reality gap and phase 6 is about to consume this record shape.
+
+1. **The async path dropped porch's `delivery` caveat.** The synchronous route has forwarded
+   `delivery` / `deliveryMessage` since phase 11; mine did not, so a `committed-not-pushed`
+   approval reported plain success **on the path ordinary projects must use**. The gate is
+   approved and the operator is never told to push. Added the fields to the record and forwarded
+   them. The test drives it through the poll route rather than asserting a shape built in the
+   test, which is what my first version did and proved nothing.
+2. **The poll answered `APPROVAL_OPERATION_SUBMITTED` for terminal states.** Cosmetic, but a
+   label that contradicts the field beside it is the one that gets read. Derived from the state
+   now: `APPROVAL_OPERATION_SETTLED` for succeeded/refused/failed (`state` says which — a code
+   per outcome would be two places to keep in step for one fact), and `interrupted` keeps its own
+   because it says something about the host rather than about the approval.
+3. **`describeWork` named the phase `verify-approval` is leaving.** `approve()` enters `verify`
+   *before* computing checks — its own comment says why — so reading the phase off `status.yaml`
+   would have shown the review phase's build and tests for a run that executes neither. This is
+   the one case where the display could be **confidently wrong rather than absent**, so it is
+   special-cased to `{ phase: 'verify', checks: [] }`, which holds in every case where the
+   approval proceeds at all.
+
+Suite: 7053 passing, 0 failing.

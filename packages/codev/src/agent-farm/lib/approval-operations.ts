@@ -74,6 +74,8 @@ export const APPROVAL_OPERATION_SIGNAL = {
    * become one HTTP answer for two different client bugs.
    */
   APPROVAL_OPERATION_ALREADY_SETTLED: 'APPROVAL_OPERATION_ALREADY_SETTLED',
+  /** Reported for `succeeded`, `refused` and `failed`; `state` says which. */
+  APPROVAL_OPERATION_SETTLED: 'APPROVAL_OPERATION_SETTLED',
   APPROVAL_OPERATION_INTERRUPTED: 'APPROVAL_OPERATION_INTERRUPTED',
   APPROVAL_ALREADY_IN_FLIGHT: 'APPROVAL_ALREADY_IN_FLIGHT',
   APPROVAL_CONCURRENCY_LIMIT: 'APPROVAL_CONCURRENCY_LIMIT',
@@ -175,6 +177,21 @@ export interface ApprovalOperation {
     readonly approvedAt?: string | null;
     readonly authority?: string;
     readonly outcome?: 'approved' | 'already-approved';
+    /**
+     * HOW FAR THE GATE WRITE GOT, when it did not get all the way.
+     *
+     * Absent means written, committed and pushed. The two failure stages are
+     * different instructions — one needs a push from the worktree, the other
+     * needs the commit investigated — and NEITHER means the gate is unapproved,
+     * which is the thing a caller must not get wrong.
+     *
+     * The synchronous route has forwarded these since phase 11 and the
+     * asynchronous path dropped them, so a `committed-not-pushed` approval
+     * reported plain success on the path ordinary projects must use: a caveat on
+     * a real approval, silently removed.
+     */
+    readonly delivery?: 'written-not-committed' | 'committed-not-pushed';
+    readonly deliveryMessage?: string;
   };
   /**
    * On `interrupted`: what `status.yaml` says about the gate NOW.

@@ -27,6 +27,7 @@ import {
 import { MACHINE_SIGNAL, type MachineCredentialStore } from '../lib/machine-credentials.js';
 import {
   APPROVAL_OPERATION_SIGNAL,
+  type ApprovalOperationState,
   type ApprovalOperationStore,
 } from '../lib/approval-operations.js';
 import { PAIRING_SIGNAL, type PairingStore } from '../lib/pairing.js';
@@ -1122,7 +1123,10 @@ async function runApprovalOperation(input: {
     // store accepted them, the response spread them, and the one call that would
     // populate them passed neither. An operator polling `running` got the word
     // and nothing to wait on, which is a spinner.
-    operations.markRunning(operationId, await describeWork(input.workspacePath, input.projectId));
+    operations.markRunning(
+      operationId,
+      await describeWork(input.workspacePath, input.projectId, input.gateName),
+    );
     const { approve } = await import('../../commands/porch/index.js');
     const result = await approve(input.workspacePath, input.projectId, input.gateName, true, undefined, {
       // The SAME deliberately minimal environment the synchronous route uses.
@@ -1158,6 +1162,12 @@ async function runApprovalOperation(input: {
         approvedAt: result.approvedAt ?? null,
         ...(record?.authority ? { authority: record.authority } : {}),
         outcome: result.outcome,
+        // FORWARDED, as the synchronous route has always done. Dropping these
+        // reported a `committed-not-pushed` approval as plain success — a caveat
+        // on a real approval, removed on the path ordinary projects must use.
+        ...(result.delivery
+          ? { delivery: result.delivery, deliveryMessage: result.deliveryMessage }
+          : {}),
       },
     });
   } catch (error) {
@@ -1180,11 +1190,27 @@ async function runApprovalOperation(input: {
 async function describeWork(
   workspacePath: string,
   projectId: string,
+  gateName: string,
 ): Promise<{ phase?: string; checks?: readonly string[] }> {
   try {
     const status = readWorkspaceStatuses(workspacePath, buildersOf(workspacePath))
       .find((result) => result.ok && result.status.projectId === projectId);
     if (!status?.ok) return {};
+
+    /*
+     * `verify-approval` MOVES THE PHASE BEFORE THE CHECKS ARE COMPUTED.
+     *
+     * `approve()` enters `verify` first — its own comment says why: so the checks
+     * below are the verify phase's, which are none. Reading the phase off
+     * `status.yaml` therefore names the phase the project is LEAVING, and would
+     * report `review`'s check set for a run that executes verify's.
+     *
+     * This is the one case where this display could be confidently wrong rather
+     * than merely absent, so it is special-cased rather than left to the general
+     * read. The answer does not depend on the transition succeeding: if it
+     * cannot, `approve` throws and nothing runs.
+     */
+    if (gateName === 'verify-approval') return { phase: 'verify', checks: [] };
     const { loadProtocol, getPhaseChecks } = await import('../../commands/porch/protocol.js');
     const { loadCheckOverrides } = await import('../../commands/porch/config.js');
     const protocol = loadProtocol(workspacePath, status.status.protocol);
@@ -1262,6 +1288,23 @@ async function settleApprovalFailure(
   }
 }
 
+/**
+ * The signal that matches an operation's state.
+ *
+ * `succeeded`, `refused` and `failed` share `APPROVAL_OPERATION_SETTLED` because
+ * `state` already says which — a second code per outcome would be two places to
+ * keep in step for one fact. `interrupted` keeps its own, because it is the one
+ * terminal state that says something about THIS HOST rather than about the
+ * approval, and the matrix classifies it as a failure row for that reason.
+ */
+function signalForState(state: ApprovalOperationState): string {
+  if (state === 'interrupted') return APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_INTERRUPTED;
+  if (state === 'submitted' || state === 'running') {
+    return APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_SUBMITTED;
+  }
+  return APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_SETTLED;
+}
+
 /** Report one submitted approval. Every field is what the store holds. */
 function handleApprovalOperation(
   res: http.ServerResponse,
@@ -1312,9 +1355,10 @@ function handleApprovalOperation(
   }
 
   writeJson(res, 200, {
-    signal: operation.state === 'interrupted'
-      ? APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_INTERRUPTED
-      : APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_SUBMITTED,
+    // DERIVED FROM THE STATE, not fixed at "submitted". A settled operation
+    // answering `APPROVAL_OPERATION_SUBMITTED` is a label that contradicts the
+    // field beside it, and a label is what gets read.
+    signal: signalForState(operation.state),
     operationId: operation.operationId,
     projectId: operation.projectId,
     gateName: operation.gateName,
