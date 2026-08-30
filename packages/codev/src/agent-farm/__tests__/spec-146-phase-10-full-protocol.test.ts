@@ -423,12 +423,29 @@ describe('Spec 146 Phase 10 — a refusal is not a timeout', () => {
      * so in the wrong words.
      */
     const launcher = readFileSync(join(repoRoot, 'tools', 't3-server', 'full-protocol-run.sh'), 'utf8');
-    expect(launcher).toContain('"providers"');
-    expect(launcher).toContain('"enabled":true');
-    // Written after `start` and loaded by a `restart`: `start` wipes the state
-    // directory, so a settings file written before it does not survive.
-    expect(launcher.indexOf('SETTINGS=')).toBeGreaterThan(launcher.indexOf('t3-server.mjs start'));
-    expect(launcher.indexOf('t3-server.mjs restart')).toBeGreaterThan(launcher.indexOf('SETTINGS='));
+    // The printf that writes the file, not the words anywhere in it — a comment
+    // mentioning `"providers"` would satisfy a bare `toContain`.
+    expect(launcher, 'the launcher does not write a provider opt-in')
+      .toMatch(/printf\s+'\{"providers":\{"%s":\{"enabled":true\}\}\}/);
+
+    /*
+     * ORDER: written after `start`, loaded by `restart`. `start` wipes the state
+     * directory, so a settings file written before it does not survive.
+     *
+     * Both positions are checked for existence first. `indexOf` returns -1 when
+     * absent, and a `toBeGreaterThan(-1)` comparison passes for any real
+     * position — so a launcher that had lost its `start` call entirely would
+     * have satisfied the ordering. That is the same defect this file fixes twice
+     * elsewhere, and it was here too.
+     */
+    const startAt = launcher.indexOf('t3-server.mjs start');
+    const settingsAt = launcher.indexOf('SETTINGS=');
+    const restartAt = launcher.indexOf('t3-server.mjs restart');
+    expect(startAt, 'the launcher never starts a server').toBeGreaterThan(-1);
+    expect(settingsAt, 'the launcher never writes a settings file').toBeGreaterThan(-1);
+    expect(restartAt, 'the launcher never restarts to load the settings').toBeGreaterThan(-1);
+    expect(settingsAt).toBeGreaterThan(startAt);
+    expect(restartAt).toBeGreaterThan(settingsAt);
   });
 });
 
