@@ -8,7 +8,7 @@ Fixes #241
 `thread.session-set` events and from nothing else, and nothing in production ever fed it —
 `DriverThread.observe` and `ResumingSubscription` had no caller outside `__tests__/`. So every
 thread-backed turn read permanently active, `DriverThread.runTurn` never returned, and #238's
-`SessionStartFailedError` could not reach a caller. This adds the missing subscriber: a
+`SessionStartFailedError` could not be raised at all. This adds the missing subscriber: a
 `ThreadSubscriptionPool` holding one `ResumingSubscription` per adopted thread, owned by Tower
 alongside the engine and keyed the same way, with the cursor on disk so a restart resumes rather
 than resubscribes cold; plus a `ThreadAdoptionSweeper` so threads are adopted after a restart
@@ -107,6 +107,22 @@ is a better outcome than displacement and is the fold the skill's own discipline
   check.
 - *Debugging* — a review lane that skipped is not a verdict and must never be counted as one.
 
+## What This Does NOT Do
+
+**`afx spawn` still does not FAIL on a session refusal.** Raised by the opencode lane, verified,
+and worth stating precisely because the issue's framing invites the opposite reading.
+
+`SessionStartFailedError` now fires — the subscription feeds `TurnTracker.observe`, which is
+what it was missing. But `track()` follows `started.running` rather than awaiting it, by design:
+its caller asked to start a turn, not to wait for one. Its rejection handler was `() => {}`, so
+the refusal fired into nothing and stayed invisible. That handler now **logs** the error with
+the server's own sentence, which is as far as `track` can honestly go.
+
+Failing the spawn would mean some caller awaiting `running`, and none does today. So the chain
+is: raised (this PR), visible (this PR), *acted on* — not yet. The plan's manual step 4 said the
+spawn would "report `SessionStartFailedError` in seconds"; what it actually does is log it in
+seconds while the spawn succeeds. Corrected here rather than left standing.
+
 ## Things to Look At During PR Review
 
 **The `synchronized` flag on `onResume`, in `packages/t3-client`.** This is the one change
@@ -166,9 +182,12 @@ was available immediately. The remaining two are one cause and are filed as **#2
 caught a factual error in this file: the status.yaml path is `codev/projects/`, not
 `codev/state/`.
 
-**opencode: NO VERDICT.** The lane exited 1 after 361s having written nothing. It is recorded as
-a lane that did not review, not as an approval — the same lane succeeded on the PR pass 17
-minutes earlier, so this is transient rather than configuration.
+**opencode: COMMENT** (HIGH), on a retry. Its first attempt exited 1 after 361s having written
+nothing; that was recorded as a lane that did not review rather than as an approval, and since
+the same lane had succeeded on the PR pass 17 minutes earlier it was retried as transient rather
+than configuration. Two findings: that a session refusal does not fail the spawn (see *What This
+Does NOT Do* above — the swallowing handler is fixed, the claim is corrected), and that `attach`
+uses `start` rather than awaiting `ensure`, which is the deliberate design documented above.
 
 ### The earlier advisory CMAP pass at the PR
 

@@ -26,6 +26,7 @@ import {
 import { asThreadEvent, TurnTracker } from '@cluesmith/porch-driver/turn';
 import type { AttachThreadInput, ThreadEngine, ThreadRecord } from './thread-runtime.js';
 import type { ThreadSubscriptionPool } from './thread-subscriptions.js';
+import { logger } from './utils/logger.js';
 import type { SpawnThreadFactory } from './db/thread-identity.js';
 
 export interface PorchThreadEngineOptions {
@@ -102,7 +103,31 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
         if (record.activeTurnId === current) record.activeTurnId = turnId;
         current = turnId;
       },
-      () => {},
+      (error: unknown) => {
+        /*
+         * LOGGED, not swallowed — and this is the last step of #238's chain.
+         *
+         * `SessionStartFailedError` exists so that a server REFUSING a session is
+         * spelled differently from a caller giving up on it, and it carries the
+         * server's own sentence. Until issue #241 nothing fed `TurnTracker.observe`, so
+         * it could not be raised at all. Feeding it makes it fire — but this handler was
+         * `() => {}`, so it fired into nothing and the refusal was still invisible.
+         *
+         * `track` cannot THROW it: its caller asked to start a turn, not to wait for one,
+         * and both promises are followed rather than awaited on purpose. So the honest
+         * thing it can do is say what happened. A caller that wants to fail on a refusal
+         * has to await `running` itself, and none does today — that is a real remaining
+         * gap and it is stated in the review rather than implied away.
+         *
+         * `TurnDisplacedError` comes through here too, and means something different:
+         * a second turn replaced this waiter. Both are worth a line; neither is worth
+         * losing.
+         */
+        logger.error(
+          `Thread ${record.threadId} (${record.builderId}): the turn started as ${started.commandId} `
+          + `will not report a turn id — ${error instanceof Error ? error.message : String(error)}`,
+        );
+      },
     );
     const clear = () => {
       finished = true;
