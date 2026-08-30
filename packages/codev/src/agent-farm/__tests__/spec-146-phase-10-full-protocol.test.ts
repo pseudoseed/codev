@@ -339,7 +339,22 @@ describe('Spec 146 Phase 10 — a refusal is not a timeout', () => {
 describe('Spec 146 Phase 10 — live', () => {
   const status = harnessStatus();
   const liveOptIn = process.env.T3_LIVE === '1';
-  const canRunLive = status.ok && liveOptIn;
+  /**
+   * AN EXPLICIT PORT IS REQUIRED, AND THAT IS A SAFETY RULE RATHER THAN A STYLE ONE.
+   *
+   * This block calls `t3-server.mjs stop` and then `start`. Both act on whatever
+   * `T3_HARNESS_PORT` and `T3_HARNESS_DIR` name, and both DEFAULT — to port 3799
+   * and `tools/t3-server/.runtime`. On this machine 3799 is the architect's own
+   * server. A live run with the variables unset would therefore stop a colleague's
+   * server as its first act, and the failure would look like their session
+   * dying for no reason.
+   *
+   * So an unset port is not defaulted, it is refused, and the refusal says why.
+   * The recorded runs go through `full-protocol-run.sh`, which gives every run
+   * its own port and its own directory for the same reason.
+   */
+  const explicitPort = process.env.T3_HARNESS_PORT?.trim();
+  const canRunLive = status.ok && liveOptIn && Boolean(explicitPort);
   // The gate this test elapses. The RECORDED runs use 3600 and 86400; a test has
   // to be runnable, so it defaults short and says so. It is the same runner
   // either way — what the long runs prove and what this asserts are one code
@@ -347,7 +362,8 @@ describe('Spec 146 Phase 10 — live', () => {
   const gateSeconds = Number(process.env.T3_GATE_SECONDS?.trim() || '60');
 
   it.skipIf(!canRunLive)(
-    '[live: requires T3_LIVE=1 + T3_NODE] runs a whole BUGFIX protocol on a thread with no PTY anywhere in it',
+    '[live: requires T3_LIVE=1 + T3_NODE + an explicit T3_HARNESS_PORT] runs a whole BUGFIX protocol on a '
+      + 'thread with no PTY anywhere in it',
     async () => {
       const harness = process.env.T3_LIVE_HARNESS?.trim() || 'claude';
       const model = process.env.T3_LIVE_MODEL?.trim() || 'claude-haiku-4-5';
@@ -407,6 +423,18 @@ describe('Spec 146 Phase 10 — live', () => {
       return;
     }
     expect(status.reason).toBe('verified');
-    if (!liveOptIn) expect(process.env.T3_LIVE).not.toBe('1');
+    if (!liveOptIn) {
+      expect(process.env.T3_LIVE).not.toBe('1');
+      return;
+    }
+    // Opted in and verified, but with no port named: that is a REFUSAL to run,
+    // not a pass, and it must be visible as one.
+    if (!explicitPort) {
+      expect(
+        canRunLive,
+        'T3_LIVE=1 with no T3_HARNESS_PORT: this block would stop and start a server on the default '
+          + 'port 3799, which is the architect\'s. Name a port nobody else is using.',
+      ).toBe(false);
+    }
   });
 });
