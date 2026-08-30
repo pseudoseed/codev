@@ -117,6 +117,11 @@ import {
 import { getProcessStartTime } from '../../terminal/session-manager.js';
 import type { CronTask } from './tower-cron.js';
 import {
+  threadCanHonourNoEnter,
+  THREAD_HAS_NO_COMPOSER,
+  THREAD_NO_ENTER_REMEDY,
+} from './thread-no-enter.js';
+import {
   getWorkspaceTerminals,
   getTerminalManager,
   getWorkspaceTerminalsEntry,
@@ -1655,6 +1660,7 @@ function holdAndRespond(
     `Message held (${reason}) → ${input.toAgent} @ ${path.basename(input.workspacePath)} (mailbox ${row.id.slice(0, 8)}...)`,
   );
   // A new held row appeared → refresh the held-count indicator (Spec 1313, Phase 7).
+  // `reason` is non-null here by signature — this path always knows why it is holding.
   ctx.broadcastNotification({ type: 'overview-changed', title: 'Held mail changed', body: `held ${reason}` });
   sendJson(res, 200, {
     ok: true,
@@ -1962,13 +1968,40 @@ async function handleSend(
           });
           return;
         }
+        // A row the delivery path ENDED. Reporting it as held would be a promise of a
+        // retry that cannot happen, plus a mailbox id that lists nowhere — the sender
+        // waits for something no action of theirs or ours will produce. `delivered:
+        // false, held: false` alone is worse: the CLI's final branch reads that as
+        // "delivered", so the refusal needs its own word.
+        if (stored?.status === 'dismissed') {
+          sendJson(res, 200, {
+            ok: true,
+            resolvedTo: reg.agent,
+            deferred: false,
+            delivered: false,
+            held: false,
+            refused: true,
+            refusedReason: refusedReasonFor(stored),
+            mailboxId: row.id,
+            reason: null,
+          });
+          return;
+        }
         sendJson(res, 200, {
           ok: true,
           resolvedTo: reg.agent,
           deferred: true,
           delivered: false,
           held: true,
-          reason: stored?.reason ?? 'no-live-pty',
+          // `null`, not a PTY word.
+          //
+          // The drainer writes a reason when it REFUSES something and deliberately
+          // leaves it null when nothing was refused — a thread submission in flight is
+          // "pending, not stuck". Substituting `no-live-pty` here handed a healthy
+          // thread-backed agent a diagnosis from a vocabulary that does not apply to it,
+          // for a state that already had a true answer. The CLI renders a null reason as
+          // "pending", which is what this is.
+          reason: stored?.reason ?? null,
           mailboxId: row.id,
         });
         return;
@@ -2226,12 +2259,31 @@ async function handleSend(
     });
     return;
   }
-  const reason: MailboxReason = stored?.reason ?? 'busy';
-  ctx.log('INFO', `Message held (${reason}): ${from ?? 'unknown'} → ${toAgent} (mailbox ${row.id.slice(0, 8)}...)`);
+  if (stored?.status === 'dismissed') {
+    // Same lie, same fix, second site. See the note at the registry branch above.
+    ctx.log('INFO', `Message refused: ${from ?? 'unknown'} → ${toAgent} (mailbox ${row.id.slice(0, 8)}...)`);
+    sendJson(res, 200, {
+      ok: true,
+      terminalId: result.terminalId,
+      resolvedTo: toAgent,
+      deferred: false,
+      delivered: false,
+      held: false,
+      refused: true,
+      refusedReason: refusedReasonFor(stored),
+      mailboxId: row.id,
+      reason: null,
+    });
+    return;
+  }
+  // Same rule as the registry branch above: a held row with no reason has not been
+  // refused, and inventing `busy` for it describes a PTY that is not involved.
+  const reason: MailboxReason | null = stored?.reason ?? null;
+  ctx.log('INFO', `Message held (${reason ?? 'pending'}): ${from ?? 'unknown'} → ${toAgent} (mailbox ${row.id.slice(0, 8)}...)`);
   // The message stayed held → a new held row is in the set; refresh the indicator
   // count (Spec 1313, Phase 7). The delivered branch above needs no fire — the
   // delivery path's onHeldStateChange already broadcast when the row left the set.
-  ctx.broadcastNotification({ type: 'overview-changed', title: 'Held mail changed', body: `held ${reason}` });
+  ctx.broadcastNotification({ type: 'overview-changed', title: 'Held mail changed', body: `held ${reason ?? 'pending'}` });
   sendJson(res, 200, {
     ok: true,
     terminalId: result.terminalId,
@@ -2242,6 +2294,22 @@ async function handleSend(
     reason,
     mailboxId: row.id,
   });
+}
+
+/**
+ * Why a row the delivery path ended was ended, for the sender.
+ *
+ * The mailbox has one terminal non-delivered state (`dismissed`) and it now carries two
+ * meanings — a human ran `afx inbox dismiss`, and the system refused the message. They
+ * are not distinguishable on the row, which is #226's migration. What IS knowable here
+ * is the one case the system produces today, so it is named specifically and everything
+ * else falls back to a sentence that does not claim more than it knows.
+ */
+function refusedReasonFor(stored: { no_enter?: number } | null | undefined): string {
+  if (!threadCanHonourNoEnter(stored?.no_enter === 1)) {
+    return `the recipient is thread-backed. ${THREAD_HAS_NO_COMPOSER} ${THREAD_NO_ENTER_REMEDY}`;
+  }
+  return 'the delivery path ended this message; it was not delivered and no retry is pending.';
 }
 
 /**

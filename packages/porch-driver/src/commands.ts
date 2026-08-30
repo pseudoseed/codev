@@ -65,6 +65,22 @@ export type JournalRecord =
       readonly commandId: string;
       readonly type: string;
       readonly command: unknown;
+      /**
+       * The CALLER's identity for this intent — a mailbox row id, a phase, whatever the
+       * caller must be able to recognise it by after a restart.
+       *
+       * Not sent to the server and not part of the command: it exists so recovery can
+       * answer "is this pending intent MINE" without guessing from the payload.
+       * Matching on payload content is what this replaces, and it was wrong — two
+       * identical messages to one agent (a retried instruction, a repeated nudge, any
+       * templated notice) made a stale intent look like the current one, and recovery
+       * would then report a message delivered that was never submitted. A duplicate turn
+       * is visible and recoverable; a false "delivered" is neither.
+       *
+       * Optional because records written before it exists have none, and an absent ref
+       * simply never matches — which is the safe direction.
+       */
+      readonly ref?: string;
       readonly at: string;
     }
   | {
@@ -153,8 +169,15 @@ export class DispatchJournal {
    *
    * Returns once the bytes are on the device.
    */
-  recordIntent(commandId: string, type: string, command: unknown): void {
-    this.#append({ kind: 'intent', commandId, type, command, at: new Date().toISOString() });
+  recordIntent(commandId: string, type: string, command: unknown, ref?: string): void {
+    this.#append({
+      kind: 'intent',
+      commandId,
+      type,
+      command,
+      ...(ref === undefined ? {} : { ref }),
+      at: new Date().toISOString(),
+    });
   }
 
   /** Record what happened to a dispatched command. */
@@ -264,6 +287,12 @@ export interface DispatchOptions {
    * `commandId` rather than by guessing which side of the line the crash fell on.
    */
   readonly afterDispatch?: (result: unknown) => void | Promise<void>;
+  /**
+   * The caller's identity for this intent, journalled alongside it.
+   *
+   * See {@link JournalRecord}'s `ref`. Never sent to the server.
+   */
+  readonly ref?: string;
 }
 
 /**
@@ -282,7 +311,7 @@ export async function dispatchCommand(
   const commandId = typeof command.commandId === 'string' ? command.commandId : newCommandId();
   const payload = { ...command, commandId };
 
-  journal.recordIntent(commandId, command.type, payload);
+  journal.recordIntent(commandId, command.type, payload, options.ref);
   await options.beforeDispatch?.();
 
   try {

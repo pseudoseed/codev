@@ -19,10 +19,12 @@
 import { DriverThread } from '@cluesmith/porch-driver/thread';
 import {
   DispatchJournal,
+  DISPATCH_METHOD,
+  isServerRefusal,
   type CommandDispatcher,
 } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
-import type { ThreadEngine, ThreadRecord } from './thread-runtime.js';
+import type { AttachThreadInput, ThreadEngine, ThreadRecord } from './thread-runtime.js';
 import type { SpawnThreadFactory } from './db/thread-identity.js';
 
 export interface PorchThreadEngineOptions {
@@ -38,17 +40,22 @@ export interface PorchThreadEngineOptions {
 /**
  * Why a thread this engine has never heard of is not the same as a thread that does not exist.
  *
- * The engine holds its threads in process-local maps and cannot rehydrate one from the
- * server. Every `afx` invocation is a fresh process, so a thread created by `afx spawn` is
- * unknown to the `afx interrupt` that follows it — and `Unknown thread <id>` reads as "no
- * such thread", which is a different and wrong diagnosis. The limitation is real and is not
- * fixed here; the message at least names it.
+ * The engine holds its threads in process-local maps. Every `afx` invocation is a fresh
+ * process, so a thread created by `afx spawn` is unknown to the `afx interrupt` that
+ * follows it — and `Unknown thread <id>` reads as "no such thread", which is a different
+ * and wrong diagnosis.
+ *
+ * `attach` is now the way out, and the message says so. It is not automatic: the worktree
+ * and branch are not derivable from a thread id here, so a caller that holds the row must
+ * hand them over. Until it does, this remains "I have not been told about it".
  */
 function unknownThread(threadId: string): string {
   return (
-    `Thread ${threadId} was not created by this process. This engine keeps threads in memory `
-    + `and cannot yet re-attach to one from a previous process or after a server restart, so `
-    + `this is not evidence that the thread does not exist.`
+    `Thread ${threadId} was not created by this process and has not been attached. This engine `
+    + `keeps threads in memory, so a thread from a previous process or from before a server `
+    + `restart is unknown here until \`attach\` adopts it — this is not evidence that the thread `
+    + `does not exist. The caller holds the worktree and branch that \`attach\` needs; this engine `
+    + `cannot recover them from the id alone.`
   );
 }
 
@@ -134,11 +141,117 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
       return thread.threadId;
     },
 
-    async startTurn(threadId, text) {
+    /**
+     * Adopt a thread that already exists on the server.
+     *
+     * `DriverThread.attach` rather than `create`: creating would dispatch a second
+     * `thread.create` and re-apply the worktree setup, so "resume the thread from
+     * before the restart" would silently become "make a new one and overwrite the
+     * worktree".
+     *
+     * Idempotent, because the caller cannot always know whether this process has
+     * already adopted the thread and a second attach must not replace a
+     * `DriverThread` that is tracking a live turn.
+     */
+    async attach(input: AttachThreadInput) {
+      const existing = records.get(input.threadId);
+      if (existing) return existing;
+      const thread = DriverThread.attach(
+        {
+          dispatcher: options.dispatcher,
+          journal: options.journal,
+          tracker: options.tracker,
+        },
+        {
+          threadId: input.threadId,
+          harnessName: input.harnessName ?? options.defaultHarness ?? 'codex',
+          model: input.model,
+          defaultModel: options.defaultModel,
+          worktreePath: input.worktreePath,
+          branch: input.branch,
+        },
+      );
+      threads.set(thread.threadId, thread);
+      const record: ThreadRecord = {
+        threadId: thread.threadId,
+        worktreePath: input.worktreePath,
+        branch: input.branch,
+        builderId: input.builderId,
+        // Whether a turn is running on the server right now is not knowable from
+        // here — this process holds no subscription to the thread. `null` means
+        // "this engine is not following a turn", and no caller may read it as
+        // "the thread is idle".
+        activeTurnId: null,
+        merged: false,
+        launched: true,
+      };
+      records.set(thread.threadId, record);
+      return record;
+    },
+
+    /**
+     * Replay this thread's unanswered turn under its original command id.
+     *
+     * The journal is the durable record — an in-process map does not survive the Tower
+     * restart this is most likely to follow — so the pending intent is found by the
+     * caller's `ref` rather than by anything held in memory. NOT by message text: two
+     * identical messages to one agent are ordinary, and text matching made a stale intent
+     * answer for the current one, reporting delivered without delivering.
+     *
+     * ONLY this intent is replayed. `recoverPendingCommands` — which drains the whole
+     * workspace journal — is deliberately NOT used, and the reason is worth stating
+     * because an earlier version of this did use it: replaying a sibling agent's intent
+     * marks it dispatched while its mailbox row is still held, so that row's next tick
+     * finds nothing pending and submits a fresh command id. Draining the journal to
+     * prevent a duplicate turn produced one, one agent over.
+     *
+     * That leaves `recoverPendingCommands` still without a production caller, which is
+     * an honest outcome rather than a gap to paper over: whole-journal replay is a
+     * process-startup operation, and doing it from a per-row delivery is what makes it
+     * wrong here.
+     */
+    async recoverTurn(threadId: string, ref: string) {
+      const mine = options.journal.pending().find((intent) => {
+        if (intent.type !== 'thread.turn.start' || intent.ref !== ref) return false;
+        // The thread too, so a ref reused across threads — which nothing does today, and
+        // which a future caller might — cannot match the wrong one.
+        return (intent.command as { threadId?: unknown }).threadId === threadId;
+      });
+      if (!mine) return 'none';
+
+      // MINE, and nothing else.
+      //
+      // The first version of this called `recoverPendingCommands`, which replays EVERY
+      // pending intent in the workspace journal and marks them all dispatched. Since
+      // round 6 submissions are concurrent across agents — the per-agent guard does not
+      // serialise them and the tick does not await — so two lost acknowledgements in one
+      // workspace is a state this code can produce. Draining the journal then marked the
+      // SIBLING's intent dispatched while its mailbox row stayed held: on the next tick
+      // its `recoverTurn` found nothing pending, `startTurn` minted a fresh id, and the
+      // duplicate turn this whole path exists to prevent appeared one agent over. A
+      // mid-loop throw was worse, because the intents replayed before it were already
+      // marked dispatched.
+      //
+      // So this is `recoverPendingCommands`' per-intent body, scoped to one intent. The
+      // split is the same and it is the load-bearing part: a REFUSAL is settled and is
+      // journalled, an UNANSWERED replay stays pending so the next attempt can try again.
+      try {
+        await options.dispatcher.call(DISPATCH_METHOD, mine.command);
+        options.journal.recordOutcome(mine.commandId, 'dispatched');
+        return 'recovered';
+      } catch (error) {
+        if (isServerRefusal(error)) {
+          options.journal.recordOutcome(mine.commandId, 'failed', (error as Error).message);
+        }
+        throw error;
+      }
+    },
+
+    async startTurn(threadId, text, ref) {
       const thread = threads.get(threadId);
       if (!thread) throw new Error(unknownThread(threadId));
       const record = records.get(threadId);
-      const started = await thread.beginTurn(text);
+      const started = await thread.beginTurn(text, ref);
       if (record) track(record, started);
     },
 

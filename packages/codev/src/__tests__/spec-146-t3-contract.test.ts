@@ -9,9 +9,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -345,12 +345,170 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
     }
   });
 
+  /**
+   * Issue #219. `stop` then `start` is not a restart: `start` wipes the data dir,
+   * so the pair is a cold start wearing a restart's shape. Spec 146 phase 9's item
+   * 4 — "an architect thread survives a server restart" — cannot be evaluated
+   * against that at all, because the harness deletes the thread and the result
+   * reads as the criterion failing.
+   */
+  it('separates a restart from a cold start, and refuses to fake one', () => {
+    const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
+    const src = readFileSync(harness, 'utf8');
+    // `start` still wipes by default: the phase-1 cold-start evidence is only
+    // evidence if each run begins with an empty database.
+    expect(src).toContain('function start({ keepData = false } = {})');
+    expect(src).toContain('start({ keepData: true })');
+
+    // And a restart exits "could not determine" rather than quietly cold-starting,
+    // which would report the wipe as the thread's fate. Two ways it refuses, and
+    // the first is the one a data dir cannot rule out: `stop` LEAVES the data dir,
+    // so its presence is not evidence that anything is running. Checking only for
+    // it meant `stop` then `restart` succeeded having replaced no process at all —
+    // a restart reported, not performed.
+    const emptyDir = mkdtempSync(join(tmpdir(), 't3-restart-'));
+    try {
+      const refused = spawnSync(process.execPath, [harness, 'restart'], {
+        encoding: 'utf8',
+        // A port nothing is listening on, so "no server is running" is the true state.
+        env: { ...process.env, T3_HARNESS_DIR: emptyDir, T3_HARNESS_PORT: '3897' },
+      });
+      expect(refused.status).toBe(3);
+      expect(refused.stderr).toContain('NOT_RUNNING: could not check:');
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+    }
+    // Both refusals are distinct signals, and neither is spelled like a success.
+    expect(src).toContain('NOT_RUNNING: could not check:');
+    expect(src).toContain('NO_DATA_TO_KEEP: could not check:');
+    expect(src).toContain('PORT_NOT_RELEASED: could not check:');
+  });
+
+  /**
+   * Issue #219 round 3. `stop` signalled whatever the pid file named, and the check
+   * behind that was `process.kill(pid, 0)` — LIVENESS, not ownership. Pids are reused,
+   * so a stale pid file could name an unrelated live process, and `stop` would SIGTERM
+   * its whole process group. `ownsProcess` already existed for the port sweep, which
+   * refuses to kill what it cannot prove it owns; the pid path was the one place that
+   * rule was not applied, and it is the one that can kill someone else's work.
+   */
+  it('refuses to signal a live pid it cannot prove it owns', () => {
+    const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
+    const runtimeDir = mkdtempSync(join(tmpdir(), 't3-ownership-'));
+    // A real, live process that is emphatically not a pinned t3code server.
+    const bystander = spawn('sleep', ['30'], { stdio: 'ignore', detached: true });
+    try {
+      expect(bystander.pid).toBeDefined();
+      writeFileSync(join(runtimeDir, 'server.pid'), String(bystander.pid));
+
+      const stopped = spawnSync(process.execPath, [harness, 'stop'], {
+        encoding: 'utf8',
+        env: { ...process.env, T3_HARNESS_DIR: runtimeDir, T3_HARNESS_PORT: '3898' },
+      });
+
+      expect(stopped.stderr).toContain(`REFUSING to signal pid ${bystander.pid}`);
+      // The assertion that matters: it is still alive. `kill(pid, 0)` throws only when
+      // the process is gone, so this is a direct observation rather than a proxy.
+      expect(() => process.kill(bystander.pid!, 0)).not.toThrow();
+      // And the stale file is cleared, so the workspace is not wedged by it forever.
+      expect(existsSync(join(runtimeDir, 'server.pid'))).toBe(false);
+    } finally {
+      try { process.kill(bystander.pid!, 'SIGKILL'); } catch { /* already gone */ }
+      rmSync(runtimeDir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Issue #219 round 4. `ownedPortHolders` caught every `lsof` failure and returned an
+   * empty list, so a tool that could not look read exactly like a port with nothing on
+   * it. `restart` then started a second server on a port whose state was unknown —
+   * "I could not tell" spelled as "no", in the harness written to refuse that.
+   */
+  /**
+   * Issue #219 round 5. `ownsProcess` promised "a `t3 serve` for OUR data directory" and
+   * performed `cmd.includes(runtimeDir)`. A substring of a path is not that: `tail -f
+   * <runtimeDir>/server.log` satisfies it, and so does an editor with the path in its
+   * argv — and that process then takes the group SIGTERM.
+   *
+   * Round 3 established that liveness is not ownership. The fix chosen was a substring,
+   * which is not ownership either, and the docblock asserted the stronger claim. Same
+   * shape as the close-handler comment last round, in the one function whose entire job
+   * is deciding what to kill.
+   */
+  it('refuses a live process whose argv merely mentions the runtime directory', () => {
+    const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
+    const runtimeDir = mkdtempSync(join(tmpdir(), 't3-argv-'));
+    const logPath = join(runtimeDir, 'server.log');
+    writeFileSync(logPath, '');
+    // A real process holding the runtime path in its command line — the exact shape a
+    // human tailing the harness log produces.
+    const bystander = spawn('tail', ['-f', logPath], { stdio: 'ignore', detached: true });
+    try {
+      expect(bystander.pid).toBeDefined();
+      writeFileSync(join(runtimeDir, 'server.pid'), String(bystander.pid));
+
+      const stopped = spawnSync(process.execPath, [harness, 'stop'], {
+        encoding: 'utf8',
+        env: { ...process.env, T3_HARNESS_DIR: runtimeDir, T3_HARNESS_PORT: '3896' },
+      });
+
+      expect(stopped.stderr).toContain(`REFUSING to signal pid ${bystander.pid}`);
+      expect(() => process.kill(bystander.pid!, 0)).not.toThrow();
+    } finally {
+      try { process.kill(bystander.pid!, 'SIGKILL'); } catch { /* already gone */ }
+      rmSync(runtimeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('the ownership check requires a `serve` bound to our data dir, both as real arguments', () => {
+    // The two shapes the harness actually creates, from `ps -o command=`:
+    //   npm exec t3@0.0.36 serve --host … --base-dir <dataDir> <checkout>
+    //   node …/node_modules/.bin/t3 serve --host … --base-dir <dataDir> <checkout>
+    // Both must be claimed, or `stop` stops recognising its own server — a refusal that
+    // leaves a live server behind is its own failure.
+    const src = readFileSync(join(repoRoot, 'tools', 't3-server', 't3-server.mjs'), 'utf8');
+    expect(src).toContain("args.includes('serve')");
+    expect(src).toContain("arg === '--base-dir' && args[i + 1] === dataDir");
+    // Whole arguments, not a path found anywhere in the line. The behavioural proof is
+    // the bystander test above; this pins the two halves so neither can be dropped
+    // without the other being noticed.
+    expect(src).toContain("const args = cmd.split(");
+  });
+
+  it('treats an lsof that cannot answer as unknown, not as a free port', () => {
+    const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
+    const emptyPath = mkdtempSync(join(tmpdir(), 't3-nolsof-'));
+    const runtimeDir = mkdtempSync(join(tmpdir(), 't3-nolsof-rt-'));
+    try {
+      // A PATH with node and the harness's other helpers, but no `lsof`.
+      for (const tool of ['node', 'ps', 'sleep', 'git']) {
+        const found = spawnSync('command', ['-v', tool], { encoding: 'utf8', shell: true }).stdout.trim();
+        if (found) symlinkSync(found, join(emptyPath, tool));
+      }
+      const refused = spawnSync(process.execPath, [harness, 'restart'], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: emptyPath, T3_HARNESS_DIR: runtimeDir, T3_HARNESS_PORT: '3899' },
+      });
+      expect(refused.status).toBe(3);
+      expect(refused.stderr).toContain('PORT_STATE_UNKNOWN: could not check:');
+      // And not the answer it would have given before, which was a confident negative.
+      expect(refused.stderr).not.toContain('NOT_RUNNING');
+    } finally {
+      rmSync(emptyPath, { recursive: true, force: true });
+      rmSync(runtimeDir, { recursive: true, force: true });
+    }
+  });
+
   it('requires a second opt-in before the unit suite can dispatch a live provider turn', () => {
-    const src = readFileSync(
-      join(repoRoot, 'packages', 'codev', 'src', 'agent-farm', '__tests__', 'spec-146-phase-9-live-harness.test.ts'),
-      'utf8',
-    );
-    expect(src).toContain("process.env.T3_LIVE === '1'");
-    expect(src).toContain('status.ok && runtime.ok && liveOptIn');
+    // Every live file, not one of them. The gate is only a gate if a new live
+    // test cannot be added without it, and #219 added a second.
+    for (const file of ['spec-146-phase-9-live-harness.test.ts', 'spec-146-phase-9-live-architect-thread.test.ts']) {
+      const src = readFileSync(
+        join(repoRoot, 'packages', 'codev', 'src', 'agent-farm', '__tests__', file),
+        'utf8',
+      );
+      expect(src, file).toContain("process.env.T3_LIVE === '1'");
+      expect(src, file).toContain('status.ok && runtime.ok && liveOptIn');
+    }
   });
 });

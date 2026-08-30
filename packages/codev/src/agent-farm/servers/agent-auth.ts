@@ -69,7 +69,11 @@ export type TransportSignal = (typeof TRANSPORT_SIGNAL)[keyof typeof TRANSPORT_S
  * `human-session` INCLUDES `machine-credential`: elevation never replaces the
  * machine's identity, so revoking a machine fails its approval routes closed too.
  */
-export type AgentAuthMode = 'pairing-token' | 'machine-credential' | 'human-session';
+export type AgentAuthMode =
+  | 'pairing-token'
+  | 'machine-credential'
+  | 'machine-credential-and-pairing-token'
+  | 'human-session';
 
 export interface AgentRoute {
   readonly id: string;
@@ -107,6 +111,31 @@ export const AGENT_ROUTES: readonly AgentRoute[] = [
     rationale:
       'the bootstrap: a machine with no credential exchanges an out-of-band token for one. '
       + 'Single-use and minutes-long, because it is the one secret a human retypes.',
+  },
+  {
+    id: 'human-session-issue',
+    method: 'POST',
+    pathname: `${AGENT_ROUTE_PREFIX}/human-sessions`,
+    probe: `${AGENT_ROUTE_PREFIX}/human-sessions`,
+    authentication: 'machine-credential-and-pairing-token',
+    rationale:
+      'Spec 146 Phase 11: the route by which a client becomes a paired session. '
+      + 'Phase 6 built the session and phase 7 the table; neither wired a caller, so until '
+      + 'this existed no client could ever hold one and criterion 9b was unreachable. '
+      + 'Costs a fresh single-use token on top of the machine credential, which makes each '
+      + 'session a distinct recorded act. It does NOT establish human presence: minting a '
+      + 'token needs only write access to the pairing store, which every same-uid agent has.',
+  },
+  {
+    id: 'gate-approve',
+    method: 'POST',
+    pattern: /^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approve$/,
+    probe: `${AGENT_ROUTE_PREFIX}/workspaces/probe/gates/approve`,
+    authentication: 'human-session',
+    rationale:
+      'Spec 146 Phase 11: spends a capability and a nonce by invoking porch. porch reads '
+      + 'both from its environment, so only a server-side caller can present them — which '
+      + 'is why the capability phase 6 issued had no way to be used until this route.',
   },
   {
     id: 'session-probe',
@@ -224,6 +253,8 @@ export interface HumanSessionRecognizer {
   recognize(presentation: string | undefined): {
     readonly paired: boolean;
     readonly sessionId?: string;
+    /** What the token that paired this session claimed. Recorded, not verified. */
+    readonly authority?: string;
     readonly reason?: string;
   };
 }
@@ -240,6 +271,14 @@ export type AgentAuthOutcome =
       /** Present for every mode except pairing, which has no machine yet. */
       readonly machine?: string;
       readonly humanSessionId?: string;
+      /**
+       * What the token that paired that session claimed as its authority.
+       *
+       * Carried, never interpreted. This host cannot verify a human was present
+       * — a same-uid process can mint its own pairing token — so an approval
+       * records the claim it was made under.
+       */
+      readonly humanSessionAuthority?: string;
     }
   | {
       readonly allowed: false;
@@ -271,6 +310,46 @@ export function authenticateAgentRequest(
       signal: TRANSPORT_SIGNAL.ORIGIN_NOT_ALLOWED,
       message: 'the request Origin is not on this host\'s allowlist',
     };
+  }
+
+  // A MODE THAT NEEDS BOTH, AND WHAT IT DOES AND DOES NOT BUY.
+  //
+  // Session issuance does not rest on the machine credential alone: that
+  // credential is a file, so a machine's credential leaking would otherwise also
+  // mean unlimited sessions. Requiring a fresh single-use token as well binds
+  // each session to one deliberate pairing act and makes sessions countable.
+  //
+  // IT DOES NOT ESTABLISH HUMAN PRESENCE, and an earlier version of this comment
+  // claimed it did. Minting a token requires only write access to the pairing
+  // store, which every agent on this host has, so a builder can mint one and
+  // redeem it here. What the token buys is that the mint is a distinct, recorded
+  // act carrying a stated `authority` — provenance, not proof.
+  //
+  // The machine credential is still required alongside it, so a revoked machine
+  // cannot open a session even holding a live token.
+  if (route.authentication === 'machine-credential-and-pairing-token') {
+    const machine = context.machineCredentials.verify(header(req, MACHINE_CREDENTIAL_HEADER));
+    if (!machine.authorized) {
+      return {
+        allowed: false,
+        route,
+        status: machine.code === MACHINE_SIGNAL.MACHINE_CREDENTIAL_REVOKED ? 403 : 401,
+        signal: machine.code,
+        message: machine.message,
+      };
+    }
+    const token = header(req, PAIRING_TOKEN_HEADER);
+    if (token === undefined || token.length === 0) {
+      return {
+        allowed: false,
+        route,
+        status: 401,
+        signal: PAIRING_SIGNAL.PAIRING_TOKEN_REQUIRED,
+        message: `no pairing token presented; send it in ${PAIRING_TOKEN_HEADER}`,
+      };
+    }
+    // Spent in the handler, which knows what it is being spent on.
+    return { allowed: true, route, machine: machine.machine };
   }
 
   if (route.authentication === 'pairing-token') {
@@ -315,7 +394,7 @@ export function authenticateAgentRequest(
       route,
       status: 401,
       signal: recognition.reason === 'REVOKED' ? 'HUMAN_SESSION_REVOKED' : 'HUMAN_SESSION_REQUIRED',
-      message: 'this route requires a human-paired session',
+      message: 'this route requires a paired client session',
       reason: recognition.reason,
     };
   }
@@ -324,6 +403,7 @@ export function authenticateAgentRequest(
     route,
     machine: machine.machine,
     humanSessionId: recognition.sessionId,
+    humanSessionAuthority: recognition.authority,
   };
 }
 

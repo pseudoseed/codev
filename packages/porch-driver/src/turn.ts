@@ -200,6 +200,14 @@ export interface StartTurnOptions {
   readonly interactionMode?: string;
   /** Attachments, passed through untouched. */
   readonly attachments?: ReadonlyArray<unknown>;
+  /**
+   * The caller's identity for this turn, journalled with the intent and never sent.
+   *
+   * A caller that may retry needs to recognise its own pending intent after a restart.
+   * The message text is not that: two identical messages to one agent are ordinary, and
+   * matching on text let a stale intent answer for the current one.
+   */
+  readonly ref?: string;
 }
 
 export interface StartedTurn {
@@ -233,15 +241,22 @@ export async function startTurn(
   const expectation = tracker.expectTurn(options.threadId);
   const messageId = newCommandId();
 
-  const { commandId } = await dispatchCommand(dispatcher, journal, {
-    type: 'thread.turn.start',
-    threadId: options.threadId,
-    message: { messageId, role: 'user', text: options.text, attachments: options.attachments ?? [] },
-    ...(options.modelSelection === undefined ? {} : { modelSelection: options.modelSelection }),
-    runtimeMode: options.runtimeMode ?? 'full-access',
-    interactionMode: options.interactionMode ?? 'default',
-    createdAt: new Date().toISOString(),
-  });
+  const { commandId } = await dispatchCommand(
+    dispatcher,
+    journal,
+    {
+      type: 'thread.turn.start',
+      threadId: options.threadId,
+      message: { messageId, role: 'user', text: options.text, attachments: options.attachments ?? [] },
+      ...(options.modelSelection === undefined ? {} : { modelSelection: options.modelSelection }),
+      runtimeMode: options.runtimeMode ?? 'full-access',
+      interactionMode: options.interactionMode ?? 'default',
+      createdAt: new Date().toISOString(),
+    },
+    // Journalled beside the intent, not added to the command: the wire payload is
+    // t3code's schema and this is the caller's bookkeeping.
+    options.ref === undefined ? {} : { ref: options.ref },
+  );
 
   return { commandId, messageId, ...expectation };
 }

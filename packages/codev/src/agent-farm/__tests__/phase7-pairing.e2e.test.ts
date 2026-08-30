@@ -26,6 +26,19 @@ import { PairingStore } from '../lib/pairing.js';
 import { MachineCredentialStore, MACHINE_SIGNAL } from '../lib/machine-credentials.js';
 import { AGENT_ROUTE_PREFIX } from '../servers/agent-auth.js';
 
+/**
+ * Every mint names the ceremony it is for and what authorized it.
+ *
+ * These tests walk the operator runbook, so they mint as the runbook does: an
+ * operator at the host, pairing a device. The store cannot verify that — a
+ * same-uid process can mint its own token — so `authority` records the claim
+ * rather than asserting it.
+ */
+const RUNBOOK_MINT = {
+  purpose: 'machine-credential' as const,
+  authority: 'operator at the host, following the pairing runbook',
+};
+
 const PORT = 14910;
 
 let tower: Awaited<ReturnType<typeof startTower>> | null = null;
@@ -78,7 +91,7 @@ describe('Phase 7 pairing flow, live server', () => {
 
     // 2. Issue a pairing token on the HOST, as the runbook says to.
     const pairings = new PairingStore({ root: join(farmDir, 'pairing') });
-    const token = pairings.issue();
+    const token = pairings.issue(RUNBOOK_MINT);
 
     // 3. Redeem it from the DEVICE — carrying ONLY the pairing token.
     //
@@ -136,7 +149,7 @@ describe('Phase 7 pairing flow, live server', () => {
 
     // 8. A second machine paired after the revocation still works, so the
     //    revocation was per machine and not a service-wide lockout.
-    const second = pairings.issue();
+    const second = pairings.issue(RUNBOOK_MINT);
     const laptop = await fetch(`${base}${AGENT_ROUTE_PREFIX}/pairing/redeem`, {
       method: 'POST',
       headers: keylessHeaders({
@@ -200,7 +213,7 @@ describe('Phase 7 pairing flow, live server', () => {
   // paired device really holds and nothing else.
   it('a paired device drives the surface with its machine credential alone', async () => {
     const pairings = new PairingStore({ root: join(tower!.agentFarmDir, 'pairing') });
-    const token = pairings.issue();
+    const token = pairings.issue(RUNBOOK_MINT);
     const redeemed = await fetch(`${base()}${AGENT_ROUTE_PREFIX}/pairing/redeem`, {
       method: 'POST',
       headers: keylessHeaders({
@@ -258,7 +271,7 @@ describe('Phase 7 pairing flow, live server', () => {
   it('revocation closes a stream that was already open, and says why', async () => {
     const pairings = new PairingStore({ root: join(tower!.agentFarmDir, 'pairing') });
     const machines = new MachineCredentialStore({ root: join(tower!.agentFarmDir, 'machines') });
-    const token = pairings.issue();
+    const token = pairings.issue(RUNBOOK_MINT);
     const redeemed = await fetch(`${base()}${AGENT_ROUTE_PREFIX}/pairing/redeem`, {
       method: 'POST',
       headers: keylessHeaders({

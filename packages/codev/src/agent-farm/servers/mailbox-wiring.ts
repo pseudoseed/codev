@@ -37,7 +37,13 @@ import {
 } from '../commands/reset/context.js';
 import { getGlobalDb } from '../db/index.js';
 import { getArchitectByName, getBuilder } from '../state.js';
-import { deliverThreadTurn } from '../thread-runtime.js';
+import { deliverThreadTurn, getThreadEngine } from '../thread-runtime.js';
+import { requestThreadBackend, type ThreadBackendAvailability } from '../thread-backend.js';
+import {
+  threadCanHonourNoEnter,
+  THREAD_HAS_NO_COMPOSER,
+  THREAD_NO_ENTER_REMEDY,
+} from './thread-no-enter.js';
 import { formatBuilderMessage } from '../utils/message-format.js';
 import { supersede as supersedeMailbox, dismissHeldWithKey, NOTICE_SUPERSEDE_PREFIX } from '../db/mailbox.js';
 import path from 'node:path';
@@ -47,6 +53,7 @@ import {
   threadDeliverySession,
   type DeliveryPorts,
   type DeliverySession,
+  type ThreadDeliveryContext,
   type HeldRecoveryResult,
   type DeliveredBroadcast,
   type EscalationInfo,
@@ -112,23 +119,77 @@ const NODE_FS_PORT: ContextFsPort = buildContextFsPort();
  * correct — and because rows address the AGENT, a respawned terminal (new id, same
  * builder id) transparently drains its predecessor's held mail.
  */
-export function resolveLiveSessionForAgent(workspacePath: string, toAgent: string): DeliverySession | null {
+export function resolveLiveSessionForAgent(
+  workspacePath: string,
+  toAgent: string,
+  log?: LogFn,
+): DeliverySession | null {
+  /**
+   * A live, writable PTY for this agent — looked up BEFORE the thread branch decides.
+   *
+   * The thread branch used to win unconditionally, so a STALE `thread_id` on a row
+   * silently shadowed a live PTY: the agent was there, typing, and its mail went to a
+   * thread that no longer served it. Low probability and completely silent, which is the
+   * combination this project keeps paying for.
+   *
+   * The two are mutually exclusive by construction (`assertExclusiveIdentity`), so both
+   * being present is a contradiction in the state rather than a choice to make quietly.
+   * The PTY wins because it is the one that was observed live, and the contradiction is
+   * logged rather than resolved in silence.
+   */
+  const livePty = (): DeliverySession | null => {
+    const entry = getWorkspaceTerminals().get(workspacePath);
+    if (!entry) return null;
+    const tid = entry.builders.get(toAgent) ?? entry.architects.get(toAgent) ?? entry.shells.get(toAgent);
+    if (!tid) return null;
+    const session = getTerminalManager().getSession(tid);
+    if (!session || !session.writable) return null;
+    return session;
+  };
+
   try {
     const builder = getBuilder(toAgent, workspacePath);
-    if (builder?.threadId) return threadDeliverySession(builder.threadId);
+    if (builder?.threadId) {
+      const pty = livePty();
+      if (pty) {
+        log?.('ERROR', `[mailbox] ${toAgent} @ ${workspacePath} has BOTH a thread id (${builder.threadId}) `
+          + `and a live PTY. Those are mutually exclusive, so one of them is stale. Delivering to the `
+          + `PTY, which is the one observed live; the thread id on the row should be cleared.`);
+        return pty;
+      }
+      return threadDeliverySession(builder.threadId, {
+        workspaceRoot: workspacePath,
+        worktreePath: builder.worktree,
+        branch: builder.branch,
+        agent: toAgent,
+        harness: builder.harness,
+        model: builder.model,
+      });
+    }
     const architect = getArchitectByName(workspacePath, toAgent);
-    if (architect?.threadId) return threadDeliverySession(architect.threadId);
+    if (architect?.threadId) {
+      const pty = livePty();
+      if (pty) {
+        log?.('ERROR', `[mailbox] architect ${toAgent} @ ${workspacePath} has BOTH a thread id `
+          + `(${architect.threadId}) and a live PTY. Those are mutually exclusive, so one of them is `
+          + `stale. Delivering to the PTY, which is the one observed live; the thread id on the row `
+          + `should be cleared.`);
+        return pty;
+      }
+      // An architect's worktree IS the workspace root, and it has no branch —
+      // the shape `createArchitectThread` writes.
+      return threadDeliverySession(architect.threadId, {
+        workspaceRoot: workspacePath,
+        worktreePath: workspacePath,
+        branch: '',
+        agent: toAgent,
+      });
+    }
   } catch {
     // Registry unreadable: fall through to the PTY map.
   }
 
-  const entry = getWorkspaceTerminals().get(workspacePath);
-  if (!entry) return null;
-  const tid = entry.builders.get(toAgent) ?? entry.architects.get(toAgent) ?? entry.shells.get(toAgent);
-  if (!tid) return null;
-  const session = getTerminalManager().getSession(tid);
-  if (!session || !session.writable) return null;
-  return session;
+  return livePty();
 }
 
 /**
@@ -375,24 +436,192 @@ function broadcastDelivered(frame: DeliveredBroadcast): void {
 }
 
 /**
+ * Deliver one message as a turn on a t3code thread, from Tower's process.
+ *
+ * WHY THIS IS MORE THAN `deliverThreadTurn` (issue #219)
+ *
+ * `ensureThreadBackendReady` runs in the `afx` CLI process, which exits. Tower is a
+ * different, long-lived process and registers no engine of its own, so
+ * `deliverThreadTurn` threw here for every thread-backed row — and the bare `catch`
+ * that used to wrap it turned that into `return false`, which the delivery path holds
+ * as `no-live-pty`. A workspace that configured threads therefore traded a working
+ * Tower architect for one that could never receive mail, and nothing said so.
+ *
+ * So: register the engine in THIS process, adopt the thread (it was created in
+ * another one), then start the turn.
+ *
+ * FOUR WAYS THIS FAILS, FOUR SENTENCES
+ *
+ * The port contract is a boolean, and the held-reason vocabulary is fixed at three
+ * values by a CHECK constraint on the mailbox table, so all four still hold the row
+ * the same way. What they no longer do is leave through the same silence: each logs
+ * at ERROR naming which of the four happened, because "Tower has no engine" is a bug
+ * in this repo and "the server refused the turn" is not, and an operator could not
+ * tell them apart from an empty catch.
+ */
+async function deliverToThread(
+  threadId: string,
+  context: ThreadDeliveryContext | undefined,
+  msg: string,
+  noEnter: boolean,
+  log: LogFn,
+  rowId?: string,
+): Promise<boolean> {
+  const where = `thread ${threadId}`;
+  // `--no-enter` means "put this in the composer and leave it for a human". A thread has
+  // no composer: `thread.turn.start` IS the submit, and there is nothing in the protocol
+  // that stages text without running it.
+  //
+  // This flag was received and DISCARDED here, so a gate notification sent with
+  // `--no-enter` — the deliberate form, the one that exists so a human decides — executed
+  // itself the moment it reached a thread-backed agent. A message that does not arrive is
+  // the failure this project has spent two days on; a message that arrives and runs itself
+  // is the worse half of it.
+  //
+  // Refused rather than approximated, and the DELIVERY PATH THEN ENDS THE ROW — it does
+  // not hold it. A hold that can never clear is retried every tick and raises a starvation
+  // notice with no remedy that applies, so `deliverAgentMail` dismisses such a row and this
+  // is its backstop for anything that reaches `writeMessage` another way.
+  //
+  // Both of these sentences said "the row stays held" until round 5, while the caller
+  // dismissed it. One rule in two places with one of them wrong is how the next reader is
+  // misled — which is the whole reason it was worth correcting.
+  if (!threadCanHonourNoEnter(noEnter)) {
+    log('ERROR', `[mailbox] ${where}: refusing a --no-enter message. ${THREAD_HAS_NO_COMPOSER} `
+      + `This is the backstop; the delivery path ends such a row terminally rather than holding `
+      + `it. ${THREAD_NO_ENTER_REMEDY}`);
+    return false;
+  }
+  if (!context) {
+    log('ERROR', `[mailbox] ${where}: the session carries no thread context, so this process cannot `
+      + `reach it. The row is thread-backed and delivery has nothing to attach to — a wiring fault here, `
+      + `not a statement about the thread or the server.`);
+    return false;
+  }
+  // NOTHING HERE AWAITS A CONNECT.
+  //
+  // Tower's drainer awaits agents sequentially, so an `await ensureThreadBackendReady(...)`
+  // on this path stalled delivery for every agent in every workspace — including PTY-only
+  // ones that never opted into threads — for as long as one workspace's connect took. The
+  // bound that makes the connect safe is exactly what makes the stall long. So the connect
+  // is started in the background and this returns; the row is held, and the next tick
+  // (1.5 s later) finds the engine ready.
+  const availability = requestThreadBackend(context.workspaceRoot);
+  if (availability.kind !== 'ready') {
+    // The TRANSITION, not the state. Tower ticks every 1.5 s, so a 60 s cooldown emitted
+    // forty identical ERROR lines saying the same stable fact — which trains people to
+    // stop reading the log, and the next line that matters is in there somewhere.
+    if (lastNotReady.get(context.workspaceRoot) !== availability.kind) {
+      lastNotReady.set(context.workspaceRoot, availability.kind);
+      log(
+        availability.kind === 'connecting' ? 'INFO' : 'ERROR',
+        threadBackendNotReady(where, context, availability),
+      );
+    }
+    return false;
+  }
+  // Ready again: forget the last complaint so the NEXT time it goes wrong is reported,
+  // rather than suppressed as a repeat of something that has since resolved.
+  lastNotReady.delete(context.workspaceRoot);
+  try {
+    // For THIS workspace. Tower serves every workspace in `global.db` from one process,
+    // and an engine registered for another one holds another server and another project.
+    await getThreadEngine(context.workspaceRoot).attach({
+      threadId,
+      worktreePath: context.worktreePath,
+      branch: context.branch,
+      builderId: context.agent,
+      harnessName: context.harness,
+      model: context.model,
+    });
+  } catch (err) {
+    log('ERROR', `[mailbox] ${where}: could not adopt the thread in this process — `
+      + `${err instanceof Error ? err.message : String(err)}. This is not evidence that the thread is `
+      + `gone; it is evidence that this process cannot address it.`);
+    return false;
+  }
+  try {
+    const outcome = await deliverThreadTurn(threadId, msg, context.workspaceRoot, rowId);
+    if (outcome === 'recovered') {
+      // Not a new turn. A previous attempt's acknowledgement was lost, the intent was
+      // still pending in the journal, and it has now been re-dispatched under its
+      // ORIGINAL command id — so the server holds it exactly once. Reporting this as
+      // anything other than delivered would send the next tick to submit it again, which
+      // is the duplicate this whole path exists to prevent.
+      log('WARN', `[mailbox] ${where}: a previous submission for ${context.agent} was never `
+        + `acknowledged, so it was REPLAYED under its original command id rather than re-sent. `
+        + `The server collapses it by that id, so the message ran once, not twice.`);
+    }
+    return true;
+  } catch (err) {
+    log('ERROR', `[mailbox] ${where}: the server refused the turn — `
+      + `${err instanceof Error ? err.message : String(err)}. The thread was reached and the message `
+      + `was not accepted.`);
+    return false;
+  }
+}
+
+/**
+ * Why this delivery did not happen yet, in the caller's terms.
+ *
+ * Four states, four sentences, and only one of them is a bug in this repo. They were one
+ * `return false` before, and an operator could not tell "connecting, try again in a
+ * second" from "your server has been down for a minute" from "this row should not be
+ * thread-backed at all".
+ */
+function threadBackendNotReady(
+  where: string,
+  context: ThreadDeliveryContext,
+  availability: Exclude<ThreadBackendAvailability, { kind: 'ready' }>,
+): string {
+  const preamble = `[mailbox] ${where}: not delivered to ${context.agent}`;
+  switch (availability.kind) {
+    case 'connecting':
+      return `${preamble} — the thread backend for ${context.workspaceRoot} is still connecting. `
+        + `The row stays held and the next drain retries it; this is ordinary, not a fault.`;
+    case 'cooling-down':
+      return `${preamble} — the last connect to the t3code server for ${context.workspaceRoot} failed `
+        + `${Math.round((Date.now() - availability.since) / 1000)}s ago and is not retried yet: `
+        + `${availability.message}. Retrying every tick would re-exchange a bootstrap token that may `
+        + `be one-time.`;
+    case 'misconfigured':
+      return `${preamble} — the "threads" config for ${context.workspaceRoot} is incomplete, so nothing `
+        + `was attempted: ${availability.message}.`;
+    case 'not-configured':
+    default:
+      return `${preamble} — the row is thread-backed, but ${context.workspaceRoot} names no t3code `
+        + `server. A thread-backed row in a workspace with no server configured is a contradiction — `
+        + `the row, or the config, is wrong.`;
+  }
+}
+
+/**
  * Build the {@link DeliveryPorts} bound to the live Tower. Cheap (closures over
  * module singletons), so `handleSend` may construct one per request and the
  * drainer one at boot; the shared state that matters (the per-agent write
  * serializer) lives in `mailbox-delivery.ts`, not here.
  */
+/**
+ * The last not-ready state reported per workspace, so a stable one is logged once.
+ *
+ * Deleted when the workspace goes ready, so a later failure is reported rather than
+ * suppressed as a repeat of a state that has since resolved.
+ */
+const lastNotReady = new Map<string, ThreadBackendAvailability['kind']>();
+
+/** Forget every suppressed state. For a test's teardown, not for production. */
+export function clearThreadBackendNotices(): void {
+  lastNotReady.clear();
+}
+
 export function makeDeliveryPorts(log: LogFn): DeliveryPorts {
   return {
-    getSessionForAgent: (ws, agent) => resolveLiveSessionForAgent(ws, agent),
+    getSessionForAgent: (ws, agent) => resolveLiveSessionForAgent(ws, agent, log),
     resolveProfile: (session) => resolveProfileForSession(session),
     classify: (session, profile) => classifyAgentScreen(session, profile, (m) => log('INFO', m)),
-    writeMessage: async (session, msg, noEnter) => {
+    writeMessage: async (session, msg, noEnter, rowId) => {
       if (isThreadDeliverySession(session) && session.threadId) {
-        try {
-          await deliverThreadTurn(session.threadId, msg);
-          return true;
-        } catch {
-          return false;
-        }
+        return await deliverToThread(session.threadId, session.threadContext, msg, noEnter, log, rowId);
       }
       return writeMessagePaced(session, msg, noEnter);
     },

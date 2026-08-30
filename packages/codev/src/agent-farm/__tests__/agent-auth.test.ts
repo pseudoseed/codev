@@ -358,13 +358,13 @@ describe('the shared-key exemption is scoped to the agent surface', () => {
 describe('pairing tokens', () => {
   it('redeems once and refuses the second presentation as REDEEMED, not UNKNOWN', () => {
     const store = new PairingStore({ root: tmp() });
-    const issued = store.issue();
+    const issued = store.issue({ purpose: 'machine-credential', authority: 'test harness' });
 
-    const first = store.redeem(issued.token, { machine: 'ipad' });
+    const first = store.redeem(issued.token, { machine: 'ipad', purpose: 'machine-credential' });
     expect(first.redeemed).toBe(true);
     expect(first.code).toBe(PAIRING_SIGNAL.PAIRING_TOKEN_ACCEPTED);
 
-    const second = store.redeem(issued.token, { machine: 'ipad' });
+    const second = store.redeem(issued.token, { machine: 'ipad', purpose: 'machine-credential' });
     expect(second.redeemed).toBe(false);
     expect(second.code).toBe(PAIRING_SIGNAL.PAIRING_TOKEN_REDEEMED);
     // "Already spent" and "never existed" send an operator to different places.
@@ -375,9 +375,9 @@ describe('pairing tokens', () => {
   it('refuses an expired token as EXPIRED, not UNKNOWN', () => {
     let now = 1_000_000;
     const store = new PairingStore({ root: tmp(), now: () => now });
-    const issued = store.issue({ ttlMs: 60_000 });
+    const issued = store.issue({ purpose: 'machine-credential', authority: 'test harness', ttlMs: 60_000 });
     now += 60_001;
-    const outcome = store.redeem(issued.token, { machine: 'ipad' });
+    const outcome = store.redeem(issued.token, { machine: 'ipad', purpose: 'machine-credential' });
     expect(outcome.redeemed).toBe(false);
     expect(outcome.code).toBe(PAIRING_SIGNAL.PAIRING_TOKEN_EXPIRED);
     expect(outcome.code).not.toBe(PAIRING_SIGNAL.PAIRING_TOKEN_UNKNOWN);
@@ -386,7 +386,7 @@ describe('pairing tokens', () => {
   it('caps the requested TTL rather than honouring an unbounded one', () => {
     let now = 0;
     const store = new PairingStore({ root: tmp(), now: () => now });
-    const issued = store.issue({ ttlMs: 365 * 24 * 60 * 60 * 1000 });
+    const issued = store.issue({ purpose: 'machine-credential', authority: 'test harness', ttlMs: 365 * 24 * 60 * 60 * 1000 });
     // One hour is the cap. A token good for a year is a permanent credential
     // with no revocation story, which is the thing the bound exists to prevent.
     expect(Date.parse(issued.expiresAt)).toBe(60 * 60 * 1000);
@@ -394,25 +394,25 @@ describe('pairing tokens', () => {
 
   it('a token with the right id and a wrong secret is UNKNOWN, revealing no state', () => {
     const store = new PairingStore({ root: tmp() });
-    const issued = store.issue();
+    const issued = store.issue({ purpose: 'machine-credential', authority: 'test harness' });
     const [id] = issued.token.split('.');
-    expect(store.redeem(`${id}.wrong-secret`, { machine: 'x' }).code)
+    expect(store.redeem(`${id}.wrong-secret`, { machine: 'x', purpose: 'machine-credential' }).code)
       .toBe(PAIRING_SIGNAL.PAIRING_TOKEN_UNKNOWN);
     // And the real token still works: the failed attempt did not consume it.
-    expect(store.redeem(issued.token, { machine: 'x' }).redeemed).toBe(true);
+    expect(store.redeem(issued.token, { machine: 'x', purpose: 'machine-credential' }).redeemed).toBe(true);
   });
 
   it('an unparseable store reports UNREADABLE rather than "no such token"', () => {
     const root = tmp();
     const store = new PairingStore({ root });
-    store.issue();
+    store.issue({ purpose: 'machine-credential', authority: 'test harness' });
     writeFileSync(store.path, '{ not json');
-    expect(() => store.redeem('a.b', { machine: 'x' })).toThrow(/PAIRING_STORE_UNREADABLE/);
+    expect(() => store.redeem('a.b', { machine: 'x', purpose: 'machine-credential' })).toThrow(/PAIRING_STORE_UNREADABLE/);
   });
 
   it('the token never appears in the log stream, over the whole redemption flow', async () => {
     const h = harness();
-    const issued = h.pairings.issue();
+    const issued = h.pairings.issue({ purpose: 'machine-credential', authority: 'test harness' });
     const secret = issued.token.slice(issued.token.indexOf('.') + 1);
 
     const out = fakeRes();
@@ -445,7 +445,7 @@ describe('pairing tokens', () => {
   // got no response at all.
   it('an issuance failure answers the caller and releases the token instead of crashing', async () => {
     const h = harness();
-    const issued = h.pairings.issue();
+    const issued = h.pairings.issue({ purpose: 'machine-credential', authority: 'test harness' });
     const injected = new Error('disk full');
     h.machines.issue = () => { throw injected; };
 
@@ -470,25 +470,25 @@ describe('pairing tokens', () => {
 
   it('a released token is redeemable again, and only a failed redemption releases one', () => {
     const store = new PairingStore({ root: tmp() });
-    const issued = store.issue();
-    expect(store.redeem(issued.token, { machine: 'ipad' }).redeemed).toBe(true);
+    const issued = store.issue({ purpose: 'machine-credential', authority: 'test harness' });
+    expect(store.redeem(issued.token, { machine: 'ipad', purpose: 'machine-credential' }).redeemed).toBe(true);
     expect(store.release(issued.pairingId)).toBe(true);
     // Single-use is not weakened: the token went back because the transaction it
     // was spent FOR did not happen.
-    expect(store.redeem(issued.token, { machine: 'ipad' }).redeemed).toBe(true);
+    expect(store.redeem(issued.token, { machine: 'ipad', purpose: 'machine-credential' }).redeemed).toBe(true);
 
     // Releasing twice, or releasing something unspent or unknown, is false —
     // so a caller can tell "put back" from "there was nothing to put back".
     expect(store.release(issued.pairingId)).toBe(true);
     expect(store.release(issued.pairingId)).toBe(false);
     expect(store.release('no-such-pairing-id')).toBe(false);
-    const fresh = store.issue();
+    const fresh = store.issue({ purpose: 'machine-credential', authority: 'test harness' });
     expect(store.release(fresh.pairingId)).toBe(false);
   });
 
   it('an issuance failure that cannot release the token says so, rather than implying a retry', async () => {
     const h = harness();
-    const issued = h.pairings.issue();
+    const issued = h.pairings.issue({ purpose: 'machine-credential', authority: 'test harness' });
     h.machines.issue = () => { throw new Error('disk full'); };
     h.pairings.release = () => { throw new Error('store gone'); };
 
@@ -533,14 +533,14 @@ describe('pairing tokens', () => {
 
   it('the store on disk holds no presentable token', () => {
     const store = new PairingStore({ root: tmp() });
-    const issued = store.issue();
+    const issued = store.issue({ purpose: 'machine-credential', authority: 'test harness' });
     const secret = issued.token.slice(issued.token.indexOf('.') + 1);
     expect(readFileSync(store.path, 'utf8')).not.toContain(secret);
   });
 
   it('redaction keeps the pairing id and drops the secret', () => {
     const store = new PairingStore({ root: tmp() });
-    const issued = store.issue();
+    const issued = store.issue({ purpose: 'machine-credential', authority: 'test harness' });
     const redacted = redactPairingToken(`pairing token issued: ${issued.token}`);
     expect(redacted).toContain(issued.pairingId);
     expect(redacted).not.toContain(issued.token.slice(issued.token.indexOf('.') + 1));
@@ -549,7 +549,7 @@ describe('pairing tokens', () => {
 
   it('redemption over the route yields a credential that actually authenticates', async () => {
     const h = harness();
-    const issued = h.pairings.issue();
+    const issued = h.pairings.issue({ purpose: 'machine-credential', authority: 'test harness' });
     const out = fakeRes();
     handleAgentRoute(
       fakeReq('POST', { [PAIRING_TOKEN_HEADER]: issued.token }, JSON.stringify({ machine: 'studio' })),
@@ -564,7 +564,7 @@ describe('pairing tokens', () => {
 
   it('redemption without a machine name is a 400, and does not spend the token', async () => {
     const h = harness();
-    const issued = h.pairings.issue();
+    const issued = h.pairings.issue({ purpose: 'machine-credential', authority: 'test harness' });
     const out = fakeRes();
     handleAgentRoute(
       fakeReq('POST', { [PAIRING_TOKEN_HEADER]: issued.token }, '{}'),
@@ -573,7 +573,7 @@ describe('pairing tokens', () => {
     );
     await flush();
     expect(out.statusCode).toBe(400);
-    expect(h.pairings.redeem(issued.token, { machine: 'later' }).redeemed).toBe(true);
+    expect(h.pairings.redeem(issued.token, { machine: 'later', purpose: 'machine-credential' }).redeemed).toBe(true);
   });
 });
 
