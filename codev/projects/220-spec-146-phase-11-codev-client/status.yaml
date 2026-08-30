@@ -1,7 +1,7 @@
 id: '220'
 title: spec-146-phase-11-codev-client
 protocol: air
-phase: implement
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,7 +11,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-30T00:32:39.201Z'
-updated_at: '2026-08-30T01:36:18.697Z'
+updated_at: '2026-08-30T02:19:18.244Z'
 pr_history:
   - phase: implement
     pr_number: 224
