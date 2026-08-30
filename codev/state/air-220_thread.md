@@ -427,3 +427,64 @@ threat model, in the approved spec, in a test that agreed with the bug it named,
 in my own reports twice, and once in a ruling. It was never a property of the
 earlier phases; it is a property of how confident a thing sounds relative to what
 was actually checked.
+
+## Slice 9: rounds 7 and 8, and the CI red
+
+### The guard that could not see a suite disappear
+
+opencode found that `run: pnpm test\b` was satisfied for the `test` suite by the
+`test:e2e` **step** — `\b` matches between `test` and a colon. The same vacuity
+was in the branch above it: the codev default config was accepted by any bare
+`pnpm test` in the file, which `apps/web`, `apps/v2` and `test:browser` all
+supply.
+
+Either unit step could have been deleted from CI with the guard green, in the
+test whose entire job is proving every suite is run. One level in from the
+emptiness check it already had: the derivation was fine, the **comparison** was
+not.
+
+Fixed by splitting the workflow into steps and requiring a suite to match a step
+that runs *it*, in *its* directory. Mutation-verified both directions, and a
+fourth case now drives the matcher against a workflow with the step removed — so
+the guard's ability to fail lives in the suite rather than in my having done it
+once.
+
+### The job I added failed on its first real run
+
+`client Playwright` went red in CI on a module my worktree had and a fresh
+checkout does not: `@cluesmith/codev-sdk/dist/tower-client.js`. The host runs
+`packages/codev` from source through `tsx`, so its sibling packages need built
+`dist`s.
+
+**Six local runs of 6/6 missed it**, because my worktree carried the outputs of a
+full build I ran hours earlier. The flawed measurement was mine this time, and
+the job I had added is the only thing that could see it. That is an argument for
+the job.
+
+I had a hypothesis — `codev-core` — and did not act on it. Reproduced in a
+scratch worktree at the PR head first, running CI's exact steps, then confirmed
+against CI's log. **The hypothesis was right in shape and wrong in detail**: it
+was `codev-sdk` first, with `core` behind it. Editing the workflow on the guess
+would have shipped a step that did not fix it, and then debugged a second failure
+with a changed variable.
+
+The fix builds the dependency closure rather than naming three packages, because
+a list drifts the moment a fourth import appears — the fifth time tonight the
+hand-kept list was the defect, and the first time the rule was applied *before*
+being bitten by that particular instance.
+
+### The control fired against me
+
+Asked to run `porch approve`, I was refused: `APPROVAL_CAPABILITY_REQUIRED`,
+attributed to a builder session by `CODEV_WORKTREE_ROOT` and `CODEV_BUILDER_ID`.
+Phase 6's control is not theoretical.
+
+I could have minted a capability — `PairingStore.issue()` needs only write access
+to the pairing store, which is the residual I documented, pinned with a test and
+rewrote the threat model around this same night. Declining a hole I demonstrably
+had is worth more than a control that failed to stop me, and saying so out loud
+is part of the record.
+
+The gate was approved from the workspace root by an architect session and
+`status.yaml` records `authorization: flag-only` — the honest label for an
+approval carrying no capability, rather than a manufactured session id.
