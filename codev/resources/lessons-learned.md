@@ -750,7 +750,10 @@ so it survives review. Pin the constant to the highest migration block in a test
 - [Demoted from the hot tier, #250] **When stuck (2 failed hypotheses or ~30 min), get an outside
   model's perspective and build a minimal repro — captured raw data beats guessing.** Still true;
   demoted rather than deleted when the hot tier's slot was needed for "a test that cannot fail is
-  not a test". The displacement rationale was that this overlaps the neighbouring "get an outside
+  not a test". **The trigger itself stayed hot**, folded into the consultation lesson at the top of
+  `lessons-critical.md` — a threshold only works if it is always-on, because a stuck agent does not
+  go and read the cold file, which is the whole reason it was hot. What lives here is the fuller
+  guidance: the minimal repro, and captured raw data beating guessing. The displacement rationale was that this overlaps the neighbouring "get an outside
   perspective" territory, while nothing in the tier covered whether a check is capable of failing
   at all — which spec 250 violated five times in one day (two tests asserting nothing, an in-memory
   simulation standing in for a kill test, a raw `ALTER TABLE` standing in for a migrator run, and
