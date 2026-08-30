@@ -105,6 +105,31 @@ Whether HEAD descends from a commit that is not there is not a question git can 
 a squash that drops the base leaves a fork that is clean at a commit nothing can be measured
 against, and without that check it verifies green.
 
+## Do not "tidy" these on rebase
+
+Two things in this fork look like inconsistencies and are not. Both are cheap to "fix" and both
+fixes are wrong.
+
+**1. `role` / `parentThreadId` are spelled two different ways.**
+
+| Schema | Spelling | Why |
+|---|---|---|
+| `ThreadCreatedPayload` | `Schema.NullOr(...).pipe(Schema.withDecodingDefault(...))` | The event log holds `thread.created` payloads written before the fields existed. A rebuild replays every one and the projector reads `payload.role` unconditionally, so that read must be total. |
+| `OrchestrationThread`, `OrchestrationThreadShell` | `Schema.optional(Schema.NullOr(...))` | Matches `linkedPullRequest` one line above — upstream's own newest field, optional so older cached snapshots decode. |
+
+Unifying on the strict form produces **32 errors across 11 upstream test files**, paid again at
+every rebase, to remove `undefined` from a read model the server never emits as `undefined` (every
+read path normalizes `?? null`). The strict form looks more correct in isolation, and the reason it
+is worse here is not visible from the diff. Endorsed by the architect on 2026-08-30.
+
+**2. The schema guard is not wired to `MigrationsLive`.**
+
+`MigrationsLive` is exported from `persistence/Migrations.ts` and **nothing builds it**. Wiring the
+guard there would look tidier and would mean it never runs in production — while a test that
+constructs `MigrationsLive` itself passes. It is called from `persistence/Layers/Sqlite.ts`'s
+`setup`, which is the path that actually boots the database, and a test asserts the ordering
+against that file rather than against a layer it assembles.
+
 ## Phase log
 
 | Phase | Fork commit | What landed |

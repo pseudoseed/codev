@@ -618,8 +618,24 @@ This repository:
 - `packages/codev/src/__tests__/spec-146-t3-contract.test.ts` — `:231`'s assertion re-scoped
   (see deliverables).
 
+#### Named inputs from earlier phases
+
+- **`orchestration.subscribeThread` is `consumed-change-undecidable`.** Measured, not guessed:
+  after phase 2, `node classify-churn.mjs --fork-drift` classifies the phase-2 fork commit and
+  reports `orchestration.subscribeThread: unknown (union shape changed; not decidable here)`. The
+  classifier stops being confident at unions and says so rather than guessing, so this is a real
+  "we could not tell", not a pass. **This phase must decide it by hand**: read what the union
+  became, and record whether the change is breaking for a client Codev writes. Regenerating
+  without deciding it converts an explicit undecidable into a silent green.
+- The two spellings on `role` / `parentThreadId` are deliberate and must survive this phase's
+  regeneration: `withDecodingDefault` on `ThreadCreatedPayload` (the log replays), `Schema.optional`
+  on the read models (matching `linkedPullRequest`; the strict form costs 32 errors across 11
+  upstream test files every rebase). See the phase 2 section of the review.
+
 #### Deliverables
 
+- [ ] **`orchestration.subscribeThread`'s undecidable verdict is resolved and recorded**, breaking
+      or non-breaking, with the union diff that decides it. Not carried forward as "unknown".
 - [ ] Regeneration runs against `/Users/chris/dev/t3code-codev`, not the upstream clone.
 - [ ] **`codev.gateWrite` is added to `pin.json`'s `methods` map, or it is not vendored at all.**
       Verified: `generate.mjs:335` iterates `Object.entries(pin.methods)`, not

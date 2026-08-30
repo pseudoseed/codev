@@ -315,6 +315,27 @@ just its inputs.
 
 ## Testing
 
+- [From #250] **Naming a hazard in a spec does not prevent it. Only a test that can fail does.**
+  The spec named this exact failure — "pointed at our own fork head it compares our tree to itself
+  and reports no churn forever" — the plan carried the warning forward, and phase 1 shipped a
+  variant of it anyway: `classify-churn --fork-drift` measured `upstreamBase..pin.commit` instead
+  of `upstreamBase..HEAD`. Every review lane read the code with the warning in front of them and
+  none flagged it, because at the time the two commits were **equal** and every test had the right
+  answer for the wrong reason.
+  It only became reachable when a later ruling froze `pin.commit` while the checkout moved on, and
+  then a fork carrying real customization commits reported **zero drift** — "I could not tell"
+  spelled exactly like "nothing changed", by the one tool whose entire job is answering "what have
+  we changed?". Nothing errored; the answer was simply wrong and confident.
+  Two things generalize. First, a hazard written in prose is inert: it survives review because
+  reviewers check the code against the prose and the code matched. Second, **a test written while
+  two values are equal cannot tell you which one the code reads.** When a design says two things
+  are "the same for now and will diverge later", the assertion has to name which one is correct
+  *before* they diverge — or force them apart in a fixture — because after they diverge the bug is
+  already in production. The same shape appeared twice more in one phase: a range whose first
+  commit was never classified because `git log from..to` excludes `from`, and a fixture pair whose
+  git shas collided because identical content, message and author in the same second produce the
+  identical commit.
+
 - [From #236] **To find every caller relying on an absent value, change the type and read the
   compiler errors.** A permissive `machine?: string` parameter on an identity check hid three call
   sites passing `undefined` — the very values that cannot be bound. Making it required enumerated
