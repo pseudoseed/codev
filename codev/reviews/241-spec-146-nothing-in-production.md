@@ -43,8 +43,12 @@ instead of only when somebody messages them.
 ## Test Results
 
 - `pnpm build`: ✓ pass (38.5s under porch)
-- `pnpm test`: ✓ pass — **7184 passed**, 54 skipped, 0 failed (361.5s under porch); 37 new
-  across four `spec-241-*` files (36 pass, 1 live test skipped without `T3_LIVE`)
+- `pnpm test`: ✓ pass — **7184 passed**, 54 skipped (361.5s under porch); 38 new across four
+  `spec-241-*` files (37 pass, 1 live test skipped without `T3_LIVE`). One unrelated flake on a
+  later run, see *Flaky Tests*.
+- **CI on #258**: all 9 jobs green — Unit Tests, CLI Tests (ubuntu + macos), CLI Integration,
+  Tower Integration, Package Install Verification, Artifact-Canvas Browser, v2 Playwright,
+  client Playwright.
 - **Live verification** at the `dev-approval` gate, run by the architect against the pinned
   t3code server: **2 passed, 12.4s**. The harness cold-started its own server, paired, drove a
   real turn, and `record.activeTurnId` returned to null on its own. That is the first turn to
@@ -198,6 +202,17 @@ opencode took the slot.
 
 Findings and what was done are in the PR body and in `codev/state/pir-241_thread.md`. All were
 fixed in `a1ab36084`; the suite was green afterwards.
+
+## Flaky Tests
+
+`src/terminal/__tests__/session-manager.test.ts > SessionManager > auto-restart logic >
+respects maxRestarts limit` failed once under full-suite load with `timeout waiting for max
+restarts`, and passed on its own (91/91, 27.8s) immediately after. It is a timing-sensitive PTY
+restart test and this PR touches nothing under `src/terminal/`.
+
+Recorded rather than skipped. Annotating someone else's test as flaky on one observation would
+be a scope decision I do not get to make here, and CI on #258 ran all nine jobs green including
+Unit Tests. Noted so the next person who sees it has a second data point rather than a first.
 
 ## Follow-ups
 
