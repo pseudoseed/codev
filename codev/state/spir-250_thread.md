@@ -240,3 +240,32 @@ lane. That is the genuine #261, and it is narrower than what I first reported.
 `process.env` is spread first, so `OPENCODE_CONFIG_CONTENT` does reach the child — which is why my
 run 3 read external files successfully. Why run 3 still produced no file is the open question the
 clean re-run is answering now.
+
+## Plan review round 1 — opencode lane, REQUEST_CHANGES
+
+The lane finally ran once I stopped piping it through `tail` and kept the permission grant: 298s,
+full review, exit 0. Keeping codex as well gave three reviews instead of two, and that paid for
+itself immediately — opencode found a hole in the fix I had just made for codex's finding.
+
+Codex said `codev:gate-write` could not be enforced on `dispatchCommand`, so I moved gate writes to
+their own RPC method. Opencode pointed out that a scope-map row alone does not compile:
+`RpcAuthorization.ts:130` is `satisfies Record<WsRpcMethod, AuthEnvironmentScope>`, and
+`WsRpcMethod` derives from `WsRpcGroup` in `packages/contracts/src/rpc.ts` — which pin.json
+**deliberately excludes** from the vendored closure. So the method needs registering in four
+places, and phase 4 now names all of them.
+
+**The most damaging finding in either round:** `acquire()` does
+`gitIn(t3Root, 'checkout', '--detach', pin.commit)` at `t3-server.mjs:94`, against `T3CODE_ROOT` —
+the read-only upstream clone. Once phase 5 moves `pin.commit` to the fork head, that checks a fork
+SHA out into the clone the spec keeps pinned at `upstreamBase`, and `start` (`:389`) and `status`
+(`:663`) compare the same way. `smoke.mjs:156` and `live/integration.mjs:196` both call `acquire`,
+so it fires from an ordinary test run rather than a deliberate invocation. I had rewired only
+`verify`. Phase 1 now rewires `acquire`, `start` and `status` too.
+
+Also: gate commands must stay out of `ClientOrchestrationCommand` /
+`DispatchableClientOrchestrationCommand` (`orchestration.ts:935-987`) — those unions *are* the
+`dispatchCommand` payload, so including them would hand gate-writing to every
+`orchestration:operate` holder and bypass the new scope entirely. `ThreadSessionSetCommand` is the
+internal-only precedent. And `generate.mjs:335` walks `pin.methods`, not `OrchestrationRpcSchemas`,
+so the new method must be listed in `pin.json` or it is never vendored — the `vcs.*` entries are
+there for exactly this reason.

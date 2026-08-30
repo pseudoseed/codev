@@ -169,7 +169,8 @@ Fork side (new repository state, no Codev commit):
 This repository:
 - `packages/types/src/t3/pin.json` — add `upstreamBase`, `forkRepo`, `forkBranch`; `commit`
   keeps its meaning and becomes the **fork** head once phase 5 runs.
-- `tools/t3-server/t3-server.mjs` — `verify` asserts both identities.
+- `tools/t3-server/t3-server.mjs` — **`verify`, `acquire`, `start` and `status`**, not `verify`
+  alone. See the deliverable below: leaving `acquire` on `pin.commit` is destructive.
 - `tools/t3-codegen/classify-churn.mjs` — two named ranges, two checkouts.
 - `tools/t3-codegen/generate.mjs` — **the root switch is the load-bearing edit**: `:51` reads
   `T3CODE_ROOT` and `:78` refuses when `git rev-parse HEAD` there does not equal `pin.commit`.
@@ -221,6 +222,16 @@ This repository:
       ```
 
       Needs a live server at the pinned commit. Planned as a step, not discovered as a failure.
+- [ ] **`acquire`, `start` and `status` are pinned to `upstreamBase`, not to `pin.commit`.**
+      Review round 1 caught this and it is the one item here that can destroy something.
+      `acquire()` does `gitIn(t3Root, 'checkout', '--detach', pin.commit)` (`t3-server.mjs:94`)
+      against `T3CODE_ROOT` — the read-only upstream clone. Once phase 5 moves `pin.commit` to the
+      fork head, that line tries to check a **fork** SHA out into the **upstream** clone, and
+      `start` (`:389`) and `status` (`:663`) compare against `pin.commit` the same way. Both
+      `tools/t3-server/smoke.mjs:156` and `packages/t3-client/live/integration.mjs:196` call
+      `acquire`, so this fires from an ordinary test run, not only from a deliberate invocation.
+      The upstream clone exists precisely to stay reproducible at `upstreamBase`; rewiring only
+      `verify` would leave the one verb that *writes* to it still pointing at the fork.
 - [ ] Exit `3` (**could not determine**) survives untouched and is still spelled differently from
       exit `1`: a missing fork checkout, an unreadable HEAD, or an unresolvable merge-base is `3`,
       never `1`.
@@ -467,10 +478,10 @@ This repository:
 
       Equal is refused, not treated as idempotent. Criterion 10's stale write is exactly the
       second row.
-- [ ] **The allocated revision is returned to the caller.** `dispatchCommand` resolves to
-      `{ commandId, result }` with `result` carrying the server's response
-      (`packages/porch-driver/src/commands.ts:310,321`), so the new revision travels there.
-      A gate write whose response cannot be read is reported as unconfirmed, never as applied.
+- [ ] **The allocated revision is returned on the new RPC's own response**, not through
+      `dispatchCommand` — an earlier draft of this phase said `dispatchCommand`, which was left
+      over from before the gate commands moved off it. A gate write whose response cannot be read
+      is reported as unconfirmed, never as applied.
 - [ ] A counter held in `codev-agent`'s memory is explicitly not used: it resets on restart, and a
       reset counter renders every later gate as *no gate pending*, a false negative exactly where
       a human is waiting.
@@ -482,15 +493,41 @@ This repository:
       It authorizes the *method*, so routing `codev.gate.set` through `dispatchCommand` and hoping
       to scope it separately is not expressible — every operator would reach it.
 
-      So the gate commands get their own method, `codev.gateWrite`, with its own row in that same
-      scope map pointing at `codev:gate-write`. This uses the existing machinery exactly as
-      designed rather than adding a command-aware branch inside `ws.ts`, and it means a builder
-      holding `orchestration:operate` cannot reach the method at all.
+- [ ] **The whole RPC surface is named, because a row in the scope map alone does not compile.**
+      Review round 1 caught this: `RpcAuthorization.ts:130` is
+      `satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>`, and `WsRpcMethod` derives
+      from `WsRpcGroup` in `packages/contracts/src/rpc.ts` — a file deliberately **outside** the
+      vendored closure. So adding only the authorization row is a type error. Four places, in
+      order:
+
+      | Where | What |
+      |---|---|
+      | `packages/contracts/src/rpc.ts` | `Rpc.make` for `codev.gateWrite`, and membership in `WsRpcGroup` |
+      | `ORCHESTRATION_WS_METHODS` (or equivalent) | the method constant |
+      | `apps/server/src/ws.ts` (`:1174`, `WsRpcGroup.of({…})`) | the handler key |
+      | `apps/server/src/auth/RpcAuthorization.ts` | the row pointing at `codev:gate-write` |
+
+      Avoiding a command-type branch inside `dispatchCommand` is still right; a separate handler
+      key is not that branch.
+- [ ] **The gate commands stay out of `ClientOrchestrationCommand` and
+      `DispatchableClientOrchestrationCommand`** (`packages/contracts/src/orchestration.ts:935-987`).
+      Those unions *are* the `dispatchCommand` payload, so putting the gate commands in them would
+      hand gate-writing to every holder of `orchestration:operate` and silently bypass the new
+      scope — undoing this phase's entire point. Internal-only commands already exist as
+      precedent: `ThreadSessionSetCommand` is not in the client union.
 - [ ] A caller holding only `orchestration:operate` is refused with a **named** signal
       (`CODEV_GATE_SCOPE_REQUIRED`), not a generic 403.
-- [ ] The credential holding `codev:gate-write` is provisioned out of band at server start, is
-      never issued to a thread, and its storage path is named in the phase rather than left to the
-      implementer.
+- [ ] **The credential path is named, and two exclusions are part of the deliverable.**
+      `AuthEnvironmentScope` is a closed `Schema.Literals` list of eight
+      (`packages/contracts/src/auth.ts:84-93`), so the new scope is added there — and `auth.ts` is
+      on the vendored closure, so this is a contract change phase 5 must regenerate. It must
+      **not** be added to:
+      - `AuthStandardClientScopes` (`auth.ts:98-104`) — the set every ordinary client is issued;
+      - the token allowlist at `apps/server/src/auth/http.ts:265-274`.
+
+      Either would grant gate-writing to exactly the callers this scope exists to exclude. The
+      phase names the issuance API and the on-disk path of the single credential, rather than
+      leaving both to the implementer.
 - [ ] `hasPendingApprovals` is untouched. Provider tool approvals and porch gates stay separate.
 - [ ] Payload limits: an oversize or malformed gate payload is refused at the schema boundary and
       does not partially apply.
@@ -540,6 +577,13 @@ This repository:
 #### Deliverables
 
 - [ ] Regeneration runs against `/Users/chris/dev/t3code-codev`, not the upstream clone.
+- [ ] **`codev.gateWrite` is added to `pin.json`'s `methods` map, or it is not vendored at all.**
+      Verified: `generate.mjs:335` iterates `Object.entries(pin.methods)`, not
+      `OrchestrationRpcSchemas`, so a method present in the schemas map but absent from
+      `pin.methods` is silently ignored and never reaches `methods.json`. There is precedent to
+      follow rather than invent — the `vcs.*` entries are recorded in `pin.methods` exactly
+      because their method strings live in the unvendored `rpc.ts`, which is the same situation
+      the new method is in.
 - [ ] The closure is unchanged — still the nine files, and this is checkable in advance rather
       than discovered at generation time. `ThreadId` is defined in `baseSchemas.ts`
       (`:55-56`), which is already on the closure list, and `role` is a plain
@@ -1030,6 +1074,9 @@ This repository:
 | The generator's source-hash becomes a tautology once generation is fork-sourced | High | Medium | Phase 1 hashes the upstream closure at `upstreamBase` alongside the fork's |
 | **Creating a public fork is outward-facing** and cannot be undone quietly | Certain | Low | Flagged to the architect before `gh repo fork` in phase 1; the spec bakes the destination |
 | The fork's commits cannot appear in this repository's PR, leaving a reviewer with no diff | High | Medium | `pin.commit` names it, `FORK.md` logs it, phase 5 exports patches as a review aid |
+| **`acquire` writes the fork SHA into the read-only upstream clone** once `pin.commit` moves — and `smoke.mjs` and `live/integration.mjs` both call it, so it fires from an ordinary test run | Was High | Severe | Phase 1 rewires `acquire`, `start` and `status` to `upstreamBase`, not `verify` alone |
+| **A new RPC method that does not compile** — the authorization map is `satisfies Record<WsRpcMethod, …>` and `WsRpcMethod` derives from the unvendored `rpc.ts` | Was High | Medium | Phase 4 names all four registration points; phase 5 adds the method to `pin.methods`, following the `vcs.*` precedent |
+| **The new scope leaks into the standard client set**, handing gate-writing to every ordinary client | Medium | Severe | Two named exclusions are deliverables: `AuthStandardClientScopes` and the `auth/http.ts` token allowlist. Gate commands also stay out of `ClientOrchestrationCommand` |
 | **SSRF through the same-origin proxy** — a server-side proxy forwarding to a browser-named origin, which a path allowlist does not constrain | Medium | Severe | The target is chosen from a server-held allowlist by id; absolute URLs refused, redirects not followed, scheme and address rules enforced server-side |
 | **Gate scope unenforceable at the existing authorization point** — `RpcAuthorization.ts:24` scopes the whole `dispatchCommand` method, so a gate command inside it inherits `orchestration:operate` | Was High | High | Gate writes get their own RPC method with its own row in the same scope map; a builder cannot reach the method at all |
 | **A new project-map module lands dead** because `thread-backend.ts` already owns workspace-to-project resolution | Was High | Medium | Phase 6 extends `ensureThreadBackendReady`'s existing lookup-then-create path rather than adding a parallel one |
@@ -1080,7 +1127,8 @@ against source before being acted on, rather than taken as ground truth:
 | No abandonment path | — | Accepted. Added to `FORK.md` in phase 5 |
 | Fork suite scope unbounded | — | Accepted. Scoped per phase, one full run at phase 11 |
 
-**Round 1, `codex` lane** (substituted for `opencode`, see the lane note). `REQUEST_CHANGES`,
+**Round 1, `codex` lane** (added while the opencode lane was being diagnosed; kept, see the lane
+note). `REQUEST_CHANGES`,
 `HIGH` confidence, and additive to claude's rather than overlapping it — five findings, all
 verified against source before being acted on:
 
@@ -1108,6 +1156,19 @@ directive to keep closed. The same-origin design is unchanged and still correct,
 is structural rather than CSP-enforced, and the test now watches the network instead of parsing a
 header that is never sent.
 
+**Round 1, `opencode` lane** (`xai/grok-4.6`). `REQUEST_CHANGES`, `HIGH` confidence, and additive
+again — it found a hole in the fix made for codex's finding, which is the argument for three lanes
+rather than two. All verified:
+
+| Finding | Verified against | Outcome |
+|---|---|---|
+| `codev.gateWrite` is never registered on the wire; a scope row alone is a type error | `RpcAuthorization.ts:130` is `satisfies Record<WsRpcMethod, …>`; `WsRpcMethod` comes from `WsRpcGroup` in the **unvendored** `rpc.ts` | Confirmed. Phase 4 now names all four registration points |
+| Gate commands must stay out of the client command unions | `orchestration.ts:935-987` — those unions *are* the `dispatchCommand` payload; `ThreadSessionSetCommand` is the internal-only precedent | Confirmed. Otherwise `orchestration:operate` writes gates and the new scope is bypassed |
+| Phase 5 would not vendor the method | `generate.mjs:335` iterates `pin.methods`, not `OrchestrationRpcSchemas` | Confirmed. Added to `pin.methods`, following the `vcs.*` precedent |
+| **`acquire` still keys off `pin.commit`** and would check the fork SHA out into the read-only upstream clone | `t3-server.mjs:94` (`checkout --detach pin.commit` against `t3Root`), `:389`, `:663`; callers `smoke.mjs:156` and `live/integration.mjs:196` | Confirmed, and the most damaging item in either round. Phase 1 now rewires `acquire`, `start` and `status`, not `verify` alone |
+| The gate-write credential path is unnamed despite the deliverable claiming otherwise | `auth.ts:84-93` closed literal, `:98-104` standard scopes, `auth/http.ts:265-274` allowlist | Confirmed. Path named, two exclusions made deliverables |
+| Phase 4's revision return path was leftover text | — | Fixed: it returns on the new RPC, not `dispatchCommand` |
+
 **Lane note.** The `opencode` lane ran under a **non-default permission**. It auto-rejects
 `external_directory` requests, and this plan cites `/Users/chris/dev/t3code` throughout, so two
 runs died on their first outside read and exited `0` with no review file — a silent lane loss that
@@ -1118,11 +1179,18 @@ invocation, with no global config edited. Filed as issue #261. It auto-rejects
 first two runs died on their first outside read and exited `0` with no review file — a silent lane
 loss that reads exactly like a review with nothing to say. Filed as issue #261.
 
-A third run under `OPENCODE_CONFIG_CONTENT='{"permission":{"external_directory":"allow"}}'`
-(scoped to the single invocation, no global config edited) read every external file it wanted and
-**still exited 0 with no review file**. The `codex` lane was substituted so round 1 is genuinely
-two independent reviews rather than one, and the substitution is recorded here rather than left
-for a reader to infer from a missing file.
+**The "exits 0 with no verdict" part of that was my own measurement error, and it is corrected
+here rather than left standing.** Every failing run was invoked as `consult … 2>&1 | tail -15`,
+and in a pipeline the reported exit code belongs to the *last* command — so the `0` was always
+`tail`'s. Run with stdout and stderr redirected to files instead of piped, the same command
+returns **exit code 1** and names the cause on stderr. The lane had been hard-failing correctly
+all along, exactly as its own contract says it should (`commands/consult/index.ts:1693`; #20
+records why a lane that quietly produces nothing is worse than one that throws).
+
+With the permission granted *and* no pipe, the lane completed in 298s and wrote a full review. The
+`codex` lane, substituted while this was being diagnosed, was kept — three independent reviews
+rather than two, which earned its place: opencode found a hole in the fix made for codex's own
+finding.
 
 **The porch-level case, which is worse than the one first filed.** A prefix on a `consult` command
 covers only that invocation. When *porch* drives the consultation, the child inherits the
