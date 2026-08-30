@@ -667,3 +667,29 @@ identically to a different, more alarming failure.
 - Fork typecheck green; contracts **291 passed**; server **2788 passed, 8 skipped**, 1 pre-existing.
 - Codev repo: build green, **7285 passed, 55 skipped, 0 failed**, plus 180 in the v2 suite.
 - 15 decider tests, one per case, asserting the discriminant rather than the failure.
+
+### Phase 3, review round 1 — the engine was deleting the deliverable
+
+Both lanes REQUEST_CHANGES, both found the blocking bug independently.
+
+`OrchestrationEngine` rewrote every `CodevHierarchyInvalidError` as a generic invariant error
+reading **"Failed to generate an event identifier"** — false, not merely lossy — and persisted that
+onto the rejected command receipt, which is replayed verbatim on redispatch. All six discriminants
+existed only inside the decider. **The entire phase 3 deliverable was being deleted one layer above
+where it was tested**, and all 15 decider tests stayed green because they call the decider directly.
+
+Same shape as phase 2's `MigrationsLive`: testing the layer below the one production uses.
+
+Added `OrchestrationEngine.codevHierarchy.test.ts`, which dispatches through the real engine.
+**Verified to discriminate**: with the mapping reverted, 3 of its 4 tests fail. On this project that
+check is no longer optional.
+
+Two of my own tests asserted nothing, both caught by review:
+- one built a `Set` of six string literals and asserted its size — proving six strings are six
+  strings, while its name claimed to guard the discriminant collapse;
+- one asserted on its own input fixture after an archive the decider never mutates.
+
+Both replaced with assertions on real output. `commandInvariants.test.ts` gained the Codev cases the
+plan listed, including both ordering decisions as tests.
+
+Fork `40fb82ce92a8`. Fork typecheck green, server 2797 passed.

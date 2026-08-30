@@ -205,6 +205,79 @@ was no check, because nothing could host one, and an absence has no output to in
 database can be stated at all, which is why it is worth a line in the harness README and this
 paragraph here rather than a one-word changelog entry. Filed as evidence on #199.
 
+---
+
+## Phase 3 — Hierarchy integrity refused at write time
+
+### The engine deleted the entire deliverable, one layer above the tests
+
+Both review lanes found this independently, and it is the sharpest instance yet of the pattern this
+project keeps producing.
+
+Phase 3's deliverable is six **reason discriminants**, so a caller can tell a retry ("no such
+parent") from a caller bug ("wrong parent role"). `OrchestrationEngine` mapped every error the
+decider raised except `OrchestrationCommandInvariantError` onto a generic invariant error reading:
+
+> `Failed to generate an event identifier.`
+
+For a hierarchy refusal that is not lossy, it is **false** — and it did not stop at the response.
+The rejected-command receipt records `error.message`, and that receipt is replayed verbatim on any
+redispatch of the same `commandId`. The wrong answer was the *permanent* answer.
+
+All fifteen decider tests were green throughout, because they call `decideOrchestrationCommand`
+directly. **The decider is not a boundary anyone sees; the engine is.** A discriminant that does not
+survive the wrapper does not exist, and no quantity of testing beneath the wrapper can report that.
+
+This is phase 2's `MigrationsLive` finding in a different costume: *testing the layer below the one
+production uses*. There it was a layer nothing built; here it is a layer something wraps. Both pass
+their own tests while production does something else, and in both cases the passing test is what
+made the gap invisible.
+
+The regression test was **verified to discriminate** rather than assumed: with the mapping reverted,
+3 of its 4 tests fail; restored, all 4 pass. On this project that check has stopped being optional.
+
+### Two of my own tests asserted nothing
+
+Both caught by review, and both worth recording because they are cheap to write by accident.
+
+**A Set of its own literals.** A test named "every refusal reports a distinct, actionable reason"
+built `new Set([...six string literals])` and asserted `size === 6`. That proves six distinct
+strings are six distinct strings. Every refusal could have collapsed onto a single discriminant and
+it would have passed — while *claiming*, in its name, to guard exactly that. It now collects the
+reasons six real dispatches return.
+
+**An assertion against its own input.** A test archived a parent and then asserted on
+`model.threads` — the object it had just constructed, which the decider never mutates. It would
+have passed whatever the decider emitted. It now asserts the output: one event, one aggregate, no
+event mentioning the child.
+
+The common thread is that both tests read as if they were about the system, and both were about the
+test. Neither could fail.
+
+### Orphaning by omission
+
+Archiving a parent is a single-aggregate event that says nothing about children. That is what makes
+the orphan case work: nobody has to remember *not* to write a cascade. The test asserts the
+omission directly — no emitted event mentions the child — rather than asserting a downstream state
+that a cascade might also produce.
+
+Creating a builder under an *already archived* architect is accepted. The rule is about the edge's
+shape, not the parent's lifecycle; refusing would mean archiving silently changes which commands
+are legal, which is a second rule nobody wrote down.
+
+### A crashed run destroying passing evidence
+
+`criterion-8b.mjs` was documented as `> evidence.json`. A shell redirect truncates the target the
+instant the process starts, so a transiently crashed run left an **empty** evidence file where a
+passing one had been — and the suite then failed on a file that said nothing, rather than on the run
+that broke. A good record was destroyed before anyone noticed.
+
+`--out <path>` now writes once, at the end, and only when the run passed. A failed run leaves the
+previous record untouched and reports itself through its exit code and stdout.
+
+Worth generalizing: **a redirect is not a way to save a result, it is a way to destroy one early.**
+Anything that records evidence a test later depends on should write on success, not on start.
+
 ## Flaky Tests
 
 `apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint` fails in the fork.
