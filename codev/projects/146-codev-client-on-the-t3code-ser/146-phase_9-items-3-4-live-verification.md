@@ -271,6 +271,61 @@ destroy someone else's work.
 leaving the workspace wedged. Mutation-checked, and the mutation **killed the bystander process**
 in the test — which is the damage, observed.
 
+## Review round 4 — a race between two awaits
+
+Round 3's four are fixed. These are narrower, and two reviewers independently went to the same
+two lines.
+
+### A socket closing DURING initialisation registered a permanently dead engine
+
+The close handler carried a comment saying it "can only fire after this function has finished
+registering" the engine. That was false, and once written as a guarantee it stopped being
+checked.
+
+The socket is **open while the HTTP project lookup runs**. A close in that window left
+`registered` undefined, so the guard compared `undefined === undefined`, evicted nothing, and
+initialisation went on to register an engine backed by an already-closed socket. No further close
+could fire, because it already had. Round 3's dead-engine defect again, in a narrower window —
+and the eviction tests could not see it, because they close the socket *after* initialisation.
+
+Now a monotonic `closed` flag, set the moment the socket goes whether or not an engine exists,
+checked **before and after** registration: the window between the check and the write is closed
+by the second check rather than by an argument about ordering. The comment says what makes it
+true instead of asserting that it is.
+
+The new test drops the socket while delaying the shell-snapshot response, which is that window.
+
+### The project lookup had no bound
+
+It sits between a completed handshake and a registered engine, and a server that accepted the
+request and never answered left `ensureThreadBackendReady` unsettled forever, having reported
+nothing. Unbounded is not slow; it never ends. Bounded now by the same value the caller controls
+for the socket upgrade, and the signal covers the body read as well as the headers.
+
+### The `--no-enter` refusal was right in substance and wrong in lifecycle
+
+Refusing was correct. Holding the refusal was not: a retryable hold is retried every drain tick,
+re-logs at ERROR each time, and eventually raises a **starvation notice to a human with no remedy
+that applies** — no action of theirs can give a thread a composer. That is #190, a notice
+promising something unreachable.
+
+It is terminal now, once, and loud: the row is dismissed with a single ERROR line naming the
+sender, the recipient, why it can never be delivered, and how to re-send it. `reason: null` is
+what keeps it out of `findStarvingAgents`, which does not filter on `escalated` — marking it
+escalated would have suppressed `findEscalatable` and left the starvation notice firing.
+
+A control test asserts `--no-enter` to a PTY-backed agent is unchanged, so this is a rule about
+the one transport that cannot honour the flag rather than about the flag.
+
+### `restart` read an `lsof` failure as "port released"
+
+`ownedPortHolders` caught every failure and returned an empty list, so a tool that could not look
+read exactly like a port with nothing on it. Three answers now: `known: false` only when the tool
+itself failed (spawn error, or a non-empty stderr), and an empty listing with `known: true` is a
+real checked negative. `restart` refuses with `PORT_STATE_UNKNOWN` rather than starting a second
+server against a port whose state is unknown. The mutation check produces the confident negative
+the fix removes.
+
 ## Recorded, not fixed
 
 - **An architect's `attach` passes no harness or model**, so it depends on the engine's
@@ -281,6 +336,10 @@ in the test — which is the damage, observed.
 - **`activeProjectForWorkspace` hand-builds a second auth path**: a bare `fetch` with an
   `authorization` header, next to `@cluesmith/t3-client/auth`, which owns every other request.
   It works and it is one request, but the client is where that knowledge belongs.
+- **`installThreadSpawnFactory` writes a process-global from Tower's multi-workspace process.**
+  It is the bug the engine map just fixed, one door down. Unreachable today — `chooseSpawnPath`'s
+  only consumer is the CLI, which is one workspace per process — so it is recorded rather than
+  fixed, and the factory at least closes over the workspace it was installed for.
 
 ## What is still NOT met, stated rather than left to be discovered
 
@@ -308,17 +367,18 @@ made about either.
 |---|---|
 | `spec-146-phase-9-live-architect-thread.test.ts` | 2 — the live run above, and the companion that names the exact reason it could not check. Its post-restart turn is delivered by a **real child process** through `makeDeliveryPorts().writeMessage`, against the built `dist` |
 | `spec-146-phase-9-thread-delivery-states.test.ts` | 9 — delivery from a process holding no engine, the four failure sentences, a fifth test comparing them against each other, and the `--no-enter` refusal with its control |
-| `spec-146-phase-9-engine-per-workspace.test.ts` | 7 — the keyed registry with no fallback in either direction, two workspaces in one process against a real fake t3code server, concurrent init counted at the server, and socket-close eviction with its reconnect |
+| `spec-146-phase-9-engine-per-workspace.test.ts` | 10 — the keyed registry with no fallback in either direction, two workspaces in one process against a real fake t3code server, concurrent init counted at the server, socket-close eviction with its reconnect, a close DURING initialisation with its reconnect, and the project lookup's bound |
+| `send-delivery.test.ts` | +2 — a `--no-enter` row to a thread-backed agent ends terminally rather than starving, with a PTY control showing the flag itself is unchanged |
 | `spec-146-phase-9-thread-backend.test.ts` | +6 — the project lookup's three answers, driven against a real HTTP server, and the symlink-normalised match |
 | `spec-146-phase-9-architect-thread-resume.test.ts` | 9 — the branch normalisation, `attach` vs `create`, idempotence, the unattached-thread message, and `DriverThread.attach` |
 | `spec-146-phase-9-add-architect-thread-path.test.ts` | 6 — the backend is registered before the engine is read; the collision refusal; auto-numbering; unconfigured still uses Tower; unreachable propagates |
-| `spec-146-t3-contract.test.ts` | +2 — `restart` is distinct from a cold start and refuses to fake one; `stop` refuses to signal a live pid it cannot prove it owns, asserted against a real bystander process; the live opt-in check now covers both live files rather than one |
+| `spec-146-t3-contract.test.ts` | +3 — `restart` is distinct from a cold start and refuses to fake one; `stop` refuses to signal a live pid it cannot prove it owns, asserted against a real bystander process; an `lsof` that cannot answer is `PORT_STATE_UNKNOWN` rather than a free port; the live opt-in check now covers both live files rather than one |
 
 Mutation-checked: reverting the branch normalisation fails the item-3 payload test; removing the
 `ensureThreadBackendReady` call fails two of the three add-architect tests; replacing `restart`
 with `stop` + `start` fails the live test.
 
-Full suite green with these changes: `347 passed | 3 skipped` files, `6837 passed | 52 skipped`
+Full suite green with these changes: `347 passed | 3 skipped` files, `6843 passed | 52 skipped`
 tests, plus the v2 suite's `180 passed`. Run with `env -u CODEV_WORKTREE_ROOT -u CODEV_BUILDER_ID
 -u CODEV_ARCHITECT_NAME`, the workaround #189 still requires.
 

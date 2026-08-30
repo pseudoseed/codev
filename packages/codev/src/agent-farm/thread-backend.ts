@@ -284,11 +284,21 @@ export async function activeProjectForWorkspace(
   serverUrl: string,
   accessToken: string,
   workspaceRoot: string,
+  timeoutMs: number = DEFAULT_SOCKET_UPGRADE_TIMEOUT_MS,
 ): Promise<ProjectLookup> {
   let body: unknown;
   try {
+    // Bounded, for the same reason the WebSocket upgrade is. A server that accepts the
+    // connection and never answers left this await unsettled forever, and it sits
+    // between a completed handshake and a registered engine — so the whole of
+    // `ensureThreadBackendReady` hung, having reported nothing. An unbounded wait is
+    // not "slow"; it never ends.
+    //
+    // The signal covers the body read as well as the headers, so a response that starts
+    // and stalls is bounded too.
     const response = await fetch(`${serverUrl.replace(/\/+$/, '')}/api/orchestration/shell`, {
       headers: { authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
       return { kind: 'unknown', detail: `GET /api/orchestration/shell answered ${response.status}` };
@@ -367,16 +377,41 @@ async function initialiseThreadBackend(
   const config = readThreadBackendConfig(resolve(workspaceRoot));
   if (!config) return 'not-configured';
 
-  // Assigned below, referenced by the socket's close handler — which can only fire
-  // after this function has finished registering it.
+  /**
+   * Whether this socket has closed, and the engine it is behind once there is one.
+   *
+   * WHAT MAKES THE EVICTION CORRECT, rather than an assertion that it is.
+   *
+   * An earlier version of this said the close handler "can only fire after this
+   * function has finished registering it". That was not true and, once written as a
+   * guarantee, it stopped being checked. The socket is OPEN while the HTTP project
+   * lookup below runs, so it can close in that window — and then `registered` was
+   * still `undefined`, `tryGetThreadEngine(key)` was also `undefined`, the guard
+   * compared `undefined === undefined`, evicted nothing, and initialisation went on to
+   * register an engine backed by an already-closed socket. No further close would ever
+   * fire, because it had already fired. That is the dead-engine bug this handler exists
+   * to prevent, in a narrower window.
+   *
+   * So there are two facts, not one:
+   *
+   * - `closed` is monotonic and set the moment the socket goes, whether or not an
+   *   engine exists yet. It is checked BEFORE and AFTER registration, so the window
+   *   between the check and the write is closed by the second check rather than by an
+   *   argument about ordering.
+   * - `registered` is what this function put in the map. The handler evicts only when
+   *   the map still holds THAT object, so a close arriving late cannot drop the engine
+   *   a later reconnect installed.
+   */
+  let closed = false;
   let registered: ReturnType<typeof createPorchThreadEngine> | undefined;
 
   let connection;
   try {
     connection = await connectDispatcher(config, upgradeTimeoutMs, () => {
-      // Only if this engine is still the registered one: a later reconnect must not
-      // be evicted by an older socket's close event arriving late.
-      if (tryGetThreadEngine(key) === registered) setThreadEngine(undefined, key);
+      closed = true;
+      if (registered !== undefined && tryGetThreadEngine(key) === registered) {
+        setThreadEngine(undefined, key);
+      }
     });
   } catch (err) {
     // Four ways this fails, four sentences. They were previously two, and one of those two was
@@ -413,7 +448,12 @@ async function initialiseThreadBackend(
   const { createProject } = await import('@cluesmith/porch-driver/thread');
   const journal = new DispatchJournal(join(config.workspaceRoot, '.codev', 'commands.jsonl'));
   const { dispatcher, accessToken } = connection;
-  const lookup = await activeProjectForWorkspace(config.serverUrl, accessToken, config.workspaceRoot);
+  const lookup = await activeProjectForWorkspace(
+    config.serverUrl,
+    accessToken,
+    config.workspaceRoot,
+    upgradeTimeoutMs,
+  );
   let projectId: string;
   if (lookup.kind === 'found') {
     projectId = lookup.projectId;
@@ -428,7 +468,12 @@ async function initialiseThreadBackend(
       // be performed and there was a project all along. Re-read once before giving
       // up, and if that still cannot answer, say which of the two happened rather
       // than reporting a server fault.
-      const retry = await activeProjectForWorkspace(config.serverUrl, accessToken, config.workspaceRoot);
+      const retry = await activeProjectForWorkspace(
+        config.serverUrl,
+        accessToken,
+        config.workspaceRoot,
+        upgradeTimeoutMs,
+      );
       if (retry.kind === 'found') {
         projectId = retry.projectId;
       } else {
@@ -444,6 +489,9 @@ async function initialiseThreadBackend(
       }
     }
   }
+  // Before. The socket was open across the project lookup above, so by here it may
+  // already be gone — and registering then would install an engine nothing can revive.
+  if (closed) throw closedDuringInit(config.serverUrl, config.workspaceRoot);
   registered = createPorchThreadEngine({
     dispatcher,
     journal,
@@ -454,6 +502,24 @@ async function initialiseThreadBackend(
     defaultModel: config.defaultModel,
   });
   setThreadEngine(registered, key);
+  // And after, because the close could have landed between the check above and this
+  // write. The handler evicts when it can see `registered`; this covers the case where
+  // it could not. Both are cheap, and only one of them has to be right.
+  if (closed) {
+    setThreadEngine(undefined, key);
+    registered = undefined;
+    throw closedDuringInit(config.serverUrl, config.workspaceRoot);
+  }
   installThreadSpawnFactory(key);
   return 'installed';
+}
+
+/** The socket went away between the handshake and registration. */
+function closedDuringInit(serverUrl: string, workspaceRoot: string): Error {
+  return new Error(
+    `The t3code socket to ${serverUrl} closed while the thread backend for ${workspaceRoot} was still `
+    + `initialising, so no engine was registered. Nothing is stale and nothing was half-installed — `
+    + `the next call connects again. This is not "the server refused" and not "the server is `
+    + `unreachable": it answered, and then went.`,
+  );
 }

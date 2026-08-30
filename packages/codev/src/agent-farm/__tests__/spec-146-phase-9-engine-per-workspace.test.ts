@@ -32,7 +32,7 @@ import {
   tryGetThreadEngine,
   createMemoryThreadEngine,
 } from '../thread-runtime.js';
-import { ensureThreadBackendReady } from '../thread-backend.js';
+import { activeProjectForWorkspace, ensureThreadBackendReady } from '../thread-backend.js';
 
 interface Fake {
   readonly url: string;
@@ -43,8 +43,22 @@ interface Fake {
   readonly close: () => Promise<void>;
 }
 
+interface FakeOptions {
+  /**
+   * Called when the shell-snapshot request arrives, BEFORE it is answered. Returning a
+   * promise holds the response open — which is the window this whole file is about: the
+   * socket is already up while that HTTP request is in flight.
+   */
+  readonly onShellRequest?: (fake: Fake) => void | Promise<void>;
+  /** Never answer the shell snapshot at all. */
+  readonly hangShellRequest?: boolean;
+}
+
 /** A t3code server, as far as `connectDispatcher` can tell. */
-async function fakeT3(projectsFor: () => ReadonlyArray<{ id: string; workspaceRoot: string }>): Promise<Fake> {
+async function fakeT3(
+  projectsFor: () => ReadonlyArray<{ id: string; workspaceRoot: string }>,
+  options: FakeOptions = {},
+): Promise<Fake> {
   let exchanges = 0;
   const sockets: WsSocket[] = [];
   const wss = new WebSocketServer({ noServer: true });
@@ -61,8 +75,11 @@ async function fakeT3(projectsFor: () => ReadonlyArray<{ id: string; workspaceRo
       return;
     }
     if (req.url?.startsWith('/api/orchestration/shell')) {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ projects: projectsFor(), threads: [] }));
+      if (options.hangShellRequest) return; // accepted, never answered
+      void Promise.resolve(options.onShellRequest?.(fake)).then(() => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ projects: projectsFor(), threads: [] }));
+      });
       return;
     }
     res.writeHead(404);
@@ -76,7 +93,7 @@ async function fakeT3(projectsFor: () => ReadonlyArray<{ id: string; workspaceRo
   });
   await new Promise<void>((res) => server.listen(0, '127.0.0.1', () => res()));
   const { port } = server.address() as { port: number };
-  return {
+  const fake: Fake = {
     url: `http://127.0.0.1:${port}`,
     tokenExchanges: () => exchanges,
     dropSockets: () => {
@@ -88,6 +105,7 @@ async function fakeT3(projectsFor: () => ReadonlyArray<{ id: string; workspaceRo
       await new Promise<void>((res) => server.close(() => res()));
     },
   };
+  return fake;
 }
 
 const dirs: string[] = [];
@@ -254,4 +272,101 @@ describe('Tower serves two workspaces from one process', () => {
     expect(await ensureThreadBackendReady(a)).toBe('installed');
     expect(fake.tokenExchanges()).toBe(2);
   });
+});
+
+/**
+ * Round 4. The close handler carried a comment saying it "can only fire after this
+ * function has finished registering" the engine. That was not true, and once written as
+ * a guarantee it stopped being checked — two reviewers went straight to it.
+ *
+ * The socket is OPEN while the HTTP project lookup runs. A close in that window left
+ * `registered` undefined, so the handler's guard compared `undefined === undefined`,
+ * evicted nothing, and initialisation went on to register an engine backed by an
+ * already-closed socket. No further close could fire, because it already had.
+ *
+ * The earlier eviction tests close the socket AFTER initialisation, which is exactly
+ * why they could not see this.
+ */
+describe('a socket that closes DURING initialisation registers nothing', () => {
+  let fake: Fake | undefined;
+
+  afterEach(async () => {
+    clearThreadEngines();
+    setSpawnThreadFactory(undefined);
+    if (fake) await fake.close();
+    fake = undefined;
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('leaves no engine behind when the socket dies while the project lookup is in flight', async () => {
+    const roots: string[] = [];
+    fake = await fakeT3(
+      () => roots.map((root, i) => ({ id: `p-${i}`, workspaceRoot: root })),
+      {
+        // The window itself: the handshake is done, the engine is not yet registered.
+        onShellRequest: (self) => {
+          self.dropSockets();
+          return new Promise((r) => setTimeout(r, 50));
+        },
+      },
+    );
+    const a = workspaceAt(fake.url);
+    roots.push(a);
+
+    await expect(ensureThreadBackendReady(a)).rejects.toThrow(/closed while the thread backend .* was still initialising/s);
+
+    // The assertion that matters. A registered engine here is a permanently dead one:
+    // its socket is gone and no further close event will ever arrive to evict it.
+    expect(tryGetThreadEngine(a)).toBeUndefined();
+  });
+
+  it('the next call after that failure connects again rather than finding a corpse', async () => {
+    const roots: string[] = [];
+    let dropOnce = true;
+    fake = await fakeT3(
+      () => roots.map((root, i) => ({ id: `p-${i}`, workspaceRoot: root })),
+      {
+        onShellRequest: (self) => {
+          if (!dropOnce) return;
+          dropOnce = false;
+          self.dropSockets();
+          return new Promise((r) => setTimeout(r, 50));
+        },
+      },
+    );
+    const a = workspaceAt(fake.url);
+    roots.push(a);
+
+    await expect(ensureThreadBackendReady(a)).rejects.toThrow();
+    expect(await ensureThreadBackendReady(a)).toBe('installed');
+    expect(tryGetThreadEngine(a)).toBeDefined();
+  });
+
+  /**
+   * The lookup sits between a completed handshake and a registered engine, and had no
+   * bound: a server that accepts the request and never answers left it unsettled
+   * forever, so `ensureThreadBackendReady` hung having reported nothing. Unbounded is
+   * not "slow" — it never ends.
+   *
+   * Asserted on the lookup itself rather than through `ensureThreadBackendReady`,
+   * because the failure that follows it (a `project.create` this fake never answers)
+   * is bounded by the RPC client's own 30 s timeout, and a 30-second unit test would
+   * be measuring that instead of this.
+   *
+   * `unknown`, not `none`: a request that could not be answered is not a workspace with
+   * no project, and the caller's next move differs.
+   */
+  it('a lookup the server never answers is bounded, and reports `unknown`', async () => {
+    fake = await fakeT3(() => [], { hangShellRequest: true });
+
+    const started = Date.now();
+    const lookup = await activeProjectForWorkspace(fake.url, 'tok', '/ws', 500);
+    const elapsed = Date.now() - started;
+
+    expect(lookup.kind).toBe('unknown');
+    // Well inside vitest's own timeout, which is the only thing that ended this before
+    // the bound existed.
+    expect(elapsed).toBeLessThan(5_000);
+    expect(elapsed).toBeGreaterThanOrEqual(400);
+  }, 20_000);
 });

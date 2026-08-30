@@ -181,6 +181,54 @@ describe('deliverAgentMail (Spec 1313, Phase 4)', () => {
     expect(mailbox.getById(db, row.id)?.status).toBe('delivered');
   });
 
+  /**
+   * Issue #219 round 4. `--no-enter` means "put this in the composer and leave it for a
+   * human". A thread has no composer — `thread.turn.start` IS the submit — so the row
+   * can never be delivered as sent, and delivering it any other way would RUN a message
+   * that was meant to wait.
+   *
+   * Refusing it is right, and holding the refusal was wrong: a retryable hold is retried
+   * every drain tick, re-logs each time, and eventually raises a starvation notice to a
+   * human WITH NO REMEDY THAT APPLIES — no action of theirs can give a thread a composer.
+   * That is #190, a notice promising something unreachable.
+   *
+   * So it is terminal, once, and loud.
+   */
+  it('a --no-enter message to a thread-backed agent ends terminally instead of starving', async () => {
+    const h = harness();
+    h.setSession('spir-1', threadDeliverySession('thr-1'));
+    h.setProfile(null);
+    const row = enqueue({ noEnter: true });
+
+    const out = await deliverAgentMail(h.ports, db, '/ws/a', 'spir-1');
+
+    // Not held — a held row is one the drainer will come back to, and coming back cannot
+    // help. `reason: null` is what keeps it out of `findStarvingAgents`.
+    expect(out).toEqual({ delivered: [], reason: null });
+    expect(mailbox.getById(db, row.id)?.status).toBe('dismissed');
+    // And nothing was written: the whole point is that it must not run.
+    expect(h.writes).toHaveLength(0);
+    // Said once, with what a sender needs to act.
+    expect(h.logs.join('\n')).toContain('TERMINAL');
+    expect(h.logs.join('\n')).toContain('--no-enter');
+    expect(h.logs.join('\n')).toContain('Re-send without --no-enter');
+  });
+
+  it('a --no-enter message to a PTY-backed agent is unaffected — it still goes to the composer', async () => {
+    // The control. Without it, the assertion above would hold just as well if `--no-enter`
+    // had been broken everywhere rather than terminated on the one transport that cannot
+    // honour it.
+    const h = harness();
+    h.setSession('spir-1', fakeSession());
+    const row = enqueue({ noEnter: true });
+
+    const out = await deliverAgentMail(h.ports, db, '/ws/a', 'spir-1');
+
+    expect(out.delivered).toEqual([row.id]);
+    expect(h.writes).toEqual([{ formattedMessage: '[from architect] hi', noEnter: true }]);
+    expect(mailbox.getById(db, row.id)?.status).toBe('delivered');
+  });
+
   it('clean gate → delivers the oldest held message, marks it delivered, broadcasts', async () => {
     const h = harness();
     h.setSession('spir-1', fakeSession());

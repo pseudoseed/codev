@@ -143,3 +143,27 @@ All five mutation checks fired. Recorded, not fixed: architect `attach` passes n
 harness/model (the `architect` table has no columns to read, so it rests on two defaults
 staying equal), and `activeProjectForWorkspace` hand-builds a second auth path next to
 `@cluesmith/t3-client/auth`.
+
+## Review round 5 (codex + claude on 2280ca56b, both REQUEST_CHANGES HIGH)
+
+Both went independently to the same two lines. Four fixed, four mutation checks fired.
+
+1. **A socket closing DURING init registered a permanently dead engine.** The handler's
+   comment claimed it "can only fire after this function has finished registering" — false,
+   and once written as a guarantee it stopped being checked. The socket is open while the
+   HTTP project lookup runs; a close there left `registered` undefined, so the guard
+   compared `undefined === undefined` and evicted nothing. Now a monotonic `closed` flag
+   checked BEFORE and AFTER registration, and the comment says what makes it true.
+2. **The project lookup had no bound.** It sits between a completed handshake and a
+   registered engine, so a server that accepted and never answered hung the whole call.
+3. **The `--no-enter` refusal was right in substance, wrong in lifecycle.** Held under a
+   retryable reason it re-logged every tick and raised a starvation notice with no
+   applicable remedy (#190). Terminal now: dismissed with one loud line, `reason: null`, so
+   it stays out of `findStarvingAgents` — which does not filter on `escalated`, so marking
+   it escalated would have suppressed the wrong list.
+4. **`restart` read an lsof failure as "port released".** Three answers now; `PORT_STATE_UNKNOWN`
+   refuses rather than starting a second server against an unknown port.
+
+Recorded: `installThreadSpawnFactory` writes a process-global from Tower's process — the bug
+the engine map just fixed, one door down, unreachable today because `chooseSpawnPath`'s only
+consumer is CLI-only.

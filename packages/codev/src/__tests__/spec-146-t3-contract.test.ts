@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -414,6 +414,36 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
       expect(existsSync(join(runtimeDir, 'server.pid'))).toBe(false);
     } finally {
       try { process.kill(bystander.pid!, 'SIGKILL'); } catch { /* already gone */ }
+      rmSync(runtimeDir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Issue #219 round 4. `ownedPortHolders` caught every `lsof` failure and returned an
+   * empty list, so a tool that could not look read exactly like a port with nothing on
+   * it. `restart` then started a second server on a port whose state was unknown —
+   * "I could not tell" spelled as "no", in the harness written to refuse that.
+   */
+  it('treats an lsof that cannot answer as unknown, not as a free port', () => {
+    const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
+    const emptyPath = mkdtempSync(join(tmpdir(), 't3-nolsof-'));
+    const runtimeDir = mkdtempSync(join(tmpdir(), 't3-nolsof-rt-'));
+    try {
+      // A PATH with node and the harness's other helpers, but no `lsof`.
+      for (const tool of ['node', 'ps', 'sleep', 'git']) {
+        const found = spawnSync('command', ['-v', tool], { encoding: 'utf8', shell: true }).stdout.trim();
+        if (found) symlinkSync(found, join(emptyPath, tool));
+      }
+      const refused = spawnSync(process.execPath, [harness, 'restart'], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: emptyPath, T3_HARNESS_DIR: runtimeDir, T3_HARNESS_PORT: '3899' },
+      });
+      expect(refused.status).toBe(3);
+      expect(refused.stderr).toContain('PORT_STATE_UNKNOWN: could not check:');
+      // And not the answer it would have given before, which was a confident negative.
+      expect(refused.stderr).not.toContain('NOT_RUNNING');
+    } finally {
+      rmSync(emptyPath, { recursive: true, force: true });
       rmSync(runtimeDir, { recursive: true, force: true });
     }
   });

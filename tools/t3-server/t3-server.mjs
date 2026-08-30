@@ -241,18 +241,35 @@ function ownsProcess(pid) {
   }
 }
 
-/** PIDs listening on our port that we can prove belong to this harness. */
+/**
+ * PIDs listening on our port that we can prove belong to this harness.
+ *
+ * THREE ANSWERS, because `lsof` exits non-zero for two different reasons and only one
+ * of them means "nothing is listening". It also exits 1 when it is missing, refused, or
+ * cannot read a proc table — and that was folded into an empty result, so a tool that
+ * could not answer read as a port that is free. `restart` then started a second server
+ * on a port the first may still hold, which is the "I could not tell" spelled as "no"
+ * that this whole harness exists to refuse.
+ *
+ * `known` is false only when the tool itself failed. An empty listing with `known: true`
+ * is a real, checked, negative answer.
+ */
 function ownedPortHolders() {
   let holders = [];
   try {
     holders = execFileSync('lsof', ['-t', `-iTCP:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' })
       .split('\n').map((l) => Number(l.trim())).filter((n) => Number.isInteger(n) && n > 0);
-  } catch {
-    return { ours: [], foreign: [] };
+  } catch (err) {
+    // `lsof` exits 1 with EMPTY output when nothing matches — the ordinary case — and
+    // exits 1 with something on stderr, or fails to spawn at all, when it could not look.
+    const spawnFailed = err && (err.code === 'ENOENT' || err.code === 'EACCES');
+    const said = String(err?.stderr ?? '').trim();
+    if (spawnFailed || said !== '') return { ours: [], foreign: [], known: false, why: said || String(err?.code ?? err) };
+    return { ours: [], foreign: [], known: true };
   }
   const ours = holders.filter(ownsProcess);
   const foreign = holders.filter((p) => !ours.includes(p));
-  return { ours, foreign };
+  return { ours, foreign, known: true };
 }
 
 /**
@@ -545,6 +562,14 @@ function restart() {
   // be true before this exits 0.
   const { pid, owned } = readOwnedPid();
   const holders = ownedPortHolders();
+  if (!holders.known) {
+    die(
+      UNDETERMINED,
+      `PORT_STATE_UNKNOWN: could not check: lsof could not report who holds port ${port} ` +
+        `(${holders.why}). Whether a server is running there is unknown, and a restart must not ` +
+        `begin from a guess.`,
+    );
+  }
   if ((!pid || !owned) && holders.ours.length === 0) {
     die(
       UNDETERMINED,
@@ -568,16 +593,25 @@ function restart() {
   // gives `start` a port already bound, and that failure has nothing to do with
   // the restart.
   const deadline = Date.now() + 30_000;
+  let last = ownedPortHolders();
   while (Date.now() < deadline) {
-    const { ours } = ownedPortHolders();
-    if (ours.length === 0) break;
+    last = ownedPortHolders();
+    if (last.known && last.ours.length === 0) break;
     execFileSync('sleep', ['0.25']);
   }
-  const stillHeld = ownedPortHolders().ours;
-  if (stillHeld.length > 0) {
+  if (!last.known) {
+    // The tool failing to answer is not a negative answer. Proceeding here would start
+    // a second server against a port whose state is unknown.
     die(
       UNDETERMINED,
-      `PORT_NOT_RELEASED: could not check: pid(s) ${stillHeld.join(', ')} still hold port ${port} ` +
+      `PORT_STATE_UNKNOWN: could not check: lsof could not report who holds port ${port} ` +
+        `(${last.why}). Whether the old server let go is unknown, and an unknown is not a release.`,
+    );
+  }
+  if (last.ours.length > 0) {
+    die(
+      UNDETERMINED,
+      `PORT_NOT_RELEASED: could not check: pid(s) ${last.ours.join(', ')} still hold port ${port} ` +
         `30s after stop. The old server was not replaced, and starting on top of it would test the ` +
         `wrong process.`,
     );

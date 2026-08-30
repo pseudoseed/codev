@@ -30,6 +30,7 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 import {
   findHeldForAgent,
+  dismiss,
   getById,
   listHeld,
   markDelivered,
@@ -487,6 +488,34 @@ export async function deliverAgentMail(
     const row = held[0];
     const current = getById(db, row.id);
     if (!current || current.status !== 'held') {
+      ports.onHeldStateChange();
+      return { delivered: [], reason: null };
+    }
+    // A `--no-enter` row can NEVER be delivered to a thread, and holding it is worse
+    // than refusing it.
+    //
+    // `--no-enter` means "put this in the composer and leave it for a human". A thread
+    // has no composer: `thread.turn.start` IS the submit. `writeMessage` refuses it —
+    // correctly, because submitting a message sent to sit would run it. But a refusal
+    // that holds under a retryable reason is retried on every drain tick, re-logs at
+    // ERROR each time, and eventually raises a STARVATION NOTICE: a message to a human
+    // saying mail is stuck, with no remedy that applies, because no action of theirs
+    // can give a thread a composer. That is #190 — a notice promising something
+    // unreachable.
+    //
+    // So it ends here, once, loudly, and with everything a sender needs to re-send it
+    // by another route. `dismissed` is the terminal state that preserves the row and its
+    // reason for audit; the alternative was leaving it eligible forever.
+    if (current.no_enter === 1) {
+      ports.log(
+        `[mailbox] TERMINAL: message ${row.id} from ${current.from_agent ?? 'unknown'} to ${toAgent} `
+        + `@ ${path.basename(workspacePath)} was sent --no-enter, and ${toAgent} is thread-backed. `
+        + `A thread has no composer — thread.turn.start is the submit — so this can never be `
+        + `delivered as "wait for a human", and delivering it any other way would RUN it. `
+        + `Dismissed rather than held: no retry can change this, and holding it would raise a `
+        + `starvation notice with no remedy. Re-send without --no-enter if it should run.`,
+      );
+      dismiss(db, row.id, ports.now());
       ports.onHeldStateChange();
       return { delivered: [], reason: null };
     }
