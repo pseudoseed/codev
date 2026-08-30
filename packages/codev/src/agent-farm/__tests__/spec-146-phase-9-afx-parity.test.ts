@@ -55,21 +55,21 @@ function threadBuilder(threadId: string, worktree: string): Builder {
 describe('Spec 146 Phase 9 — afx command parity against a thread-backed builder', () => {
   afterEach(() => {
     setThreadEngine(undefined);
-    setSpawnThreadFactory(undefined);
+    setSpawnThreadFactory(undefined, undefined);
     setThreadBackedSpawnsEnabled(true);
   });
 
   it('installThreadSpawnFactory registers the factory and chooseSpawnPath returns thread', () => {
     setThreadEngine(createMemoryThreadEngine());
-    expect(chooseSpawnPath()).toBe('pty');
-    installThreadSpawnFactory();
-    expect(chooseSpawnPath()).toBe('thread');
+    expect(chooseSpawnPath(undefined, undefined)).toBe('pty');
+    installThreadSpawnFactory(undefined);
+    expect(chooseSpawnPath(undefined, undefined)).toBe('thread');
   });
 
   it('launchSpawnedBuilder takes the thread path and launches the worktree session', async () => {
     const engine = createMemoryThreadEngine();
     setThreadEngine(engine);
-    installThreadSpawnFactory();
+    installThreadSpawnFactory(undefined);
     const pty = async () => ({ terminalId: 'term-should-not-run' });
     const identity = await launchSpawnedBuilder({
       builderId: 'worktree-9',

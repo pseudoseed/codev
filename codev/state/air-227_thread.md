@@ -74,3 +74,47 @@ three were real:
 - `spec-146-phase-9-add-architect-thread-path` — mocks `../thread-runtime.js` wholesale, so
   the new `architectThreadDefaults` export was missing. Added to the mock, and the existing
   assertion extended to check the pair actually lands on the row.
+
+## Round 2 — the 3-way review (2 APPROVE, 1 COMMENT)
+
+Two required changes, four follow-ups filed (#254 #255 #256 #257).
+
+### `workspaceRoot` is required now
+
+`chooseSpawnPath` returned `pty` before ever reaching the loud failure in
+`allocateSpawnThread`, so a caller that forgot the argument silently took a different
+transport. Applied to the whole chain — `setSpawnThreadFactory`, `installThreadSpawnFactory`,
+`chooseSpawnPath`, `allocateSpawnThread` — as `string | undefined` positionals, so every
+unkeyed use is written out rather than defaulted into.
+
+### The live run, and what only running could show
+
+`afx interrupt` and `afx cleanup` now run against the pinned harness in
+`issue-227-live-interrupt-cleanup.test.ts` (gated on `T3_LIVE=1` + `T3_NODE`). Four things
+the source guards could never have caught, in the order they appeared:
+
+1. **`cli.ts` exports `runAgentFarm` and calls nothing.** Running it directly exits 0 in
+   silence. `bin/afx.js` is the invoker, and it imports `dist/` — which can be older than
+   the change under test, so a live test built on it green-lights a previous build.
+   `__tests__/helpers/air-227-afx-from-source.ts` is that file with the import repointed.
+2. **The child inherited `CODEV_BUILDER_ID` / `CODEV_WORKTREE_ROOT` from my own session.**
+   `detectWorkspaceRoot` reads those BEFORE cwd, deliberately, so the child resolved the
+   real repository instead of the fixture. A live test acting on the operator's workspace is
+   worse than no live test.
+3. **`NODE_ENV=test` from vitest** makes `getGlobalDbPath` resolve `test.db`, so the child
+   opened an empty database next to the seeded one and fell through to the PTY path.
+4. **The real finding.** `afx interrupt` printed `Interrupt sent to thread <id>` and then
+   never returned — killed at the timeout, exit 143. The interrupt had already landed. An
+   open WebSocket is a live handle, so Node's loop does not drain while it exists; Tower
+   wants that, a one-shot command does not. `closeThreadBackend(workspaceRoot)` hangs up, and
+   both commands call it in a `finally`. The socket's close handler also stopped warning
+   about a hang-up we asked for, which read as a server that went away.
+
+A command that works and hangs is not a working command, and no amount of string-index
+assertion reaches that.
+
+Also, a token note for whoever runs this next: a pairing grant is one-time and the harness
+prints one per server lifetime, while every `afx` process exchanges it again. The test
+`restart`s between commands (data dir kept, new token) so each child has a credential it can
+spend — and the side effect is that each command acts on a thread that outlived the server
+it was created on.

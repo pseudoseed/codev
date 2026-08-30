@@ -91,9 +91,19 @@ export type SpawnThreadFactory = (input: {
 const spawnThreadFactories = new Map<string, SpawnThreadFactory>();
 let threadBacked = true;
 
+/**
+ * `workspaceRoot` is REQUIRED, and `undefined` has to be written out.
+ *
+ * Not a style choice. Every parameter in this chain names which workspace is being talked
+ * about, and an OPTIONAL one lets a future caller omit it and land in the unkeyed slot —
+ * where `chooseSpawnPath` cannot see it, so the caller quietly takes the PTY path. That is
+ * the bug this whole change fixes, one indirection further out, and an optional parameter
+ * is what would let it back in. Spelling `undefined` is a decision; omitting it was an
+ * accident waiting to look like a decision.
+ */
 export function setSpawnThreadFactory(
   fn: SpawnThreadFactory | undefined,
-  workspaceRoot?: string,
+  workspaceRoot: string | undefined,
 ): void {
   const key = workspaceMapKey(workspaceRoot);
   if (fn === undefined) spawnThreadFactories.delete(key);
@@ -114,16 +124,26 @@ export function threadBackedSpawnsEnabled(): boolean {
 }
 
 /**
- * `workspaceRoot` names WHOSE factory decides. A caller that omits it asks about the
- * unkeyed slot and is never answered from a keyed one — a keyed miss falling back to
- * some other workspace's factory is exactly the process-global behaviour this replaced.
+ * `workspaceRoot` names WHOSE factory decides, and is REQUIRED — see
+ * {@link setSpawnThreadFactory}.
+ *
+ * This one is the reason the rule exists. `allocateSpawnThread` throws on a keyed miss, so
+ * a forgotten argument there is loud. This function RETURNS `pty` and never reaches it, so
+ * a forgotten argument here silently routes a thread-configured workspace down the PTY
+ * path — a working spawn, on the wrong transport, with nothing said. `existing` is
+ * therefore `| undefined` rather than optional too: a required parameter cannot follow an
+ * optional one, and the two callers that pass no `existing` say so.
+ *
+ * A caller that names no workspace asks about the unkeyed slot and is never answered from
+ * a keyed one — a keyed miss falling back to some other workspace's factory is exactly the
+ * process-global behaviour this replaced.
  */
 export function chooseSpawnPath(
-  existing?: {
+  existing: {
     terminalId?: string;
     threadId?: string;
-  },
-  workspaceRoot?: string,
+  } | undefined,
+  workspaceRoot: string | undefined,
 ): 'thread' | 'pty' {
   if (existing?.terminalId) return 'pty';
   if (existing?.threadId) return 'thread';
@@ -132,9 +152,10 @@ export function chooseSpawnPath(
   return 'thread';
 }
 
+/** `workspaceRoot` is REQUIRED — see {@link setSpawnThreadFactory}. */
 export async function allocateSpawnThread(
   input: Parameters<SpawnThreadFactory>[0],
-  workspaceRoot?: string,
+  workspaceRoot: string | undefined,
 ): Promise<string> {
   const factory = spawnThreadFactories.get(workspaceMapKey(workspaceRoot));
   if (!factory) {

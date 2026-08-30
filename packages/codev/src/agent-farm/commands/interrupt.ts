@@ -23,7 +23,7 @@ import { TowerClient } from '../lib/tower-client.js';
 import { detectWorkspaceRoot, detectCurrentBuilderId } from './send.js';
 import { findBuilderById } from '../lib/builder-lookup.js';
 import { isThreadBacked } from '../thread-runtime.js';
-import { adoptThreadInThisProcess } from '../thread-backend.js';
+import { adoptThreadInThisProcess, closeThreadBackend } from '../thread-backend.js';
 
 export async function interrupt(options: InterruptOptions): Promise<void> {
   const target = options.builder;
@@ -82,6 +82,11 @@ export async function interrupt(options: InterruptOptions): Promise<void> {
       logger.success(`Interrupt sent to thread ${builder.threadId}`);
     } catch (error) {
       fatal(error instanceof Error ? error.message : String(error));
+    } finally {
+      // An open WebSocket keeps the event loop alive, and this command is expected to
+      // exit. Without it the first live run printed its success line and then hung until
+      // the caller killed it — the interrupt having already landed. Working, and hung.
+      closeThreadBackend(workspaceRoot);
     }
     return;
   }

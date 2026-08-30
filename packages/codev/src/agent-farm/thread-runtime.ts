@@ -339,8 +339,12 @@ export function createMemoryThreadEngine(): ThreadEngine {
  * `SpawnThreadFactory`'s input carries a worktree, not a workspace root, and a
  * builder's worktree is under `.builders/` rather than being the workspace — so the
  * root cannot be recovered from it. The installer knows it; the factory remembers it.
+ *
+ * `workspaceRoot` is REQUIRED and `undefined` must be written out, for the reason
+ * `setSpawnThreadFactory` gives: an installer that forgets it fills the unkeyed slot, and
+ * every keyed `chooseSpawnPath` then answers `pty` without saying why.
  */
-export function installThreadSpawnFactory(workspaceRoot?: string): void {
+export function installThreadSpawnFactory(workspaceRoot: string | undefined): void {
   // Registered UNDER that workspace as well as closed over it. The closure always
   // dispatched to the right engine; what was global was the module-level slot it sat in,
   // so the last workspace to install one decided whether every other workspace's

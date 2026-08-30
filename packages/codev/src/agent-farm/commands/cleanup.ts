@@ -21,7 +21,7 @@ import { resolveDefaultBranch } from '../../lib/default-branch.js';
 import {
   isThreadBacked,
 } from '../thread-runtime.js';
-import { adoptThreadInThisProcess } from '../thread-backend.js';
+import { adoptThreadInThisProcess, closeThreadBackend } from '../thread-backend.js';
 
 /**
  * Clean porch review artifacts for a project from codev/projects/,
@@ -565,7 +565,15 @@ export async function cleanupThreadBackedBuilder(
     harnessName: builder.harness,
     model: builder.model,
   });
-  const result = await engine.removeWorktree(builder.threadId, { force: !!force });
+  let result: 'removed' | 'refused-unmerged';
+  try {
+    result = await engine.removeWorktree(builder.threadId, { force: !!force });
+  } finally {
+    // Hang up, so a one-shot command can exit. An open WebSocket is a live handle and
+    // Node's loop does not drain while one exists — measured on the first live run of
+    // `afx interrupt`, which did its work and then hung until it was killed.
+    closeThreadBackend(config.workspaceRoot);
+  }
   if (result === 'refused-unmerged') return result;
   removeBuilder(builder.id, config.workspaceRoot);
   return 'removed';

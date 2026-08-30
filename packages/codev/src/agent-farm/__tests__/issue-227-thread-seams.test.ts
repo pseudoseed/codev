@@ -33,7 +33,7 @@ function workspace(): string {
 
 afterEach(() => {
   clearThreadEngines();
-  setSpawnThreadFactory(undefined);
+  setSpawnThreadFactory(undefined, undefined);
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -64,7 +64,7 @@ describe('the spawn factory is keyed by workspace, not by process', () => {
     // And a caller that names no workspace reads the unkeyed slot, which a keyed install
     // never fills. A keyed miss falling back to some other workspace's factory would be
     // the process-global behaviour one indirection further away.
-    expect(chooseSpawnPath()).toBe('pty');
+    expect(chooseSpawnPath(undefined, undefined)).toBe('pty');
   });
 
   it('the last workspace to install does not take the previous one over', () => {

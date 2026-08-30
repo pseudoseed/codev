@@ -303,7 +303,12 @@ async function connectDispatcher(
   // finds no engine and connects again, with a fresh credential exchange. Reconnecting
   // from in here would need a credential this closure does not have.
   socket.addEventListener('close', () => {
-    logger.warn(`t3code socket to ${config.serverUrl} closed; dropping the engine for ${config.workspaceRoot}`);
+    // A hang-up WE asked for is not a warning. `closeThreadBackend` marks the workspace
+    // first, so the deliberate close on a one-shot command's exit stops reporting itself as
+    // a server that went away — which is a different event, and the one this line is for.
+    if (!isHangingUp(config.workspaceRoot)) {
+      logger.warn(`t3code socket to ${config.serverUrl} closed; dropping the engine for ${config.workspaceRoot}`);
+    }
     onClosed();
   });
   const client = new T3Client({
@@ -685,6 +690,9 @@ async function initialiseThreadBackend(
   const upgradeTimeoutMs = options.upgradeTimeoutMs ?? DEFAULT_SOCKET_UPGRADE_TIMEOUT_MS;
   const config = readThreadBackendConfig(resolve(workspaceRoot));
   if (!config) return 'not-configured';
+  // Connecting again ends any deliberate hang-up: from here a close is the server's doing
+  // and must be reported.
+  deliberate.delete(key);
 
   /**
    * Whether this socket has closed, and the engine it is behind once there is one.
@@ -901,8 +909,65 @@ async function initialiseThreadBackend(
     throw closedDuringInit(config.serverUrl, config.workspaceRoot);
   }
   installThreadSpawnFactory(key);
+  // Remembered so a one-shot command can hang up when it is done — see
+  // `closeThreadBackend`. Registered alongside the engine and dropped with it.
+  hangUp.set(key, connection.close);
   lastFailure.delete(key);
   return 'installed';
+}
+
+/**
+ * A per-workspace socket closer, for callers that finish and want to exit.
+ *
+ * Recorded only on the successful path: every other exit from `initialiseThreadBackend`
+ * hangs up before it returns, so there is nothing left to close.
+ */
+const hangUp = new Map<string, () => void>();
+
+/**
+ * Hang up this workspace's t3code connection and drop what was registered on it.
+ *
+ * WHY A ONE-SHOT COMMAND NEEDS THIS. An open WebSocket is a live handle, so Node's event
+ * loop does not drain while it exists. Tower wants exactly that — it holds its connection
+ * for as long as it runs. `afx interrupt` and `afx cleanup` do not: they do their work and
+ * are expected to exit.
+ *
+ * Measured, not predicted. The first live run of `afx interrupt` against a real server
+ * printed `Interrupt sent to thread <id>` and then never returned; the harness killed it at
+ * its timeout and it exited 143. The interrupt had ALREADY landed — so the command was
+ * simultaneously working and, from any operator's point of view, hung. That is the exact
+ * gap between "the call site is spelled right" and "the command works" that item 2 is about,
+ * and only running it could have shown it.
+ *
+ * Idempotent, and a no-op for a workspace that never connected: a command that took the PTY
+ * path must be able to call it without asking whether it needs to.
+ */
+export function closeThreadBackend(workspaceRoot: string): void {
+  const key = canonicalWorkspaceKey(workspaceRoot);
+  const close = hangUp.get(key);
+  hangUp.delete(key);
+  // Dropped whether or not there was a socket to close: leaving an engine registered on a
+  // connection nobody holds is the dead-engine state this module works to avoid.
+  setThreadEngine(undefined, key);
+  setThreadStreamer(undefined, key);
+  if (!close) return;
+  deliberate.add(key);
+  close();
+}
+
+/**
+ * Workspaces whose socket is closing because we asked it to.
+ *
+ * CLEARED ON THE NEXT CONNECT, not on a timer. The socket's `close` event is asynchronous,
+ * and a `setTimeout(..., 0)` fired BEFORE it — so the flag was gone by the time the handler
+ * read it and the spurious warning came out anyway, which is how this comment came to be
+ * written twice. A workspace stops "hanging up" when it connects again; that is the event
+ * that actually ends the state, so it is the one that clears it.
+ */
+const deliberate = new Set<string>();
+
+function isHangingUp(workspaceRoot: string): boolean {
+  return deliberate.has(canonicalWorkspaceKey(workspaceRoot));
 }
 
 /**

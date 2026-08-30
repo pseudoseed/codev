@@ -118,7 +118,7 @@ function baseState(overrides: Partial<ProjectState> = {}): ProjectState {
 
 describe('Spec 146 Phase 8 — exclusivity and drain', () => {
   afterEach(() => {
-    setSpawnThreadFactory(undefined);
+    setSpawnThreadFactory(undefined, undefined);
     setThreadBackedSpawnsEnabled(true);
   });
 
@@ -191,12 +191,12 @@ describe('Spec 146 Phase 8 — architect sentinels (#170)', () => {
 
 describe('Spec 146 Phase 8 — spawn path', () => {
   afterEach(() => {
-    setSpawnThreadFactory(undefined);
+    setSpawnThreadFactory(undefined, undefined);
     setThreadBackedSpawnsEnabled(true);
   });
 
   it('takes the thread path when a factory is registered', async () => {
-    setSpawnThreadFactory(async () => 'thread-from-factory');
+    setSpawnThreadFactory(async () => 'thread-from-factory', undefined);
     const pty = vi.fn(async () => ({ terminalId: 'term-should-not-run' }));
     const identity = await launchSpawnedBuilder({
       builderId: 'air-163',
@@ -209,7 +209,7 @@ describe('Spec 146 Phase 8 — spawn path', () => {
   });
 
   it('returns to the PTY path immediately when thread-backed spawns are stopped', async () => {
-    setSpawnThreadFactory(async () => 'thread-orphaned');
+    setSpawnThreadFactory(async () => 'thread-orphaned', undefined);
     setThreadBackedSpawnsEnabled(false);
     const pty = vi.fn(async () => ({ terminalId: 'term-pty' }));
     const identity = await launchSpawnedBuilder({
@@ -220,11 +220,11 @@ describe('Spec 146 Phase 8 — spawn path', () => {
     });
     expect(identity).toEqual({ terminalId: 'term-pty' });
     expect(pty).toHaveBeenCalledOnce();
-    expect(chooseSpawnPath()).toBe('pty');
+    expect(chooseSpawnPath(undefined, undefined)).toBe('pty');
   });
 
   it('does not migrate an in-flight PTY builder onto the thread path', async () => {
-    setSpawnThreadFactory(async () => 'thread-new');
+    setSpawnThreadFactory(async () => 'thread-new', undefined);
     const pty = vi.fn(async () => ({ terminalId: 'term-existing' }));
     const identity = await launchSpawnedBuilder({
       existing: { terminalId: 'term-existing' },
@@ -234,12 +234,12 @@ describe('Spec 146 Phase 8 — spawn path', () => {
       startPty: pty,
     });
     expect(identity).toEqual({ terminalId: 'term-existing' });
-    expect(chooseSpawnPath({ terminalId: 'term-existing' })).toBe('pty');
+    expect(chooseSpawnPath({ terminalId: 'term-existing' }, undefined)).toBe('pty');
   });
 
   it('keeps a thread-backed builder on the thread path after rollback of new spawns', () => {
     setThreadBackedSpawnsEnabled(false);
-    expect(chooseSpawnPath({ threadId: 'thr-live' })).toBe('thread');
+    expect(chooseSpawnPath({ threadId: 'thr-live' }, undefined)).toBe('thread');
   });
 
   it('allocateSpawnThread fails loud with no factory', async () => {
