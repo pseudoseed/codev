@@ -14,7 +14,7 @@ gates:
       machine: chriss-MacBook-Pro.local
       caller: pre-approval frontmatter on codev/specs/250-t3code-front-end-customization.md
   plan-approval:
-    status: pending
+    status: approved
     requested_at: '2026-08-30T20:06:28.609Z'
     request:
       question: >-
@@ -57,6 +57,12 @@ gates:
         read-only upstream clone (t3-server.mjs:94), called from smoke.mjs:156 and
         live/integration.mjs:196, so it would have fired from an ordinary test run
         once pin.commit named the fork.
+    approved_at: '2026-08-30T20:09:05.175Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-30T20:09:05.175Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
   pr:
     status: pending
   verify-approval:
@@ -65,4 +71,4 @@ iteration: 1
 build_complete: true
 history: []
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-30T20:06:48.080Z'
+updated_at: '2026-08-30T20:09:05.193Z'
