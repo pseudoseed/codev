@@ -113,22 +113,32 @@ in `packages/codev` **cannot see**. Its config excludes `**/*.e2e.test.ts` and
 how a change to `PairingStore.issue()` broke `phase7-pairing.e2e.test.ts` while
 6,813 tests passed.
 
-| Command | Covers | Does NOT cover |
+<!-- suite-coverage:begin -->
+
+| Suite | Covers | Does NOT cover |
 |---|---|---|
-| `packages/codev` → `pnpm exec vitest run` | 344 unit and integration files | anything matching `*.e2e.test.ts` or under `e2e/` |
-| `packages/codev` → `pnpm exec vitest run --config vitest.e2e.config.ts` | `src/**/*.e2e.test.ts` and `src/commands/porch/__tests__/e2e/**` — server-spawning Tower tests | the unit suite |
-| `apps/client` → `pnpm test` | this app's unit and component tests | anything server-side |
-| `apps/client` → `pnpm test:e2e` | Playwright against two live `codev-agent` hosts | the unit suites |
-| `packages/codev` → `vitest run --config vitest.cli.config.ts` | `src/__tests__/cli/*.e2e.test.ts` — the installed-CLI surface | everything above |
+| `packages/codev` · `vitest.config.ts` | unit and integration files | anything matching `*.e2e.test.ts` or under `e2e/` |
+| `packages/codev` · `vitest.e2e.config.ts` | `src/**/*.e2e.test.ts` and `src/commands/porch/__tests__/e2e/**` — server-spawning Tower tests | the unit suite |
+| `packages/codev` · `vitest.cli.config.ts` | `src/__tests__/cli/*.e2e.test.ts` — the installed-CLI surface | everything else |
+| `apps/client` · `pnpm test` | this app's unit and component tests | anything server-side |
+| `apps/client` · `pnpm test:e2e` | Playwright against two live `codev-agent` hosts | the unit suites |
 
-CI runs all five, in the `unit`, `integration`, `cli`, `client-playwright` and
-`v2-playwright` jobs. **Locally, a change to `packages/codev/src` needs at least
-the first two**; the unit run alone is a measurement taken where the thing being
-measured may not be present.
+<!-- suite-coverage:end -->
 
-The list was enumerated from the vitest configs and `.github/workflows/test.yml`
-rather than remembered — a hand-kept list of what covers what is the same claim
-the table exists to replace.
+**Locally, a change to `packages/codev/src` needs at least the first two.** The
+unit run alone is a measurement taken where the thing being measured may not be
+present.
+
+**This table is checked, not remembered.** `__tests__/suite-coverage.test.ts`
+derives the suite list from `packages/codev/vitest*.config.ts` and this app's
+`package.json`, and fails if the table drifts from either — or if a suite it
+names is not actually run by a job in `.github/workflows/test.yml`.
+
+That guard exists because the table drifted **within one turn of being written**:
+the first version was typed from memory and omitted `vitest.cli.config.ts`. A
+table that can go stale reintroduces the exact failure it exists to prevent, and
+does it with more authority than no table at all, because the next reader trusts
+it.
 
 ## What the tests deliberately cannot catch
 
