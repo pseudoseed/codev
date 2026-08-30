@@ -139,6 +139,7 @@ against that file rather than against a layer it assembles.
 | 2 | `992b781f4314ec1df1abb752c7c9c5378ec13c26` | Review fixes: the "upstream migration still runs" test goes through the migrator instead of a raw `ALTER TABLE`, and `apps/server/scripts/apply-codev-guard.ts` runs the real guard against a file-backed database for criterion 8b. |
 | 2 | `e1a858434a8096d7a82e05347f8159d94f42c0b1` | The two `CODEV_SCHEMA_GUARD_*` log signals are pinned by a test — they are the whole mitigation for staying out of the migration registry and nothing enforced they stay two. |
 | 3 | `e1b7f7b04af5aa869a552baa622fc9e526a00bb3` | Illegal hierarchy edges refused at write time in the decider, with six reason discriminants. `role`/`parentThreadId` added to `thread.create`, optional so upstream clients dispatch it unchanged. |
+| 3 | `40fb82ce92a8ed42e6868bd946bfee00b79b3022` | `OrchestrationEngine` was rewriting every refusal as "Failed to generate an event identifier" and persisting it onto the rejected receipt. The discriminants now survive the wrapper, asserted by an engine-level test. |
 
 ### Migration 900 is abandoned, and must stay abandoned
 
