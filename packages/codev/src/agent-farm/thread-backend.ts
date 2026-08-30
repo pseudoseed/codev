@@ -12,6 +12,7 @@
  * never be spelled the same way as a server that was never named.
  */
 import { join, resolve } from 'node:path';
+import { statSync } from 'node:fs';
 import { DispatchJournal } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
 import { createPorchThreadEngine } from './porch-thread-engine.js';
@@ -24,7 +25,7 @@ import {
   type ThreadStream,
 } from './thread-runtime.js';
 import { logger } from './utils/logger.js';
-import { loadConfig } from '../lib/config.js';
+import { configLayerPaths, loadConfig } from '../lib/config.js';
 
 /**
  * How long a socket may sit connected-but-not-upgraded before it is called a failure.
@@ -462,6 +463,66 @@ const pendingInit = new Map<string, Promise<'not-configured' | 'already-installe
  */
 const FAILED_CONNECT_COOLDOWN_MS = 60_000;
 
+/**
+ * The last "this workspace has no usable thread config" answer, and what it was
+ * computed from.
+ *
+ * ## Why a cache at all
+ *
+ * Tower sweeps every KNOWN workspace every 5s, and asks this function per
+ * workspace. `ready`, `connecting` and `cooling-down` all answer from memory
+ * before any file is touched — but `not-configured` and `misconfigured` are the
+ * verdicts that require the read, and they are the verdicts of every workspace
+ * that never opted in. So the workspaces that use nothing were paying a full
+ * five-layer `loadConfig` — four reads, four deep merges, the validators — on
+ * Tower's event loop, twelve times a minute each, scaling with how many
+ * workspaces have ever been registered rather than with how many are in use.
+ *
+ * ## Why a signature and not a TTL
+ *
+ * A TTL makes an operator who has just written their t3 config wait it out, and
+ * picking the number trades that wait against the saving. A signature has no such
+ * dial: the moment a layer file changes, appears or disappears, the cached answer
+ * is discarded and the real read happens on that very pass.
+ *
+ * Cost per pass drops to `existsSync` on the project layers plus one `statSync`
+ * each — no reads, no parses, no merges, no validation.
+ *
+ * KNOWN LIMIT, stated rather than papered over: two different contents with the
+ * same size AND the same mtime read as unchanged. Every mtime-based cache carries
+ * this, and the alternative is the read it exists to avoid.
+ */
+interface CachedNegative {
+  readonly verdict: ThreadBackendAvailability;
+  readonly signature: string;
+}
+const negativeConfig = new Map<string, CachedNegative>();
+
+/**
+ * A cheap fingerprint of everything `readThreadBackendConfig` consults.
+ *
+ * The env vars are in it because they are checked FIRST and short-circuit the
+ * files: a token exported into Tower's environment must not be masked by an
+ * answer computed before it existed.
+ */
+function configSignature(workspaceRoot: string): string {
+  const parts = [
+    `env:${process.env.CODEV_T3_URL ?? ''}\u0000${process.env.CODEV_T3_TOKEN ?? ''}`,
+  ];
+  for (const path of configLayerPaths(workspaceRoot)) {
+    const stat = statSync(path, { throwIfNoEntry: false });
+    // The PATH is part of it, so a layer appearing or disappearing changes the
+    // signature even when nothing that already existed was touched.
+    parts.push(`${path}:${stat ? `${stat.mtimeMs}:${stat.size}` : 'absent'}`);
+  }
+  return parts.join('\n');
+}
+
+/** Forget every cached negative verdict. For a test's teardown, not for production. */
+export function clearThreadBackendConfigCache(): void {
+  negativeConfig.clear();
+}
+
 /** When each workspace's last connect attempt failed, and why. */
 const lastFailure = new Map<string, { at: number; message: string }>();
 
@@ -513,15 +574,35 @@ export function requestThreadBackend(
 
   // Read the config synchronously — files, no network — so a workspace with no server
   // named costs the tick nothing and starts nothing.
+  //
+  // Unless nothing it reads has changed since the last negative answer, in which
+  // case the answer is reused and the read is skipped. Only the NEGATIVE verdicts
+  // are cached: `connecting` below has a side effect, and `ready` /
+  // `cooling-down` never reach here.
+  const signature = configSignature(workspaceRoot);
+  const remembered = negativeConfig.get(key);
+  if (remembered && remembered.signature === signature) return remembered.verdict;
+
   let config;
   try {
     config = readThreadBackendConfig(resolve(workspaceRoot));
   } catch (err) {
     // Half-configured is a mistake, not a decision to stay on PTY, and it is not a
     // connect failure either — no cooldown, because nothing was attempted.
-    return { kind: 'misconfigured', message: err instanceof Error ? err.message : String(err) };
+    const verdict: ThreadBackendAvailability = {
+      kind: 'misconfigured', message: err instanceof Error ? err.message : String(err),
+    };
+    negativeConfig.set(key, { verdict, signature });
+    return verdict;
   }
-  if (!config) return { kind: 'not-configured' };
+  if (!config) {
+    const verdict: ThreadBackendAvailability = { kind: 'not-configured' };
+    negativeConfig.set(key, { verdict, signature });
+    return verdict;
+  }
+  // Configured after all: drop any negative so a later failure is recomputed
+  // rather than answered from a verdict this pass just disproved.
+  negativeConfig.delete(key);
 
   void ensureThreadBackendReady(workspaceRoot).then(
     () => {
@@ -540,6 +621,7 @@ export function requestThreadBackend(
 /** Forget every recorded connect failure. For a test's teardown, not for production. */
 export function clearThreadBackendFailures(): void {
   lastFailure.clear();
+  negativeConfig.clear();
 }
 
 async function initialiseThreadBackend(

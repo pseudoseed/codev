@@ -811,3 +811,70 @@ truth. Recorded that the change is purely additive *and* that "only additive" is
 argument a content-addressed guard exists to refuse.
 
 Suites: 7126 server, 265 client, 0 failing. Not pushed — architect asked me to hold.
+
+## Round 2 — four blockers, and the one that was measuring the wrong rejection
+
+Codex returned three, claude a fourth. Two of codex's said my round-1 restart fix did not work
+end to end, and it was right: I had fixed the 403 the poll returned and the request never got
+that far the second time, because it now failed at *authentication*.
+
+The architect's instruction was the thing that made this round work: **write the real restart
+test first and let it tell you where it stops.** So I did, before touching anything.
+
+### The path, in the order the test found it
+
+1. **401 at the route table.** `approval-operation` was `authentication: 'human-session'`.
+   Sessions are memory-only, so the restart that creates `interrupted` destroys the session — the
+   route refused the client before any handler could look at the receipt. Now
+   `machine-credential`; the handler reads a session opportunistically and prefers it, and the
+   receipt is the second way in. The rationale is recorded at the route.
+2. **Wrong machine persisted.** Submission recorded `stored.machine` — this HOST's name — so
+   ownership was the same string for every paired device, and the submitting one had no way to
+   prove it was the submitter. Now `outcome.machine`, the paired client's name from its
+   credential.
+3. **Then it went green.** No third rejection.
+
+### The fixtures were doing the concealing
+
+Codex named this and it is the sharper half of the finding: `pair revoke` had a passing test
+because the fixture set the host store's `machine` and the device name both to `'ipad'`.
+Capabilities are keyed by the verifying host, so `revokeMachine('laptop')` matched nothing — the
+command reported `0 capability record(s) revoked`, truthfully, while the device kept a live
+capability. It worked only where the operator's laptop and the Tower host share a name, which is
+a fixture and never a deployment.
+
+Capability records now carry `pairedMachine` (the device) beside `machine` (the verifying host),
+revocation matches the device first and falls back to the host for records predating the field,
+and the fixtures use two different names. Both new tests fail if I revert the match.
+
+### Workspace scope, found twice with no contact
+
+Codex's third and claude's independent finding are the same seam: the poll looked an operation up
+by id alone, so any workspace URL this host served returned it — gate, project, approving session
+and authority, to a client scoped elsewhere. 404 rather than 403, because through the wrong
+workspace it does not exist and "forbidden" would confirm that it exists somewhere else.
+
+### The sweep was paying for workspaces that opted out
+
+`requestThreadBackend` answers `ready` / `connecting` / `cooling-down` from memory, but
+`not-configured` and `misconfigured` needed the config — and those are the verdicts of every
+workspace that never opted in. So Tower's 5s sweep ran a full five-layer `loadConfig` per
+unconfigured workspace per pass: 12 reads a minute each, on the event loop, scaling with
+accumulated `known_workspaces` rather than with use.
+
+Cached the negative against a **signature**, not a TTL: mtime+size of the layer files plus the
+env vars. A TTL makes an operator who just wrote their t3 config wait it out and gives you a
+number to argue about; a signature invalidates on the pass after the edit. The layer list is
+extracted as `configLayerPaths` and `loadConfig` now walks the same list — a second copy in the
+cache would go stale silently the moment a layer is added. Measured at `fs.readFileSync`: 12 → 0
+over a simulated minute, and the test fails with 12 if I disable the cache.
+
+### Nothing to do on the two couplings
+
+Claude asked for comments at both source-text coupling sites. Both were already there and both
+name their enforcing test — the `handleGateApprove` prefix slice
+(`spec-146-phase-11-approval-writes.test.ts`) and the absent poll URL in the 202 body
+(`agent-auth.test.ts`). Left as they were rather than re-wording to look responsive.
+
+Criterion 3 is verified against the vendored contract and a driven fake, not a running t3code
+server. The spec's own risk table called for exactly this handling; it goes in the PR body.

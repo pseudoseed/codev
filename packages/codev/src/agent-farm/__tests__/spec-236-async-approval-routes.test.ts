@@ -127,7 +127,7 @@ interface Host {
 
 async function startHost(
   workspacePath: string,
-  options: { withOperations?: boolean } = {},
+  options: { withOperations?: boolean; alsoServing?: string } = {},
 ): Promise<Host> {
   const stateRoot = tmp();
   const pairings = new PairingStore({ root: join(stateRoot, 'pairing') });
@@ -135,11 +135,15 @@ async function startHost(
   const database = new Database(':memory:');
   database.exec(GLOBAL_SCHEMA);
   const workspace = normalizeWorkspacePath(workspacePath);
+  // A host ordinarily serves SEVERAL workspaces; one is the degenerate case, and
+  // the degenerate case cannot see a cross-workspace read.
+  const served = new Set([workspace,
+    ...(options.alsoServing ? [normalizeWorkspacePath(options.alsoServing)] : [])]);
 
   initAgentRoutes({
     db: () => database,
     log: () => {},
-    isKnownWorkspace: (candidate) => normalizeWorkspacePath(candidate) === workspace,
+    isKnownWorkspace: (candidate) => served.has(normalizeWorkspacePath(candidate)),
     humanSessions: new HumanPairedSessionRegistry(),
     approvalCapabilities: new ApprovalCapabilityStore({
       root: join(stateRoot, 'approval'), machine: 'test-machine',
@@ -311,6 +315,22 @@ describe('submit, poll, report', () => {
     expect(done.body.record.sessionId).toBe(gate.approval.session_id);
     expect(done.body.record.sessionId).toBe(session.sessionId);
     expect(done.body.record.approvedAt).toBe(gate.approved_at);
+
+    /*
+     * OWNED BY THE DEVICE THAT SUBMITTED IT, NOT BY THIS HOST.
+     *
+     * Two names are in play and they are not the same namespace: this harness's
+     * capability store is 'test-machine' and the paired client is 'laptop'. The
+     * operation's `machine` decides who may present a receipt after a restart, so
+     * persisting the host's name there would hand every paired device the same
+     * ownership and give the submitting one no way to prove it was the submitter.
+     *
+     * Note this is a DIFFERENT field from `record.machine` above, which is what
+     * porch wrote into status.yaml.
+     */
+    const owned = host.operations.describe(submitted.body.operationId);
+    expect(owned?.machine).toBe('laptop');
+    expect(owned?.machine).not.toBe('test-machine');
   });
 
   /*
@@ -551,6 +571,59 @@ describe('an already-approved gate reports the approval that exists', () => {
   });
 });
 
+/*
+ * ONE OPERATION BELONGS TO ONE WORKSPACE.
+ *
+ * The dispatcher checks that the URL names a workspace this host serves, and the
+ * handler used to look the operation up by id alone — so the same record was
+ * readable through EVERY workspace URL the host answered for. The leak is not
+ * abstract: the response carries the gate, the project, the approving session and
+ * the authority the approval was made under, to a client scoped to a different
+ * workspace.
+ *
+ * FOUND INDEPENDENTLY BY TWO REVIEW LANES at the same seam, which is why this
+ * test exists rather than a note.
+ */
+describe('the workspace in the URL', () => {
+  it('does not hand an operation to a client polling a different workspace', async () => {
+    const workspace = workspaceWithRequestedGate('916', { checks: 'skipped' });
+    const other = workspaceWithRequestedGate('916-other', { checks: 'skipped' });
+    const host = await startHost(workspace, { alsoServing: other });
+    const { authed, capability, nonce } = await credentialed(host, '916');
+
+    const submitted = await post(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`,
+      authed,
+      { projectId: '916', gateName: 'pr', capability: capability.presentation, nonce: nonce.nonce },
+    );
+    expect(submitted.status).toBe(202);
+
+    // THE SAME CLIENT, THE SAME OPERATION ID, A DIFFERENT WORKSPACE. Authorisation
+    // would pass — it is the submitting session — so nothing but the scope check
+    // stands between this request and the record.
+    const encodedOther = Buffer.from(normalizeWorkspacePath(other), 'utf8').toString('base64url');
+    const crossed = await get(
+      `${host.origin}/api/agent/v1/workspaces/${encodedOther}/gates/approvals/${submitted.body.operationId}`,
+      authed,
+    );
+
+    // 404, NOT 403: through this workspace the operation does not exist. A 403
+    // would confirm that it exists somewhere else, which is half the answer the
+    // request was refused for asking.
+    expect(crossed.status).toBe(404);
+    expect(crossed.body.signal).toBe('APPROVAL_OPERATION_UNKNOWN');
+    expect(JSON.stringify(crossed.body)).not.toContain('916');
+
+    // And it is still readable through its own workspace, so the check narrowed
+    // the leak rather than the feature.
+    const own = await get(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals/${submitted.body.operationId}`,
+      authed,
+    );
+    expect(own.status).toBe(200);
+  });
+});
+
 describe('what is checked before an operation exists', () => {
   /*
    * An operation is a durable artifact an operator can see. Creating one and
@@ -690,5 +763,121 @@ describe('a host with nowhere to record an approval says so', () => {
     );
     expect(refused.status).toBe(501);
     expect(refused.body.signal).toBe('APPROVAL_OPERATIONS_NOT_AVAILABLE');
+  });
+});
+
+/**
+ * A REAL RESTART, DRIVEN THROUGH THE ROUTES THE CLIENT ACTUALLY USES.
+ *
+ * ## Why this test exists, and why it is written before the fix
+ *
+ * Criterion 10 promises that an approval interrupted by a host restart reports
+ * what happened. Two review rounds each found a different rejection standing in
+ * front of that promise — first a 403 on session identity, then a 401 at
+ * authentication before the receipt could even be read — and each round I fixed
+ * the rejection I had been shown rather than the path.
+ *
+ * So this drives the whole path with only what a client genuinely holds across a
+ * restart: **its machine credential** (file-backed, survives), the operation id,
+ * and the receipt it was handed at submit. It holds no human session, because the
+ * restart that produced the interrupted record destroyed every one of them —
+ * that is not a limitation of the test, it is the condition the criterion is
+ * about.
+ *
+ * If this passes, the path works. If it fails, it names where.
+ */
+describe('an approval interrupted by a restart is readable by the client that submitted it', () => {
+  it('reports the interrupted outcome to a machine holding only its credential and the receipt', async () => {
+    const workspace = workspaceWithRequestedGate('920', { checks: 'passing' });
+    const stateRoot = tmp();
+    const database = new Database(':memory:');
+    database.exec(GLOBAL_SCHEMA);
+    const normalized = normalizeWorkspacePath(workspace);
+    const encoded = Buffer.from(normalized, 'utf8').toString('base64url');
+
+    const pairings = new PairingStore({ root: join(stateRoot, 'pairing') });
+    const machines = new MachineCredentialStore({ root: join(stateRoot, 'machines') });
+    const capabilities = new ApprovalCapabilityStore({
+      root: join(stateRoot, 'approval'), machine: 'tower-host',
+    });
+    const nonces = new ApprovalNonceStore({ root: join(stateRoot, 'approval') });
+
+    /** The Tower that dies: its operations are owned by a pid that will be gone. */
+    const before = new ApprovalOperationStore({
+      root: join(stateRoot, 'approval'),
+      owner: { host: 'tower-a', pid: 4242, runId: 'run-before-the-crash' },
+    });
+
+    const wire = (operations: ApprovalOperationStore, humanSessions: HumanPairedSessionRegistry) => {
+      initAgentRoutes({
+        db: () => database,
+        log: () => {},
+        isKnownWorkspace: (candidate) => normalizeWorkspacePath(candidate) === normalized,
+        humanSessions,
+        approvalCapabilities: capabilities,
+        approvalNonces: nonces,
+        machineCredentials: machines,
+        pairings,
+        approvalOperations: operations,
+      });
+    };
+
+    wire(before, new HumanPairedSessionRegistry());
+    const server: Server = createServer((req, res) => {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      if (handleAgentRoute(req, res, url)) return;
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
+    cleanup.push(() => { server.close(); database.close(); });
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    // THE DEVICE. Its credential is file-backed and survives the restart, which
+    // is the only thing about this client that does.
+    const credential: string = (await post(`${origin}/api/agent/v1/pairing/redeem`,
+      { [PAIRING_TOKEN_HEADER]: pairings.issue(MACHINE_MINT).token },
+      { machine: 'laptop' })).body.credential;
+    const session = (await post(`${origin}/api/agent/v1/human-sessions`, {
+      [MACHINE_CREDENTIAL_HEADER]: credential,
+      [PAIRING_TOKEN_HEADER]: pairings.issue(SESSION_MINT).token,
+    }, {})).body;
+    const authed = {
+      [MACHINE_CREDENTIAL_HEADER]: credential,
+      [HUMAN_SESSION_HEADER]: session.presentation as string,
+    };
+    const capability = (await post(`${origin}/api/agent/v1/approval-capabilities`, authed,
+      { principalKind: 'human-client' })).body;
+    const nonce = (await post(`${origin}/api/agent/v1/approval-nonces`, authed,
+      { projectId: '920', gateName: 'pr', capabilityId: capability.capabilityId })).body;
+
+    const submitted = await post(`${origin}/api/agent/v1/workspaces/${encoded}/gates/approvals`, authed, {
+      projectId: '920', gateName: 'pr', capability: capability.presentation, nonce: nonce.nonce,
+    });
+    expect(submitted.status).toBe(202);
+    const { operationId, receipt } = submitted.body;
+    expect(typeof receipt, 'the submit must hand back a receipt to survive the restart').toBe('string');
+
+    // THE RESTART. Same files, new process identity, and — the part that matters —
+    // a FRESH session registry, because sessions live in memory and do not survive.
+    shutdownAgentRoutes();
+    const after = new ApprovalOperationStore({
+      root: join(stateRoot, 'approval'),
+      owner: { host: 'tower-a', pid: 5150, runId: 'run-after-the-restart' },
+      isAlive: () => false,
+    });
+    wire(after, new HumanPairedSessionRegistry());
+    expect(after.describe(operationId)?.state, 'startup must resolve the abandoned record')
+      .toBe('interrupted');
+
+    // THE CLIENT COMES BACK holding exactly what survived: its machine credential,
+    // the operation id and the receipt. No session — there cannot be one.
+    const polled = await get(
+      `${origin}/api/agent/v1/workspaces/${encoded}/gates/approvals/${operationId}?receipt=${encodeURIComponent(receipt)}`,
+      { [MACHINE_CREDENTIAL_HEADER]: credential },
+    );
+    expect(polled.status, `the client could not read its own interrupted approval: ${JSON.stringify(polled.body)}`)
+      .toBe(200);
+    expect(polled.body.state).toBe('interrupted');
+    expect(polled.body.gateAfterInterruption).toBeDefined();
   });
 });

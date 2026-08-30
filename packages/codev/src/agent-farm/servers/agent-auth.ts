@@ -155,12 +155,17 @@ export const AGENT_ROUTES: readonly AgentRoute[] = [
     method: 'GET',
     pattern: /^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approvals\/([^/]+)$/,
     probe: `${AGENT_ROUTE_PREFIX}/workspaces/probe/gates/approvals/probe`,
-    authentication: 'human-session',
+    authentication: 'machine-credential',
     rationale:
-      'reports one submitted approval. `human-session` rather than `machine-credential`: the '
-      + 'record carries the gate, the approving machine and the authority a gate was approved '
-      + 'under, which is the same content the issuing routes protect. A poll is not a weaker '
-      + 'read than the submit it follows.',
+      'reports one submitted approval. `machine-credential`, NOT `human-session`, and the '
+      + 'difference is the whole of criterion 10: sessions live in memory, so the restart that '
+      + 'resolves an approval to `interrupted` destroys the session that submitted it. Under '
+      + '`human-session` the client was refused 401 at AUTHENTICATION — before the handler could '
+      + 'look at anything — so the durable record whose only purpose is surviving that restart '
+      + 'was unreadable by the client that needed it. A real restart test drives that path. '
+      + 'The content is still not public: the handler requires the submitting session OR the '
+      + 'unguessable receipt handed back at submit, presented from the machine that submitted it, '
+      + 'and it refuses an operation belonging to another workspace.',
   },
   {
     id: 'session-probe',

@@ -435,6 +435,8 @@ function handleApprovalRoute(
   context: AgentRouteContext,
   humanSessionId: string,
   humanSessionAuthority: string | undefined,
+  /** The PAIRED CLIENT's name, from its machine credential. Not this host's. */
+  callerMachine: string,
 ): void {
   if (req.method === 'POST' && url.pathname === `${AGENT_ROUTE_PREFIX}/approval-capabilities`) {
     void readJsonBody(req).then((body) => {
@@ -470,6 +472,13 @@ function handleApprovalRoute(
         humanSession: { paired: true, sessionId: humanSessionId, authority: humanSessionAuthority },
         declaredPrincipal: typeof body.principalKind === 'string' ? body.principalKind : undefined,
         machine: declaredMachine,
+        /*
+         * The DEVICE, alongside the host. Two namespaces, and the record needs
+         * both: `machine` is who verifies, `pairedMachine` is who holds it. With
+         * only the first, `afx pair revoke laptop` matched nothing and said so
+         * truthfully while the laptop kept working.
+         */
+        pairedMachine: callerMachine,
         lifetimeMs: typeof body.lifetimeMs === 'number' ? body.lifetimeMs : undefined,
       });
       if (!outcome.issued) {
@@ -1003,6 +1012,8 @@ function handleApprovalSubmit(
   workspacePath: string,
   context: AgentRouteContext,
   humanSessionId: string,
+  /** The PAIRED CLIENT's name, from the machine credential. Not this host's. */
+  callerMachine: string,
 ): void {
   void readJsonBody(req).then((body) => {
     const projectId = body && typeof body.projectId === 'string' ? body.projectId : '';
@@ -1053,9 +1064,18 @@ function handleApprovalSubmit(
       projectId,
       gateName,
       sessionId: humanSessionId,
-      // The machine the CAPABILITY was issued for, which is this host's own name
-      // — the same value that ends up in `status.yaml` beside the approval.
-      machine: stored.machine,
+      /*
+       * THE PAIRED CLIENT, NOT THE HOST — and they are different namespaces.
+       *
+       * `stored.machine` is the CAPABILITY's machine, which is the Tower host
+       * (`ApprovalCapabilityStore` defaults it to `hostname()`) because a
+       * capability is issued for the host that will verify it. The authenticated
+       * caller is the paired DEVICE — 'laptop', 'ipad'. Recording the host here
+       * made `mayRead` compare a hostname against a device name after a restart,
+       * so the receipt path could never match and the fix that added it did
+       * nothing on any real device.
+       */
+      machine: callerMachine,
     });
     if (!submission.accepted) {
       // 409, not 400: the request is well formed and would be valid at another
@@ -1332,7 +1352,13 @@ function handleApprovalOperation(
   res: http.ServerResponse,
   url: URL,
   context: AgentRouteContext,
-  caller: { readonly sessionId: string; readonly machine?: string },
+  caller: {
+    /** Present only when a live session was ALSO presented; absent after a restart. */
+    readonly sessionId?: string;
+    readonly machine?: string;
+  },
+  /** The workspace named in the URL, which the record must agree with. */
+  workspacePath: string,
 ): void {
   const match = url.pathname.match(/^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approvals\/([^/]+)$/);
   const operationId = match ? decodeURIComponent(match[2]) : '';
@@ -1366,6 +1392,27 @@ function handleApprovalOperation(
     });
     return;
   }
+
+  /*
+   * THE URL'S WORKSPACE MUST BE THE RECORD'S WORKSPACE.
+   *
+   * The dispatcher checks only that the URL names SOME workspace this host
+   * serves, so without this an operation was readable through ANY registered
+   * workspace's URL — a cross-workspace read of an approval, its gate, its
+   * approving machine and the authority it was made under. Found independently
+   * by two review lanes, which is why it is checked here rather than argued
+   * about: the record names one workspace and that is the only one it belongs to.
+   *
+   * 404, not 403: through the wrong workspace this operation does not exist, and
+   * saying "forbidden" would confirm that it exists somewhere else.
+   */
+  if (operation.workspacePath !== workspacePath) {
+    writeJson(res, 404, {
+      signal: APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_UNKNOWN,
+      message: 'no approval operation with that id in this workspace',
+    });
+    return;
+  }
   /*
    * One session must not read another's approval, for the same reason it cannot
    * spend another's capability — but session identity ALONE cannot be the rule.
@@ -1377,7 +1424,7 @@ function handleApprovalOperation(
    * presented from the same machine, is the second way in.
    */
   if (!mayRead(operation, {
-    sessionId: caller.sessionId,
+    ...(caller.sessionId ? { sessionId: caller.sessionId } : {}),
     machine: caller.machine,
     receipt: url.searchParams.get('receipt') ?? undefined,
   })) {
@@ -1498,6 +1545,7 @@ export function handleAgentRoute(
         req, res, url, context,
         outcome.humanSessionId as string,
         outcome.humanSessionAuthority,
+        outcome.machine as string,
       );
       return true;
 
@@ -1527,7 +1575,11 @@ export function handleAgentRoute(
         writeJson(res, 404, { signal: 'WORKSPACE_NOT_REGISTERED' });
         return true;
       }
-      handleApprovalSubmit(req, res, workspace, context, outcome.humanSessionId as string);
+      handleApprovalSubmit(
+        req, res, workspace, context,
+        outcome.humanSessionId as string,
+        outcome.machine as string,
+      );
       return true;
     }
 
@@ -1542,10 +1594,24 @@ export function handleAgentRoute(
         writeJson(res, 404, { signal: 'WORKSPACE_NOT_REGISTERED' });
         return true;
       }
+      /*
+       * A SESSION IF THERE IS ONE, AND THE ROUTE DOES NOT REQUIRE ONE.
+       *
+       * This route is `machine-credential`, so `outcome.humanSessionId` is
+       * undefined. A live session is still the ordinary way in, so it is read
+       * opportunistically here and `mayRead` prefers it; after a restart there is
+       * none and the receipt is what authorises.
+       */
+      const presented = req.headers[HUMAN_SESSION_HEADER];
+      const recognition = context.humanSessions.recognize(
+        Array.isArray(presented) ? presented[0] : presented,
+      );
       handleApprovalOperation(res, url, context, {
-        sessionId: outcome.humanSessionId as string,
+        ...(recognition.paired && recognition.sessionId
+          ? { sessionId: recognition.sessionId }
+          : {}),
         machine: outcome.machine,
-      });
+      }, workspace);
       return true;
     }
 

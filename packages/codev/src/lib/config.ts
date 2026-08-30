@@ -332,41 +332,45 @@ export function resolveLocalConfigPath(workspaceRoot: string): string | null {
  * "in *this* repo I want X." Add the file to your project's
  * `.gitignore` so it's never accidentally committed.
  */
+/**
+ * The files `loadConfig` merges, lowest priority first, existing ones only.
+ *
+ * ONE LIST, TWO READERS. `loadConfig` walks it to merge, and callers that only
+ * need to know whether the answer could have CHANGED stat it instead — which is
+ * why it is extracted rather than inlined. Tower's 5s thread sweep asks
+ * `requestThreadBackend` per workspace, and for a workspace with no thread
+ * backend that was a full five-layer load — four reads, four deep merges and the
+ * validators — every pass, on the event loop, scaling with accumulated known
+ * workspaces rather than with active use.
+ *
+ * A second copy of this list in the cache would go stale the moment a layer is
+ * added, and it would go stale silently: the negative cache would keep answering
+ * from before the new layer existed.
+ */
+export function configLayerPaths(workspaceRoot: string): string[] {
+  const paths: string[] = [];
+  // Layer 2: remote framework base config (if cached)
+  const cacheDir = _getFrameworkCacheDir();
+  if (cacheDir) paths.push(resolve(cacheDir, 'config.json'));
+  // Layer 3: global config
+  paths.push(resolve(homedir(), '.codev', 'config.json'));
+  // Layer 4: project config (also checks for legacy af-config.json)
+  const projectPath = resolveProjectConfigPath(workspaceRoot);
+  if (projectPath) paths.push(projectPath);
+  // Layer 5: project-local override (gitignored, per-engineer).
+  const localPath = resolveLocalConfigPath(workspaceRoot);
+  if (localPath) paths.push(localPath);
+  return paths;
+}
+
 export function loadConfig(workspaceRoot: string): CodevConfig {
   let merged: CodevConfig = structuredClone(DEFAULT_CONFIG);
 
-  // Layer 2: remote framework base config (if cached)
-  const cacheDir = _getFrameworkCacheDir();
-  if (cacheDir) {
-    const cacheConfigPath = resolve(cacheDir, 'config.json');
-    const cacheConfig = readJsonFile(cacheConfigPath);
-    if (cacheConfig) {
-      merged = deepMerge(merged as unknown as Record<string, unknown>, cacheConfig) as CodevConfig;
-    }
-  }
-
-  // Layer 3: global config
-  const globalPath = resolve(homedir(), '.codev', 'config.json');
-  const globalConfig = readJsonFile(globalPath);
-  if (globalConfig) {
-    merged = deepMerge(merged as unknown as Record<string, unknown>, globalConfig) as CodevConfig;
-  }
-
-  // Layer 4: project config (also checks for legacy af-config.json)
-  const projectPath = resolveProjectConfigPath(workspaceRoot);
-  if (projectPath) {
-    const projectConfig = readJsonFile(projectPath);
-    if (projectConfig) {
-      merged = deepMerge(merged as unknown as Record<string, unknown>, projectConfig) as CodevConfig;
-    }
-  }
-
-  // Layer 5: project-local override (gitignored, per-engineer).
-  const localPath = resolveLocalConfigPath(workspaceRoot);
-  if (localPath) {
-    const localConfig = readJsonFile(localPath);
-    if (localConfig) {
-      merged = deepMerge(merged as unknown as Record<string, unknown>, localConfig) as CodevConfig;
+  // Layer 1 is the clone above; 2-5 in ascending priority, from the one list.
+  for (const path of configLayerPaths(workspaceRoot)) {
+    const layer = readJsonFile(path);
+    if (layer) {
+      merged = deepMerge(merged as unknown as Record<string, unknown>, layer) as CodevConfig;
     }
   }
 

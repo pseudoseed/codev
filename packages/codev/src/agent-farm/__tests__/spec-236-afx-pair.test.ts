@@ -295,18 +295,26 @@ describe('afx pair revoke', () => {
   });
 
   /*
-   * TWO STORES, ONE OPERATOR ACTION. They are keyed by the same machine name, and
-   * revoking only the credential would leave a withdrawn device still able to
-   * present a live approval capability to `porch approve`.
+   * TWO STORES, ONE OPERATOR ACTION, AND TWO DIFFERENT MACHINE NAMES.
+   *
+   * A capability record carries both: `machine` is the HOST that will verify it,
+   * `pairedMachine` is the DEVICE that holds it. `afx pair revoke ipad` names the
+   * device.
+   *
+   * THIS TEST USED TO SET BOTH TO 'ipad', and that is why it passed while the
+   * command did nothing in a real deployment: revocation matched on the host, so
+   * it worked only where the operator's laptop and the Tower host happened to
+   * share a name — a fixture, never a deployment. The host here is deliberately
+   * NOT the device, so the assertion measures the thing the operator does.
    */
   it('withdraws the approval capabilities as well as the credential', () => {
     const root = scratch();
     new MachineCredentialStore({ root: join(root, 'machines') }).issue({ machine: 'ipad' });
-    const capabilities = new ApprovalCapabilityStore({ root: join(root, 'approval'), machine: 'ipad' });
+    const capabilities = new ApprovalCapabilityStore({ root: join(root, 'approval'), machine: 'tower-host' });
     const issued = issueApprovalCapability(capabilities, {
       humanSession: { paired: true, sessionId: 'session-1' },
       declaredPrincipal: 'human-client',
-      machine: 'ipad',
+      pairedMachine: 'ipad',
     });
     expect(issued.issued).toBe(true);
 
@@ -314,6 +322,29 @@ describe('afx pair revoke', () => {
     expect(result.credentialRevoked).toBe(true);
     expect(result.approvalCapabilitiesRevoked).toBe(1);
     expect(capabilities.verify(issued.issued ? issued.capability.presentation : '').authorized).toBe(false);
+  });
+
+  /*
+   * REVOKING ONE DEVICE DOES NOT REVOKE ANOTHER, EVEN ON A SHARED HOST. Every
+   * capability on this Tower carries the same `machine`, so a revocation matching
+   * on it would withdraw every device at once while reporting a plausible count.
+   */
+  it('leaves another device\'s capability on the same host alone', () => {
+    const root = scratch();
+    new MachineCredentialStore({ root: join(root, 'machines') }).issue({ machine: 'ipad' });
+    const capabilities = new ApprovalCapabilityStore({ root: join(root, 'approval'), machine: 'tower-host' });
+    const withdrawn = issueApprovalCapability(capabilities, {
+      humanSession: { paired: true, sessionId: 'session-1' },
+      pairedMachine: 'ipad',
+    });
+    const kept = issueApprovalCapability(capabilities, {
+      humanSession: { paired: true, sessionId: 'session-2' },
+      pairedMachine: 'laptop',
+    });
+
+    expect(pairRevoke('ipad', { root, write: () => {} }).approvalCapabilitiesRevoked).toBe(1);
+    expect(capabilities.verify(withdrawn.issued ? withdrawn.capability.presentation : '').authorized).toBe(false);
+    expect(capabilities.verify(kept.issued ? kept.capability.presentation : '').authorized).toBe(true);
   });
 
   /*

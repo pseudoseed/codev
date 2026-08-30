@@ -85,6 +85,8 @@ export const NONCE_ENV_VAR = 'CODEV_APPROVAL_NONCE';
  */
 export interface StoredCapability {
   readonly id: string;
+  /** The paired DEVICE that obtained it. Absent on records predating the field. */
+  readonly pairedMachine?: string;
   readonly machine: string;
   /** The paired client session that requested issuance. */
   readonly sessionId: string;
@@ -220,7 +222,19 @@ export class ApprovalCapabilityStore {
   issue(options: {
     sessionId: string;
     lifetimeMs?: number;
+    /** The HOST that will verify this capability. Defaults to this machine. */
     machine?: string;
+    /**
+     * The PAIRED DEVICE that obtained it — 'laptop', 'ipad'.
+     *
+     * A DIFFERENT NAMESPACE FROM `machine`, and recording it is what makes
+     * "withdraw this device" possible. Capabilities are keyed by the verifying
+     * host, so `revokeMachine('laptop')` matched nothing and `afx pair revoke`
+     * reported `0 capability record(s) revoked` for every real device — the
+     * command worked only where the two names happened to coincide, which is a
+     * test fixture and never a deployment.
+     */
+    pairedMachine?: string;
     authority?: string;
   }): IssuedCapability {
     const requested = options.lifetimeMs ?? DEFAULT_CAPABILITY_LIFETIME_MS;
@@ -231,6 +245,7 @@ export class ApprovalCapabilityStore {
     const record: StoredCapability = {
       id,
       machine: options.machine ?? this.#machine,
+      ...(options.pairedMachine ? { pairedMachine: options.pairedMachine } : {}),
       sessionId: options.sessionId,
       ...(options.authority ? { authority: options.authority } : {}),
       verifier: sha256Hex(secret),
@@ -361,13 +376,26 @@ export class ApprovalCapabilityStore {
    * read out of the returned count and not touched on disk — that isolation is
    * the property `revoking one machine leaves another working` depends on.
    */
+  /**
+   * Revoke every live capability belonging to one machine.
+   *
+   * MATCHES THE PAIRED DEVICE FIRST, and the host only for records that predate
+   * `pairedMachine`. Capabilities are stored keyed by the VERIFYING HOST, so a
+   * match on `machine` alone meant `revokeMachine('laptop')` found nothing and
+   * `afx pair revoke laptop` truthfully reported zero — while the device kept a
+   * live capability. The fallback keeps the existing HTTP route's behaviour for
+   * older records rather than silently changing what they mean.
+   */
   revokeMachine(machine: string): number {
     return withLock(this.#path, () => {
       const capabilities = this.#read();
       const revokedAt = new Date(this.#now()).toISOString();
       let revoked = 0;
       for (const entry of capabilities) {
-        if (entry.machine === machine && !entry.revokedAt) {
+        const owned = entry.pairedMachine !== undefined
+          ? entry.pairedMachine === machine
+          : entry.machine === machine;
+        if (owned && !entry.revokedAt) {
           entry.revokedAt = revokedAt;
           revoked += 1;
         }
@@ -685,7 +713,15 @@ export interface IssuanceRequest {
   };
   /** What the caller says it is. A lying caller is not caught here; see the threat model. */
   readonly declaredPrincipal?: string;
+  /** The HOST that will verify it. Client-supplied values are refused at the route. */
   readonly machine?: string;
+  /**
+   * The PAIRED DEVICE it is issued to, from the caller's machine credential.
+   *
+   * Recorded so `afx pair revoke <device>` can find it. Unlike `machine` this is
+   * not client-declared: it comes from the credential the caller presented.
+   */
+  readonly pairedMachine?: string;
   readonly lifetimeMs?: number;
 }
 
@@ -722,6 +758,7 @@ export function issueApprovalCapability(
     capability: store.issue({
       sessionId: request.humanSession.sessionId,
       machine: request.machine,
+      ...(request.pairedMachine ? { pairedMachine: request.pairedMachine } : {}),
       lifetimeMs: request.lifetimeMs,
       authority: request.humanSession.authority,
     }),
