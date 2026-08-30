@@ -271,27 +271,6 @@ async function main() {
   let subscriptionRun = null;
   const resumeOutcomes = [];
 
-  /**
-   * Where the fix turn's completion event arrived, and on which side of the
-   * resumed subscription's synchronization marker.
-   *
-   * THE FIRST VERSION OF THIS WAS UNSOUND, IN THE DIRECTION THAT LOOKS SAFE.
-   *
-   * It asked `thread.isTurnActive` after the dark window. But `isTurnActive` is
-   * fed by the event stream, and during the dark window there is no stream — so
-   * the tracker still believes the turn is running no matter what the server did,
-   * and the reading is `false` for the criterion whether or not the completion
-   * event was replayed. It could only ever record `undetermined`, which is the
-   * one outcome nobody investigates.
-   *
-   * What the criterion actually asks is whether the completion event arrived in
-   * the resumed subscription's CATCH-UP rather than live after it. That is
-   * directly observable: catch-up handlers and `onResume` run on one serial
-   * chain, catch-up first. So an event whose handler sees `resumeOutcomes.length`
-   * still at the pre-resubscribe baseline was replayed out of the gap; one that
-   * sees it incremented arrived live afterwards.
-   */
-  let fixTurnWatch = null;
 
   /**
    * Start a subscription from a cursor position read off DISK.
@@ -328,19 +307,6 @@ async function main() {
         isSynchronized: turnModule.isSynchronized,
         onValue: (value) => {
           thread.observe(value);
-          if (fixTurnWatch === null) return;
-          const event = turnModule.asThreadEvent(value);
-          if (!event || event.aggregateId !== thread.threadId) return;
-          const activeTurnId = turnModule.activeTurnIdOf(event);
-          if (activeTurnId === undefined) return;
-          if (activeTurnId !== null) {
-            fixTurnWatch.sawRunning = true;
-            return;
-          }
-          if (fixTurnWatch.sawRunning && fixTurnWatch.settleSequence === null) {
-            fixTurnWatch.settleSequence = event.sequence;
-            fixTurnWatch.resumeOutcomesAtSettle = resumeOutcomes.length;
-          }
         },
         onResume: (outcome, info) => {
           resumeOutcomes.push({ kind: outcome.kind, lastSequence: outcome.lastSequence ?? null, ...info });
@@ -446,7 +412,7 @@ async function main() {
         : `node --test exited ${preFix.exitCode} in ${preFix.shell}`,
     );
 
-    // ── fix, with the subscriber restarting mid-turn ─────────────────────────
+    // ── fix, with PORCH restarting mid-turn ──────────────────────────────────
     // The sentinel is how the runner knows the turn's WORK is done without
     // asking the server. During the dead window there is deliberately no
     // connection, so every other way of knowing would mean reconnecting — and a
@@ -461,7 +427,6 @@ async function main() {
       await thread.runTurn(fixPrompt, { timeoutMs: turnTimeoutMs });
       record('restart-loses-no-completion', 'undetermined', 'RUN_SKIP_RESTART=1 — the restart was not attempted');
     } else {
-      fixTurnWatch = { sawRunning: false, settleSequence: null, resumeOutcomesAtSettle: null };
       const started = await thread.beginTurn(fixPrompt);
       await started.running;
 
