@@ -77,3 +77,63 @@ Known collision: PR #253 (#227) touches `thread-backend.ts`, `porch-thread-engin
 `thread-runtime.ts`, moves `canonicalWorkspaceKey` to `workspace-key.ts`, adds a
 `workspaceRoot` argument to `chooseSpawnPath`/`allocateSpawnThread`, and adds a `defaults`
 accessor to `ThreadEngine`. It merges first; rebasing after rather than anticipating.
+
+## PR gate — CMAP (2026-08-30)
+
+PR #258. Three real verdicts, from three lanes that actually ran:
+
+| Lane | Verdict |
+|---|---|
+| codex | REQUEST_CHANGES |
+| claude | COMMENT |
+| opencode (grok-4.6) | COMMENT |
+
+gemini SKIPPED — `agy` exited 1 on quota. That is `LANE_DID_NOT_REVIEW`, not an
+approval, so it is not counted as one of the three; opencode took the slot per the
+fallback rule in CLAUDE.md.
+
+### The finding that mattered
+
+codex and claude found the same bug independently, and it defeated the guard the whole
+PR is built on. `ResumingSubscription` calls `onResume` with a `gap` from the `finally`
+of an attempt that ended BEFORE the server signalled catch-up was complete. That attempt
+never came up — `#everSubscribed` stays false, the cursor stays put, so the next attempt
+is another COLD subscribe whose snapshot carries no observable events. The pool marked it
+attached, `ensure()` resolved, and a turn could dispatch into exactly the snapshot race.
+
+**Not fixed the way either lane proposed.** Both said gate on `outcome.kind !== 'gap'`.
+That is wrong in the other direction: `classifyResume` returns a legitimate `gap` when
+the server SYNCHRONIZED and declined to resume from the cursor — that subscription is up,
+and the caller reconciles rather than waits. Gating on kind would turn a recoverable
+condition into a permanent refusal to dispatch turns on that thread.
+
+So the two gaps were made distinguishable instead: `onResume`'s info object gains a
+`synchronized` flag in `packages/t3-client`, true at the sync marker and false in the
+`finally`. The pool keys on that. One regression test per direction.
+
+### Also fixed
+
+- `attach()` returned an existing record before calling `start()`, so a subscription the
+  pool dropped on a terminal failure could never be recreated by a later sweeper pass —
+  while the log claimed one would adopt it. A record and a subscription are two different
+  things and only one was being checked. (codex)
+- `ThreadAdoptionSweeper.start()` set an interval and ran no first pass, leaving every
+  unmessaged thread unsubscribed for a full sweep after Tower boots — the exact window a
+  Tower restart lands in, which is the event the sweeper exists for. (opencode)
+- Three comments that overclaimed. `startTurn`'s `ensure` cannot guard a stream that
+  dropped after attaching, because `isAttached` is monotonic. The await DOES lengthen the
+  drain loop's worst case, to 30s + 30s. And `attach`'s comment said the subscription
+  makes `activeTurnId` knowable; only `track()` writes that field. (claude, opencode)
+
+All in `01d51a233`. Full suite after: 7184 passed, 0 failed.
+
+### Still open
+
+Both lanes flagged the missing `codev/reviews/241-*.md` and `status.yaml` reading
+`dev-approval: pending`. Same fact: `porch approve 241 dev-approval` has not been run.
+`review` is the phase BEHIND that gate in `pir/protocol.json`, so the artifact cannot be
+written until it clears. The PR was opened one phase early on the architect's explicit
+instruction; porch recorded it in `pr_history`.
+
+Merge order flipped by the architect: #258 goes first, #227 rebases onto it. No rebase
+on my side.
