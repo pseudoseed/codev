@@ -40,6 +40,7 @@ import path from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
 import { fileURLToPath } from 'node:url';
+import { LEGACY_WEB_KEY_HEADER, TOWER_KEY_HEADER } from '@cluesmith/codev-types';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -67,6 +68,18 @@ export function setClientDistRoot(root: string | null): void {
 
 export function setClientMachinesFileForTests(file: string | null): void {
   machinesFileOverride = file;
+}
+
+let headersTimeoutOverride: number | null = null;
+
+/**
+ * Shortens the upstream headers bound so a test can observe it without waiting
+ * the production 15s. A setter rather than an env var because
+ * `vitest-setup.ts` scrubs every `CODEV_*` variable (#189), and because this
+ * module already carries two of these.
+ */
+export function setProxyHeadersTimeoutForTests(ms: number | null): void {
+  headersTimeoutOverride = ms;
 }
 
 export interface ClientMachine {
@@ -261,6 +274,78 @@ function serveAsset(res: http.ServerResponse, pathname: string): void {
 }
 
 /**
+ * Headers a proxy must not copy from one connection onto another.
+ *
+ * RFC 9110 hop-by-hop: they describe THIS connection, not the message, and
+ * forwarding them lets a client dictate framing on a socket it does not own —
+ * `Transfer-Encoding` and `Connection` most of all, which is the shape of
+ * request-smuggling bugs.
+ */
+const HOP_BY_HOP = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
+
+/**
+ * Bound on how long the upstream may take to produce RESPONSE HEADERS.
+ *
+ * Deliberately not a bound on the body: the response is usually an SSE stream
+ * that is supposed to stay open for hours, and a total-duration timeout would
+ * sever exactly the connection this client is built around. What must be bounded
+ * is a machine that accepts a socket and never answers, because each of those
+ * holds a Tower request open indefinitely — an availability hole on Tower's own
+ * event loop, reachable by anyone who can point a machine entry at a black hole.
+ */
+const UPSTREAM_HEADERS_TIMEOUT_MS = 15_000;
+
+/**
+ * What survives the hop, and why forwarding the request's headers verbatim was
+ * wrong even though nothing is known to be leaking today.
+ *
+ * `codev-tower-key` is stripped EXPLICITLY. The client is built never to hold
+ * it — `/client/` injects no key, which is the whole point of the mount's
+ * posture — so in a correct system this header cannot be here. That is precisely
+ * why it is removed rather than trusted: "the browser should never have it" is
+ * the same assumption phase 11 shipped on and had to retract. If a future page,
+ * an extension, or a hand-written client ever attaches it, this proxy would
+ * otherwise hand Tower's all-or-nothing secret to a remote host over the wire.
+ * Defence in depth, one line, no cost.
+ *
+ * `Connection`'s own listed tokens are stripped too: the header names a set of
+ * headers that are themselves hop-by-hop, so honouring only the fixed list would
+ * forward whatever it points at.
+ */
+export function forwardableHeaders(
+  headers: http.IncomingHttpHeaders,
+  hostHeader: string,
+): http.OutgoingHttpHeaders {
+  const connectionTokens = new Set(
+    String(headers.connection ?? '')
+      .split(',')
+      .map((token) => token.trim().toLowerCase())
+      .filter((token) => token !== ''),
+  );
+  const out: http.OutgoingHttpHeaders = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const lower = name.toLowerCase();
+    if (HOP_BY_HOP.has(lower) || connectionTokens.has(lower)) continue;
+    if (lower === TOWER_KEY_HEADER || lower === LEGACY_WEB_KEY_HEADER) continue;
+    if (lower === 'host') continue;
+    if (value === undefined) continue;
+    out[name] = value;
+  }
+  // The upstream's host, not the browser's. Set last so nothing above can win.
+  out.host = hostHeader;
+  return out;
+}
+
+/**
  * `/m/<id>/...` → that machine's `codev-agent`.
  *
  * STREAMED, NOT BUFFERED. The response under test is an SSE stream that never
@@ -305,8 +390,11 @@ function proxyToMachine(
     port: target.port,
     path: rest,
     method: req.method,
-    headers: { ...req.headers, host: target.host },
+    headers: forwardableHeaders(req.headers, target.host),
   }, (answer) => {
+    // Headers arrived, so the bound has done its job. Cleared rather than left
+    // armed, because an SSE stream is meant to outlive it by hours.
+    upstream.setTimeout(0);
     res.writeHead(answer.statusCode ?? 502, answer.headers);
     answer.pipe(res);
     // `pipe` does not end the destination when the source errors, and this
@@ -314,6 +402,25 @@ function proxyToMachine(
     // waits forever on a server that is already gone.
     answer.on('aborted', () => res.destroy());
     answer.on('error', () => res.destroy());
+  });
+  upstream.setTimeout(headersTimeoutOverride ?? UPSTREAM_HEADERS_TIMEOUT_MS, () => {
+    /*
+     * A SEPARATE SIGNAL FROM UPSTREAM_GONE, because they are different facts and
+     * want different next actions: one machine refused the connection, the other
+     * accepted it and then said nothing. Reporting a silent host as a dead one
+     * sends an operator to check whether it is running, which it is.
+     */
+    upstream.destroy();
+    if (!res.headersSent) {
+      res.writeHead(504, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        signal: 'UPSTREAM_TIMEOUT',
+        message: `${machine.id} accepted the connection but sent no response headers within `
+          + `${headersTimeoutOverride ?? UPSTREAM_HEADERS_TIMEOUT_MS}ms.`,
+      }));
+    } else {
+      res.destroy();
+    }
   });
   upstream.on('error', () => {
     if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'application/json' });

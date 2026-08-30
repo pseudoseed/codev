@@ -21,6 +21,7 @@ import path from 'node:path';
 import type http from 'node:http';
 import {
   CLIENT_CSP,
+  forwardableHeaders,
   isClientPath,
   originProblem,
   readClientMachines,
@@ -330,5 +331,69 @@ describe('proxy paths that name nothing', () => {
     serveClientStatic(makeReq('GET', path), out.res, url(path));
     expect(out.status()).toBe(404);
     expect(out.body()).not.toContain('<div id="root">');
+  });
+});
+
+/**
+ * WHAT CROSSES THE HOP, and why "the browser cannot have that header" is not a
+ * reason to forward it.
+ *
+ * The proxy used to copy the client's headers verbatim onto a socket to a remote
+ * machine. Nothing is known to leak today — `/client/` injects no key, which is
+ * the mount's whole posture — but "should never be there" is the assumption
+ * phase 11 shipped and had to retract, and the cost of not relying on it is one
+ * filter.
+ */
+describe('headers forwarded to a machine', () => {
+  it('never forwards Tower\'s shared key, current or legacy', () => {
+    const out = forwardableHeaders({
+      'codev-tower-key': 'a'.repeat(64),
+      'codev-web-key': 'b'.repeat(64),
+      'codev-machine-credential': 'id.secret',
+    }, 'box:4100');
+    expect(out['codev-tower-key']).toBeUndefined();
+    expect(out['codev-web-key']).toBeUndefined();
+    // The credential the page IS meant to present still travels.
+    expect(out['codev-machine-credential']).toBe('id.secret');
+  });
+
+  it('strips the header whatever case it arrives in', () => {
+    const out = forwardableHeaders({ 'CODEV-TOWER-KEY': 'x' } as never, 'box:4100');
+    expect(JSON.stringify(out).toLowerCase()).not.toContain('tower-key');
+  });
+
+  /*
+   * Hop-by-hop headers describe THIS connection, not the message. Forwarding
+   * them lets a client dictate framing on a socket it does not own, which is the
+   * shape of request-smuggling bugs.
+   */
+  it.each([
+    'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
+    'te', 'trailer', 'transfer-encoding', 'upgrade',
+  ])('strips the hop-by-hop header %s', (name) => {
+    const out = forwardableHeaders({ [name]: 'value', accept: 'text/event-stream' }, 'box:4100');
+    expect(out[name]).toBeUndefined();
+    expect(out.accept).toBe('text/event-stream');
+  });
+
+  /*
+   * `Connection` NAMES further hop-by-hop headers. Honouring only the fixed list
+   * forwards whatever it points at, which is how a stripper gets walked around.
+   */
+  it('strips the headers Connection itself names', () => {
+    const out = forwardableHeaders({
+      connection: 'keep-alive, X-Custom-Hop , Another-Hop',
+      'x-custom-hop': 'should not travel',
+      'another-hop': 'nor this',
+      'x-kept': 'travels',
+    }, 'box:4100');
+    expect(out['x-custom-hop']).toBeUndefined();
+    expect(out['another-hop']).toBeUndefined();
+    expect(out['x-kept']).toBe('travels');
+  });
+
+  it('rewrites Host to the upstream rather than passing the browser\'s', () => {
+    const out = forwardableHeaders({ host: 'tower.tailnet.ts.net' }, 'box:4100');
+    expect(out.host).toBe('box:4100');
   });
 });

@@ -207,3 +207,70 @@ Tower's real dispatcher with `isRequestAllowed` in front — that is what would 
 did catch that a traversal escaping `/client/` is refused by the allowlist rather than the mount.
 It did not catch 1, because the client half was never in the loop. The Playwright test added for
 finding 1 closes that.
+
+## Round 2 — the architect read the diff
+
+**Fixed before merge: the proxy forwarded all client headers verbatim, with no upstream bound.**
+
+Three defects in one call site, and the first is the interesting one:
+
+`codev-tower-key` was forwarded to a remote machine if a client sent it. Nothing is known to leak
+today — `/client/` injects no key, which is the mount's whole posture — so this is defence in depth
+rather than a live hole. It is worth fixing anyway because **"the browser should never have that
+header" is the same assumption phase 11 shipped on and had to retract.** If any future page,
+extension, or hand-written client attaches it, this proxy would have handed Tower's all-or-nothing
+secret to a remote host over the wire. The fix is one filter.
+
+Hop-by-hop headers (`Connection`, `Transfer-Encoding`, `TE`, `Upgrade`, and the rest) were also
+forwarded. They describe *this* connection, not the message; forwarding them lets a client dictate
+framing on a socket it does not own, which is the shape of request-smuggling bugs. `Connection`'s
+own listed tokens are stripped too, since honouring only the fixed list forwards whatever it points
+at.
+
+And there was **no upstream timeout**. A machine that accepts a socket and never answers held a
+Tower request open forever — an availability hole on Tower's own event loop, reachable by pointing
+a machine entry at a black hole. The bound is on **response headers only** (15s): an SSE stream is
+meant to stay open for hours, and a total-duration timeout would sever the connection this whole
+client is built around. It answers `UPSTREAM_TIMEOUT`, not `UPSTREAM_GONE` — "refused the
+connection" and "accepted it then went quiet" are different facts wanting different next actions.
+
+Tested both ways: `forwardableHeaders` directly, and — the assertion that survives someone
+reverting the call site — over real HTTP, asserting on what the **upstream received**. The key is
+presented to Tower and does not arrive at the machine; the machine credential still does.
+
+### Filed, not fixed (#239)
+
+The architect asked for these to be written down rather than folded in.
+
+1. **`recentByAgent` query cost.** I had measured payload and not query. Now measured: **2.36 ms**
+   per snapshot tick at 1,250 workspace rows, **2.88 ms** at 1,424, against the real global.db.
+   `EXPLAIN QUERY PLAN` uses `idx_mailbox_agent_drain` for the `workspace_path` prefix but the
+   window function's partition ordering cannot ride it, so every workspace row is read into two
+   temp B-trees to yield three rows per agent. Small, on the event loop, per tick, and growing with
+   retention rather than bounded.
+2. **Machine-id validation is split** — `wellFormed` on the server, `isMachine` on the client — so
+   the server can publish ids the client silently drops. The silence is the defect; two validators
+   across a wire is normal, one discarding the other's output without either saying so is not.
+3. **The mount e2e copies `tower-server.ts`'s handler ordering** rather than importing it. Two
+   encodings of one rule with nothing keeping them equal: if Tower moves the allowlist inside the
+   handler, the test keeps passing against a Tower that no longer exists — which is the exact
+   failure the test was written to close, and what bit #221 twice.
+
+### Lane verdicts, unrounded
+
+All four run as `consult --type integration --issue 237`, against `a79b965e4`.
+
+| Lane | Model | Verdict | Confidence |
+|---|---|---|---|
+| claude | claude-opus-5 | COMMENT | **HIGH** (revised up from MEDIUM after it verified its own finding against experiment 39) |
+| opencode | xai/grok-4.6 | REQUEST_CHANGES | HIGH |
+| codex | gpt-5.6-sol, medium effort | REQUEST_CHANGES | HIGH |
+| gemini | agy default | **NO REVIEW** — `[gemini (agy) skipped: agy exited with code 1]` | — |
+
+I had first reported gemini's skip from a general-mode invocation; I re-ran the integration lane so
+the record is like-for-like, and it printed the identical skip.
+
+**Codex's REQUEST_CHANGES was not only criterion 6.** It raised four: criterion 6 (ruled), the
+Host-guard runbook (fixed), the http-only proxy plus cleartext credentials against spec:368
+(fixed), and tests never exercising the production remote path (fixed by the mount e2e). Three of
+four were code.

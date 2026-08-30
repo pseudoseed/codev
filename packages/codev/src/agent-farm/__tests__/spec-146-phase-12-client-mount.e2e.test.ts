@@ -31,7 +31,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isPublicRoute, isRequestAllowed } from '../utils/server-utils.js';
 import { handleRequest } from '../servers/tower-routes.js';
-import { setClientDistRoot, setClientMachinesFileForTests } from '../servers/client-static.js';
+import {
+  setClientDistRoot,
+  setClientMachinesFileForTests,
+  setProxyHeadersTimeoutForTests,
+} from '../servers/client-static.js';
 
 const SHELL = '<!doctype html><html><head><title>Codev</title></head><body><div id="root"></div></body></html>';
 
@@ -53,7 +57,13 @@ function listen(server: Server): Promise<number> {
 
 let base: string;
 let machinesFile: string;
-let upstreamSaw: { path: string | undefined; credential: string | string[] | undefined };
+let upstreamSaw: {
+  path: string | undefined;
+  credential: string | string[] | undefined;
+  headers: Record<string, unknown>;
+};
+/** Set to hang the upstream, so the headers timeout can be observed for real. */
+let upstreamSilent = false;
 
 const routeCtx = {
   log: () => undefined,
@@ -81,7 +91,14 @@ beforeAll(async () => {
   // A stand-in for a machine's codev-agent, so the proxy has something real to
   // reach and can report what actually arrived.
   const upstreamPort = await listen(createServer((req, res) => {
-    upstreamSaw = { path: req.url, credential: req.headers['codev-machine-credential'] };
+    upstreamSaw = {
+      path: req.url,
+      credential: req.headers['codev-machine-credential'],
+      headers: { ...req.headers },
+    };
+    // Accept the socket and say nothing — the case an unbounded proxy holds a
+    // Tower request open on forever.
+    if (upstreamSilent) return;
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true }));
   }));
@@ -243,4 +260,65 @@ describe('the mount does not widen anything else', () => {
       chmodSync(machinesFile, 0o600);
     }
   });
+});
+
+/**
+ * WHAT ACTUALLY ARRIVES AT THE MACHINE.
+ *
+ * `forwardableHeaders` is unit-tested, and a unit test cannot say whether the
+ * proxy calls it. This asserts on the headers the upstream RECEIVED, which is
+ * the only statement that survives someone reverting the call site.
+ */
+describe('the hop, observed from the machine', () => {
+  it('does not deliver Tower\'s shared key even when a client sends one', async () => {
+    const answer = await probe('/m/alpha/api/agent/v1/workspaces/x/state', {
+      headers: {
+        'codev-tower-key': 'a'.repeat(64),
+        'codev-machine-credential': 'cred-id.cred-secret',
+      },
+    });
+    expect(answer.status).toBe(200);
+    // The key was presented to Tower and did NOT reach the machine.
+    expect(upstreamSaw.headers['codev-tower-key']).toBeUndefined();
+    expect(JSON.stringify(upstreamSaw.headers)).not.toContain('a'.repeat(64));
+    // And the credential that is supposed to travel still did.
+    expect(upstreamSaw.credential).toBe('cred-id.cred-secret');
+  });
+
+  it('does not deliver hop-by-hop headers', async () => {
+    await probe('/m/alpha/api/agent/v1/workspaces/x/state', {
+      headers: { 'codev-machine-credential': 'cred-id.cred-secret', te: 'trailers' },
+    });
+    expect(upstreamSaw.headers.te).toBeUndefined();
+    expect(upstreamSaw.headers['proxy-authorization']).toBeUndefined();
+  });
+
+  it('sends the machine its own Host, not the browser\'s', async () => {
+    await probe('/m/alpha/api/agent/v1/workspaces/x/state');
+    expect(String(upstreamSaw.headers.host)).toContain('127.0.0.1');
+  });
+
+  /*
+   * AN UNBOUNDED HOP IS AN AVAILABILITY HOLE, not just a slow page: every
+   * request to a machine that accepts a socket and never answers holds a Tower
+   * request open indefinitely. The bound is on RESPONSE HEADERS only — an SSE
+   * stream is supposed to stay open for hours, and a total-duration timeout
+   * would sever the connection this client is built around.
+   */
+  it('gives up on a machine that accepts the connection and says nothing', async () => {
+    upstreamSilent = true;
+    setProxyHeadersTimeoutForTests(500);
+    try {
+      const answer = await probe('/m/alpha/api/agent/v1/workspaces/x/state');
+      expect(answer.status).toBe(504);
+      const parsed = JSON.parse(answer.body) as { signal: string };
+      // Its own signal: "refused the connection" and "accepted it then went
+      // quiet" are different facts with different next actions.
+      expect(parsed.signal).toBe('UPSTREAM_TIMEOUT');
+      expect(parsed.signal).not.toBe('UPSTREAM_GONE');
+    } finally {
+      upstreamSilent = false;
+      setProxyHeadersTimeoutForTests(null);
+    }
+  }, 30_000);
 });
