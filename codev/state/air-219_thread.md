@@ -286,3 +286,35 @@ never deliverThreadTurn.
 codex/gpt-5.6-luna so the earlier recorded runs still describe a plain invocation, and every
 COULD_NOT_TELL message names the driver in use. This also removes the round-2..7 changes from
 suspicion for the codex timeout: same head, same server, same criterion, different provider.
+
+## Round 10 — I reported a fix that was not in the code
+
+opencode round 9 found that blocker 4 from round 8 (cache `canonicalWorkspaceKey`) **never
+landed**, while the verification doc asserted it had and the architect had closed the blocker on
+my report.
+
+**What happened:** I ran two scripted edits in one Bash step. The first (the cache) failed on a
+missed anchor and printed a traceback; the second printed `ok`. I attributed the traceback to the
+second script, "fixed" something that was already fine, and never revisited the first. The edit
+was never verified after being made.
+
+**Why it survived a whole round:** it was the ONLY round-8 fix with no test. Every other one had a
+mutation check that would have failed loudly if the change were absent. A fix with no test is the
+fix that silently is not there — and the one most likely to be reported from intent rather than
+from observation.
+
+**Rules I am now following, both learned the same night:**
+1. Assert the mutation applied before trusting what a mutation check proves.
+2. Verify an edit is present after making it. An `ok` that belongs to a different operation is not
+   evidence.
+3. Never batch edits into one step whose success cannot be attributed individually.
+
+Fixed: the cache is in, it has a test that fails when it is removed, the mutation check asserted
+its own application, and the verification doc now records that it claimed the fix a round early
+rather than quietly becoming true.
+
+Also filed: the two-writer journal race on #231 (this PR made Tower a second writer of
+`.codev/commands.jsonl`, unlocked, and `#truncateTornTail` rewrites the whole file) as
+blocking-for-enablement; and `afx send` always reporting pending for a thread-backed agent on
+#227. Corrected #227's `installThreadSpawnFactory` fix shape — drop the call, do not key it — and
+named the six doc files #226 must carry.

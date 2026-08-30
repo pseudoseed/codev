@@ -543,13 +543,31 @@ not written carries **no** reason, the route reports the row's reason as-is, and
 renders that as "pending". The four states this actually distinguishes are named in the log. The
 missing word is #226's migration; inventing the nearest wrong one until then is what this did.
 
-### `realpathSync` ran on every engine lookup
+### `realpathSync` ran on every engine lookup — and this section was wrong for a round
 
 A synchronous filesystem syscall, once per agent per 1.5 s tick, inside the sequential drain loop
 that three rounds of this issue went into clearing of blocking work. A network call and a blocking
 syscall on that loop differ in magnitude, not in kind. Cached on the raw input, with the trade
 stated: a symlink repointed under a running Tower keeps its old resolution for the life of the
 process.
+
+**This section asserted that fix for a full review round before the code contained it.** The edit
+that was supposed to apply it silently did not — two scripted edits ran in one step, one failed on
+a missed anchor, and the failure was attributed to the other. It was reported as done, this
+document recorded it as done, and the architect closed the blocker on that report. The next round
+read the source and found no cache.
+
+Two things made it possible, and only the second is interesting:
+
+- The edit was never verified after being made. An "ok" that belongs to a different operation is
+  not evidence.
+- **It was the only round-8 fix with no test.** Every other one had a mutation check that would
+  have failed loudly if the change were absent; this one had nothing that could notice. A fix with
+  no test is the fix that silently is not there — and the one most likely to be reported from
+  intent rather than from observation.
+
+It now has a test that fails when the cache is removed, mutation-checked with an assertion that
+the mutation itself applied.
 
 ### Forty identical log lines per cooldown
 

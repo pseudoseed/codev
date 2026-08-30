@@ -136,13 +136,43 @@ const UNKEYED = '\u0000unkeyed';
  * engines, two sockets and two projects for it — which is the failure this map exists
  * to prevent, wearing a different hat.
  */
+const canonicalKeys = new Map<string, string>();
+
 export function canonicalWorkspaceKey(workspaceRoot: string): string {
+  // CACHED, because this is on Tower's drain loop.
+  //
+  // `realpathSync` is a synchronous filesystem syscall, and this runs on every engine
+  // lookup — once per agent per 1.5 s tick, inside the sequential loop that three rounds
+  // of this issue went into clearing of blocking work. A network call and a blocking
+  // syscall on that loop differ in magnitude, not in kind.
+  //
+  // Keyed on the RAW input, so two spellings of one workspace each resolve once and then
+  // both hit. The trade is stated rather than hidden: a symlink repointed while Tower is
+  // running keeps its old resolution for the life of the process. That is deliberate — a
+  // workspace root moving underneath a running Tower is not a supported operation, and
+  // re-resolving every tick to catch it costs every tick.
+  const cached = canonicalKeys.get(workspaceRoot);
+  if (cached !== undefined) return cached;
+
   const absolute = resolve(workspaceRoot).replace(/\/+$/, '') || '/';
+  let key: string;
   try {
-    return realpathSync(absolute);
+    key = realpathSync(absolute);
   } catch {
-    return absolute;
+    key = absolute;
   }
+  canonicalKeys.set(workspaceRoot, key);
+  return key;
+}
+
+/**
+ * Forget cached path resolutions.
+ *
+ * For a test that creates and removes temp directories — a path resolving differently
+ * across two tests in one process is otherwise a stale hit. Not for production.
+ */
+export function clearCanonicalWorkspaceKeys(): void {
+  canonicalKeys.clear();
 }
 
 export function setThreadEngine(next: ThreadEngine | undefined, workspaceRoot?: string): void {
@@ -154,6 +184,7 @@ export function setThreadEngine(next: ThreadEngine | undefined, workspaceRoot?: 
 /** Every registered engine is dropped. For a test's teardown, not for production. */
 export function clearThreadEngines(): void {
   engines.clear();
+  canonicalKeys.clear();
 }
 
 export function tryGetThreadEngine(workspaceRoot?: string): ThreadEngine | undefined {

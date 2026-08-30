@@ -21,11 +21,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import { setSpawnThreadFactory } from '../db/thread-identity.js';
 import {
   canonicalWorkspaceKey,
+  clearCanonicalWorkspaceKeys,
   clearThreadEngines,
   getThreadEngine,
   setThreadEngine,
@@ -165,6 +166,34 @@ describe('the engine registry is keyed by workspace', () => {
     setThreadEngine(keyed, '/ws/a');
     expect(tryGetThreadEngine()).toBe(unkeyed);
     expect(tryGetThreadEngine('/ws/a')).toBe(keyed);
+  });
+
+  /**
+   * Issue #219 round 9. This fix was reported as landed in round 8 and was NOT in the
+   * code — every other round-8 blocker had a mutation check that would have caught its
+   * absence, and this one had no test at all. A fix with no test is the fix that
+   * silently is not there.
+   *
+   * What it guards: `realpathSync` is a synchronous filesystem syscall, and
+   * `canonicalWorkspaceKey` runs on every engine lookup — once per agent per 1.5 s tick,
+   * inside Tower's sequential drain loop.
+   */
+  it('resolves a workspace path once, not on every lookup', () => {
+    const root = mkdtempSync(join(tmpdir(), 'air-219-cache-'));
+    dirs.push(root);
+    clearCanonicalWorkspaceKeys();
+
+    const first = canonicalWorkspaceKey(root);
+    // Remove the directory. An uncached implementation now takes the `catch` branch and
+    // returns the unresolved path; a cached one returns what it resolved before. That is
+    // the observable difference between calling realpathSync and not calling it.
+    rmSync(root, { recursive: true, force: true });
+    const second = canonicalWorkspaceKey(root);
+
+    expect(second).toBe(first);
+    // And the cache is per-process state a test can clear, not a leak.
+    clearCanonicalWorkspaceKeys();
+    expect(canonicalWorkspaceKey(root)).toBe(resolve(root));
   });
 
   it('two spellings of one workspace are one key, not two engines', () => {
