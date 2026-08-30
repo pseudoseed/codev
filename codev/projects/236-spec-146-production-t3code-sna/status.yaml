@@ -1,16 +1,37 @@
 id: '236'
 title: spec-146-production-t3code-sna
 protocol: aspir
-phase: plan
-plan_phases: []
-current_plan_phase: null
+phase: implement
+plan_phases:
+  - id: phase_1
+    title: Snapshot status vocabulary and the session-state mapping
+    status: in_progress
+  - id: phase_2
+    title: The t3code session cache and the production provider
+    status: pending
+  - id: phase_3
+    title: afx pair issue/list/revoke
+    status: pending
+  - id: phase_4
+    title: Durable approval operation store
+    status: pending
+  - id: phase_5
+    title: Asynchronous gate approval routes
+    status: pending
+  - id: phase_6
+    title: Client submits and polls an approval
+    status: pending
+  - id: phase_7
+    title: Threat model, failure matrix, and the dev-check revocation
+    status: pending
+current_plan_phase: phase_1
 gates:
   pr:
     status: pending
   verify-approval:
     status: pending
 iteration: 1
-build_complete: true
+build_complete: false
 history: []
 started_at: '2026-08-30T04:48:34.619Z'
-updated_at: '2026-08-30T05:08:37.552Z'
+updated_at: '2026-08-30T05:19:08.492Z'
