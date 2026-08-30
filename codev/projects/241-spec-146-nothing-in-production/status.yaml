@@ -40,10 +40,41 @@ gates:
   dev-approval:
     status: pending
     requested_at: '2026-08-30T16:07:10.673Z'
+    request:
+      question: >-
+        How do you want dev-approval verified? The change is Tower-side and needs a configured t3code server, so there
+        is no screen to click.
+      choices:
+        - label: Run the gated live test
+          consequence: >-
+            T3_LIVE=1 T3_NODE=<node> pnpm exec vitest run src/agent-farm/__tests__/spec-241-live-settle.test.ts from
+            packages/codev in this worktree. It starts the pinned harness, creates a thread through the production
+            engine over a real socket, and fails with TURN_DID_NOT_SETTLE if activeTurnId does not return to null on its
+            own. This is the only proof a real server emits these events in this order.
+          recommended: true
+        - label: Read the diff and approve
+          consequence: >-
+            Full suite is green (7176 passed, 1 skipped file for the live gate). 32 new tests cover the settle chain,
+            the refusal path, cursor resume across a fresh pool, and the sweeper's three failure modes. No live server
+            exercised.
+        - label: Run a real Tower against a t3code server
+          consequence: >-
+            Configure .codev/config.local.json threads block, run Tower from this worktree, spawn a thread-backed
+            builder and watch afx status show the turn go inactive. Closest to production; needs a server and a spare
+            Tower port, and the shared global.db makes a second Tower risky.
+      terminalExcerpt: |-
+        RUNNING CHECKS...
+          ✓ build (17.4s)
+          ✓ tests (213.6s)
+
+        Full suite: 365 passed | 1 failed → the 1 was packages/artifact-canvas dist missing;
+        after `pnpm --filter @cluesmith/codev-artifact-canvas build` it passes. 7176 tests green.
+
+        spec-241 suites: 32 passed | 1 skipped (live, needs T3_LIVE=1 + T3_NODE)
   pr:
     status: pending
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-30T15:18:07.177Z'
-updated_at: '2026-08-30T16:07:10.674Z'
+updated_at: '2026-08-30T16:07:28.297Z'
