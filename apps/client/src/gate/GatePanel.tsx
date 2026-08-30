@@ -136,12 +136,13 @@ export function GatePanel({
             placeholder="a fresh token, from the machine"
           />
           <button className="gate-button" type="submit" disabled={busy || token.length === 0}>
-            Open a human session
+            Open a session
           </button>
           <p className="gate-note">
-            Approving needs a human session, and one costs a fresh pairing token. Holding this
-            machine&rsquo;s credential is deliberately not enough: an agent on this machine can read
-            that file.
+            Approving needs a session, and one costs a fresh single-use pairing token minted on
+            that machine. The token makes this a deliberate, recorded act &mdash; it does not
+            prove a person is here, because anything that can write the pairing store can mint
+            one. What it authorized is recorded alongside the approval.
           </p>
         </form>
       ) : (

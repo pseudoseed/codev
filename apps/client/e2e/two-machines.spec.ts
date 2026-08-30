@@ -148,7 +148,7 @@ test.describe('approving a real gate', () => {
     await expect(row.locator('.gate-token')).toBeVisible();
     const token = await mintPairingToken();
     await row.locator('.gate-token').fill(token);
-    await row.getByRole('button', { name: /open a human session/i }).click();
+    await row.getByRole('button', { name: /open a session/i }).click();
 
     const approveButton = row.getByRole('button', { name: /approve pr/i });
     await expect(approveButton).toBeVisible({ timeout: 20_000 });
@@ -199,7 +199,7 @@ test.describe('approving a real gate', () => {
       await row.locator('.gate-token').fill(
         await mintPairingTokenFor(gated.host.stateRoot as string),
       );
-      await row.getByRole('button', { name: /open a human session/i }).click();
+      await row.getByRole('button', { name: /open a session/i }).click();
       const approveButton = row.getByRole('button', { name: /approve pr/i });
       await expect(approveButton).toBeVisible({ timeout: 20_000 });
       await approveButton.click();

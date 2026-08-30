@@ -170,10 +170,17 @@ construction and says what is needed.
 The durable fix is an asynchronous approval — submit, poll, report — and it
 belongs with phase 12's static mount rather than here.
 
-Spec 146 criterion 9b is therefore **narrowed**: a real gate is approved from the
-client, end to end, with session id, machine, authority and timestamp in
-`status.yaml`, on a project whose phase checks do not run. Both branches are
-tested — `two-machines.spec.ts` covers the approval and the refusal.
+Spec 146 criterion 9b is therefore **unmet**, and deliberately not narrowed. The
+approval works end to end — session id, machine, authority and timestamp land in
+`status.yaml` — but only where the phase's checks do not run, and no real project
+is like that. The spec and the phase plan are human-approved and this app's
+documentation does not get to redefine one of their acceptance criteria; a
+criterion quietly rewritten to match what was built is the thing this phase is
+about.
+
+**Owner: phase 12**, with the asynchronous approval and the static mount. Both
+branches are tested here — `two-machines.spec.ts` covers the approval and the
+refusal — so the gap is measured rather than assumed.
 
 ## What a paired session proves
 

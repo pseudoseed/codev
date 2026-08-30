@@ -217,7 +217,6 @@ describe('an approval the client cannot confirm', () => {
     ['the wrong signal', { signal: 'SOMETHING_ELSE', machine: 'alpha', sessionId: 's1', approvedAt: 'x' }],
     ['no approvedAt', { signal: 'GATE_APPROVED', machine: 'alpha', sessionId: 's1' }],
     ['no machine', { signal: 'GATE_APPROVED', sessionId: 's1', approvedAt: 'x' }],
-    ['no sessionId', { signal: 'GATE_APPROVED', machine: 'alpha', approvedAt: 'x' }],
   ])('reports a 200 with %s as unconfirmed, not as approved', async (_name, body) => {
     const { fetchImpl } = upTo({ status: 200, body });
     const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
@@ -235,6 +234,48 @@ describe('an approval the client cannot confirm', () => {
     const rendered = JSON.stringify(result);
     expect(rendered).not.toContain('alpha');
     expect(rendered).not.toContain('s1');
+  });
+
+  /*
+   * A MISSING SESSION ID IS NOT A MISSING ANSWER. An approval recorded before
+   * session ids existed is a real approval whose approver is unknown, and the
+   * client reports "unknown" rather than filling it with the session in hand.
+   */
+  it('accepts an approval with no recorded session, and does not invent one', async () => {
+    const { fetchImpl } = upTo({
+      status: 200,
+      body: { signal: 'GATE_APPROVED', machine: 'alpha', approvedAt: '2026-08-30T02:00:00Z' },
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.sessionId).toBeNull();
+  });
+
+  /*
+   * ALREADY-APPROVED IS SOMEBODY ELSE'S ACT. Reporting it as this session's
+   * approval would credit a person for something they did not do, at the one
+   * place the product records who decided what.
+   */
+  it('reports an already-approved gate with the record that exists, not this request', async () => {
+    const { fetchImpl } = upTo({
+      status: 200,
+      body: {
+        signal: 'GATE_ALREADY_APPROVED',
+        machine: 'someone-elses-host',
+        sessionId: 'their-session',
+        approvedAt: '2026-08-29T09:00:00Z',
+        authority: 'operator at the keyboard',
+      },
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.alreadyApproved).toBe(true);
+    expect(result.ok && result.machine).toBe('someone-elses-host');
+    expect(result.ok && result.sessionId).toBe('their-session');
+    expect(result.ok && result.approvedAt).toBe('2026-08-29T09:00:00Z');
+    expect(result.ok && result.authority).toBe('operator at the keyboard');
+    // Emphatically not the requesting session.
+    expect(result.ok && result.sessionId).not.toBe(session.sessionId);
   });
 
   /* An actual refusal is still a refusal, and is NOT marked unconfirmed. */

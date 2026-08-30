@@ -261,7 +261,18 @@ and asserts the recorded authority reads `a builder minted this for itself`. A
 future phase that adds real authority fails it — which is the point of putting it
 there rather than only in prose.
 
-### Criterion 9b, narrowed
+### Criterion 9b — narrowed in round 3, then corrected to UNMET in round 5
+
+The architect's round-3 ruling was to narrow it in the PR body and README. codex
+was right that this does not hold: the spec and the phase plan are
+human-approved sources of truth for acceptance criteria, and PR prose does not
+amend them. The architect corrected their own ruling; 9b is unmet, with the
+mechanism named and phase 12 as owner — the same treatment as criterion 3.
+
+A criterion quietly redefined to match what was built is the thing this phase is
+about, and it nearly happened in the phase's own artifacts.
+
+### Why it cannot be met here
 
 Approving runs porch's phase checks, which for an AIR `implement` phase are the
 repository's build and test suite. The architect's own ruling against a timeout

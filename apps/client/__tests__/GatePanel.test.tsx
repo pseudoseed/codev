@@ -122,7 +122,7 @@ describe('approving from the client', () => {
     const openSession = vi.fn(async () => ({ ok: true, message: 'session open until later' }));
     render(<ThreadRowView row={rowWith(BLOCKED)} approval={handle({ session: null, openSession })} />);
     fireEvent.change(screen.getByLabelText(/pairing token/i), { target: { value: 'tok-abc' } });
-    fireEvent.click(screen.getByRole('button', { name: /open a human session/i }));
+    fireEvent.click(screen.getByRole('button', { name: /open a session/i }));
     await waitFor(() => expect(openSession).toHaveBeenCalledWith('tok-abc'));
     await waitFor(() => expect(screen.getByText(/session open until later/i)).toBeTruthy());
   });

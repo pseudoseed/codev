@@ -3,10 +3,16 @@ import { machineHeaders, type MachineConfig } from '../connection/machine.js';
 /**
  * The approval path, as a client walks it.
  *
- * Four requests, because four different things are being established: that this
- * machine is paired, that a human is present, that this session holds a
- * capability, and that this particular gate is the one being approved. Porch
- * writes `status.yaml`; nothing here does.
+ * Four requests, because four different things are established: that this
+ * machine is paired, that a session was opened by a deliberate single-use mint,
+ * that this session holds a capability, and that this particular gate is the one
+ * being approved. Porch writes `status.yaml`; nothing here does.
+ *
+ * NONE OF THEM ESTABLISHES THAT A HUMAN IS PRESENT. Minting a pairing token
+ * needs only write access to the pairing store, and every agent on this host
+ * runs as the same user. See `codev/resources/146-approval-threat-model.md`;
+ * what the chain carries instead is a stated `authority`, recorded and never
+ * verified.
  */
 
 export const HUMAN_SESSION_HEADER = 'x-codev-human-session';
@@ -24,7 +30,17 @@ export type ApprovalOutcome =
     readonly ok: true;
     readonly approvedAt: string;
     readonly machine: string;
-    readonly sessionId: string;
+    readonly sessionId: string | null;
+    /**
+     * True when the gate was ALREADY approved before this request.
+     *
+     * A definite, readable answer — not this session's approval. The fields
+     * below describe whoever actually approved it, which may be someone else on
+     * another machine, so the caller must not present it as "you approved this".
+     */
+    readonly alreadyApproved?: boolean;
+    /** What the pairing token behind the approving capability claimed. */
+    readonly authority?: string;
     /**
      * Present when the gate WAS approved and committed but the push failed.
      *
@@ -119,12 +135,13 @@ function api(config: MachineConfig, path: string): string {
 }
 
 /**
- * Exchange a pairing token for a human-paired session.
+ * Exchange a pairing token for a paired client session.
  *
- * The token is what makes "a human is present" a fact rather than a claim: it is
- * single-use, minutes-long, and a person carries it from one screen to another.
- * Holding this machine's credential is deliberately not enough, because a
- * builder on this machine can read that file.
+ * The token makes each session a distinct, single-use, recorded act, and binds
+ * it to one ceremony. It does NOT make "a human is present" a fact: minting one
+ * needs only write access to the pairing store, which every agent on this host
+ * has. The machine credential is required alongside it so a revoked machine
+ * cannot open a session — that part is a real control.
  */
 export async function openHumanSession(
   fetchImpl: typeof globalThis.fetch,
@@ -210,8 +227,12 @@ export async function approveGate(
   const signal = text(approved.body, 'signal');
   const approvedAt = text(approved.body, 'approvedAt');
   const machine = text(approved.body, 'machine');
-  const sessionId = text(approved.body, 'sessionId');
-  if (signal !== 'GATE_APPROVED' || !approvedAt || !machine || !sessionId) {
+  // NULLABLE ON PURPOSE. An approval recorded before session ids existed is a
+  // real approval with an unknown approver, and reporting "unknown" is right
+  // where inventing this session's id would be a lie.
+  const sessionId = text(approved.body, 'sessionId') ?? null;
+  const alreadyApproved = signal === 'GATE_ALREADY_APPROVED';
+  if ((signal !== 'GATE_APPROVED' && !alreadyApproved) || !approvedAt || !machine) {
     return {
       ok: false,
       unconfirmed: true,
@@ -223,11 +244,14 @@ export async function approveGate(
   }
 
   const pushFailed = text(approved.body, 'pushFailed');
+  const authority = text(approved.body, 'authority');
   return {
     ok: true,
     approvedAt,
     machine,
     sessionId,
+    ...(alreadyApproved ? { alreadyApproved: true } : {}),
+    ...(authority ? { authority } : {}),
     ...(pushFailed ? { pushFailed } : {}),
   };
 }

@@ -25,6 +25,7 @@ import {
   resolveProjectId,
   resolveArtifactBaseName,
   resolvePorchWorkspaceRoot,
+  StatePushFailed,
 } from './state.js';
 import {
   loadProtocol,
@@ -58,6 +59,7 @@ import { findUnlandedCommits, completionReport } from './unlanded.js';
 import { resolveDefaultBranch } from '../../lib/default-branch.js';
 
 import { notifyTerminal, gateApprovedMessage, notifyProtocolComplete } from './notify.js';
+import type { ApprovalRecord } from './approval-record.js';
 import { loadConfig } from '../../lib/config.js';
 import { version } from '../../version.js';
 import { readGateRequestFile } from './gate-request.js';
@@ -908,6 +910,32 @@ export interface ApproveOptions {
 }
 
 /**
+ * WHAT AN `approve()` CALL ACTUALLY DID.
+ *
+ * `approve` used to return `void`, and it returns NORMALLY when the gate was
+ * already approved. A caller could not tell "I approved this" from "somebody
+ * else already had", so codev-agent answered both with GATE_APPROVED, the
+ * requesting session id, and a fresh timestamp — claiming that session approved
+ * a gate it did not, at a time that never happened. Provenance falsified by a
+ * missing return value.
+ *
+ * `record` is the record PERSISTED IN `status.yaml`, never one built for the
+ * response, so a caller reporting an approval reports the one that exists.
+ */
+export interface ApproveOutcome {
+  /**
+   * `approved` — this invocation performed the gate transition.
+   * `already-approved` — it was approved before this call and nothing changed.
+   */
+  readonly outcome: 'approved' | 'already-approved';
+  /** From `status.yaml`. Absent only on records that predate the field. */
+  readonly approvedAt?: string;
+  readonly record?: ApprovalRecord;
+  /** Set when the gate write itself was committed but not pushed. */
+  readonly pushFailed?: string;
+}
+
+/**
  * A refusal raised instead of exiting, for in-process callers.
  *
  * Carries the same `code` and `message` the CLI prints, so a route can answer
@@ -935,7 +963,7 @@ export async function approve(
   hasHumanFlag: boolean,
   resolver?: ArtifactResolver,
   options: ApproveOptions = {},
-): Promise<void> {
+): Promise<ApproveOutcome> {
   const statusPath = findStatusPath(workspaceRoot, projectId);
   if (!statusPath) {
     throw new Error(projectNotFoundMessage(workspaceRoot, projectId));
@@ -1016,10 +1044,46 @@ export async function approve(
 
   const state = readState(statusPath);
 
+  /*
+   * A WRITE THAT HAPPENS BEFORE THE GATE IS APPROVED.
+   *
+   * `writeStateAndCommit` throws `StatePushFailed` when the state was written
+   * and committed but the push failed, and codev-agent turns that into
+   * "approved, but not pushed — do not approve again". That is right for the
+   * gate write and CATASTROPHIC for the three writes above it: a push failure
+   * during the verify auto-complete, the upgrade gate-creation or the verify
+   * phase transition would report an approval that never happened AND tell the
+   * human not to retry. They walk away believing a gate is approved that is not.
+   *
+   * The round before this one had the opposite bug — a successful approval
+   * reported as a refusal — which merely made someone re-approve. Same class,
+   * opposite sign, and this direction is far worse.
+   *
+   * So a push failure before the gate write is translated into an ordinary
+   * failure, which says plainly that the gate was NOT approved. Only the write
+   * at the end may raise `StatePushFailed`, and
+   * `spec-146-phase-11-approval-writes.test.ts` reads this function's source to
+   * assert that stays true — the push is skipped under VITEST, so no behavioural
+   * test can reach this.
+   */
+  const writeBeforeApproval = async (message: string): Promise<void> => {
+    try {
+      await writeStateAndCommit(statusPath, state, message);
+    } catch (error: unknown) {
+      if (error instanceof StatePushFailed) {
+        throw new Error(
+          `the ${gateName} gate was NOT approved: a preparatory write was committed but not `
+          + `pushed (${message}). ${error.message}`,
+        );
+      }
+      throw error;
+    }
+  };
+
   // Convenience: for verify-approval, auto-complete porch done if build_complete is false
   if (gateName === 'verify-approval' && state.phase === 'verify' && !state.build_complete) {
     state.build_complete = true;
-    await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} verify build-complete (auto)`);
+    await writeBeforeApproval(`chore(porch): ${state.id} verify build-complete (auto)`);
   }
 
   // Auto-create gate entry for upgraded projects (e.g., verify-approval missing after upgrade)
@@ -1029,7 +1093,7 @@ export async function approve(
     if (phaseGate === gateName) {
       // Gate belongs to the current phase — initialize it
       state.gates[gateName] = { status: 'pending', requested_at: new Date().toISOString() };
-      await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} ${gateName} gate-created (upgrade)`);
+      await writeBeforeApproval(`chore(porch): ${state.id} ${gateName} gate-created (upgrade)`);
     } else {
       const knownGates = Object.keys(state.gates).join(', ');
       throw new Error(`Unknown gate: ${gateName}\nKnown gates: ${knownGates || 'none'}`);
@@ -1038,7 +1102,13 @@ export async function approve(
 
   if (state.gates[gateName].status === 'approved') {
     say(chalk.yellow(`Gate ${gateName} is already approved.`));
-    return;
+    // The EXISTING record, so a caller reports the approval that happened rather
+    // than the one it just asked for.
+    return {
+      outcome: 'already-approved',
+      ...(state.gates[gateName].approved_at ? { approvedAt: state.gates[gateName].approved_at } : {}),
+      ...(state.gates[gateName].approval ? { record: state.gates[gateName].approval } : {}),
+    };
   }
 
   // Run phase checks before approving
@@ -1055,7 +1125,7 @@ export async function approve(
     if (state.phase === 'review' && state.gates['pr']?.status === 'approved') {
       state.phase = 'verify';
       state.build_complete = true;
-      await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} verify phase-transition (verify-approval)`);
+      await writeBeforeApproval(`chore(porch): ${state.id} verify phase-transition (verify-approval)`);
     } else {
       throw new Error(
         `Cannot approve verify-approval from phase '${state.phase}'. ` +
@@ -1132,7 +1202,23 @@ export async function approve(
   if (gateName === 'pr') {
     state.pr_ready_for_human = false;
   }
-  await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} ${gateName} gate-approved`);
+  /*
+   * THE ONE WRITE THAT MAY RAISE `StatePushFailed` TO THE CALLER.
+   *
+   * Everything above went through `writeBeforeApproval`, which converts a push
+   * failure into an ordinary failure saying the gate was NOT approved. From
+   * here the gate IS approved and committed, so a push failure is a caveat on a
+   * real approval — and the caller is told which of the two it has.
+   */
+  let pushFailed: string | undefined;
+  try {
+    await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} ${gateName} gate-approved`);
+  } catch (error: unknown) {
+    if (!(error instanceof StatePushFailed)) throw error;
+    pushFailed = error.message;
+    say('');
+    say(chalk.yellow(`  ${error.message}`));
+  }
 
   // Wake the builder iff porch was invoked from OUTSIDE the builder's
   // worktree. The wake-up wakes an *idle* builder; when the builder is
@@ -1166,6 +1252,15 @@ export async function approve(
     say(`\n  Run: porch done ${state.id} (to advance)`);
   }
   say('');
+
+  // Read back off the state that was written, not off the decision that produced
+  // it: a caller reporting this approval reports the one now in status.yaml.
+  return {
+    outcome: 'approved',
+    ...(state.gates[gateName].approved_at ? { approvedAt: state.gates[gateName].approved_at } : {}),
+    ...(state.gates[gateName].approval ? { record: state.gates[gateName].approval } : {}),
+    ...(pushFailed ? { pushFailed } : {}),
+  };
 }
 
 /**

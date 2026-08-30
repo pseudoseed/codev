@@ -183,8 +183,10 @@ describe('a client can get from nothing to an approved gate', () => {
     });
     expect(probeBefore.status).toBe(401);
 
-    // 3. BECOME A HUMAN SESSION. Costs a second, fresh pairing token — a builder
-    //    that read the machine credential off disk still cannot mint one.
+    // 3. OPEN A SESSION. Costs a second, fresh token bound to this ceremony, so
+    //    a machine credential read off disk is not by itself a session. It does
+    //    NOT establish human presence — a same-uid process can mint its own
+    //    token, which the residual test at the bottom of this file demonstrates.
     const humanToken = host.pairings.issue(SESSION_MINT).token;
     const session = await post(`${host.origin}/api/agent/v1/human-sessions`, {
       [MACHINE_CREDENTIAL_HEADER]: credential,

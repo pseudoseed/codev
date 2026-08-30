@@ -769,10 +769,9 @@ function handleGateApprove(
     // Imported here, not at module load. porch's entry point pulls in the whole
     // state layer, and this module is loaded by every Tower start.
     const { approve, ApprovalRefusedError } = await import('../../commands/porch/index.js');
-    const { StatePushFailed } = await import('../../commands/porch/state.js');
-    let pushFailed: string | null = null;
+    let result;
     try {
-      await approve(workspacePath, projectId, gateName, true, undefined, {
+      result = await approve(workspacePath, projectId, gateName, true, undefined, {
         // A DELIBERATELY MINIMAL ENVIRONMENT. Inheriting process.env would carry
         // Tower's own CODEV_ARCHITECT_NAME / CODEV_WORKTREE_ROOT into the caller
         // attribution and record this approval as an architect session, which it
@@ -808,28 +807,38 @@ function handleGateApprove(
         writeJson(res, 403, { signal: error.code, message: error.message });
         return;
       }
-      /*
-       * THE GATE IS APPROVED. Only the push to the remote failed.
-       *
-       * Reporting this as a failure is how a human is told their approval did
-       * not happen when it did — and they approve again, chasing a state that
-       * already changed. It is reported as a success carrying a caveat, because
-       * that is what it is.
-       */
-      if (error instanceof StatePushFailed) {
-        pushFailed = error.message;
-      } else {
-        throw error;
-      }
+      throw error;
     }
+
+    /*
+     * EVERY FIELD BELOW COMES FROM WHAT PORCH PERSISTED. NONE IS BUILT HERE.
+     *
+     * This used to answer GATE_APPROVED unconditionally, with the REQUESTING
+     * session id, this host's machine name, and `new Date()`. Two ways that
+     * falsified the record it was reporting:
+     *
+     *  - `approve` returns normally when the gate was ALREADY approved, so a
+     *    stale or concurrent request claimed that this session approved a gate
+     *    somebody else had.
+     *  - the timestamp was this server's clock rather than the one in
+     *    `status.yaml`, so an old approval was reported as having just happened.
+     *
+     * The client is built to refuse a response it cannot read rather than fill
+     * gaps from local state; this is the same rule one layer down, and it was
+     * the layer manufacturing the values.
+     */
+    const record = result.record;
     writeJson(res, 200, {
-      signal: 'GATE_APPROVED',
+      signal: result.outcome === 'approved' ? 'GATE_APPROVED' : 'GATE_ALREADY_APPROVED',
       projectId,
       gateName,
-      machine: stored.machine,
-      sessionId: humanSessionId,
-      approvedAt: new Date().toISOString(),
-      ...(pushFailed ? { pushFailed } : {}),
+      // The machine and session that made the approval THAT EXISTS — which on
+      // the already-approved path is somebody else's, and says so.
+      machine: record?.machine ?? stored.machine,
+      sessionId: record?.session_id ?? null,
+      approvedAt: result.approvedAt ?? null,
+      ...(record?.authority ? { authority: record.authority } : {}),
+      ...(result.pushFailed ? { pushFailed: result.pushFailed } : {}),
     });
   }).catch((error: unknown) => guardRouteFailure(res, context, 'gate-approve', error));
 }

@@ -66,14 +66,27 @@ export function App() {
         if (!session) return { ok: false, message: 'no human session is open on this machine' };
         const result = await approveGate(fetchImpl, config, session, gate);
         if (result.ok) {
-          const approved = `approved on ${result.machine} at ${result.approvedAt}, session ${result.sessionId}`;
+          /*
+           * EVERY WORD OF THIS COMES FROM THE SERVER'S RECORD.
+           *
+           * `alreadyApproved` is deliberately worded as somebody else's act:
+           * the gate was approved before this request, and the session named is
+           * whoever did it — not the one that just clicked. Reporting it as
+           * "you approved this" would credit a person for an act they did not
+           * perform, at the one place the product records who decided what.
+           */
+          const by = result.sessionId ? `session ${result.sessionId}` : 'an unrecorded session';
+          const approved = result.alreadyApproved
+            ? `already approved on ${result.machine} at ${result.approvedAt}, by ${by}`
+            : `approved on ${result.machine} at ${result.approvedAt}, ${by}`;
+          const withAuthority = result.authority ? `${approved} — authority: ${result.authority}` : approved;
           // The gate IS approved. Saying so first, and naming the push failure
           // second, is the difference between a caveat and a retry.
           return {
             ok: true,
             message: result.pushFailed
-              ? `${approved} — but not pushed: ${result.pushFailed}. Do not approve again; push from the worktree.`
-              : approved,
+              ? `${withAuthority} — but not pushed: ${result.pushFailed}. Do not approve again; push from the worktree.`
+              : withAuthority,
           };
         }
         /*
