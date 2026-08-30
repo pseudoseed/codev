@@ -40,6 +40,23 @@ export interface PorchStatusProjection {
   readonly statusPath: string;
 }
 
+/**
+ * One message addressed to an agent, newest first in {@link ThreadIdentity.messages}.
+ *
+ * `truncated` is not cosmetic. A body cut at the server's limit that renders
+ * without saying so is a message misreported as complete, which is the defect
+ * class this whole client exists to avoid — so the flag travels to the UI and
+ * the UI states it.
+ */
+export interface AgentMessage {
+  readonly id: string;
+  readonly from: string;
+  readonly at: string;
+  readonly body: string;
+  readonly truncated?: true;
+  readonly held?: true;
+}
+
 export interface ThreadIdentity {
   /**
    * `terminal` while a row is still driven by a PTY rather than a t3code thread.
@@ -56,6 +73,8 @@ export interface ThreadIdentity {
   readonly porch?: PorchStatusProjection;
   readonly spawnedByArchitect?: string;
   readonly sessionState?: string;
+  /** Absent means none. Whether any could be read is `messageLog` on the snapshot. */
+  readonly messages?: readonly AgentMessage[];
 }
 
 export interface AgentStateSignal {
@@ -71,6 +90,17 @@ export interface AgentStateSignal {
 /** Whether session state was observable at all. Never inferred from its absence. */
 export type T3codeReachability = 'not-provided' | 'unreachable' | 'available';
 
+/**
+ * Whether the message log was readable.
+ *
+ * `not-provided` is what a server that predates the field reports by omitting
+ * it — a THIRD situation, not a synonym for either of the others. An older
+ * server has messages it is not sending; an `unreadable` one could not open the
+ * store; an `available` one answered, possibly with nothing. Three facts, three
+ * words.
+ */
+export type MessageLogReachability = 'not-provided' | 'unreadable' | 'available';
+
 export interface ThreadRegistrySnapshot {
   readonly t3code: T3codeReachability;
   readonly architects: Readonly<Record<string, string>>;
@@ -78,6 +108,8 @@ export interface ThreadRegistrySnapshot {
   readonly identities: readonly ThreadIdentity[];
   readonly statuses: readonly PorchStatusProjection[];
   readonly signals: readonly AgentStateSignal[];
+  /** Optional on the wire so a phase-11 server still validates. */
+  readonly messageLog?: 'available' | 'unreadable';
 }
 
 export interface AgentProtocolSnapshot {
@@ -137,6 +169,16 @@ function porch(value: unknown): value is PorchStatusProjection {
     && str(value.statusPath);
 }
 
+function message(value: unknown): value is AgentMessage {
+  return isRecord(value)
+    && str(value.id)
+    && str(value.from)
+    && str(value.at)
+    && str(value.body)
+    && (value.truncated === undefined || value.truncated === true)
+    && (value.held === undefined || value.held === true);
+}
+
 function identity(value: unknown): value is ThreadIdentity {
   return isRecord(value)
     && (value.backing === 'thread' || value.backing === 'terminal')
@@ -148,7 +190,9 @@ function identity(value: unknown): value is ThreadIdentity {
     && (value.management === 'managed' || value.management === 'unmanaged')
     && (value.porch === undefined || porch(value.porch))
     && optionalStr(value.spawnedByArchitect)
-    && optionalStr(value.sessionState);
+    && optionalStr(value.sessionState)
+    && (value.messages === undefined
+      || (Array.isArray(value.messages) && value.messages.every(message)));
 }
 
 function signal(value: unknown): value is AgentStateSignal {
@@ -216,6 +260,19 @@ export function validateSnapshot(value: unknown): AgentProtocolSnapshot | null {
   if (!Array.isArray(protocol.identities) || !protocol.identities.every(identity)) return null;
   if (!Array.isArray(protocol.statuses) || !protocol.statuses.every(porch)) return null;
   if (!Array.isArray(protocol.signals) || !protocol.signals.every(signal)) return null;
+  // ABSENT IS ACCEPTED, WRONG IS NOT. A server that predates the field is an
+  // older server, which `messageLogOf` reports as `not-provided`; a present
+  // value this build does not recognise is a payload it cannot parse.
+  if (protocol.messageLog !== undefined
+    && protocol.messageLog !== 'available'
+    && protocol.messageLog !== 'unreadable') {
+    return null;
+  }
 
   return value as unknown as AgentProtocolSnapshot;
+}
+
+/** The snapshot's message-log state, with an older server's omission named. */
+export function messageLogOf(snapshot: AgentProtocolSnapshot): MessageLogReachability {
+  return snapshot.protocol.messageLog ?? 'not-provided';
 }
