@@ -1962,6 +1962,25 @@ async function handleSend(
           });
           return;
         }
+        // A row the delivery path ENDED. Reporting it as held would be a promise of a
+        // retry that cannot happen, plus a mailbox id that lists nowhere — the sender
+        // waits for something no action of theirs or ours will produce. `delivered:
+        // false, held: false` alone is worse: the CLI's final branch reads that as
+        // "delivered", so the refusal needs its own word.
+        if (stored?.status === 'dismissed') {
+          sendJson(res, 200, {
+            ok: true,
+            resolvedTo: reg.agent,
+            deferred: false,
+            delivered: false,
+            held: false,
+            refused: true,
+            refusedReason: refusedReasonFor(stored),
+            mailboxId: row.id,
+            reason: null,
+          });
+          return;
+        }
         sendJson(res, 200, {
           ok: true,
           resolvedTo: reg.agent,
@@ -2226,6 +2245,23 @@ async function handleSend(
     });
     return;
   }
+  if (stored?.status === 'dismissed') {
+    // Same lie, same fix, second site. See the note at the registry branch above.
+    ctx.log('INFO', `Message refused: ${from ?? 'unknown'} → ${toAgent} (mailbox ${row.id.slice(0, 8)}...)`);
+    sendJson(res, 200, {
+      ok: true,
+      terminalId: result.terminalId,
+      resolvedTo: toAgent,
+      deferred: false,
+      delivered: false,
+      held: false,
+      refused: true,
+      refusedReason: refusedReasonFor(stored),
+      mailboxId: row.id,
+      reason: null,
+    });
+    return;
+  }
   const reason: MailboxReason = stored?.reason ?? 'busy';
   ctx.log('INFO', `Message held (${reason}): ${from ?? 'unknown'} → ${toAgent} (mailbox ${row.id.slice(0, 8)}...)`);
   // The message stayed held → a new held row is in the set; refresh the indicator
@@ -2255,6 +2291,24 @@ async function handleSend(
  * the message BODY is deliberately never surfaced here (it travels only over the live
  * terminal stream on delivery). `escalated` is normalized from SQLite's 0/1 to a bool.
  */
+/**
+ * Why a row the delivery path ended was ended, for the sender.
+ *
+ * The mailbox has one terminal non-delivered state (`dismissed`) and it now carries two
+ * meanings — a human ran `afx inbox dismiss`, and the system refused the message. They
+ * are not distinguishable on the row, which is #226's migration. What IS knowable here
+ * is the one case the system produces today, so it is named specifically and everything
+ * else falls back to a sentence that does not claim more than it knows.
+ */
+function refusedReasonFor(stored: { no_enter?: number } | null | undefined): string {
+  if (stored?.no_enter === 1) {
+    return 'the recipient is thread-backed and a thread has no composer, so a --no-enter message '
+      + 'cannot be left to wait for a human — delivering it would run it. Re-send without '
+      + '--no-enter if it should run.';
+  }
+  return 'the delivery path ended this message; it was not delivered and no retry is pending.';
+}
+
 function handleInboxList(res: http.ServerResponse, url: URL): void {
   const rawWorkspace = url.searchParams.get('workspace');
   // Normalize to the stored realpath key (mailbox workspace_path is normalized at

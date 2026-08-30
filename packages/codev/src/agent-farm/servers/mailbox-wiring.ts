@@ -114,10 +114,44 @@ const NODE_FS_PORT: ContextFsPort = buildContextFsPort();
  * correct — and because rows address the AGENT, a respawned terminal (new id, same
  * builder id) transparently drains its predecessor's held mail.
  */
-export function resolveLiveSessionForAgent(workspacePath: string, toAgent: string): DeliverySession | null {
+export function resolveLiveSessionForAgent(
+  workspacePath: string,
+  toAgent: string,
+  log?: LogFn,
+): DeliverySession | null {
+  /**
+   * A live, writable PTY for this agent — looked up BEFORE the thread branch decides.
+   *
+   * The thread branch used to win unconditionally, so a STALE `thread_id` on a row
+   * silently shadowed a live PTY: the agent was there, typing, and its mail went to a
+   * thread that no longer served it. Low probability and completely silent, which is the
+   * combination this project keeps paying for.
+   *
+   * The two are mutually exclusive by construction (`assertExclusiveIdentity`), so both
+   * being present is a contradiction in the state rather than a choice to make quietly.
+   * The PTY wins because it is the one that was observed live, and the contradiction is
+   * logged rather than resolved in silence.
+   */
+  const livePty = (): DeliverySession | null => {
+    const entry = getWorkspaceTerminals().get(workspacePath);
+    if (!entry) return null;
+    const tid = entry.builders.get(toAgent) ?? entry.architects.get(toAgent) ?? entry.shells.get(toAgent);
+    if (!tid) return null;
+    const session = getTerminalManager().getSession(tid);
+    if (!session || !session.writable) return null;
+    return session;
+  };
+
   try {
     const builder = getBuilder(toAgent, workspacePath);
     if (builder?.threadId) {
+      const pty = livePty();
+      if (pty) {
+        log?.('ERROR', `[mailbox] ${toAgent} @ ${workspacePath} has BOTH a thread id (${builder.threadId}) `
+          + `and a live PTY. Those are mutually exclusive, so one of them is stale. Delivering to the `
+          + `PTY, which is the one observed live; the thread id on the row should be cleared.`);
+        return pty;
+      }
       return threadDeliverySession(builder.threadId, {
         workspaceRoot: workspacePath,
         worktreePath: builder.worktree,
@@ -129,6 +163,14 @@ export function resolveLiveSessionForAgent(workspacePath: string, toAgent: strin
     }
     const architect = getArchitectByName(workspacePath, toAgent);
     if (architect?.threadId) {
+      const pty = livePty();
+      if (pty) {
+        log?.('ERROR', `[mailbox] architect ${toAgent} @ ${workspacePath} has BOTH a thread id `
+          + `(${architect.threadId}) and a live PTY. Those are mutually exclusive, so one of them is `
+          + `stale. Delivering to the PTY, which is the one observed live; the thread id on the row `
+          + `should be cleared.`);
+        return pty;
+      }
       // An architect's worktree IS the workspace root, and it has no branch —
       // the shape `createArchitectThread` writes.
       return threadDeliverySession(architect.threadId, {
@@ -142,13 +184,7 @@ export function resolveLiveSessionForAgent(workspacePath: string, toAgent: strin
     // Registry unreadable: fall through to the PTY map.
   }
 
-  const entry = getWorkspaceTerminals().get(workspacePath);
-  if (!entry) return null;
-  const tid = entry.builders.get(toAgent) ?? entry.architects.get(toAgent) ?? entry.shells.get(toAgent);
-  if (!tid) return null;
-  const session = getTerminalManager().getSession(tid);
-  if (!session || !session.writable) return null;
-  return session;
+  return livePty();
 }
 
 /**
@@ -543,7 +579,7 @@ function threadBackendNotReady(
 
 export function makeDeliveryPorts(log: LogFn): DeliveryPorts {
   return {
-    getSessionForAgent: (ws, agent) => resolveLiveSessionForAgent(ws, agent),
+    getSessionForAgent: (ws, agent) => resolveLiveSessionForAgent(ws, agent, log),
     resolveProfile: (session) => resolveProfileForSession(session),
     classify: (session, profile) => classifyAgentScreen(session, profile, (m) => log('INFO', m)),
     writeMessage: async (session, msg, noEnter) => {

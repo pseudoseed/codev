@@ -386,6 +386,66 @@ runtime log.
 `deliverToThread`'s `--no-enter` log said "the row stays held". The caller dismisses it. One rule
 in two files with one of them wrong is how the next reader is misled.
 
+## Review round 6 — the stall that survives a healthy connect
+
+Round 5 took the CONNECT off Tower's drain tick. These are what was still on it, plus a lie the
+route was telling about a row the delivery path had ended.
+
+### The turn submission was still on the tick
+
+`MailboxDrainer.tick` walks agents **sequentially**, and a thread submission is
+`thread.turn.start` over RPC — bounded at 30 s by the client, not by anything in the mailbox. So
+an **already-connected but unresponsive** server stalled delivery for every agent in every
+workspace, PTY-only ones included. The connect was one path to that stall; this is the other, and
+it is the one that survives a healthy connect.
+
+The submission now runs out of band and the tick returns immediately. The row stays held until the
+submission says otherwise, which is what held is for. An in-flight guard keyed by agent is what
+makes not awaiting safe: the row is still held, so the next tick 1.5 s later would submit the same
+message a second time — one message, several turns.
+
+### A post-upgrade failure leaked the socket
+
+The upgrade timeout closes the socket it gives up on, but a connection that upgraded
+**successfully** and then failed at the project lookup or `project.create` was simply dropped: the
+reference went out of scope and the socket stayed open. The 60 s cooldown then retries, and Tower
+accumulates one live connection per attempt.
+
+`connectDispatcher` returns a disposer now, and every exit before an engine owns the socket hangs
+up. The successful path deliberately does not — the engine holds it for its lifetime, and its own
+`close` handler evicts it.
+
+### The route told the sender a row was held when it had been ended
+
+`deliverAgentMail` ends a `--no-enter` row to a thread-backed agent terminally. The route reported
+that as `held: true, reason: 'no-live-pty'` — promising a retry that cannot happen, and handing
+back a mailbox id that lists nowhere.
+
+`delivered: false, held: false` alone would have been worse: the CLI's final branch reads that as
+**delivered**. So the refusal has its own word — `refused` with a `refusedReason` sentence — on
+both route sites, in the SDK response type, and on both CLI paths, each checked *before* the
+`held` branch and before the delivered fallthrough so an older Tower's answer is unchanged.
+
+The vocabulary migration this points at is still **#226**; this is the one line that was
+user-visibly false.
+
+### A stale thread id silently shadowed a live PTY
+
+`resolveLiveSessionForAgent` returned a thread session before consulting the terminal map, so a
+row whose `thread_id` was stale sent its mail to a thread that no longer served the agent — while
+the agent sat at a live prompt. Low probability, completely silent.
+
+The two identities are mutually exclusive by construction (`assertExclusiveIdentity`), so both
+being present is a contradiction in the state rather than a preference. The PTY wins, because it
+is the one observed live, and the contradiction is logged rather than resolved in silence. A
+not-writable PTY entry is not a live PTY and does not displace the thread.
+
+### One more test isolation, found on the way
+
+`tower-routes.test.ts` mocked `getGlobalDb` but not `getDb`, so `state.js`'s builder and architect
+reads reached the **real user-global database** — a route test's answer depended on what happened
+to be registered on the machine running it. Both now point at the in-memory test DB.
+
 ## Recorded, not fixed
 
 - **An architect's `attach` passes no harness or model**, so it depends on the engine's
@@ -432,8 +492,10 @@ made about either.
 |---|---|
 | `spec-146-phase-9-live-architect-thread.test.ts` | 2 — the live run above, and the companion that names the exact reason it could not check. Its post-restart turn is delivered by a **real child process** through `makeDeliveryPorts().writeMessage`, against the built `dist` |
 | `spec-146-phase-9-thread-delivery-states.test.ts` | 11 — delivery from a process holding no engine, six not-delivered states compared against each other, the connect that is never awaited, the backoff state, and the `--no-enter` refusal with its control |
-| `spec-146-phase-9-engine-per-workspace.test.ts` | 14 — the keyed registry with no fallback in either direction, two workspaces in one process against a real fake t3code server, concurrent init counted at the server, socket-close eviction with its reconnect, a close DURING initialisation with its reconnect, the project lookup's bound, the non-blocking request, the failed-connect cooldown, and the upgrade bound closing the socket it gave up on |
-| `send-delivery.test.ts` | +2 — a `--no-enter` row to a thread-backed agent ends terminally rather than starving, with a PTY control showing the flag itself is unchanged |
+| `spec-146-phase-9-engine-per-workspace.test.ts` | 15 — the keyed registry with no fallback in either direction, two workspaces in one process against a real fake t3code server, concurrent init counted at the server, socket-close eviction with its reconnect, a close DURING initialisation with its reconnect, the project lookup's bound, the non-blocking request, the failed-connect cooldown, the upgrade bound closing the socket it gave up on, and a post-upgrade failure hanging up rather than leaking |
+| `send-delivery.test.ts` | +5 — a `--no-enter` row ends terminally with a PTY control; a hung thread submission does not delay a PTY agent behind it; a second tick does not re-submit an in-flight turn; the row delivers when the submission settles |
+| `tower-routes.test.ts` | +2 — a terminally refused row is reported `refused`, not `held`, with an ordinary send to the same thread-backed agent as the control |
+| `spec-146-phase-9-render-gate.test.ts` | +3 — a stale thread id beside a live PTY delivers to the PTY and logs the contradiction, with a thread-only control and a not-writable-PTY control |
 | `spec-146-phase-9-thread-backend.test.ts` | +6 — the project lookup's three answers, driven against a real HTTP server, and the symlink-normalised match |
 | `spec-146-phase-9-architect-thread-resume.test.ts` | 9 — the branch normalisation, `attach` vs `create`, idempotence, the unattached-thread message, and `DriverThread.attach` |
 | `spec-146-phase-9-add-architect-thread-path.test.ts` | 6 — the backend is registered before the engine is read; the collision refusal; auto-numbering; unconfigured still uses Tower; unreachable propagates |
@@ -443,7 +505,7 @@ Mutation-checked: reverting the branch normalisation fails the item-3 payload te
 `ensureThreadBackendReady` call fails two of the three add-architect tests; replacing `restart`
 with `stop` + `start` fails the live test.
 
-Full suite green with these changes: `347 passed | 3 skipped` files, `6851 passed | 52 skipped`
+Full suite green with these changes: `347 passed | 3 skipped` files, `6860 passed | 52 skipped`
 tests, plus the v2 suite's `180 passed`. Run with `env -u CODEV_WORKTREE_ROOT -u CODEV_BUILDER_ID
 -u CODEV_ARCHITECT_NAME`, the workaround #189 still requires.
 

@@ -519,21 +519,62 @@ export async function deliverAgentMail(
       ports.onHeldStateChange();
       return { delivered: [], reason: null };
     }
-    let written = false;
-    try {
-      written = await ports.writeMessage(session, current.formatted_message, current.no_enter === 1);
-    } catch {
-      written = false;
-    }
-    if (!written) return hold('no-live-pty');
-    if (!markDelivered(db, row.id, ports.now())) {
-      ports.onHeldStateChange();
+    // THE TICK DOES NOT AWAIT THE SUBMISSION.
+    //
+    // `MailboxDrainer.tick` walks agents sequentially, and a thread submission is
+    // `thread.turn.start` over RPC — bounded at 30 s by the client, not by anything here.
+    // Awaiting it stalled delivery for EVERY agent in EVERY workspace, PTY-only ones
+    // included, on a server that had connected fine and then went quiet. Moving the
+    // CONNECT off the tick fixed one path to that stall; this is the other one, and it is
+    // the one that survives a healthy connect.
+    //
+    // So the submission runs out of band and the tick moves on. The row stays held until
+    // the submission says otherwise, which is what held is for.
+    //
+    // WHY AN IN-FLIGHT GUARD AND NOT JUST FIRE-AND-FORGET: the row is still held, so the
+    // next tick 1.5 s later would pick it up and submit it AGAIN. One message, several
+    // turns. The guard is per agent, and it is the reason this is safe to not await.
+    const inFlightKey = agentKey(workspacePath, toAgent);
+    if (threadSubmissions.has(inFlightKey)) {
+      // Pending, not stuck: nothing is refused, so no reason is written. Inventing one
+      // here would be another word for a state that already has a true one.
       return { delivered: [], reason: null };
     }
-    ports.broadcast(broadcastForRow(current, ports.now()));
-    ports.onHeldStateChange();
-    ports.log(`[mailbox] delivered ${row.id} → ${toAgent} @ ${path.basename(workspacePath)} (thread)`);
-    return { delivered: [row.id], reason: null };
+    const submission = (async () => {
+      let written = false;
+      try {
+        written = await ports.writeMessage(session, current.formatted_message, current.no_enter === 1);
+      } catch {
+        written = false;
+      }
+      if (!written) {
+        if (current.reason !== 'no-live-pty') setHeldReason(db, row.id, 'no-live-pty', ports.now());
+        return;
+      }
+      if (!markDelivered(db, row.id, ports.now())) {
+        ports.onHeldStateChange();
+        return;
+      }
+      ports.broadcast(broadcastForRow(current, ports.now()));
+      ports.onHeldStateChange();
+      ports.log(`[mailbox] delivered ${row.id} → ${toAgent} @ ${path.basename(workspacePath)} (thread)`);
+    })();
+    // Every outcome swallowed, and the key cleared either way. This promise is never
+    // awaited by anyone, so a rejection escaping it would reach the tower-server's
+    // `unhandledRejection` handler and exit(1) — taking Tower and every terminal with it.
+    threadSubmissions.set(
+      inFlightKey,
+      submission.then(
+        () => { threadSubmissions.delete(inFlightKey); },
+        (err: unknown) => {
+          threadSubmissions.delete(inFlightKey);
+          ports.log(`[mailbox] thread submission for ${toAgent} @ ${path.basename(workspacePath)} threw: ${String(err)}`);
+        },
+      ),
+    );
+    // Held, unchanged, and the next tick either finds it delivered or finds the
+    // submission still running.
+    return { delivered: [], reason: null };
   }
 
   const profile = ports.resolveProfile(session);
@@ -674,6 +715,27 @@ export async function deliverAgentMail(
  * fully written its text + Enter (see {@link KeyedSerializer}).
  */
 const deliverySerializer = new KeyedSerializer();
+
+/**
+ * Thread submissions the tick started and did not wait for, keyed by agent.
+ *
+ * One entry means "a `thread.turn.start` for this agent is in flight". It exists so the
+ * next tick does not submit the same held row a second time — the row is still held while
+ * the first submission runs, and without this guard 1.5 s later it would be sent again.
+ *
+ * Cleared on settle, whichever way it settles.
+ */
+const threadSubmissions = new Map<string, Promise<void>>();
+
+/** Drop every in-flight marker. For a test's teardown, not for production. */
+export function clearThreadSubmissions(): void {
+  threadSubmissions.clear();
+}
+
+/** Whether a thread submission is currently in flight for this agent. */
+export function hasThreadSubmissionInFlight(workspacePath: string, toAgent: string): boolean {
+  return threadSubmissions.has(agentKey(workspacePath, toAgent));
+}
 
 /**
  * {@link deliverAgentMail}, serialized per agent through the shared

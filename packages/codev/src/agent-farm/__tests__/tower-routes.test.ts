@@ -125,6 +125,11 @@ vi.mock('../servers/tower-messages.js', () => ({
 vi.mock('../db/index.js', async (importActual) => ({
   ...(await importActual<typeof import('../db/index.js')>()),
   getGlobalDb: () => sendDbHolder.db,
+  // `getDb` too (#219 round 6): `state.js` reads builders and architects through it, and
+  // the send path consults those to decide whether a target is thread-backed. Left
+  // unmocked it reached the real user-global database, so a route test's answer depended
+  // on what happened to be registered on the machine running it.
+  getDb: () => sendDbHolder.db,
 }));
 
 vi.mock('../servers/tower-utils.js', () => ({
@@ -1536,6 +1541,73 @@ describe('tower-routes', () => {
       expect(parsed.reason).toBe('no-live-pty');
       expect(typeof parsed.mailboxId).toBe('string');
       expect(mockWrite).not.toHaveBeenCalled(); // never written to a dead line
+    });
+
+    /**
+     * Issue #219 round 6 — the route-level lie.
+     *
+     * `deliverAgentMail` ends a `--no-enter` row to a thread-backed agent TERMINALLY: a
+     * thread has no composer, `thread.turn.start` is the submit, and holding it would
+     * raise a starvation notice with no remedy. The route reported that row as
+     * `held: true, reason: 'no-live-pty'` — promising the sender a retry that cannot
+     * happen, and handing back a mailbox id that lists nowhere.
+     *
+     * It is not enough to answer `delivered: false, held: false` either: the CLI's final
+     * branch reads that as delivered. The refusal needs its own word.
+     */
+    it('reports a terminally refused --no-enter to a thread-backed agent as refused, not held', async () => {
+      sendDbHolder.db
+        .prepare(
+          `INSERT INTO builders (id, workspace_path, name, status, phase, worktree, branch, type, thread_id, started_at)
+           VALUES (?, ?, ?, 'implementing', 'implement', ?, ?, 'task', ?, ?)`,
+        )
+        .run('spir-thread', '/tmp/ws', 'spir-thread', '/tmp/ws/.builders/spir-thread', 'builder/spir-thread', 'thr-9', new Date().toISOString());
+      // `--no-enter` arrives under `options`, which is where the route reads it.
+      mockParseJsonBody.mockResolvedValue({
+        to: 'spir-thread', message: 'gate reached', workspace: '/tmp/ws', options: { noEnter: true },
+      });
+      mockResolveTarget.mockReturnValue({ code: 'NOT_FOUND', message: 'no live terminal' });
+      mockResolveAgentInRegistry.mockReturnValue({ workspacePath: '/tmp/ws', agent: 'spir-thread', kind: 'builder' });
+      const req = makeReq('POST', '/api/send');
+      const { res, statusCode, body } = makeRes();
+
+      await handleRequest(req, res, makeCtx());
+
+      expect(statusCode()).toBe(200);
+      const parsed = JSON.parse(body());
+      expect(parsed.refused).toBe(true);
+      expect(parsed.held).toBe(false);
+      expect(parsed.delivered).toBe(false);
+      expect(parsed.refusedReason).toMatch(/no composer/);
+      expect(parsed.refusedReason).toMatch(/Re-send without --no-enter/);
+      // The row really is terminal, so the mailbox id the sender was handed lists nowhere
+      // — which is exactly why calling it "held" was a lie.
+      expect(mailbox.getById(sendDbHolder.db, parsed.mailboxId)?.status).toBe('dismissed');
+      expect(mailbox.findHeldForAgent(sendDbHolder.db, '/tmp/ws', 'spir-thread')).toHaveLength(0);
+    });
+
+    it('an ordinary send to the same thread-backed agent is still held, not refused', async () => {
+      // The control. Without it the assertion above would hold just as well if every
+      // thread-backed send had been turned into a refusal.
+      sendDbHolder.db
+        .prepare(
+          `INSERT INTO builders (id, workspace_path, name, status, phase, worktree, branch, type, thread_id, started_at)
+           VALUES (?, ?, ?, 'implementing', 'implement', ?, ?, 'task', ?, ?)`,
+        )
+        .run('spir-thread', '/tmp/ws', 'spir-thread', '/tmp/ws/.builders/spir-thread', 'builder/spir-thread', 'thr-9', new Date().toISOString());
+      mockParseJsonBody.mockResolvedValue({ to: 'spir-thread', message: 'hello', workspace: '/tmp/ws' });
+      mockResolveTarget.mockReturnValue({ code: 'NOT_FOUND', message: 'no live terminal' });
+      mockResolveAgentInRegistry.mockReturnValue({ workspacePath: '/tmp/ws', agent: 'spir-thread', kind: 'builder' });
+      const req = makeReq('POST', '/api/send');
+      const { res, statusCode, body } = makeRes();
+
+      await handleRequest(req, res, makeCtx());
+
+      expect(statusCode()).toBe(200);
+      const parsed = JSON.parse(body());
+      expect(parsed.refused).toBeUndefined();
+      expect(parsed.held).toBe(true);
+      expect(mailbox.getById(sendDbHolder.db, parsed.mailboxId)?.status).toBe('held');
     });
 
     it('holds (no-live-pty) a normal send to a known offline agent instead of 404ing (Spec 1313 dead-session seam)', async () => {

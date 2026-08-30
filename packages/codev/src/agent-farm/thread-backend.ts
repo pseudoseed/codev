@@ -199,7 +199,15 @@ async function connectDispatcher(
   config: ThreadBackendConfig,
   upgradeTimeoutMs: number,
   onClosed: () => void,
-): Promise<{ dispatcher: { call: (m: string, p: unknown) => Promise<unknown> }; accessToken: string }> {
+): Promise<{
+  dispatcher: { call: (m: string, p: unknown) => Promise<unknown> };
+  accessToken: string;
+  /**
+   * Hang up. Every path that abandons this connection before an engine owns it must
+   * call this — see the note in `initialiseThreadBackend`.
+   */
+  close: () => void;
+}> {
   const { T3Client } = await import('@cluesmith/t3-client/client');
   const auth = await import('@cluesmith/t3-client/auth');
   const access = await auth.exchangeBootstrapToken(config.serverUrl, config.bootstrapToken, {
@@ -284,6 +292,13 @@ async function connectDispatcher(
   return {
     dispatcher: { call: (method: string, payload: unknown) => client.call(method, payload) },
     accessToken: access.access_token,
+    close: () => {
+      try {
+        socket.close();
+      } catch {
+        /* already closing */
+      }
+    },
   };
 }
 
@@ -568,6 +583,24 @@ async function initialiseThreadBackend(
   const { createProject } = await import('@cluesmith/porch-driver/thread');
   const journal = new DispatchJournal(join(config.workspaceRoot, '.codev', 'commands.jsonl'));
   const { dispatcher, accessToken } = connection;
+
+  /**
+   * Nothing owns this socket until an engine is registered on it.
+   *
+   * The upgrade timeout closes the socket it gave up on, but a connection that upgraded
+   * SUCCESSFULLY and then failed here — the project lookup, or `project.create` — was
+   * simply dropped: the reference went out of scope and the socket stayed open. The 60 s
+   * cooldown then retries, and Tower accumulates one live connection per attempt, each
+   * holding a descriptor and a server-side session.
+   *
+   * So every exit from here that is not "an engine now owns it" hangs up first. The
+   * successful path deliberately does not: the engine holds the socket for its lifetime,
+   * and its own `close` handler evicts it.
+   */
+  const abandonConnection = (): void => {
+    connection.close();
+  };
+
   const lookup = await activeProjectForWorkspace(
     config.serverUrl,
     accessToken,
@@ -597,6 +630,7 @@ async function initialiseThreadBackend(
       if (retry.kind === 'found') {
         projectId = retry.projectId;
       } else {
+        abandonConnection();
         const detail = err instanceof Error ? err.message : String(err);
         throw new Error(
           `Could not resolve a t3code project for ${config.workspaceRoot}. Creating one failed (${detail}), `
@@ -611,7 +645,10 @@ async function initialiseThreadBackend(
   }
   // Before. The socket was open across the project lookup above, so by here it may
   // already be gone — and registering then would install an engine nothing can revive.
-  if (closed) throw closedDuringInit(config.serverUrl, config.workspaceRoot);
+  if (closed) {
+    abandonConnection();
+    throw closedDuringInit(config.serverUrl, config.workspaceRoot);
+  }
   registered = createPorchThreadEngine({
     dispatcher,
     journal,
@@ -628,6 +665,7 @@ async function initialiseThreadBackend(
   if (closed) {
     setThreadEngine(undefined, key);
     registered = undefined;
+    abandonConnection();
     throw closedDuringInit(config.serverUrl, config.workspaceRoot);
   }
   installThreadSpawnFactory(key);

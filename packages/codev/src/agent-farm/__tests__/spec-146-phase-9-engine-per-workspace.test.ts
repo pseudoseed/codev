@@ -454,6 +454,66 @@ describe('the drain tick never waits for a connect', () => {
   }, 20_000);
 
   /**
+   * Round 6. The upgrade timeout closes the socket it gave up on — but a connection that
+   * upgraded SUCCESSFULLY and then failed afterwards was simply dropped: the reference
+   * went out of scope and the socket stayed open. The 60 s cooldown then retries, and
+   * Tower accumulates one live connection per attempt.
+   *
+   * Nothing owns the socket until an engine is registered on it, so every exit before
+   * that has to hang up.
+   */
+  it('a failure AFTER a successful upgrade hangs up rather than leaking the socket', async () => {
+    const http = await import('node:http');
+    let ends = 0;
+    let upgrades = 0;
+    const { WebSocketServer } = await import('ws');
+    const wss = new WebSocketServer({ noServer: true });
+    const server = http.createServer((req, res) => {
+      if (req.url?.startsWith('/oauth/token')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ access_token: 'a', token_type: 'Bearer', expires_in: 3600 }));
+        return;
+      }
+      if (req.url?.startsWith('/api/auth/websocket-ticket')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ticket: 't', expires_in: 60 }));
+        return;
+      }
+      if (req.url?.startsWith('/api/orchestration/shell')) {
+        // A real answer with no project for this root, so `project.create` is attempted
+        // — and this server never answers RPC, so it fails. The socket upgraded fine.
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ projects: [], threads: [] }));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    server.on('upgrade', (req, socket, head) => {
+      upgrades += 1;
+      socket.on('end', () => { ends += 1; });
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    });
+    await new Promise<void>((res) => server.listen(0, '127.0.0.1', () => res()));
+    const { port } = server.address() as { port: number };
+    const dir = workspaceAt(`http://127.0.0.1:${port}`);
+
+    try {
+      // `project.create` is dispatched over a socket nobody answers; the RPC client's own
+      // timeout ends it. A short one keeps this a unit test.
+      await expect(ensureThreadBackendReady(dir, { upgradeTimeoutMs: 800 })).rejects.toThrow();
+      expect(upgrades).toBe(1);
+      expect(tryGetThreadEngine(dir)).toBeUndefined();
+      // The FIN. Without the disposer this socket stays open for the life of the process,
+      // and the cooldown's retry adds another.
+      expect(await until(() => ends === 1, 60_000)).toBe(true);
+    } finally {
+      wss.close();
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  }, 90_000);
+
+  /**
    * A bound that does not cancel is not a bound. The upgrade timeout rejected and walked
    * away, leaving a live socket past the advertised deadline — and Tower retries, so it
    * accumulated one orphan per attempt.

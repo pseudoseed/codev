@@ -195,3 +195,33 @@ attach harness/model, second auth path).
 
 The live child fixture now TICKS at Tower's 1.5 s cadence instead of calling once — a single
 `false` is the first tick now, not a failure.
+
+## Review round 7 (codex + claude round 6)
+
+Three blockers, one permitted small fix, one ruling I agreed with, one verification task.
+
+1. **The turn submission was still on the tick.** Round 5 took the CONNECT off; `thread.turn.start`
+   is bounded at 30 s by the RPC client and the drainer walks agents sequentially, so an
+   already-connected but unresponsive server still stalled every workspace. Submissions now run out
+   of band with a per-agent in-flight guard — the row is still held, so without the guard the next
+   tick would submit the same message again.
+2. **Post-upgrade failures leaked sockets.** `connectDispatcher` returns a disposer; every exit
+   before an engine owns the socket hangs up.
+3. **The route lie.** A terminally-dismissed row was reported `held`/`no-live-pty`. `refused` +
+   `refusedReason` end to end (route ×2, SDK type, CLI ×2), each checked BEFORE `held` and before
+   the delivered fallthrough — `delivered:false, held:false` alone would have printed "Message
+   delivered".
+4. **Small fix taken here:** a stale `thread_id` silently shadowed a live PTY. The PTY wins and the
+   contradiction is logged.
+
+Found on the way: `tower-routes.test.ts` mocked `getGlobalDb` but not `getDb`, so route tests read
+the REAL user-global database.
+
+**Ruling I agree with:** the architect ruled the remaining `ownsProcess` gap (any command with bare
+`serve` plus the matching `--base-dir`) non-blocking, since the residual is contrived and the
+docblock no longer claims a proof. I have no counter-case; filed on #227.
+
+**Verification asked for:** claude could not confirm its reviewed SHA. Established that
+`7baa2474c` touched ONLY `mailbox-wiring.ts` (+8/−6, net +2, hunk at line 442), so the route
+finding is against unmoved code and stands; `resolveLiveSessionForAgent` at ~117 did not move
+either. My comment-only push landed as the lanes started — that ambiguity is mine.
