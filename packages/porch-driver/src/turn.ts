@@ -101,6 +101,16 @@ export function activeTurnIdOf(event: ThreadEvent): string | null | undefined {
 
 interface Waiter {
   seenRunning: boolean;
+  /**
+   * The thread's sequence when this waiter was registered.
+   *
+   * Delivery is at-least-once by design, so a `status: "error"` from a PREVIOUS
+   * turn can be redelivered after a new `expectTurn` — and without this it would
+   * abandon a healthy turn's waiter with a refusal that belongs to history. The
+   * cursor advances after the handler, which is exactly what makes such a replay
+   * ordinary rather than exotic.
+   */
+  startSequence: number;
   resolveRunning(turnId: string): void;
   resolveSettled(): void;
   abandon(reason: Error): void;
@@ -108,7 +118,7 @@ interface Waiter {
   readonly settled: Promise<void>;
 }
 
-function makeWaiter(): Waiter {
+function makeWaiter(startSequence: number): Waiter {
   let resolveRunning!: (turnId: string) => void;
   let resolveSettled!: () => void;
   let rejectRunning!: (reason: Error) => void;
@@ -127,6 +137,7 @@ function makeWaiter(): Waiter {
   settled.catch(() => {});
   return {
     seenRunning: false,
+    startSequence,
     resolveRunning,
     resolveSettled,
     abandon: (reason: Error) => {
@@ -216,10 +227,17 @@ export class TurnTracker {
     const failure = sessionFailureOf(event);
     if (failure !== undefined) {
       const failed = this.#waiters.get(event.aggregateId);
-      // Only before the turn is running. After it, a session error is the turn
-      // ENDING, and the `activeTurnId: null` below settles it normally — a
-      // caller that already has a turn id wants its result, not an exception.
-      if (failed && !failed.seenRunning) {
+      // Only before the turn is running, and only for a refusal that happened
+      // AFTER this waiter was registered. Two guards, for two different mistakes:
+      //
+      //  - After running, a session error is the turn ENDING, and the
+      //    `activeTurnId: null` below settles it normally. A caller that already
+      //    holds a turn id wants its result, not an exception.
+      //  - At or below `startSequence`, the error predates this waiter. Delivery
+      //    is at-least-once, so a refusal from a previous turn WILL be
+      //    redelivered on any resubscription, and killing a healthy turn with a
+      //    stale refusal would be a worse failure than the one this guard fixes.
+      if (failed && !failed.seenRunning && event.sequence > failed.startSequence) {
         this.#waiters.delete(event.aggregateId);
         this.#active.delete(event.aggregateId);
         failed.abandon(new SessionStartFailedError(event.aggregateId, failure));
@@ -260,9 +278,10 @@ export class TurnTracker {
     // promises it handed out would then never settle either way. Rejecting them
     // is the difference between a caller that learns and a caller that hangs.
     this.#waiters.get(threadId)?.abandon(new TurnDisplacedError(threadId));
-    const waiter = makeWaiter();
+    const startSequence = this.lastSequence(threadId);
+    const waiter = makeWaiter(startSequence);
     this.#waiters.set(threadId, waiter);
-    return { startSequence: this.lastSequence(threadId), running: waiter.running, settled: waiter.settled };
+    return { startSequence, running: waiter.running, settled: waiter.settled };
   }
 }
 

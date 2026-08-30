@@ -33,6 +33,7 @@
  * with no evidence behind it, and it must not be able to hide inside a green run.
  */
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -42,6 +43,7 @@ const repoRoot = resolve(import.meta.dirname, '../../../../..');
 const harnessPath = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
 const runnerPath = join(repoRoot, 'packages/codev/src/agent-farm/__tests__/helpers/air-235-full-protocol.mjs');
 const witnessPath = join(repoRoot, 'packages/codev/src/agent-farm/__tests__/helpers/air-235-pty-witness.mjs');
+const protocolPath = join(repoRoot, 'codev-skeleton/protocols/bugfix/protocol.json');
 const evidencePath = join(repoRoot, 'codev', 'research', '146-phase10-live-evidence.json');
 const parityPath = join(repoRoot, 'codev', 'research', '146-driver-parity.md');
 const longGatePath = join(repoRoot, 'codev', 'research', '146-long-gate-evidence.md');
@@ -55,12 +57,22 @@ interface RunEvidence {
   readonly startedAt: string;
   readonly finishedAt: string | null;
   readonly criteria: Record<string, { outcome: string; detail: string }>;
+  readonly observations?: {
+    readonly gate?: {
+      readonly elapsedMs: number;
+      readonly measuredWith: string;
+      readonly journalRecordsDuringGate: number;
+    };
+    readonly codewordOnDiskBeforeGate?: boolean | null;
+  };
   readonly failure: string | null;
 }
 
 interface EvidenceFile {
   readonly recordedAt: string;
   readonly server: Record<string, unknown>;
+  /** Repo-relative path → sha256 of the code this evidence describes. */
+  readonly describes: Record<string, string>;
   readonly runs: ReadonlyArray<RunEvidence>;
   readonly longGate: { readonly startedAt: string; readonly gateSeconds: number; readonly harness: string };
 }
@@ -81,6 +93,7 @@ const REQUIRED_CRITERIA = [
   'merge-lands-the-fix-on-main',
   'no-pty-code-path-ran',
   'pty-witness-can-see-a-pty',
+  'gate-elapsed-at-least-its-target',
 ] as const;
 
 function harnessStatus(): { ok: boolean; reason: string } {
@@ -129,12 +142,30 @@ describe('Spec 146 Phase 10 — the recorded full-protocol runs', () => {
       // startup, so a gate under 30 minutes cannot cross it and would not test
       // what the reaper does to an idle thread. An hour clears it with margin.
       expect(run.gateSeconds, `the ${run.harness} run's gate was only ${run.gateSeconds}s`).toBeGreaterThanOrEqual(3600);
-      const elapsedMs = new Date(run.finishedAt ?? 0).getTime() - new Date(run.startedAt).getTime();
+      /*
+       * THE GATE, NOT THE RUN.
+       *
+       * The previous version compared end-to-end runtime against the gate
+       * target, and the surrounding turns padded that well past an hour — so a
+       * genuinely short gate passed. It was not hypothetical: the first recorded
+       * runs measured 3,599,964 ms and 3,599,962 ms against a 3,600,000 ms
+       * target, because `setTimeout` is not a promise about elapsed time, and
+       * this assertion did not notice.
+       *
+       * The runner now holds the gate open on a monotonic clock until the target
+       * is genuinely reached, and this reads the measurement it took.
+       */
+      const gate = run.observations?.gate;
+      expect(gate, `the ${run.harness} run recorded no gate measurement`).toBeDefined();
+      expect(gate!.measuredWith, 'the gate was not measured with a monotonic clock').toContain('hrtime');
       expect(
-        elapsedMs,
-        `the ${run.harness} run claims a ${run.gateSeconds}s gate but took only ${Math.round(elapsedMs / 1000)}s `
-          + 'end to end, so the gate cannot have been elapsed',
+        gate!.elapsedMs,
+        `the ${run.harness} run's gate lasted ${gate!.elapsedMs}ms against a ${run.gateSeconds * 1000}ms target`,
       ).toBeGreaterThanOrEqual(run.gateSeconds * 1000);
+      expect(
+        gate!.journalRecordsDuringGate,
+        `${gate!.journalRecordsDuringGate} commands were dispatched during the ${run.harness} gate`,
+      ).toBe(0);
     }
   });
 
@@ -189,41 +220,62 @@ describe('Spec 146 Phase 10 — the recorded full-protocol runs', () => {
     expect(result.stderr).toMatch(/This is not "the run failed"/);
   });
 
-  it('is not older than the runner it describes', () => {
-    const evidenceAge = statSync(evidencePath).mtimeMs;
-    for (const source of [runnerPath, witnessPath]) {
+  it('describes the code that actually produced it, by content and not by timestamp', () => {
+    /*
+     * HASHES, NOT MTIMES. Both review lanes flagged the previous version
+     * independently and both were right: git does not preserve mtimes, so a
+     * clean checkout randomises the comparison, and `touch` satisfies it
+     * outright. It was an assertion that could not fail — the same defect this
+     * PR fixes in two other places.
+     *
+     * A hash is the same answer on every machine and is satisfied by nothing
+     * except the bytes. Change the runner and this fails until the runs are
+     * redone, which is the point: the criteria are claims about what that code
+     * did, and after an edit it is not that code.
+     */
+    const { describes } = loadEvidence();
+    expect(Object.keys(describes).length, 'the evidence names no source at all').toBeGreaterThanOrEqual(3);
+    for (const [relative, recorded] of Object.entries(describes)) {
+      const absolute = join(repoRoot, relative);
+      expect(existsSync(absolute), `the evidence names ${relative}, which does not exist`).toBe(true);
+      const actual = createHash('sha256').update(readFileSync(absolute)).digest('hex');
       expect(
-        evidenceAge,
-        `${source} changed after the evidence was recorded. Re-run the protocol rather than trusting a stale `
-          + 'result — the criteria are claims about what this code did, and it is not this code any more.',
-      ).toBeGreaterThanOrEqual(statSync(source).mtimeMs - 1000);
+        actual,
+        `${relative} has changed since the evidence was recorded. Re-run the protocol rather than trusting a `
+          + 'stale result — the criteria are claims about what this code did, and it is not this code any more.\n'
+          + `  recorded ${recorded.slice(0, 16)}…, on disk ${actual.slice(0, 16)}…`,
+      ).toBe(recorded);
     }
-  });
-});
-
-describe('Spec 146 Phase 10 — the PTY witness has an intact window', () => {
-  /**
-   * The witness records what resolves AFTER `module.register`, so a static import
-   * of anything but a builtin, placed above it, would load outside the recording
-   * and the run's "no PTY code path ran" would be measuring a shorter window than
-   * it claims. Cheap to state, invisible to break — a later edit adding
-   * `import { WebSocket } from 'ws'` at the top is the natural thing to do.
-   */
-  it('imports nothing but node: builtins statically', () => {
-    const source = readFileSync(runnerPath, 'utf8');
-    const staticImports = [...source.matchAll(/^import .*? from '([^']+)';$/gm)].map((match) => match[1]);
-    expect(staticImports.length, 'the runner has no static imports at all; this guard is measuring nothing')
-      .toBeGreaterThan(3);
-    const nonBuiltin = staticImports.filter((specifier) => !specifier.startsWith('node:'));
-    expect(
-      nonBuiltin,
-      'these load before module.register and are therefore outside the witness window; make them dynamic',
-    ).toEqual([]);
+    // The runner and the fresh-process resubscriber are the two that carry the
+    // criteria; naming them explicitly stops the set silently shrinking to one
+    // trivially-stable file.
+    expect(Object.keys(describes).some((k) => k.endsWith('air-235-full-protocol.mjs'))).toBe(true);
+    expect(Object.keys(describes).some((k) => k.endsWith('air-235-resubscribe.mjs'))).toBe(true);
   });
 
-  it('registers the witness before it imports anything of its own', () => {
-    const source = readFileSync(runnerPath, 'utf8');
-    expect(source.indexOf('register(')).toBeLessThan(source.indexOf('await import('));
+  it('enacts the phases and checks the BUGFIX protocol actually defines', () => {
+    /*
+     * The runner reenacts the protocol rather than driving porch through it, so
+     * without this the evidence could stay green while the protocol's own
+     * definition moved underneath it. This does not close the whole gap — see
+     * the PR body — but it closes the half that decays silently: a phase added,
+     * renamed or removed in `protocol.json` fails here.
+     */
+    const protocol = JSON.parse(readFileSync(protocolPath, 'utf8')) as {
+      phases: ReadonlyArray<{ id: string; checks?: Record<string, unknown>; gate?: string }>;
+    };
+    const runner = readFileSync(runnerPath, 'utf8');
+    expect(protocol.phases.map((p) => p.id), 'the BUGFIX protocol is no longer investigate → fix → pr')
+      .toEqual(['investigate', 'fix', 'pr']);
+    for (const phase of protocol.phases) {
+      expect(runner, `the runner does not enact the "${phase.id}" phase`).toContain(`${phase.id} phase`);
+    }
+    // The fix phase is the one carrying checks, and the runner runs one before
+    // it and one after. The gate is on the pr phase, and the runner elapses it.
+    const fix = protocol.phases.find((p) => p.id === 'fix');
+    expect(Object.keys(fix?.checks ?? {}), 'the fix phase no longer defines build/tests checks')
+      .toEqual(expect.arrayContaining(['build', 'tests']));
+    expect(protocol.phases.find((p) => p.id === 'pr')?.gate, 'the pr phase no longer carries a gate').toBe('pr');
   });
 });
 
@@ -300,6 +352,43 @@ describe('Spec 146 Phase 10 — a refusal is not a timeout', () => {
     // WHY is unknown; THAT it failed is not. Those are different facts and the
     // message has to carry which one this is.
     await expect(started.running).rejects.toThrow(/gave no reason, so WHY is unknown/);
+  });
+
+  it('ignores a REPLAYED refusal that predates the waiter', async () => {
+    /*
+     * Delivery is at-least-once by design — the cursor advances after the
+     * handler, so every resubscription redelivers. That means a `status: "error"`
+     * from a PREVIOUS turn comes back on any reconnect, and without a sequence
+     * guard it would abandon the waiter for a perfectly healthy turn that is
+     * running right now.
+     *
+     * The fix introduced this hazard, so the fix owns the test: killing a live
+     * turn with a refusal that belongs to history is a worse failure than the
+     * ten-minute hang it replaced.
+     */
+    const { TurnTracker } = await import('@cluesmith/porch-driver/turn');
+    const tracker = new TurnTracker();
+    // The thread has history: a refusal at sequence 7.
+    tracker.observe(sessionEvent('t4', { status: 'error', activeTurnId: null, lastError: 'an old refusal' }, 7));
+    const started = tracker.expectTurn('t4');
+    // That same event, redelivered after the new waiter was registered.
+    tracker.observe(sessionEvent('t4', { status: 'error', activeTurnId: null, lastError: 'an old refusal' }, 7));
+    // And the healthy turn proceeds.
+    tracker.observe(sessionEvent('t4', { status: 'running', activeTurnId: 'turn-9', lastError: null }, 8));
+    await expect(started.running).resolves.toBe('turn-9');
+    tracker.observe(sessionEvent('t4', { status: 'ready', activeTurnId: null, lastError: null }, 9));
+    await expect(started.settled).resolves.toBeUndefined();
+  });
+
+  it('still fails on a refusal that arrives AFTER the waiter', async () => {
+    // Guards the guard above: a sequence filter set one notch too wide would
+    // swallow the real refusal too, and put the ten-minute hang back.
+    const { TurnTracker, SessionStartFailedError } = await import('@cluesmith/porch-driver/turn');
+    const tracker = new TurnTracker();
+    tracker.observe(sessionEvent('t5', { status: 'ready', activeTurnId: null, lastError: null }, 7));
+    const started = tracker.expectTurn('t5');
+    tracker.observe(sessionEvent('t5', { status: 'error', activeTurnId: null, lastError: 'a fresh refusal' }, 8));
+    await expect(started.running).rejects.toThrow(SessionStartFailedError);
   });
 
   it('does not turn a turn that ENDED in error into a start failure', async () => {

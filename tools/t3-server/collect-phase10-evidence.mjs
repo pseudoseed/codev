@@ -25,6 +25,7 @@
  * the evidence" and "the evidence says the run failed" are different facts, and
  * this script never gets to make the second claim on the strength of the first.
  */
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,9 +39,11 @@ const argv = process.argv.slice(2);
 const labels = [];
 let longGateLabel = null;
 let longGateStarted = null;
+let longGateHarness = null;
 for (let i = 0; i < argv.length; i += 1) {
   if (argv[i] === '--long-gate') longGateLabel = argv[++i];
   else if (argv[i] === '--long-gate-started') longGateStarted = argv[++i];
+  else if (argv[i] === '--long-gate-harness') longGateHarness = argv[++i];
   else labels.push(argv[i]);
 }
 
@@ -70,6 +73,42 @@ if (longGateLabel !== null && longGateStarted === null) {
     + "long gate's deliverable is its recorded START, so recording it without one records nothing.");
   process.exit(3);
 }
+if (longGateLabel !== null && longGateHarness === null) {
+  // It used to default to 'claude'. A run that says which driver produced it is
+  // the rule this whole program is built on, and a hardcoded default is that
+  // rule with the answer written in advance.
+  console.error('MISSING_HARNESS: could not check: --long-gate was given without --long-gate-harness. '
+    + 'Every recorded run says which driver produced it; the long gate does not get an exception.');
+  process.exit(3);
+}
+
+/**
+ * Content hashes of the code the evidence describes.
+ *
+ * These replace an mtime comparison, which both review lanes flagged
+ * independently and which was another assertion that could not fail: git does
+ * not preserve mtimes, so a clean checkout randomises the comparison, and
+ * `touch` bypasses it outright. A hash is the same answer on every machine and
+ * cannot be satisfied by anything except the bytes.
+ */
+function sha256(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+const describes = {
+  'packages/codev/src/agent-farm/__tests__/helpers/air-235-full-protocol.mjs': null,
+  'packages/codev/src/agent-farm/__tests__/helpers/air-235-pty-witness.mjs': null,
+  'packages/codev/src/agent-farm/__tests__/helpers/air-235-resubscribe.mjs': null,
+};
+for (const relative of Object.keys(describes)) {
+  const absolute = join(repoRoot, relative);
+  if (!existsSync(absolute)) {
+    console.error(`MISSING_SOURCE: could not check: ${relative} does not exist, so the evidence cannot record `
+      + 'what code produced it.');
+    process.exit(3);
+  }
+  describes[relative] = sha256(absolute);
+}
 
 const evidence = {
   _comment:
@@ -83,10 +122,18 @@ const evidence = {
     interpreter: 'Node 26.4.0 (outside t3code engines.node ^24.13.1; the harness emits its ADVISORY and continues)',
     bind: '127.0.0.1 only, one server and one data directory per run',
   },
+  describes,
   runs,
   ...(longGateLabel === null
     ? {}
-    : { longGate: { label: longGateLabel, startedAt: longGateStarted, gateSeconds: 86_400, harness: 'claude' } }),
+    : {
+        longGate: {
+          label: longGateLabel,
+          startedAt: longGateStarted,
+          gateSeconds: 86_400,
+          harness: longGateHarness,
+        },
+      }),
 };
 
 writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
@@ -127,6 +174,9 @@ writeFileSync(
 );
 
 console.log(`wrote ${evidencePath}`);
+for (const [relative, hash] of Object.entries(describes)) {
+  console.log(`  describes ${relative} @ ${hash.slice(0, 12)}`);
+}
 console.log(`filled the results table in ${parityPath}`);
 for (const run of runs) {
   const notMet = Object.entries(run.criteria).filter(([, c]) => c.outcome !== 'met');

@@ -188,6 +188,10 @@ async function main() {
   // issued against this same access token, so a resubscription does not need a
   // credential the server will refuse to mint twice.
   const access = await auth.exchangeBootstrapToken(base, token, { clientLabel: 'codev-air-235' });
+  // Handed to the restart child. The bootstrap grant is one-time and already
+  // spent here, so the child cannot pair for itself; the access token can mint
+  // as many tickets as it needs.
+  const accessToken = access.access_token;
 
   /** Open one authenticated socket, recording every RPC method it carries. */
   async function connect() {
@@ -492,6 +496,46 @@ async function main() {
       // window rather than adjacent to it.
       await sleep(20_000);
 
+      // ── porch comes back as a DIFFERENT PROCESS ─────────────────────────
+      //
+      // Not a rebuilt subscription in this one. The first version of this step
+      // closed the socket and reopened it here, and review was right that it
+      // proved stream reconnection rather than recovery: the `DriverThread`, the
+      // `TurnTracker`, the waiter promises and the journal all survived, so
+      // nothing had to be reconstructed from anything durable.
+      //
+      // This child shares none of that. It is given a URL, a token, a thread id
+      // and the path to the cursor FILE, and it works out where to resume from
+      // by reading it. Whether the completion event comes back is then a fact
+      // about the persisted cursor and the server, which is what the criterion
+      // is about.
+      let recovery;
+      try {
+        const childOut = execFileSync(
+          process.execPath,
+          [join(import.meta.dirname, 'air-235-resubscribe.mjs')],
+          {
+            encoding: 'utf8',
+            timeout: 180_000,
+            env: {
+              ...process.env,
+              RESUB_REPO_ROOT: repoRoot,
+              RESUB_URL: base,
+              RESUB_ACCESS_TOKEN: accessToken,
+              RESUB_THREAD_ID: thread.threadId,
+              RESUB_CURSOR_PATH: cursorPath,
+              RESUB_WAIT_MS: '120000',
+            },
+          },
+        );
+        recovery = JSON.parse(childOut.slice(childOut.indexOf('{')));
+      } catch (error) {
+        recovery = { error: `CHILD_FAILED: ${String(error).slice(0, 300)}` };
+      }
+
+      // Only now does THIS process resubscribe, to carry the rest of the
+      // protocol. The criterion is scored from the child's report, not from
+      // anything observed here.
       const resumedFrom = subscribe();
       if (!(await awaitAttached(resumesBefore))) {
         throw new Error('COULD_NOT_TELL: RESUBSCRIBE_TIMEOUT — the resumed subscription never attached.');
@@ -502,45 +546,44 @@ async function main() {
       ]);
       const resumePayload = conn.wrapped.streamPayloads.at(-1)?.payload ?? {};
       const resumeOutcome = resumeOutcomes[resumesBefore];
-      // Replayed out of the dark window, rather than seen live after it.
-      const settledUnobserved =
-        activeAtDeath
-        && fixTurnWatch.settleSequence !== null
-        && fixTurnWatch.resumeOutcomesAtSettle === resumesBefore;
       evidence.observations.restart = {
         activeAtDeath,
         cursorAtDeath,
-        resumedFrom,
-        settleSequence: fixTurnWatch.settleSequence,
-        resumeOutcomesAtSettle: fixTurnWatch.resumeOutcomesAtSettle,
-        resumesBefore,
-        settledUnobserved,
+        freshProcessRecovery: recovery,
+        parentResumedFrom: resumedFrom,
+        parentAfterSequenceSent: resumePayload.afterSequence ?? null,
+        parentResumeOutcome: resumeOutcome ?? null,
         settleSeen,
-        afterSequenceSent: resumePayload.afterSequence ?? null,
-        resumeOutcome: resumeOutcome ?? null,
       };
-      const sentAfterSequence = resumePayload.afterSequence === resumedFrom && resumedFrom > 0;
-      const noGap = resumeOutcome !== undefined && resumeOutcome.kind !== 'gap';
+      const childRecovered =
+        recovery.error == null
+        && recovery.synchronized === true
+        && recovery.afterSequenceSent === recovery.cursorReadFromDisk
+        && recovery.cursorReadFromDisk > 0;
       record(
         'restart-loses-no-completion',
-        !settledUnobserved || !settleSeen
+        !activeAtDeath || recovery.error != null || !recovery.synchronized
           ? 'undetermined'
-          : sentAfterSequence && noGap
+          : childRecovered && recovery.sawSettleInCatchUp
             ? 'met'
             : 'not-met',
         !activeAtDeath
-          ? 'the turn had already settled when the subscriber was torn down, so no completion event was ever at '
-            + 'risk and the criterion was NOT evaluated'
-          : !settledUnobserved
-            ? `the completion event arrived live after the resumed subscription synchronized `
-              + `(settle at ${fixTurnWatch.settleSequence}), not replayed out of the gap, so the criterion was `
-              + 'NOT evaluated'
-            : !settleSeen
-              ? 'the turn never settled at all, so nothing can be said about replaying its completion'
-              : `resubscribed with afterSequence=${resumePayload.afterSequence} read off disk (cursor was `
-                + `${cursorAtDeath} when porch died); resume outcome ${resumeOutcome?.kind}; the turn's completion `
-                + `event, sequence ${fixTurnWatch.settleSequence}, was emitted while nothing was subscribed and `
-                + 'came back in the catch-up replay',
+          ? 'the turn had already settled when porch was torn down, so no completion event was ever at risk '
+            + 'and the criterion was NOT evaluated'
+          : recovery.error != null
+            ? `the restarted process could not subscribe at all (${recovery.error}), so whether the completion `
+              + 'event survives a restart is UNKNOWN — this is not "it was lost"'
+            : !recovery.synchronized
+              ? 'the restarted process subscribed and never reached the synchronization marker, so catch-up '
+                + 'and live events could not be told apart and the criterion was NOT evaluated'
+              : recovery.sawSettleInCatchUp
+                ? `a process sharing nothing with this one read cursor ${recovery.cursorReadFromDisk} off disk `
+                  + `(file contained ${JSON.stringify(recovery.rawCursorFile)}), resubscribed with `
+                  + `afterSequence=${recovery.afterSequenceSent}, and the turn's completion event — sequence `
+                  + `${recovery.settleSequence}, emitted while nothing was subscribed — came back in the `
+                  + `CATCH-UP replay rather than live`
+                : `the restarted process resumed from ${recovery.cursorReadFromDisk} and the completion event `
+                  + `was NOT in its catch-up (replayed sequences: ${JSON.stringify(recovery.catchUpSequences)})`,
       );
     }
 
@@ -581,17 +624,62 @@ async function main() {
 
     // ── THE GATE ────────────────────────────────────────────────────────────
     //
-    // No turn is dispatched for the whole window, and that is asserted from the
-    // journal afterwards rather than believed: a gate that quietly dispatched
-    // something would keep the session warm and the resume would prove nothing.
+    // No command is dispatched for the whole window, and that is asserted from
+    // the journal afterwards rather than believed: a gate that quietly
+    // dispatched something would keep the session warm and the resume would
+    // prove nothing.
+    //
+    // THE CODEWORD MUST NOT BE ON DISK.
+    //
+    // The criterion is that the thread REMEMBERS. If the codeword is sitting in
+    // a file in the worktree, the post-gate turn can read it, and a thread that
+    // had been reaped and reconnected would produce it just as readily — the
+    // criterion would pass and mean nothing. This is the same shape as the
+    // restart check that could only ever answer `undetermined`: an assertion
+    // whose subject is available by another route is not an assertion.
+    //
+    // So the tree is searched first, and a hit makes the criterion
+    // `undetermined` rather than `met`. The turn is still run; what is refused
+    // is the claim.
+    let codewordOnDisk = null;
+    try {
+      execFileSync('grep', ['-rlF', codeword, repo.worktree, repo.checkout], { encoding: 'utf8' });
+      codewordOnDisk = true;
+    } catch (error) {
+      // grep exits 1 for "no match" and 2 for "could not search". Only the first
+      // is "the codeword is not on disk"; the second is "I could not tell", and
+      // it must not read like the first.
+      codewordOnDisk = error.status === 1 ? false : null;
+    }
+    evidence.observations.codewordOnDiskBeforeGate = codewordOnDisk;
+
+    // A MONOTONIC gate, and long enough.
+    //
+    // `setTimeout(3_600_000)` is not a promise that 3,600,000 ms elapse: the
+    // recorded runs measured 3,599,964 ms and 3,599,962 ms, both SHORT of the
+    // hour they claimed. The test that was supposed to catch that measured
+    // end-to-end runtime instead, which the surrounding turns padded well past
+    // an hour — so a genuinely short gate would have passed too.
+    //
+    // `hrtime.bigint()` is monotonic, so it is not moved by NTP or a suspend,
+    // and the loop runs until the target is actually reached rather than until
+    // one timer says it should have been.
     const gateOpenedAt = Date.now();
+    const gateStartNs = process.hrtime.bigint();
+    const gateTargetNs = BigInt(gateSeconds) * 1_000_000_000n;
     evidence.observations.gateOpenedAt = new Date(gateOpenedAt).toISOString();
     const journalBefore = readFileSync(journalPath, 'utf8').split('\n').filter(Boolean).length;
-    await sleep(gateSeconds * 1000);
-    const gateElapsedMs = Date.now() - gateOpenedAt;
+    for (;;) {
+      const remainingNs = gateTargetNs - (process.hrtime.bigint() - gateStartNs);
+      if (remainingNs <= 0n) break;
+      await sleep(Math.min(Number(remainingNs / 1_000_000n) + 1, 60_000));
+    }
+    const gateElapsedMs = Number((process.hrtime.bigint() - gateStartNs) / 1_000_000n);
     const journalAfter = readFileSync(journalPath, 'utf8').split('\n').filter(Boolean).length;
     evidence.observations.gate = {
       elapsedMs: gateElapsedMs,
+      measuredWith: 'process.hrtime.bigint (monotonic)',
+      wallClockElapsedMs: Date.now() - gateOpenedAt,
       journalRecordsDuringGate: journalAfter - journalBefore,
     };
 
@@ -609,22 +697,36 @@ async function main() {
     }
     record(
       'gate-resumes-with-context',
-      recalled === null
+      codewordOnDisk !== false
         ? 'undetermined'
-        : recalled.includes(codeword)
-          ? 'met'
-          : 'not-met',
-      recalled === null
-        ? `the post-gate turn never produced a file, so whether context survived ${Math.round(gateElapsedMs / 1000)}s `
-          + `of idleness is UNKNOWN — this is not "context was lost"`
-        : recalled.includes(codeword)
-          ? `after ${Math.round(gateElapsedMs / 1000)}s idle the thread returned the codeword established before the gate`
-          : `the thread came back without its context: wrote ${JSON.stringify(recalled.slice(0, 80))}`,
+        : recalled === null
+          ? 'undetermined'
+          : recalled.includes(codeword)
+            ? 'met'
+            : 'not-met',
+      codewordOnDisk === true
+        ? 'the codeword was already in a file in the tree before the gate, so the post-gate turn could have '
+          + 'READ it rather than remembered it. The criterion cannot be evaluated from this run.'
+        : codewordOnDisk === null
+          ? 'the tree could not be searched for the codeword, so whether the answer was available on disk is '
+            + 'unknown, and with it whether this criterion means anything'
+          : recalled === null
+            ? `the post-gate turn never produced a file, so whether context survived `
+              + `${Math.round(gateElapsedMs / 1000)}s of idleness is UNKNOWN — this is not "context was lost"`
+            : recalled.includes(codeword)
+              ? `after ${Math.round(gateElapsedMs / 1000)}s idle — measured monotonically — the thread returned `
+                + `the codeword established before the gate, which was verified to exist in no file in the tree`
+              : `the thread came back without its context: wrote ${JSON.stringify(recalled.slice(0, 80))}`,
     );
     record(
       'gate-dispatched-nothing',
       journalAfter === journalBefore ? 'met' : 'not-met',
       `${journalAfter - journalBefore} commands were journalled during the gate`,
+    );
+    record(
+      'gate-elapsed-at-least-its-target',
+      gateElapsedMs >= gateSeconds * 1000 ? 'met' : 'not-met',
+      `${gateElapsedMs}ms elapsed against a ${gateSeconds * 1000}ms target, measured with a monotonic clock`,
     );
 
     // ── merge ───────────────────────────────────────────────────────────────
