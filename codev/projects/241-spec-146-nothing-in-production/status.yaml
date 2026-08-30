@@ -1,7 +1,7 @@
 id: '241'
 title: spec-146-nothing-in-production
 protocol: pir
-phase: implement
+phase: review
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -83,7 +83,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-30T15:18:07.177Z'
-updated_at: '2026-08-30T16:34:26.523Z'
+updated_at: '2026-08-30T16:34:43.592Z'
 pr_history:
   - phase: implement
     pr_number: 258
