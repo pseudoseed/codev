@@ -99,6 +99,12 @@ const describes = {
   'packages/codev/src/agent-farm/__tests__/helpers/air-235-full-protocol.mjs': null,
   'packages/codev/src/agent-farm/__tests__/helpers/air-235-pty-witness.mjs': null,
   'packages/codev/src/agent-farm/__tests__/helpers/air-235-resubscribe.mjs': null,
+  // The launcher is here because it changes what a run MEANS, not just how it is
+  // started: it writes the provider opt-in without which a turn on some drivers
+  // is refused outright, and it decides that each run owns its own port and
+  // state directory. Evidence gathered by a launcher that had lost the opt-in
+  // would describe a different experiment.
+  'tools/t3-server/full-protocol-run.sh': null,
 };
 for (const relative of Object.keys(describes)) {
   const absolute = join(repoRoot, relative);

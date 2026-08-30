@@ -241,7 +241,7 @@ describe('Spec 146 Phase 10 — the recorded full-protocol runs', () => {
       'this evidence has no `describes` block, so it does not say what code produced it. Regenerate it with '
         + 'tools/t3-server/collect-phase10-evidence.mjs.',
     ).toBeDefined();
-    expect(Object.keys(describes).length, 'the evidence names no source at all').toBeGreaterThanOrEqual(3);
+    expect(Object.keys(describes).length, 'the evidence names no source at all').toBeGreaterThanOrEqual(4);
     for (const [relative, recorded] of Object.entries(describes)) {
       const absolute = join(repoRoot, relative);
       expect(existsSync(absolute), `the evidence names ${relative}, which does not exist`).toBe(true);
@@ -256,8 +256,16 @@ describe('Spec 146 Phase 10 — the recorded full-protocol runs', () => {
     // The runner and the fresh-process resubscriber are the two that carry the
     // criteria; naming them explicitly stops the set silently shrinking to one
     // trivially-stable file.
-    expect(Object.keys(describes).some((k) => k.endsWith('air-235-full-protocol.mjs'))).toBe(true);
-    expect(Object.keys(describes).some((k) => k.endsWith('air-235-resubscribe.mjs'))).toBe(true);
+    // Named individually, so the set cannot silently shrink to one
+    // trivially-stable file. The launcher counts: it writes the provider opt-in
+    // without which a turn on some drivers is refused, so evidence gathered
+    // without it describes a different experiment.
+    for (const required of ['air-235-full-protocol.mjs', 'air-235-resubscribe.mjs', 'full-protocol-run.sh']) {
+      expect(
+        Object.keys(describes).some((k) => k.endsWith(required)),
+        `the evidence does not record a hash for ${required}`,
+      ).toBe(true);
+    }
   });
 
   it('enacts the phases and checks the BUGFIX protocol actually defines', () => {
