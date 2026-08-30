@@ -100,6 +100,18 @@ export interface ThreadEngine {
   worktreePath(threadId: string): string | undefined;
   removeWorktree(threadId: string, opts?: { force?: boolean }): Promise<'removed' | 'refused-unmerged'>;
   get(threadId: string): ThreadRecord | undefined;
+  /**
+   * Feed one subscription value (issue #241).
+   *
+   * This is the entry point that did not exist. `TurnTracker` resolves a turn's
+   * `running` and `settled` from observed `thread.session-set` events and nothing
+   * else, so with no caller here every turn stayed permanently active, `runTurn`
+   * never returned, and `SessionStartFailedError` could not reach anyone.
+   *
+   * MUST be idempotent: the cursor advances after the handler by design, so
+   * at-least-once delivery is the contract and every replay crosses this line.
+   */
+  observe(value: unknown): void;
 }
 
 /**
@@ -329,6 +341,18 @@ export function createMemoryThreadEngine(): ThreadEngine {
     get(threadId) {
       return threads.get(threadId);
     },
+    /**
+     * A no-op, and it must stay one.
+     *
+     * This engine's turns settle in memory the instant they are asked to — there is
+     * no server, no tracker and no event stream, so there is nothing a stream value
+     * could tell it that it does not already assert. Folding observed events into
+     * these records would make the memory engine agree with a real one by imitation,
+     * and #221's first finding is exactly that: the in-memory engine records what it
+     * is handed and validates nothing, which is why in-memory tests could not see
+     * that production had no subscriber at all.
+     */
+    observe() {},
   };
 }
 

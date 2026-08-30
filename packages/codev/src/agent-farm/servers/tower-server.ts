@@ -75,6 +75,13 @@ import { ApprovalCapabilityStore, ApprovalNonceStore } from '../lib/approval-cap
 import { MachineCredentialStore } from '../lib/machine-credentials.js';
 import { PairingStore } from '../lib/pairing.js';
 import { T3codeSessionCache } from './t3code-session-cache.js';
+import {
+  createThreadAdoptionSweeper,
+  type AdoptableThread,
+  type ThreadAdoptionSweeper,
+} from '../thread-subscriptions.js';
+import { requestThreadBackend } from '../thread-backend.js';
+import { tryGetThreadEngine } from '../thread-runtime.js';
 import { ApprovalOperationStore } from '../lib/approval-operations.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 
@@ -85,6 +92,14 @@ import { normalizeWorkspacePath } from '../utils/workspace-path.js';
  * function here, the same way every other subsystem in this file is torn down.
  */
 let t3codeSessionCache: T3codeSessionCache | null = null;
+
+/**
+ * The thread adoption sweeper, so shutdown can stop its interval (issue #241).
+ *
+ * Module-scoped for the same reason the session cache is: shutdown is a
+ * module-level function here.
+ */
+let threadAdoptionSweeper: ThreadAdoptionSweeper | null = null;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -250,6 +265,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // closed would log a failure that reads like a t3code problem.
   t3codeSessionCache?.stop();
   t3codeSessionCache = null;
+  // Same reason, same order: its pass reads global.db and calls into engines, and a
+  // pass landing after the database is closed would log an adoption failure that
+  // reads like a t3code problem.
+  threadAdoptionSweeper?.stop();
+  threadAdoptionSweeper = null;
   shutdownAgentRoutes();
 
   // 7. Tear down instance module (Spec 0105 Phase 3)
@@ -787,6 +807,83 @@ async function bootSequence(): Promise<void> {
     t3codeSnapshot: (workspacePath) => t3codeSessions.snapshot(workspacePath),
   });
   t3codeSessions.start();
+
+  /*
+   * Issue #241: adopt every thread in global.db, so its subscription exists.
+   *
+   * `ThreadEngine.attach` has exactly one other production caller — the mailbox
+   * delivery path — so without this a thread is subscribed only when somebody sends
+   * it a message. A turn in flight when Tower died would then never settle, and the
+   * cursor the subscription pool persists would never be read by anything: the
+   * "resumes rather than resubscribes cold" property would hold in the test suite and
+   * nowhere else.
+   *
+   * `tryGetThreadEngine`, never `getThreadEngine`. A workspace with no t3code server
+   * is the ordinary case, and the throwing accessor would turn it into an error on
+   * every pass.
+   */
+  const threadSweeper = createThreadAdoptionSweeper({
+    log,
+    workspaces: () => {
+      try {
+        const rows = getGlobalDb().prepare(`
+          SELECT DISTINCT workspace_path FROM architect
+          UNION
+          SELECT DISTINCT workspace_path FROM builders
+          ORDER BY workspace_path
+        `).all() as Array<{ workspace_path: string }>;
+        return rows.map((row) => normalizeWorkspacePath(row.workspace_path));
+      } catch (err) {
+        // NULL, not an empty list. A locked database is not "there are no
+        // workspaces", and adopting nothing because the read failed would leave every
+        // thread unwatched while reporting nothing wrong.
+        log('WARN', `Thread adoption sweep could not list workspaces: ${(err as Error).message}`);
+        return null;
+      }
+    },
+    threads: (workspaceRoot) => {
+      try {
+        const builders = getGlobalDb().prepare(`
+          SELECT id, thread_id, worktree, branch, harness, model FROM builders
+          WHERE workspace_path = ? AND thread_id IS NOT NULL
+        `).all(workspaceRoot) as Array<{
+          id: string; thread_id: string; worktree: string; branch: string;
+          harness: string | null; model: string | null;
+        }>;
+        const architects = getGlobalDb().prepare(`
+          SELECT id, thread_id FROM architect
+          WHERE workspace_path = ? AND thread_id IS NOT NULL
+        `).all(workspaceRoot) as Array<{ id: string; thread_id: string }>;
+        const adoptable: AdoptableThread[] = [
+          ...builders.map((row) => ({
+            threadId: row.thread_id,
+            worktreePath: row.worktree,
+            branch: row.branch,
+            builderId: row.id,
+            harnessName: row.harness ?? undefined,
+            model: row.model ?? undefined,
+          })),
+          // An architect's worktree IS the workspace root and its branch is empty —
+          // the shape `createArchitectThread` writes. Neither is a column on the
+          // architect table, so they are reconstructed here rather than read.
+          ...architects.map((row) => ({
+            threadId: row.thread_id,
+            worktreePath: workspaceRoot,
+            branch: '',
+            builderId: `architect-${row.id}`,
+          })),
+        ];
+        return adoptable;
+      } catch (err) {
+        log('WARN', `Thread adoption sweep could not read threads for ${workspaceRoot}: ${(err as Error).message}`);
+        return null;
+      }
+    },
+    isReady: (workspaceRoot) => requestThreadBackend(workspaceRoot).kind === 'ready',
+    engineFor: (workspaceRoot) => tryGetThreadEngine(workspaceRoot),
+  });
+  threadAdoptionSweeper = threadSweeper;
+  threadSweeper.start();
 
   // Spec 399: Initialize cron scheduler after instances are ready.
   // Spec 1313 (Phase 6): cron delivers through the mailbox + gate via `deliverCronMessage`

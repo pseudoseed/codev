@@ -16,6 +16,7 @@ import { statSync } from 'node:fs';
 import { DispatchJournal } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
 import { createPorchThreadEngine } from './porch-thread-engine.js';
+import { createThreadSubscriptionPool, type ThreadSubscriber } from './thread-subscriptions.js';
 import {
   canonicalWorkspaceKey,
   installThreadSpawnFactory,
@@ -210,6 +211,20 @@ async function connectDispatcher(
    * the bootstrap token — see `token-refused` below for why that is one-time.
    */
   streamer: { stream: (m: string, p: unknown, onValue: (v: unknown) => void) => ThreadStream };
+  /**
+   * The same read side again, shaped for `ResumingSubscription` (issue #241).
+   *
+   * A THIRD view of one socket rather than a second connection, for the reason
+   * `streamer` gives: opening another would spend the bootstrap token, which is
+   * one-time when it was pairing-issued.
+   *
+   * It is separate from `streamer` because the two want different things.
+   * `streamer` returns a `ThreadStream` — a handle with `cancel`, for a display
+   * subscriber that opens one long stream and never resumes. `ResumingSubscription`
+   * wants the raw promise plus the request id, because it opens a NEW stream on every
+   * attempt and each attempt's `close` must cancel its own.
+   */
+  subscriber: ThreadSubscriber;
   accessToken: string;
   /**
    * Hang up. Every path that abandons this connection before an engine owns it must
@@ -332,6 +347,16 @@ async function connectDispatcher(
           },
         };
       },
+    },
+    subscriber: {
+      stream: (
+        method: string,
+        payload: unknown,
+        onValue: (value: unknown) => void,
+        timeoutMs?: number,
+        onRequestId?: (id: number) => void,
+      ) => client.stream(method, payload, onValue, timeoutMs, onRequestId),
+      cancel: (requestId: number) => client.cancel(requestId),
     },
     accessToken: access.access_token,
     close: () => {
@@ -681,11 +706,27 @@ async function initialiseThreadBackend(
    */
   let closed = false;
   let registered: ReturnType<typeof createPorchThreadEngine> | undefined;
+  /**
+   * The subscriptions the engine drives (issue #241), stopped with the socket.
+   *
+   * Set as soon as it is built rather than with the engine, because it is built
+   * BEFORE the engine — the engine takes it as an option — and a close landing in
+   * that window would otherwise leave every `ResumingSubscription` retrying against
+   * a socket that is gone. `stopAll` is idempotent, so stopping it here and again on
+   * an abandon path costs nothing.
+   */
+  let pool: ReturnType<typeof createThreadSubscriptionPool> | undefined;
 
   let connection;
   try {
     connection = await connectDispatcher(config, upgradeTimeoutMs, () => {
       closed = true;
+      // Unconditional, and not guarded by the engine's identity the way the two
+      // registry entries are. The pool is not in a registry a later reconnect can
+      // overwrite — it is owned by THIS socket, so when this socket goes there is
+      // nothing left for its subscriptions to run against, whatever else has since
+      // been installed.
+      pool?.stopAll();
       if (registered !== undefined && tryGetThreadEngine(key) === registered) {
         setThreadEngine(undefined, key);
         // Same socket, same eviction. Guarded by the ENGINE's identity rather
@@ -728,7 +769,7 @@ async function initialiseThreadBackend(
 
   const { createProject } = await import('@cluesmith/porch-driver/thread');
   const journal = new DispatchJournal(join(config.workspaceRoot, '.codev', 'commands.jsonl'));
-  const { dispatcher, streamer, accessToken } = connection;
+  const { dispatcher, streamer, subscriber, accessToken } = connection;
 
   /**
    * Nothing owns this socket until an engine is registered on it.
@@ -744,6 +785,10 @@ async function initialiseThreadBackend(
    * and its own `close` handler evicts it.
    */
   const abandonConnection = (): void => {
+    // The pool first. Closing the socket out from under a running
+    // `ResumingSubscription` leaves it retrying, and its retry loop opens a stream on
+    // a client whose socket is shut — noise on every abandon path, forever.
+    pool?.stopAll();
     connection.close();
   };
 
@@ -795,14 +840,43 @@ async function initialiseThreadBackend(
     abandonConnection();
     throw closedDuringInit(config.serverUrl, config.workspaceRoot);
   }
+  const tracker = new TurnTracker();
+  /**
+   * Built before the engine, because the engine holds it.
+   *
+   * `observe` closes over `registered` rather than over the tracker directly: the
+   * engine routes a value to the `DriverThread` whose `aggregateId` it carries, which
+   * is what fills that thread's event log so `runTurn` can read the assistant text it
+   * produced. Feeding the tracker alone would settle turns and leave every one of
+   * them wordless.
+   *
+   * The `?? tracker` fallback covers exactly the window between this line and the
+   * `createPorchThreadEngine` call below. It cannot deliver events to a thread — no
+   * engine exists to route them — but it keeps `lastSequence` moving, which is what a
+   * waiter registered a moment later reads as its `startSequence`.
+   */
+  pool = createThreadSubscriptionPool({
+    subscriber,
+    workspaceRoot: config.workspaceRoot,
+    observe: (value) => {
+      if (registered) registered.observe(value);
+      else tracker.observe(value);
+    },
+    log: (level, message) => {
+      if (level === 'ERROR') logger.error(message);
+      else if (level === 'WARN') logger.warn(message);
+      else logger.info(message);
+    },
+  });
   registered = createPorchThreadEngine({
     dispatcher,
     journal,
-    tracker: new TurnTracker(),
+    tracker,
     projectId,
     workspaceRoot: config.workspaceRoot,
     defaultHarness: config.defaultHarness,
     defaultModel: config.defaultModel,
+    subscriptions: pool,
   });
   setThreadEngine(registered, key);
   // Registered WITH the engine and evicted WITH it, because they are one socket:

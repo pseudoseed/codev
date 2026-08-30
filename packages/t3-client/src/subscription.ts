@@ -32,11 +32,32 @@
  */
 
 import { classifyResume, SequenceCursor, type ResumeOutcome, type SequencedItem } from './resume.js';
-import type { T3Client } from './client.js';
+
+/**
+ * The only thing this module needs from a client: the ability to open one stream.
+ *
+ * Narrowed from `T3Client` (issue #241) because the wider type overstated the
+ * dependency and made it uncallable from a caller that legitimately has something
+ * else. Tower shares ONE socket between commands and subscriptions, so its transport
+ * has to be a thin per-attempt wrapper whose `close` cancels this attempt's request
+ * id rather than the socket — a `T3Client` cannot express that, and requiring one
+ * forced a cast at exactly the seam where the distinction lives.
+ *
+ * `T3Client` satisfies this structurally, so nothing that passed one before changes.
+ */
+export interface SubscriptionClient {
+  stream(
+    method: string,
+    payload: unknown,
+    onValue: (value: unknown) => void,
+    timeoutMs?: number,
+    onRequestId?: (id: number) => void,
+  ): Promise<unknown>;
+}
 
 /** One connection's worth of transport: a live client, already authenticated. */
 export interface SubscriptionTransport {
-  readonly client: T3Client;
+  readonly client: SubscriptionClient;
   /** Close it. Called when the subscription stops. */
   close(): void;
 }

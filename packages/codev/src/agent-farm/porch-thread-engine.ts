@@ -23,8 +23,9 @@ import {
   isServerRefusal,
   type CommandDispatcher,
 } from '@cluesmith/porch-driver/commands';
-import { TurnTracker } from '@cluesmith/porch-driver/turn';
+import { asThreadEvent, TurnTracker } from '@cluesmith/porch-driver/turn';
 import type { AttachThreadInput, ThreadEngine, ThreadRecord } from './thread-runtime.js';
+import type { ThreadSubscriptionPool } from './thread-subscriptions.js';
 import type { SpawnThreadFactory } from './db/thread-identity.js';
 
 export interface PorchThreadEngineOptions {
@@ -35,6 +36,16 @@ export interface PorchThreadEngineOptions {
   readonly workspaceRoot: string;
   readonly defaultHarness?: string;
   readonly defaultModel?: string;
+  /**
+   * The subscriptions that make turns settle (issue #241).
+   *
+   * OPTIONAL, and the reason matters: an engine built against a fake dispatcher with
+   * no server has nothing to subscribe to, and every existing unit test is that
+   * engine. Absent, this engine behaves exactly as it did before — which is to say
+   * no turn it starts will ever settle, and a caller in that position must not be
+   * told otherwise. Production always passes one.
+   */
+  readonly subscriptions?: ThreadSubscriptionPool;
 }
 
 /**
@@ -134,6 +145,20 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
         launched: Boolean(input.launchScript || input.prompt || input.role === 'architect'),
       };
       records.set(thread.threadId, record);
+      // BEFORE the first turn, and this ordering is the point of issue #241.
+      //
+      // `ResumingSubscription` hands the server's snapshot frame to `onValue` and
+      // `asThreadEvent` returns null for it, so anything the server compacted into
+      // that snapshot is never observed. A turn dispatched first can therefore have
+      // its `running` transition land inside the snapshot, and the waiter then waits
+      // for a transition that already happened.
+      //
+      // It is driver-dependent, which is what makes it dangerous: the same race
+      // passed under claude and timed out under opencode/grok-4.6, which finishes a
+      // trivial turn in ~14s and beat the subscribe. A spawn that feels slower here
+      // is the cost of a turn that settles; it is not a latency bug to be optimised
+      // back into fire-and-forget.
+      await options.subscriptions?.ensure(thread.threadId);
       // The initial turn IS the spawn: without it the thread exists and the builder has
       // been given nothing to do. Tracked like any other turn so the record does not
       // read idle while the first one runs.
@@ -177,15 +202,26 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
         worktreePath: input.worktreePath,
         branch: input.branch,
         builderId: input.builderId,
-        // Whether a turn is running on the server right now is not knowable from
-        // here — this process holds no subscription to the thread. `null` means
-        // "this engine is not following a turn", and no caller may read it as
-        // "the thread is idle".
+        // `null` means "this engine is not following a turn as of this instant",
+        // and no caller may read it as "the thread is idle".
+        //
+        // It used to mean less than that. Until issue #241 this process held NO
+        // subscription, so the field was not merely unknown at adoption — it could
+        // never become known, because nothing would ever observe the transition. The
+        // `ensure` below is what changes that: once the subscription has attached and
+        // replayed, `observe` writes the server's own `activeTurnId` onto this record
+        // through the tracker. The window where this is stale is now the replay, not
+        // the life of the process.
         activeTurnId: null,
         merged: false,
         launched: true,
       };
       records.set(thread.threadId, record);
+      // Idempotent, and called on every adoption. `attach` runs on every mailbox
+      // delivery, so this is the ordinary path by which a thread acquires its
+      // subscription after a Tower restart — the cursor on disk is what makes that a
+      // resume rather than a cold resubscribe.
+      await options.subscriptions?.ensure(thread.threadId);
       return record;
     },
 
@@ -251,6 +287,18 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
       const thread = threads.get(threadId);
       if (!thread) throw new Error(unknownThread(threadId));
       const record = records.get(threadId);
+      // Cheap when the subscription is already up, and the only guard against
+      // dispatching onto a thread whose stream dropped and has not come back. A turn
+      // started into an unwatched thread is a turn that never settles, which is the
+      // failure this whole change exists to remove — reintroducing it on the second
+      // turn would be a narrower version of the same bug.
+      //
+      // This runs on Tower's mailbox drain, which awaits agents sequentially — so a
+      // new await here is the thing `mailbox-wiring`'s "NOTHING HERE AWAITS A CONNECT"
+      // comment warns about. It is bounded by the same 30s the `beginTurn` on the next
+      // line is already bounded by (`T3Client.requestTimeoutMs`), on the same socket,
+      // so it does not lengthen that path's worst case. See the budget's own note.
+      await options.subscriptions?.ensure(threadId);
       const started = await thread.beginTurn(text, ref);
       if (record) track(record, started);
     },
@@ -280,11 +328,36 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
       });
       threads.delete(threadId);
       records.delete(threadId);
+      // The thread's reason is gone, so the stream must go with it. Forgetting the
+      // bookkeeping while the stream ran on is how a server keeps producing values
+      // for nobody.
+      options.subscriptions?.stop(threadId);
       return 'removed';
     },
 
     get(threadId) {
       return records.get(threadId);
+    },
+
+    /**
+     * Route one subscription value to the thread it belongs to (issue #241).
+     *
+     * Routing on `aggregateId` rather than broadcasting: `DriverThread.observe`
+     * appends to its own event log after filtering, so handing every thread every
+     * value would be correct and would also make the retention cap meaningless work.
+     *
+     * A value for a thread this engine does not hold still reaches the TRACKER. That
+     * is not tidiness — `lastSequence` is what `expectTurn` captures as a waiter's
+     * `startSequence`, and a tracker that skipped events for an unadopted thread
+     * would hand the next `attach` a start sequence below events it had already been
+     * shown, which is exactly the condition under which a replayed refusal kills a
+     * healthy turn.
+     */
+    observe(value: unknown) {
+      const aggregateId = asThreadEvent(value)?.aggregateId;
+      const thread = aggregateId === undefined ? undefined : threads.get(aggregateId);
+      if (thread) thread.observe(value);
+      else options.tracker.observe(value);
     },
   };
 }
