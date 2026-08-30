@@ -11,10 +11,10 @@ plan_phases:
     status: complete
   - id: phase_3
     title: Hierarchy integrity refused at write time
-    status: in_progress
+    status: complete
   - id: phase_4
     title: Porch gate block with a server-allocated revision
-    status: pending
+    status: in_progress
   - id: phase_5
     title: Vendored contract regenerated from the fork
     status: pending
@@ -36,7 +36,7 @@ plan_phases:
   - id: phase_11
     title: 'Acceptance run: tailnet iPad and the rebase drill'
     status: pending
-current_plan_phase: phase_3
+current_plan_phase: phase_4
 gates:
   spec-approval:
     status: approved
@@ -100,8 +100,8 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 2
-build_complete: true
+iteration: 1
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -146,7 +146,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/spir-250/codev/projects/250-t3code-is-the-front-end-privat/250-phase_3-iter1-opencode.txt
         stated: true
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-30T23:40:51.969Z'
+updated_at: '2026-08-30T23:46:47.337Z'
 context_refreshes:
   - boundary: enter:implement
     at: '2026-08-30T20:09:29.526Z'
@@ -157,3 +157,5 @@ context_refreshes:
   - boundary: plan-phase:phase_3
     at: '2026-08-30T22:46:35.537Z'
     acknowledged_at: '2026-08-30T22:47:44.711Z'
+  - boundary: plan-phase:phase_4
+    at: '2026-08-30T23:46:47.337Z'
