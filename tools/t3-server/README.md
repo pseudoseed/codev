@@ -116,6 +116,57 @@ establishes are claims about **threads** rather than about a provider. The drive
 in every `COULD_NOT_TELL` message, so a run cannot report an outcome without saying which driver
 produced it.
 
+## Running a whole protocol against it (Spec 146 Phase 10)
+
+`full-protocol-run.sh` brings up a server the run OWNS, runs one complete BUGFIX protocol on a
+t3code thread against it, and tears it down:
+
+```bash
+T3_NODE=/absolute/path/to/node tools/t3-server/full-protocol-run.sh \
+  <port> <harness> <model> <gate-seconds> <label>
+```
+
+Every run gets its own port and its own `T3_HARNESS_DIR`, because Phase 10 runs several at once
+— one per driver, plus a 24-hour gate — and they would otherwise share a data directory and a
+pairing token, which is one-time.
+
+Three things it refuses rather than guesses:
+
+- **A port it does not own.** `stop` can only stop a server its own `T3_HARNESS_DIR` describes,
+  so a server left by another label — or one whose runtime directory was deleted, which orphans
+  it beyond any `stop` — keeps the port. The new server then fails to bind and `ready` answers
+  about the stranger: "answering but printed no pairing token". Truthful, and the wrong
+  diagnosis. Two runs were lost to it before the check existed.
+- **A missing `T3_NODE`.** Same rule as the rest of the harness: an absolute interpreter, never
+  one inherited from `PATH`.
+- **A start it could not complete.** Exit `3`, not `1`. A run that could not start a server has
+  not failed a protocol.
+
+**It writes a provider opt-in into the state directory it owns.** t3code ships some drivers OFF —
+`OpenCodeSettings.enabled` defaults to false at the pinned commit, deliberately: *"Off by default
+(like Cursor and Grok): the binding is not yet stable enough to probe on every install. Users opt
+in from Settings."* Since every run gets a fresh `--base-dir`, every run gets a state directory
+nobody has opted in for, and turns on that driver are refused at `startSession`. The file is
+written after the `start` that wipes the directory and before a `restart` that loads it. **The
+user's own T3 Code settings are never touched.**
+
+## Collecting the evidence
+
+```bash
+node tools/t3-server/collect-phase10-evidence.mjs claude-1h opencode-1h \
+  --long-gate gate-24h --long-gate-started <iso8601>
+```
+
+Assembles the run outputs from `.runtime-runs/` into
+`codev/research/146-phase10-live-evidence.json` and fills the results table in
+`codev/research/146-driver-parity.md`. A script rather than a hand step because
+`spec-146-phase-10-full-protocol.test.ts` refuses evidence older than the runner that produced
+it, so the evidence is regenerated every time the runs are — and a procedure that lives in
+someone's memory gets done differently the second time.
+
+It exits `3`, never `1`, when a named run is missing. "The run has not finished" and "the run
+failed" are different facts.
+
 ## CI
 
 CI does not have this checkout. The rule is:
