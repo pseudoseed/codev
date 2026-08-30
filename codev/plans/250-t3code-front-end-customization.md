@@ -46,9 +46,27 @@ recorded rows in `effect_sql_migrations`, on a database whose only backup is the
 guarded, idempotent `PRAGMA table_info` + `ALTER TABLE … ADD COLUMN`, which never reads or writes
 `effect_sql_migrations` and leaves the watermark exactly where upstream put it.
 
-This **contradicts a spec assumption** — "t3code's server owns its own migrations; the added
-columns follow that mechanism". It is an Assumption, not a Constraint or a Baked Decision, and it
-is the assumption that produces the bug. Raised at the plan gate rather than changed quietly.
+**The guard is upstream's own idiom, not an invention.** Verified: upstream already adds nullable
+columns exactly this way. `042_ProjectionThreadLinkedPullRequest.ts` in full —
+
+```ts
+const columns = yield* sql<{ readonly name: string }>`PRAGMA table_info(projection_threads)`;
+if (!columns.some((column) => column.name === "linked_pull_request_json")) {
+  yield* sql`ALTER TABLE projection_threads ADD COLUMN linked_pull_request_json TEXT`;
+}
+```
+
+`033_ProjectionThreadsSettled.ts`, `034`, `035`, `039`, `040`, `021`, `022` and `032` all do the
+same. So our column applier is that code verbatim; the only difference is **where it is invoked
+from** — a layer sequenced after `MigrationsLive` (`Migrations.ts:173`) rather than an entry in
+`migrationEntries`.
+
+That narrows the deviation a long way. It **still contradicts a spec assumption** — "t3code's
+server owns its own migrations; the added columns follow that mechanism" — because we skip the
+numbered registry, and that is the part worth a ruling. But it is the same SQL, the same guard and
+the same idempotence upstream itself relies on, so it is not a parallel mechanism. It is an
+Assumption, not a Constraint or a Baked Decision, and it is the assumption that produces the bug.
+Raised at the plan gate rather than changed quietly.
 
 ### Two repositories, one PR
 
@@ -232,8 +250,9 @@ All in `/Users/chris/dev/t3code-codev`:
   `ThreadCreatedPayload`, each with a decoding default of `null`.
 - `apps/server/src/codev/schemaGuard.ts` — new. The guarded, idempotent column applier. **Not**
   a file under `Migrations/`, and **not** registered in `Migrations.ts`.
-- `apps/server/src/persistence/Layers/…` — call the guard at server start, after upstream's
-  migrator has run and before the projection opens.
+- `apps/server/src/persistence/Migrations.ts` — export a `CodevSchemaGuardLive` layer sequenced
+  **after** `MigrationsLive` (`:173`) and before the projection layers open. `migrationEntries`
+  itself is not touched.
 - `apps/server/src/orchestration/projector.ts` — read and write the columns.
 - `apps/server/src/orchestration/Schemas.ts` — re-export as the file already does.
 - `packages/contracts/src/orchestration.test.ts` — decode cases.
@@ -248,11 +267,12 @@ This repository:
 
 - [ ] `role` is `"architect" | "builder" | null`; `null` means a thread Codev did not create.
 - [ ] `parentThreadId` is a nullable `ThreadId`.
-- [ ] **The columns are applied outside upstream's migrator.** `schemaGuard.ts` reads
-      `PRAGMA table_info(<table>)` and issues `ALTER TABLE … ADD COLUMN` only for columns that
-      are absent. It never reads or writes `effect_sql_migrations`, so upstream's watermark
-      (`Migrator.js:78`, `:121`) is left exactly where upstream put it and every future upstream
-      migration still runs.
+- [ ] **The columns are applied outside upstream's migrator, using upstream's own idiom.**
+      `schemaGuard.ts` reads `PRAGMA table_info(projection_threads)` and issues
+      `ALTER TABLE … ADD COLUMN` only for absent columns — the same shape as
+      `042_ProjectionThreadLinkedPullRequest.ts` and seven other upstream migrations. It never
+      reads or writes `effect_sql_migrations`, so upstream's watermark (`Migrator.js:78`, `:121`)
+      stays where upstream put it and every future upstream migration still runs.
 - [ ] The guard is idempotent and safe to run on every start: present columns are left alone,
       absent ones are added, and running it twice changes nothing the second time.
 - [ ] `ALTER TABLE … ADD COLUMN` only. Nothing is rewritten, no table is recreated, no data is
