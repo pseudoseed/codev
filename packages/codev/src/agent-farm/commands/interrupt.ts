@@ -42,7 +42,10 @@ export async function interrupt(options: InterruptOptions): Promise<void> {
   }
   if (builder && isThreadBacked(builder) && builder.threadId) {
     try {
-      const settled = await interruptThread(builder.threadId);
+      // Named, so the keyed engine map is read for THIS workspace rather than for
+      // whichever one happened to register first. (This command registers no engine of
+      // its own, so it still throws — but it throws about the right workspace.)
+      const settled = await interruptThread(builder.threadId, detectWorkspaceRoot() ?? undefined);
       if (settled.activeTurnId !== null) {
         fatal(`Interrupt of ${builder.id} did not settle activeTurnId`);
       }

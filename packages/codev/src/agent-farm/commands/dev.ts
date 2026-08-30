@@ -65,7 +65,7 @@ export async function dev(options: DevOptions): Promise<void> {
     throw new Error(`No builder found matching "${options.builderId}". Try \`afx status\`.`);
   }
   if (isThreadBacked(builder)) {
-    builder.worktree = worktreeForThreadBuilder(builder);
+    builder.worktree = worktreeForThreadBuilder(builder, config.workspaceRoot);
   }
   if (!builder.worktree) {
     throw new Error(`Builder ${builder.id} has no worktree path on record — cannot start dev.`);

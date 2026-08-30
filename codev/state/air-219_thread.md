@@ -116,3 +116,30 @@ driving the engine from the test process cannot see it.
 - **Filed, not built:** #223 — a thread-backed row held as `no-live-pty` sends the operator to
   restart a session when the real fault is an uninitialised backend in Tower's process.
   Architect's ruling: it is a user-global DB migration and belongs in its own change.
+
+## Review round 4 (codex + claude re-run on ad75b253a, both REQUEST_CHANGES HIGH)
+
+Three of the four exist because round 2's fix moved engine registration into Tower, which
+is multi-workspace in a way the CLI never was. Both lanes landed on the first independently.
+
+1. **One process-global engine served every workspace.** `let engine` plus an unkeyed
+   `already-installed` check meant the first thread-configured workspace pinned the socket,
+   projectId, dispatcher and journal for all of them. Now a Map keyed on the canonical
+   workspace root, with NO fallback in either direction, plus one in-flight init per
+   workspace (concurrent deliveries raced the singleton). The concurrency test counts
+   bootstrap-token exchanges at the server — a pairing grant is one-time.
+2. **`--no-enter` became a submitted turn.** The flag was received and discarded on the
+   thread branch, so a gate notification sent to sit for a human executed itself. Refused,
+   with nothing attempted before the refusal.
+3. **Tower never invalidated a dead socket.** The post-handshake listener only warned, so
+   after a server restart — which item 4 proves is supported — Tower held the dead engine
+   forever. Close now evicts that workspace's engine only, and only if it is still the
+   registered one.
+4. **`restart` could signal a process it does not own.** `readPid` proved liveness, not
+   ownership; a reused pid would have been SIGTERMed as a group. `readOwnedPid` gates it.
+   The mutation check killed the bystander process — the damage, observed.
+
+All five mutation checks fired. Recorded, not fixed: architect `attach` passes no
+harness/model (the `architect` table has no columns to read, so it rests on two defaults
+staying equal), and `activeProjectForWorkspace` hand-builds a second auth path next to
+`@cluesmith/t3-client/auth`.

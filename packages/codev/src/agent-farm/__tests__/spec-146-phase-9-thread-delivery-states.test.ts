@@ -36,7 +36,7 @@ vi.mock('../thread-runtime.js', async (importOriginal) => {
   return {
     ...actual,
     deliverThreadTurn: (...args: unknown[]) => deliverThreadTurn(...args),
-    getThreadEngine: () => getThreadEngine(),
+    getThreadEngine: (...args: unknown[]) => getThreadEngine(...args),
   };
 });
 
@@ -78,7 +78,9 @@ describe('thread delivery registers an engine and adopts the thread', () => {
     expect(attach).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'thr-1', worktreePath: '/ws', branch: '', builderId: 'architect-main' }),
     );
-    expect(deliverThreadTurn).toHaveBeenCalledWith('thr-1', 'hello');
+    // For THIS workspace. Tower serves every workspace in `global.db` from one process.
+    expect(getThreadEngine).toHaveBeenCalledWith('/ws');
+    expect(deliverThreadTurn).toHaveBeenCalledWith('thr-1', 'hello', '/ws');
     // A success that logs a failure sentence is the shape this replaced.
     expect(logs).toEqual([]);
   });
@@ -122,6 +124,40 @@ describe('thread delivery registers an engine and adopts the thread', () => {
     await expect(run()).resolves.toBe(false);
 
     expect(logs.join('\n')).toContain('the server refused the turn');
+  });
+
+  /**
+   * `--no-enter` means "put this in the composer and leave it for a human". A thread has
+   * no composer: `thread.turn.start` IS the submit. The flag was received here and
+   * discarded, so a gate notification sent with `--no-enter` — the deliberate form, the
+   * one that exists so a human decides — executed itself on a thread-backed agent.
+   *
+   * A message that does not arrive is the failure this project spent two days on. A
+   * message that arrives and runs itself is the worse half of it.
+   */
+  it('refuses a --no-enter message instead of silently submitting it', async () => {
+    const logs: string[] = [];
+    const ports = makeDeliveryPorts((level, message) => {
+      if (level !== 'INFO') logs.push(`${level}: ${message}`);
+    });
+
+    await expect(ports.writeMessage(threadDeliverySession('thr-1', CONTEXT), 'gate reached', true))
+      .resolves.toBe(false);
+
+    // Not delivered, and not by accident of some earlier failure: nothing was even
+    // attempted, so there is no path by which the turn could have started.
+    expect(deliverThreadTurn).not.toHaveBeenCalled();
+    expect(ensureThreadBackendReady).not.toHaveBeenCalled();
+    expect(attach).not.toHaveBeenCalled();
+    expect(logs.join('\n')).toContain('refusing a --no-enter message');
+    expect(logs.join('\n')).toContain('has no composer');
+  });
+
+  it('an ordinary message is unaffected by that refusal', async () => {
+    const { logs, run } = deliver(threadDeliverySession('thr-1', CONTEXT));
+    await expect(run()).resolves.toBe(true);
+    expect(deliverThreadTurn).toHaveBeenCalledWith('thr-1', 'hello', '/ws');
+    expect(logs).toEqual([]);
   });
 
   it('a session with no context names a wiring fault rather than blaming the server', async () => {

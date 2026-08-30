@@ -69,7 +69,7 @@ export async function workspaceAddArchitect(
   // unreachable server must not be spelled the same way as an unconfigured one.
   await ensureThreadBackendReady(workspacePath);
 
-  if (tryGetThreadEngine()) {
+  if (tryGetThreadEngine(workspacePath)) {
     const existing = new Set(getArchitects(workspacePath).map((a) => a.name));
     let name = options.name;
     if (name) {

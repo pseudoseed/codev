@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -382,6 +382,40 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
     expect(src).toContain('NOT_RUNNING: could not check:');
     expect(src).toContain('NO_DATA_TO_KEEP: could not check:');
     expect(src).toContain('PORT_NOT_RELEASED: could not check:');
+  });
+
+  /**
+   * Issue #219 round 3. `stop` signalled whatever the pid file named, and the check
+   * behind that was `process.kill(pid, 0)` — LIVENESS, not ownership. Pids are reused,
+   * so a stale pid file could name an unrelated live process, and `stop` would SIGTERM
+   * its whole process group. `ownsProcess` already existed for the port sweep, which
+   * refuses to kill what it cannot prove it owns; the pid path was the one place that
+   * rule was not applied, and it is the one that can kill someone else's work.
+   */
+  it('refuses to signal a live pid it cannot prove it owns', () => {
+    const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
+    const runtimeDir = mkdtempSync(join(tmpdir(), 't3-ownership-'));
+    // A real, live process that is emphatically not a pinned t3code server.
+    const bystander = spawn('sleep', ['30'], { stdio: 'ignore', detached: true });
+    try {
+      expect(bystander.pid).toBeDefined();
+      writeFileSync(join(runtimeDir, 'server.pid'), String(bystander.pid));
+
+      const stopped = spawnSync(process.execPath, [harness, 'stop'], {
+        encoding: 'utf8',
+        env: { ...process.env, T3_HARNESS_DIR: runtimeDir, T3_HARNESS_PORT: '3898' },
+      });
+
+      expect(stopped.stderr).toContain(`REFUSING to signal pid ${bystander.pid}`);
+      // The assertion that matters: it is still alive. `kill(pid, 0)` throws only when
+      // the process is gone, so this is a direct observation rather than a proxy.
+      expect(() => process.kill(bystander.pid!, 0)).not.toThrow();
+      // And the stale file is cleared, so the workspace is not wedged by it forever.
+      expect(existsSync(join(runtimeDir, 'server.pid'))).toBe(false);
+    } finally {
+      try { process.kill(bystander.pid!, 'SIGKILL'); } catch { /* already gone */ }
+      rmSync(runtimeDir, { recursive: true, force: true });
+    }
   });
 
   it('requires a second opt-in before the unit suite can dispatch a live provider turn', () => {

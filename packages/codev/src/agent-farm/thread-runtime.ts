@@ -2,6 +2,8 @@ import {
   setSpawnThreadFactory,
   type SpawnThreadFactory,
 } from './db/thread-identity.js';
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { getArchitectByName, getBuilder } from './state.js';
 
 export const THREAD_BACKED_UNSUPPORTED = 'thread-backed, unsupported here';
@@ -63,30 +65,81 @@ export interface ThreadEngine {
   get(threadId: string): ThreadRecord | undefined;
 }
 
-let engine: ThreadEngine | undefined;
+/**
+ * One engine PER WORKSPACE, not one per process.
+ *
+ * This was a bare `let engine`, and in the CLI that was harmless: an `afx` process
+ * serves one workspace and exits. Tower does not. It drains mail for every workspace
+ * in `global.db` from a single process, so a process-global engine meant the FIRST
+ * thread-configured workspace to deliver pinned the socket, the projectId, the
+ * dispatcher and the journal — and workspace B's turns then ran against workspace A's
+ * server, under A's project. Silently, because a turn dispatched to the wrong server
+ * succeeds.
+ *
+ * The bug was created by moving engine registration into Tower, which is what the
+ * delivery fix required. It is the shape of that seam, not an accident of it.
+ */
+const engines = new Map<string, ThreadEngine>();
 
-export function setThreadEngine(next: ThreadEngine | undefined): void {
-  engine = next;
+/**
+ * The slot for a caller that names no workspace.
+ *
+ * Deliberately NOT a fallback for keyed lookups. A keyed read that missed and then
+ * took this one would restore exactly the bug above, one indirection further away.
+ * A caller either names a workspace or it does not, and the two never see each
+ * other's engine.
+ */
+const UNKEYED = '\u0000unkeyed';
+
+/**
+ * The canonical key for a workspace root.
+ *
+ * `/var` and `/private/var` are the same directory on macOS, and `.`-relative and
+ * trailing-slash forms are the same workspace. Two keys for one workspace is two
+ * engines, two sockets and two projects for it — which is the failure this map exists
+ * to prevent, wearing a different hat.
+ */
+export function canonicalWorkspaceKey(workspaceRoot: string): string {
+  const absolute = resolve(workspaceRoot).replace(/\/+$/, '') || '/';
+  try {
+    return realpathSync(absolute);
+  } catch {
+    return absolute;
+  }
 }
 
-export function tryGetThreadEngine(): ThreadEngine | undefined {
-  return engine;
+export function setThreadEngine(next: ThreadEngine | undefined, workspaceRoot?: string): void {
+  const key = workspaceRoot === undefined ? UNKEYED : canonicalWorkspaceKey(workspaceRoot);
+  if (next === undefined) engines.delete(key);
+  else engines.set(key, next);
 }
 
-export function getThreadEngine(): ThreadEngine {
-  if (!engine) {
+/** Every registered engine is dropped. For a test's teardown, not for production. */
+export function clearThreadEngines(): void {
+  engines.clear();
+}
+
+export function tryGetThreadEngine(workspaceRoot?: string): ThreadEngine | undefined {
+  return engines.get(workspaceRoot === undefined ? UNKEYED : canonicalWorkspaceKey(workspaceRoot));
+}
+
+export function getThreadEngine(workspaceRoot?: string): ThreadEngine {
+  const found = tryGetThreadEngine(workspaceRoot);
+  if (!found) {
     // "No engine registered" was true and useless: it is the same sentence for a
     // workspace that has no t3code server configured, and for one that has a server but
     // reached this line from a command that never called `ensureThreadBackendReady`.
     // Only the second is a bug in this repo, and a caller cannot tell them apart from
     // the old message.
     throw new Error(
-      'No thread engine is registered in this process. Either this workspace has no t3code '
-      + 'server configured (in which case nothing should be thread-backed), or this command '
-      + 'reached a thread-backed row without calling ensureThreadBackendReady() first.',
+      `No thread engine is registered in this process for ${workspaceRoot ?? '(no workspace named)'}. `
+      + 'Either this workspace has no t3code server configured (in which case nothing should be '
+      + 'thread-backed), or this command reached a thread-backed row without calling '
+      + 'ensureThreadBackendReady() for THAT workspace first. An engine registered for a different '
+      + 'workspace is deliberately not used here: it holds another workspace\'s server and project.',
     );
   }
-  return engine;
+  return found;
 }
 
 export function createMemoryThreadEngine(): ThreadEngine {
@@ -149,21 +202,38 @@ export function createMemoryThreadEngine(): ThreadEngine {
   };
 }
 
-export function installThreadSpawnFactory(): void {
-  setSpawnThreadFactory(async (input) => getThreadEngine().create(input));
+/**
+ * The factory closes over the workspace it was installed for.
+ *
+ * `SpawnThreadFactory`'s input carries a worktree, not a workspace root, and a
+ * builder's worktree is under `.builders/` rather than being the workspace — so the
+ * root cannot be recovered from it. The installer knows it; the factory remembers it.
+ */
+export function installThreadSpawnFactory(workspaceRoot?: string): void {
+  setSpawnThreadFactory(async (input) => getThreadEngine(workspaceRoot).create(input));
 }
 
-export async function deliverThreadTurn(threadId: string, text: string): Promise<void> {
-  await getThreadEngine().startTurn(threadId, text);
+export async function deliverThreadTurn(
+  threadId: string,
+  text: string,
+  workspaceRoot?: string,
+): Promise<void> {
+  await getThreadEngine(workspaceRoot).startTurn(threadId, text);
 }
 
-export async function interruptThread(threadId: string): Promise<{ activeTurnId: null }> {
-  return getThreadEngine().interrupt(threadId);
+export async function interruptThread(
+  threadId: string,
+  workspaceRoot?: string,
+): Promise<{ activeTurnId: null }> {
+  return getThreadEngine(workspaceRoot).interrupt(threadId);
 }
 
-export function worktreeForThreadBuilder(builder: { threadId?: string; worktree?: string }): string {
+export function worktreeForThreadBuilder(
+  builder: { threadId?: string; worktree?: string },
+  workspaceRoot?: string,
+): string {
   if (!builder.threadId) throw new Error('worktreeForThreadBuilder requires threadId');
-  const fromEngine = tryGetThreadEngine()?.worktreePath(builder.threadId);
+  const fromEngine = tryGetThreadEngine(workspaceRoot)?.worktreePath(builder.threadId);
   const path = fromEngine ?? builder.worktree;
   if (!path) throw new Error(`Thread ${builder.threadId} has no worktree`);
   return path;
@@ -184,7 +254,7 @@ export async function createArchitectThread(input: {
   harnessName?: string;
   model?: string;
 }): Promise<string> {
-  return getThreadEngine().create({
+  return getThreadEngine(input.workspaceRoot).create({
     builderId: `architect-${input.name}`,
     worktreePath: input.workspaceRoot,
     branch: '',

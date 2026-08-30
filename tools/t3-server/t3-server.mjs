@@ -255,6 +255,12 @@ function ownedPortHolders() {
   return { ours, foreign };
 }
 
+/**
+ * The pid in the pid file, if a process with that id is alive.
+ *
+ * LIVENESS ONLY. `process.kill(pid, 0)` says a process exists, not that it is ours,
+ * and pids are reused. Use {@link readOwnedPid} before signalling.
+ */
 function readPid() {
   if (!existsSync(pidFile)) return null;
   const pid = Number(readFileSync(pidFile, 'utf8').trim());
@@ -265,6 +271,25 @@ function readPid() {
   } catch {
     return null;
   }
+}
+
+/**
+ * The pid in the pid file, if it is alive AND this harness can prove it owns it.
+ *
+ * `stop` signalled whatever `readPid` returned, and `readPid` proves liveness rather
+ * than ownership. A stale pid file whose pid has been reused by something unrelated
+ * passes that check, and `stop` then sends SIGTERM to that process GROUP — killing
+ * someone else's work on the strength of a number in a file this harness wrote
+ * earlier. `ownsProcess` already exists for the port sweep, which refuses to kill what
+ * it cannot prove it owns; the pid path is the one place that rule was not applied.
+ *
+ * Returns `{ pid, owned }` so a caller can tell "nothing there" from "something there
+ * that is not mine" — those are different facts and only the second is worth saying.
+ */
+function readOwnedPid() {
+  const pid = readPid();
+  if (pid === null) return { pid: null, owned: false };
+  return { pid, owned: ownsProcess(pid) };
 }
 
 /**
@@ -449,8 +474,19 @@ async function ready() {
 
 function stop() {
   rmSync(runtimeFile, { force: true });
-  const pid = readPid();
-  if (!pid) {
+  const { pid, owned } = readOwnedPid();
+  if (pid !== null && !owned) {
+    // The file names a live process this harness cannot claim. Signalling it is the
+    // one irreversible thing `stop` can do wrong, and a reused pid is exactly how it
+    // would happen. Drop the stale file, say so, and fall through to the port sweep —
+    // which refuses foreign holders by the same rule.
+    say(
+      `REFUSING to signal pid ${pid} from ${pidFile}: it is alive but not ours (a reused pid, or a ` +
+        `stale file). Removing the stale pid file; the port sweep below still applies.`,
+    );
+    rmSync(pidFile, { force: true });
+  }
+  if (!pid || !owned) {
     // Still sweep the port: a previous run may have left a listener with no
     // matching pid file, and reporting "nothing running" while a server holds
     // the port is the same lie as a check that passes without looking.
@@ -465,7 +501,8 @@ function stop() {
           `  T3_HARNESS_PORT to a free port. This harness does not kill what it cannot prove it owns.`,
       );
     }
-    say(ours.length > 0 ? `no pid file, but released port ${port} (pids ${ours.join(', ')})` : 'nothing running');
+    const pidNote = pid === null ? 'no pid file' : `pid ${pid} not ours`;
+    say(ours.length > 0 ? `${pidNote}, but released port ${port} (pids ${ours.join(', ')})` : 'nothing running');
     return;
   }
   try {
@@ -506,12 +543,13 @@ function restart() {
   // succeeded with no server having been replaced, and reported a restart that did
   // not happen. What item 4 asks about is a process being replaced, and that has to
   // be true before this exits 0.
-  const pid = readPid();
+  const { pid, owned } = readOwnedPid();
   const holders = ownedPortHolders();
-  if (!pid && holders.ours.length === 0) {
+  if ((!pid || !owned) && holders.ours.length === 0) {
     die(
       UNDETERMINED,
-      `NOT_RUNNING: could not check: no harness server is running on port ${port}` +
+      `NOT_RUNNING: could not check: no harness server this process owns is running on port ${port}` +
+        (pid !== null && !owned ? ` (pid ${pid} in ${pidFile} is alive but not ours)` : '') +
         (holders.foreign.length > 0
           ? `; pid(s) ${holders.foreign.join(', ')} hold it and are not ours.`
           : '.') +

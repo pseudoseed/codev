@@ -320,9 +320,30 @@ describe('Spec 146 Phase 9 — production spawn wiring (#179 item 2)', () => {
     await expect(ensureThreadBackendReady(root)).rejects.toThrow(/could not be reached/);
   });
 
-  it('an already-registered engine is left alone', async () => {
-    setThreadEngine(createMemoryThreadEngine());
-    await expect(ensureThreadBackendReady(workspace())).resolves.toBe('already-installed');
+  it('an engine already registered FOR THIS WORKSPACE is left alone', async () => {
+    const root = workspace();
+    setThreadEngine(createMemoryThreadEngine(), root);
+    await expect(ensureThreadBackendReady(root)).resolves.toBe('already-installed');
+  });
+
+  /**
+   * #219 round 3. This check read an unkeyed slot, so in Tower — one process, every
+   * workspace in `global.db` — the first thread-configured workspace to connect made
+   * every later one return `already-installed` and then use its socket and its project.
+   */
+  it('an engine registered for ANOTHER workspace does not count as installed here', async () => {
+    // Its own directory rather than a second `workspace()` call: that helper reassigns
+    // the shared `dir` the teardown removes, so the first one would be left behind.
+    const other = mkdtempSync(join(tmpdir(), 'phase9-other-'));
+    try {
+      setThreadEngine(createMemoryThreadEngine(), other);
+      // A second workspace, with no `threads` block of its own: the honest answer is
+      // "not configured", never "already installed".
+      await expect(ensureThreadBackendReady(workspace({}))).resolves.toBe('not-configured');
+    } finally {
+      setThreadEngine(undefined, other);
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 
   it('launchSpawnedBuilder forwards the mission to the factory, not only to the PTY closure', async () => {

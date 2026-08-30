@@ -11,12 +11,16 @@
  * silently, the second throws. A server that was named and could not be reached must
  * never be spelled the same way as a server that was never named.
  */
-import { realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DispatchJournal } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
 import { createPorchThreadEngine } from './porch-thread-engine.js';
-import { installThreadSpawnFactory, setThreadEngine, tryGetThreadEngine } from './thread-runtime.js';
+import {
+  canonicalWorkspaceKey,
+  installThreadSpawnFactory,
+  setThreadEngine,
+  tryGetThreadEngine,
+} from './thread-runtime.js';
 import { logger } from './utils/logger.js';
 import { loadConfig } from '../lib/config.js';
 
@@ -194,6 +198,7 @@ export function classifyConnectFailure(err: unknown): ConnectFailure {
 async function connectDispatcher(
   config: ThreadBackendConfig,
   upgradeTimeoutMs: number,
+  onClosed: () => void,
 ): Promise<{ dispatcher: { call: (m: string, p: unknown) => Promise<unknown> }; accessToken: string }> {
   const { T3Client } = await import('@cluesmith/t3-client/client');
   const auth = await import('@cluesmith/t3-client/auth');
@@ -222,6 +227,20 @@ async function connectDispatcher(
   // listener left and a later failure vanishes. This one is durable and outlives the handshake.
   socket.addEventListener('error', () => {
     logger.warn(`t3code socket error after connecting to ${config.serverUrl}`);
+  });
+  // A dead socket must not stay registered as a live engine.
+  //
+  // In the CLI this could not matter: the process exits. Tower holds its engine for as
+  // long as it runs, and THIS PR proves the t3code server can be restarted — after which
+  // every delivery through the stale engine fails, forever, until Tower is restarted.
+  // Warning about it was all the old listener did.
+  //
+  // Eviction, not reconnection: the next `ensureThreadBackendReady` for this workspace
+  // finds no engine and connects again, with a fresh credential exchange. Reconnecting
+  // from in here would need a credential this closure does not have.
+  socket.addEventListener('close', () => {
+    logger.warn(`t3code socket to ${config.serverUrl} closed; dropping the engine for ${config.workspaceRoot}`);
+    onClosed();
   });
   const client = new T3Client({
     send: (d: string) => socket.send(d),
@@ -286,24 +305,18 @@ export async function activeProjectForWorkspace(
   // are the same directory on macOS and a string compare calls them different, which
   // would report `none` for a project that exists — the answer that leads straight
   // back into the invariant this lookup exists to avoid.
-  const target = normalisePath(workspaceRoot);
+  // The same canonicalisation the engine map keys on, not a second copy of the rule:
+  // two spellings of one workspace here would answer `none` for a project that exists.
+  const target = canonicalWorkspaceKey(workspaceRoot);
   const match = projects.find(
-    (project) => typeof project.workspaceRoot === 'string' && normalisePath(project.workspaceRoot) === target,
+    (project) =>
+      typeof project.workspaceRoot === 'string' && canonicalWorkspaceKey(project.workspaceRoot) === target,
   );
   if (!match || typeof match.id !== 'string') return { kind: 'none' };
   return { kind: 'found', projectId: match.id };
 }
 
-function normalisePath(value: string): string {
-  const absolute = resolve(value).replace(/\/+$/, '');
-  try {
-    return realpathSync(absolute);
-  } catch {
-    // The path may not exist on this machine at all (a server serving another
-    // host's root). The resolved form is still comparable.
-    return absolute;
-  }
-}
+
 
 /**
  * Register the production thread engine and spawn factory if this workspace is
@@ -321,14 +334,50 @@ export async function ensureThreadBackendReady(
   workspaceRoot: string,
   options: { readonly upgradeTimeoutMs?: number } = {},
 ): Promise<'not-configured' | 'already-installed' | 'installed'> {
+  const key = canonicalWorkspaceKey(workspaceRoot);
+  // The engine is looked up for THE REQUESTED workspace. This read used to be
+  // unkeyed, so in Tower — one process, every workspace — the first thread-configured
+  // workspace to connect made every later one return `already-installed` and then use
+  // its socket, its projectId and its journal.
+  if (tryGetThreadEngine(workspaceRoot)) return 'already-installed';
+  // Concurrent first deliveries for one workspace raced the registration: both saw no
+  // engine, both connected, and the second overwrote the first — leaving an orphaned
+  // socket and, worse, two projects racing `project.create` for the same root. One
+  // in-flight initialisation per workspace, shared by everyone who asks for it.
+  const inFlight = pendingInit.get(key);
+  if (inFlight) return await inFlight;
+  const started = initialiseThreadBackend(workspaceRoot, key, options);
+  pendingInit.set(key, started);
+  try {
+    return await started;
+  } finally {
+    pendingInit.delete(key);
+  }
+}
+
+/** One in-flight `ensureThreadBackendReady` per canonical workspace root. */
+const pendingInit = new Map<string, Promise<'not-configured' | 'already-installed' | 'installed'>>();
+
+async function initialiseThreadBackend(
+  workspaceRoot: string,
+  key: string,
+  options: { readonly upgradeTimeoutMs?: number },
+): Promise<'not-configured' | 'already-installed' | 'installed'> {
   const upgradeTimeoutMs = options.upgradeTimeoutMs ?? DEFAULT_SOCKET_UPGRADE_TIMEOUT_MS;
-  if (tryGetThreadEngine()) return 'already-installed';
   const config = readThreadBackendConfig(resolve(workspaceRoot));
   if (!config) return 'not-configured';
 
+  // Assigned below, referenced by the socket's close handler — which can only fire
+  // after this function has finished registering it.
+  let registered: ReturnType<typeof createPorchThreadEngine> | undefined;
+
   let connection;
   try {
-    connection = await connectDispatcher(config, upgradeTimeoutMs);
+    connection = await connectDispatcher(config, upgradeTimeoutMs, () => {
+      // Only if this engine is still the registered one: a later reconnect must not
+      // be evicted by an older socket's close event arriving late.
+      if (tryGetThreadEngine(key) === registered) setThreadEngine(undefined, key);
+    });
   } catch (err) {
     // Four ways this fails, four sentences. They were previously two, and one of those two was
     // wrong for half the cases it covered. A caller who cannot tell "the network is down" from
@@ -395,7 +444,7 @@ export async function ensureThreadBackendReady(
       }
     }
   }
-  setThreadEngine(createPorchThreadEngine({
+  registered = createPorchThreadEngine({
     dispatcher,
     journal,
     tracker: new TurnTracker(),
@@ -403,7 +452,8 @@ export async function ensureThreadBackendReady(
     workspaceRoot: config.workspaceRoot,
     defaultHarness: config.defaultHarness,
     defaultModel: config.defaultModel,
-  }));
-  installThreadSpawnFactory();
+  });
+  setThreadEngine(registered, key);
+  installThreadSpawnFactory(key);
   return 'installed';
 }

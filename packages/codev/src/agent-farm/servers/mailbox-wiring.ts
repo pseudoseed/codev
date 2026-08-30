@@ -428,9 +428,28 @@ async function deliverToThread(
   threadId: string,
   context: ThreadDeliveryContext | undefined,
   msg: string,
+  noEnter: boolean,
   log: LogFn,
 ): Promise<boolean> {
   const where = `thread ${threadId}`;
+  // `--no-enter` means "put this in the composer and leave it for a human". A thread has
+  // no composer: `thread.turn.start` IS the submit, and there is nothing in the protocol
+  // that stages text without running it.
+  //
+  // This flag was received and DISCARDED here, so a gate notification sent with
+  // `--no-enter` — the deliberate form, the one that exists so a human decides — executed
+  // itself the moment it reached a thread-backed agent. A message that does not arrive is
+  // the failure this project has spent two days on; a message that arrives and runs itself
+  // is the worse half of it.
+  //
+  // Refused rather than approximated. The row stays held and stays visible in `afx inbox`,
+  // which is the outcome `--no-enter` asks for, minus the composer.
+  if (noEnter) {
+    log('ERROR', `[mailbox] ${where}: refusing a --no-enter message. A thread has no composer — `
+      + `thread.turn.start is the submit — so delivering it would RUN a message that was sent to `
+      + `sit and wait for a human. The row stays held rather than being executed.`);
+    return false;
+  }
   if (!context) {
     log('ERROR', `[mailbox] ${where}: the session carries no thread context, so this process cannot `
       + `reach it. The row is thread-backed and delivery has nothing to attach to — a wiring fault here, `
@@ -439,6 +458,7 @@ async function deliverToThread(
   }
   try {
     const state = await ensureThreadBackendReady(context.workspaceRoot);
+
     if (state === 'not-configured') {
       log('ERROR', `[mailbox] ${where}: the row for ${context.agent} is thread-backed, but `
         + `${context.workspaceRoot} names no t3code server. A thread-backed row in a workspace with no `
@@ -452,7 +472,9 @@ async function deliverToThread(
     return false;
   }
   try {
-    await getThreadEngine().attach({
+    // For THIS workspace. Tower serves every workspace in `global.db` from one process,
+    // and an engine registered for another one holds another server and another project.
+    await getThreadEngine(context.workspaceRoot).attach({
       threadId,
       worktreePath: context.worktreePath,
       branch: context.branch,
@@ -467,7 +489,7 @@ async function deliverToThread(
     return false;
   }
   try {
-    await deliverThreadTurn(threadId, msg);
+    await deliverThreadTurn(threadId, msg, context.workspaceRoot);
     return true;
   } catch (err) {
     log('ERROR', `[mailbox] ${where}: the server refused the turn — `
@@ -484,7 +506,7 @@ export function makeDeliveryPorts(log: LogFn): DeliveryPorts {
     classify: (session, profile) => classifyAgentScreen(session, profile, (m) => log('INFO', m)),
     writeMessage: async (session, msg, noEnter) => {
       if (isThreadDeliverySession(session) && session.threadId) {
-        return await deliverToThread(session.threadId, session.threadContext, msg, log);
+        return await deliverToThread(session.threadId, session.threadContext, msg, noEnter, log);
       }
       return writeMessagePaced(session, msg, noEnter);
     },

@@ -111,7 +111,10 @@ describe('Spec 146 Phase 9 — afx command parity against a thread-backed builde
 
   it('cleanupThreadBackedBuilder refuses when isWorktreeMerged is false', async () => {
     const engine = createMemoryThreadEngine();
-    setThreadEngine(engine);
+    // Registered FOR '/ws', which is what `getConfig().workspaceRoot` returns here.
+    // Since #219 the engine map is keyed by workspace and a keyed read never falls
+    // back — an engine registered for another workspace holds another server.
+    setThreadEngine(engine, '/ws');
     const threadId = await engine.create({
       builderId: 'air-173', worktreePath: '/tmp/missing-air-173', branch: 'builder/air-173',
     });
@@ -122,7 +125,7 @@ describe('Spec 146 Phase 9 — afx command parity against a thread-backed builde
 
   it('cleanupThreadBackedBuilder removes a thread-backed builder when force is set', async () => {
     const engine = createMemoryThreadEngine();
-    setThreadEngine(engine);
+    setThreadEngine(engine, '/ws');
     const threadId = await engine.create({
       builderId: 'air-173', worktreePath: '/tmp/missing-air-173', branch: 'builder/air-173',
     });
@@ -133,16 +136,16 @@ describe('Spec 146 Phase 9 — afx command parity against a thread-backed builde
 
   it('worktreeForThreadBuilder resolves the worktree from the thread', async () => {
     const engine = createMemoryThreadEngine();
-    setThreadEngine(engine);
+    setThreadEngine(engine, '/ws');
     const threadId = await engine.create({
       builderId: 'air-173', worktreePath: '/ws/.builders/air-173', branch: 'builder/air-173',
     });
-    expect(worktreeForThreadBuilder({ threadId, worktree: '/stale' })).toBe('/ws/.builders/air-173');
+    expect(worktreeForThreadBuilder({ threadId, worktree: '/stale' }, '/ws')).toBe('/ws/.builders/air-173');
   });
 
   it('createArchitectThread roots the thread at the workspace', async () => {
     const engine = createMemoryThreadEngine();
-    setThreadEngine(engine);
+    setThreadEngine(engine, '/ws');
     const threadId = await createArchitectThread({ name: 'uiv2', workspaceRoot: '/ws' });
     expect(engine.get(threadId)?.worktreePath).toBe('/ws');
     expect(engine.get(threadId)?.launched).toBe(true);
