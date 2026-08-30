@@ -232,9 +232,9 @@ describe('Spec 1313 — migration + self-heal source guards', () => {
     const dbSrc = read('../db/index.ts');
     // The version constant MUST advance — else a fresh install records only 1..15
     // and the v16 block only converges on a later open (the omission #23 flagged).
-    // It now sits at 21 (Spec 146 Phase 5 added architect/builders thread_id);
+    // It now sits at 22 (#227 item 3 added architect harness/model);
     // v16, v17 and v18 must all be registered under it.
-    expect(dbSrc).toContain('GLOBAL_CURRENT_VERSION = 21');
+    expect(dbSrc).toContain('GLOBAL_CURRENT_VERSION = 22');
     expect(dbSrc).toContain('Migration v16');
     expect(dbSrc).toContain('Migration v17');
     expect(dbSrc).toContain('Migration v18');

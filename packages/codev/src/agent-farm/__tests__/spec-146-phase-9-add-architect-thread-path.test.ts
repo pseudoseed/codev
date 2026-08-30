@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const ensureThreadBackendReady = vi.fn();
 const createArchitectThread = vi.fn();
 const tryGetThreadEngine = vi.fn();
+const architectThreadDefaults = vi.fn();
 const setArchitectByName = vi.fn();
 const addArchitect = vi.fn();
 
@@ -28,6 +29,7 @@ vi.mock('../thread-backend.js', () => ({
 vi.mock('../thread-runtime.js', () => ({
   createArchitectThread: (...args: unknown[]) => createArchitectThread(...args),
   tryGetThreadEngine: () => tryGetThreadEngine(),
+  architectThreadDefaults: (...args: unknown[]) => architectThreadDefaults(...args),
 }));
 
 let architects: Array<{ name: string }> = [];
@@ -69,6 +71,8 @@ describe('workspace add-architect — the thread path is reachable in a fresh pr
     });
     tryGetThreadEngine.mockImplementation(() => (installed ? {} : undefined));
     createArchitectThread.mockResolvedValue('thr-architect-1');
+    // #227 item 3: the pair the engine would resolve, which is what the row must record.
+    architectThreadDefaults.mockReturnValue({ harness: 'claude', model: 'claude-opus-5' });
   }
 
   it('registers the backend BEFORE reading the engine, so a configured workspace gets a thread', async () => {
@@ -81,6 +85,7 @@ describe('workspace add-architect — the thread path is reachable in a fresh pr
     });
     tryGetThreadEngine.mockImplementation(() => (installed ? {} : undefined));
     createArchitectThread.mockResolvedValue('thr-architect-1');
+    architectThreadDefaults.mockReturnValue({ harness: 'claude', model: 'claude-opus-5' });
 
     await workspaceAddArchitect({ name: 'uiv2' });
 
@@ -89,7 +94,14 @@ describe('workspace add-architect — the thread path is reachable in a fresh pr
     expect(setArchitectByName).toHaveBeenCalledWith(
       '/ws',
       'uiv2',
-      expect.objectContaining({ name: 'uiv2', threadId: 'thr-architect-1' }),
+      // #227 item 3: harness and model are pinned on the row here, so the `attach` that
+      // resumes this thread does not re-read them from a config that may have moved.
+      expect.objectContaining({
+        name: 'uiv2',
+        threadId: 'thr-architect-1',
+        harness: 'claude',
+        model: 'claude-opus-5',
+      }),
     );
     // Not both. A thread-backed architect that also took a Tower terminal would
     // be the dual-identity state `assertExclusiveIdentity` exists to forbid.

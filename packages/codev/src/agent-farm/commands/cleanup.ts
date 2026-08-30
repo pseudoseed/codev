@@ -19,9 +19,9 @@ import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 import { executeForgeCommand } from '../../lib/forge.js';
 import { resolveDefaultBranch } from '../../lib/default-branch.js';
 import {
-  getThreadEngine,
   isThreadBacked,
 } from '../thread-runtime.js';
+import { adoptThreadInThisProcess } from '../thread-backend.js';
 
 /**
  * Clean porch review artifacts for a project from codev/projects/,
@@ -547,10 +547,25 @@ export async function cleanupThreadBackedBuilder(
   const config = getConfig();
   const merged = builder.worktree ? await isWorktreeMerged(config.workspaceRoot, builder.worktree) : false;
   if (!merged && !force) return 'refused-unmerged';
-  // For this workspace: the engine map is keyed, and an engine registered for another
-  // workspace holds another server. (This command still registers none of its own — see
-  // the note in `porch-thread-engine.ts` — so this throws rather than reaching the wrong one.)
-  const result = await getThreadEngine(config.workspaceRoot).removeWorktree(builder.threadId, { force: !!force });
+  // Register the backend in THIS process and adopt the thread from the row before asking
+  // it to remove anything (issue #227 item 2).
+  //
+  // `afx cleanup` is a fresh process, so nothing had registered an engine and this threw —
+  // and the throw was about the right workspace, which made it an accurate description of
+  // a command that did not work. Attaching is what makes it work: the engine keeps threads
+  // in memory, and a thread created by `afx spawn` is unknown to the process that cleans it
+  // up until `attach` adopts it. Without that, `removeWorktree` reports the thread unknown,
+  // which reads as "no such thread" and is a different, wrong diagnosis.
+  const engine = await adoptThreadInThisProcess({
+    threadId: builder.threadId,
+    workspaceRoot: config.workspaceRoot,
+    worktreePath: builder.worktree,
+    branch: builder.branch,
+    builderId: builder.id,
+    harnessName: builder.harness,
+    model: builder.model,
+  });
+  const result = await engine.removeWorktree(builder.threadId, { force: !!force });
   if (result === 'refused-unmerged') return result;
   removeBuilder(builder.id, config.workspaceRoot);
   return 'removed';

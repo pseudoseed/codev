@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { GLOBAL_SCHEMA } from '../db/schema.js';
 import {
+  applyArchitectAgentMigration,
   applyThreadIdentityMigration,
   threadIdentityBackupPath,
 } from '../db/index.js';
@@ -43,11 +44,12 @@ function extractCreateTable(schema: string, table: string): string {
   return match[0].replace('IF NOT EXISTS ', '');
 }
 
-function stripThreadId(createTable: string, table: string): string {
+function stripColumn(createTable: string, table: string, column: string): string {
   const lines = createTable.split('\n');
-  const columnIndex = lines.findIndex((line) => /^\s*thread_id\s+TEXT\s*,?\s*$/.test(line));
+  const pattern = new RegExp(`^\\s*${column}\\s+TEXT\\s*,?\\s*$`);
+  const columnIndex = lines.findIndex((line) => pattern.test(line));
   if (columnIndex === -1) {
-    throw new Error(`Expected a thread_id column to strip from ${table}; the schema changed`);
+    throw new Error(`Expected a ${column} column to strip from ${table}; the schema changed`);
   }
   // Drop the column and the comment block that documents it, so the fixture reads as a
   // real pre-v21 table rather than one with a dangling explanation of a missing column.
@@ -55,13 +57,29 @@ function stripThreadId(createTable: string, table: string): string {
   while (firstIndex > 0 && /^\s*--/.test(lines[firstIndex - 1])) firstIndex -= 1;
   const stripped = [...lines.slice(0, firstIndex), ...lines.slice(columnIndex + 1)];
   if (stripped.length === lines.length) {
-    throw new Error(`stripThreadId removed nothing from ${table}`);
+    throw new Error(`stripColumn removed nothing from ${table}.${column}`);
   }
   return stripped.join('\n');
 }
 
-const PRE_V21_ARCHITECT = stripThreadId(extractCreateTable(GLOBAL_SCHEMA, 'architect'), 'architect');
-const PRE_V21_BUILDERS = stripThreadId(extractCreateTable(GLOBAL_SCHEMA, 'builders'), 'builders');
+function stripColumns(createTable: string, table: string, columns: readonly string[]): string {
+  return columns.reduce((sql, column) => stripColumn(sql, table, column), createTable);
+}
+
+/**
+ * `harness` and `model` come off `architect` too (#227 item 3, migration v22).
+ *
+ * They were added AFTER `thread_id` in `GLOBAL_SCHEMA` precisely so a fresh install
+ * matches the ADD COLUMN order of an upgraded one. Leaving them in the pre-v21 fixture put
+ * them BEFORE the thread_id that v21 appends, and the convergence assertion below — which
+ * compares column order, deliberately — caught it.
+ */
+const PRE_V21_ARCHITECT = stripColumns(
+  extractCreateTable(GLOBAL_SCHEMA, 'architect'),
+  'architect',
+  ['thread_id', 'harness', 'model'],
+);
+const PRE_V21_BUILDERS = stripColumn(extractCreateTable(GLOBAL_SCHEMA, 'builders'), 'builders', 'thread_id');
 
 type TableInfoRow = {
   cid: number;
@@ -306,6 +324,10 @@ describe('Spec 146 Phase 8 — v21 migration, backup, restore, convergence', () 
   it('fresh GLOBAL_SCHEMA and a migrated database have identical schemas', () => {
     const db = openPreV21();
     applyThreadIdentityMigration(db, dbPath);
+    // v22 (#227 item 3) is part of the upgrade path now, and this assertion compares
+    // column ORDER — so the test has to walk the same migrations in the same sequence a
+    // real upgrade does, not just the one it was written for.
+    applyArchitectAgentMigration(db);
     const freshPath = resolve(dir, 'fresh.db');
     const fresh = new Database(freshPath);
     fresh.exec(GLOBAL_SCHEMA);

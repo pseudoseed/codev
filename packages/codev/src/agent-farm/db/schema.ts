@@ -185,6 +185,15 @@ CREATE TABLE IF NOT EXISTS architect (
   session_id TEXT,
   -- Spec 146 Phase 5: nullable t3code join. Phase 8 begins writing it.
   thread_id TEXT,
+  -- Issue #227 item 3: the (harness, model) pair this architect's thread was CREATED
+  -- with, the way builders records its own. Without them a resumed architect thread
+  -- attaches under whatever .codev/config.json says at attach time, so editing
+  -- threads.model between a spawn and a delivery silently changed the model an
+  -- existing thread ran under. NULL means "not recorded" — every row written before
+  -- this existed, and every PTY-backed architect, which has no thread to attach.
+  -- Declared after thread_id so a fresh install matches the v22 ALTER order.
+  harness TEXT,
+  model TEXT,
   PRIMARY KEY (workspace_path, id)
 );
 

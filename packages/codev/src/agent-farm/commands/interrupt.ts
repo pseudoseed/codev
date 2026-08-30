@@ -22,7 +22,8 @@ import { logger, fatal } from '../utils/logger.js';
 import { TowerClient } from '../lib/tower-client.js';
 import { detectWorkspaceRoot, detectCurrentBuilderId } from './send.js';
 import { findBuilderById } from '../lib/builder-lookup.js';
-import { interruptThread, isThreadBacked } from '../thread-runtime.js';
+import { isThreadBacked } from '../thread-runtime.js';
+import { adoptThreadInThisProcess } from '../thread-backend.js';
 
 export async function interrupt(options: InterruptOptions): Promise<void> {
   const target = options.builder;
@@ -57,10 +58,24 @@ export async function interrupt(options: InterruptOptions): Promise<void> {
       );
     }
     try {
-      // Named, so the keyed engine map is read for THIS workspace rather than for
-      // whichever one happened to register first. (This command registers no engine of
-      // its own, so it still throws — but it throws about the right workspace.)
-      const settled = await interruptThread(builder.threadId, workspaceRoot!);
+      // Register the backend in THIS process and adopt the thread from the row, then
+      // interrupt (issue #227 item 2).
+      //
+      // This command used to look the engine up and throw, because nothing registers one
+      // in a fresh `afx` process — a correct sentence about a command that did not work.
+      // The engine map is keyed by workspace, so it is named here rather than left to the
+      // unkeyed slot: an engine registered for a different workspace holds another
+      // server and another project.
+      const engine = await adoptThreadInThisProcess({
+        threadId: builder.threadId,
+        workspaceRoot,
+        worktreePath: builder.worktree,
+        branch: builder.branch,
+        builderId: builder.id,
+        harnessName: builder.harness,
+        model: builder.model,
+      });
+      const settled = await engine.interrupt(builder.threadId);
       if (settled.activeTurnId !== null) {
         fatal(`Interrupt of ${builder.id} did not settle activeTurnId`);
       }

@@ -142,7 +142,7 @@ function ensureGlobalDatabase(): Database.Database {
   configurePragmas(db);
 
   // Current migration version — bump when adding new migrations
-  const GLOBAL_CURRENT_VERSION = 21;
+  const GLOBAL_CURRENT_VERSION = 22;
 
   // Detect fresh vs existing database by checking if content tables exist.
   // On existing databases, GLOBAL_SCHEMA must NOT run because it references column names
@@ -704,7 +704,52 @@ function ensureGlobalDatabase(): Database.Database {
     console.log('[info] Added architect/builders thread_id columns (Spec 146 Phase 5)');
   }
 
+  // Migration v22 (#227 item 3): record harness/model on the architect row.
+  //
+  // `builders` has had this pair since v18, and `mailbox-wiring.ts` reads it off the
+  // builder row when it attaches a thread. The architect table had nowhere to read it
+  // FROM, so an architect's attach carried neither and fell through to the engine's
+  // defaults — which are read from `.codev/config.json` at ATTACH time, not at create
+  // time. Change `threads.model` between a spawn and a delivery and the resumed thread
+  // runs under a different model than the one it was created with, silently.
+  //
+  // Nullable and additive, mirroring v18: rows written before this read as "not
+  // recorded" rather than being assigned a guess, and a previous release ignores the
+  // columns and can still open the DB. PRAGMA-gated ADD COLUMN rather than a blanket
+  // try/catch, for the same reason v18 gives — a real ALTER failure recorded as
+  // "migrated" would make every subsequent architect write fail.
+  const v22 = db.prepare('SELECT version FROM _migrations WHERE version = 22').get();
+  if (!v22) {
+    applyArchitectAgentMigration(db);
+    db.prepare('INSERT INTO _migrations (version) VALUES (22)').run();
+    console.log('[info] Added harness/model columns to architect (#227 item 3)');
+  }
+
   return db;
+}
+
+/**
+ * v22's ALTERs, callable on their own.
+ *
+ * Extracted the way `applyThreadIdentityMigration` is, and for the same reason: the
+ * convergence test has to reproduce the UPGRADE path exactly — a fresh `GLOBAL_SCHEMA`
+ * database and a migrated one must agree down to column ORDER, and column order is
+ * decided by the sequence of ADD COLUMNs. A test that re-typed these two statements
+ * would be asserting against its own copy of the migration rather than the migration.
+ *
+ * PRAGMA-gated rather than wrapped in a blanket try/catch: a real ALTER failure recorded
+ * as "migrated" would make every subsequent architect write fail, because
+ * `setArchitectByName` names both columns.
+ */
+export function applyArchitectAgentMigration(db: Database.Database): void {
+  const architectCols = (db.prepare(`PRAGMA table_info(architect)`).all() as Array<{ name: string }>)
+    .map((c) => c.name);
+  if (!architectCols.includes('harness')) {
+    db.exec(`ALTER TABLE architect ADD COLUMN harness TEXT`);
+  }
+  if (!architectCols.includes('model')) {
+    db.exec(`ALTER TABLE architect ADD COLUMN model TEXT`);
+  }
 }
 
 /** Stable restore point created once for the additive Spec 146 migration. */

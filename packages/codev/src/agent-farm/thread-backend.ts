@@ -19,10 +19,12 @@ import { createPorchThreadEngine } from './porch-thread-engine.js';
 import { createThreadSubscriptionPool, type ThreadSubscriber } from './thread-subscriptions.js';
 import {
   canonicalWorkspaceKey,
+  getThreadEngine,
   installThreadSpawnFactory,
   setThreadEngine,
   setThreadStreamer,
   tryGetThreadEngine,
+  type ThreadEngine,
   type ThreadStream,
 } from './thread-runtime.js';
 import { logger } from './utils/logger.js';
@@ -400,17 +402,22 @@ export async function activeProjectForWorkspace(
 ): Promise<ProjectLookup> {
   let body: unknown;
   try {
-    // Bounded, for the same reason the WebSocket upgrade is. A server that accepts the
-    // connection and never answers left this await unsettled forever, and it sits
-    // between a completed handshake and a registered engine — so the whole of
-    // `ensureThreadBackendReady` hung, having reported nothing. An unbounded wait is
-    // not "slow"; it never ends.
+    // Through the client, not a second hand-built request (issue #227 item 4).
     //
-    // The signal covers the body read as well as the headers, so a response that starts
-    // and stalls is bounded too.
-    const response = await fetch(`${serverUrl.replace(/\/+$/, '')}/api/orchestration/shell`, {
-      headers: { authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(timeoutMs),
+    // This was a bare `fetch` with its own `authorization: Bearer` header and its own base
+    // URL normalisation, one import away from the module that owns every other request to
+    // this server. One request is a small duplication and it still had a consequence: it
+    // skipped `assertTransportSafe`, so it was the one call here willing to put a bearer
+    // token on a plaintext connection to a non-loopback host.
+    //
+    // Still bounded, for the same reason the WebSocket upgrade is. A server that accepts
+    // the connection and never answers left this await unsettled forever, and it sits
+    // between a completed handshake and a registered engine — so the whole of
+    // `ensureThreadBackendReady` hung, having reported nothing. An unbounded wait is not
+    // "slow"; it never ends.
+    const auth = await import('@cluesmith/t3-client/auth');
+    const response = await auth.authorizedGet(serverUrl, '/api/orchestration/shell', accessToken, {
+      timeoutMs,
     });
     if (!response.ok) {
       return { kind: 'unknown', detail: `GET /api/orchestration/shell answered ${response.status}` };
@@ -896,6 +903,49 @@ async function initialiseThreadBackend(
   installThreadSpawnFactory(key);
   lastFailure.delete(key);
   return 'installed';
+}
+
+/**
+ * Make a thread this process did not create reachable from this process (issue #227 item 2).
+ *
+ * `afx interrupt` and `afx cleanup` are fresh processes. Nothing has registered an engine in
+ * them, so `getThreadEngine` threw — and since #221 it threw about the right workspace, with
+ * a message that named the limitation. Honest, and still not working.
+ *
+ * The delivery path in `mailbox-wiring.ts` already showed the shape, because Tower is a
+ * fresh process for exactly the same reason: register the backend HERE, `attach` the thread
+ * from the row that recorded it, then act. This is that shape, in one place, so a third
+ * command does not get a third copy of it.
+ *
+ * The worktree and branch are NOT derivable from a thread id, which is why they are
+ * parameters: the caller holds the row. An architect's worktree is the workspace root and
+ * its branch is `''` — the shape `createArchitectThread` writes.
+ *
+ * `ensureThreadBackendReady` throws when a server IS configured and cannot be reached, and
+ * returns `not-configured` when none is named. The second is a contradiction for a
+ * thread-backed row, and `getThreadEngine` is what says so — it is left to say it rather
+ * than pre-empted here, because its message already distinguishes the two causes.
+ */
+export async function adoptThreadInThisProcess(input: {
+  readonly threadId: string;
+  readonly workspaceRoot: string;
+  readonly worktreePath: string;
+  readonly branch: string;
+  readonly builderId: string;
+  readonly harnessName?: string;
+  readonly model?: string;
+}): Promise<ThreadEngine> {
+  await ensureThreadBackendReady(input.workspaceRoot);
+  const engine = getThreadEngine(input.workspaceRoot);
+  await engine.attach({
+    threadId: input.threadId,
+    worktreePath: input.worktreePath,
+    branch: input.branch,
+    builderId: input.builderId,
+    harnessName: input.harnessName,
+    model: input.model,
+  });
+  return engine;
 }
 
 /** The socket went away between the handshake and registration. */

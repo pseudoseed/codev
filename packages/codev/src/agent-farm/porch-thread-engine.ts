@@ -71,6 +71,15 @@ function unknownThread(threadId: string): string {
   );
 }
 
+/**
+ * The harness used when neither the caller nor the workspace names one.
+ *
+ * Named once because three places consulted it — `create`, `attach`, and now the
+ * `defaults` an architect row is written from. A literal in each is three chances for the
+ * recorded pair to disagree with the pair actually used (issue #227 item 3).
+ */
+export const DEFAULT_THREAD_HARNESS = 'codex';
+
 export function createPorchThreadEngine(options: PorchThreadEngineOptions): ThreadEngine {
   const threads = new Map<string, DriverThread>();
   const records = new Map<string, ThreadRecord>();
@@ -137,6 +146,9 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
   }
 
   return {
+    // What a create/attach naming neither will use, resolved here rather than recomputed
+    // by the caller that records it (issue #227 item 3).
+    defaults: { harness: options.defaultHarness ?? DEFAULT_THREAD_HARNESS, model: options.defaultModel },
     async create(input: Parameters<SpawnThreadFactory>[0]) {
       const thread = await DriverThread.create(
         {
@@ -147,7 +159,7 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
         {
           projectId: options.projectId,
           title: input.builderId,
-          harnessName: input.harnessName ?? options.defaultHarness ?? 'codex',
+          harnessName: input.harnessName ?? options.defaultHarness ?? DEFAULT_THREAD_HARNESS,
           model: input.model,
           defaultModel: options.defaultModel,
           worktreePath: input.worktreePath,
@@ -226,7 +238,7 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
         },
         {
           threadId: input.threadId,
-          harnessName: input.harnessName ?? options.defaultHarness ?? 'codex',
+          harnessName: input.harnessName ?? options.defaultHarness ?? DEFAULT_THREAD_HARNESS,
           model: input.model,
           defaultModel: options.defaultModel,
           worktreePath: input.worktreePath,

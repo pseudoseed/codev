@@ -183,6 +183,14 @@ export function resolveLiveSessionForAgent(
         worktreePath: workspacePath,
         branch: '',
         agent: toAgent,
+        // Issue #227 item 3. These were absent, so `attach` fell through to the engine's
+        // defaults — read from `.codev/config.json` at attach time. A `threads.model`
+        // edited between the spawn and this delivery moved a live thread onto a different
+        // model, silently. Now they come off the row, the way the builder branch above
+        // takes them off the builder row. Undefined for a row written before the columns
+        // existed, which restores the old fallback for exactly those rows and no others.
+        harness: architect.harness,
+        model: architect.model,
       });
     }
   } catch {

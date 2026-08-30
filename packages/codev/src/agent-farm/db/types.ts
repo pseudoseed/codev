@@ -24,6 +24,10 @@ export interface DbArchitect {
   terminal_id: string | null;
   session_id: string | null;   // Issue #832: persisted agent conversation session id (agent-neutral)
   thread_id: string | null;    // Spec 146: t3code thread join; Phase 8 begins writing it
+  // #227 item 3: the pair the architect's thread was CREATED with, so `attach` can pin it
+  // instead of re-reading the workspace's current defaults. NULL = not recorded.
+  harness: string | null;
+  model: string | null;
 }
 
 /**
@@ -148,6 +152,8 @@ export function dbArchitectToArchitectState(row: DbArchitect): ArchitectState {
     terminalId: row.terminal_id ?? undefined,
     threadId: row.thread_id ?? undefined,
     sessionId: row.session_id ?? undefined,
+    harness: row.harness ?? undefined,
+    model: row.model ?? undefined,
   };
 }
 

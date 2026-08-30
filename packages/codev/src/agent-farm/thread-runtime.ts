@@ -1,10 +1,15 @@
 import {
+  clearSpawnThreadFactories,
   setSpawnThreadFactory,
   type SpawnThreadFactory,
 } from './db/thread-identity.js';
-import { realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { clearCanonicalWorkspaceKeys, workspaceMapKey } from './workspace-key.js';
 import { getArchitectByName, getBuilder } from './state.js';
+
+// Re-exported because this module was where they lived until issue #227 item 1 keyed the
+// spawn factory too, and a factory in `db/thread-identity.ts` reaching back up here for
+// the key helper would be an import cycle. The definition moved down; the name did not.
+export { canonicalWorkspaceKey, clearCanonicalWorkspaceKeys } from './workspace-key.js';
 
 export const THREAD_BACKED_UNSUPPORTED = 'thread-backed, unsupported here';
 
@@ -47,7 +52,33 @@ export interface AttachThreadInput {
   readonly model?: string;
 }
 
+/**
+ * What a `create` or `attach` that names no harness or model will actually use.
+ *
+ * WHY AN ENGINE HAS TO SAY THIS OUT LOUD (issue #227 item 3). An architect's thread is
+ * created with neither, so the engine resolves both from the workspace's configuration
+ * plus its own final fallback. Those are the values that must be written to the architect
+ * row, because attaching later re-resolves them from configuration as it stands THEN —
+ * and a `threads.model` edited between a spawn and a delivery would silently move an
+ * existing thread onto a different model.
+ *
+ * Recomputing the resolution at the call site instead would put the fallback in two
+ * places, which is how the two answers start to differ.
+ */
+export interface ThreadEngineDefaults {
+  /** Never undefined: the engine has a final fallback, and this is it, resolved. */
+  readonly harness: string;
+  /** Undefined when nothing names one and the server chooses. */
+  readonly model?: string;
+}
+
 export interface ThreadEngine {
+  /**
+   * Optional because an engine need not resolve defaults it can name — the in-memory one
+   * ignores harness and model entirely, and saying `codex` there would be a claim it does
+   * not honour. A caller reads `undefined` as "not recorded", the same as a NULL column.
+   */
+  readonly defaults?: ThreadEngineDefaults;
   create(input: Parameters<SpawnThreadFactory>[0]): Promise<string>;
   /**
    * Adopt a thread that already exists on the server.
@@ -131,63 +162,6 @@ export interface ThreadEngine {
 const engines = new Map<string, ThreadEngine>();
 
 /**
- * The slot for a caller that names no workspace.
- *
- * Deliberately NOT a fallback for keyed lookups. A keyed read that missed and then
- * took this one would restore exactly the bug above, one indirection further away.
- * A caller either names a workspace or it does not, and the two never see each
- * other's engine.
- */
-const UNKEYED = '\u0000unkeyed';
-
-/**
- * The canonical key for a workspace root.
- *
- * `/var` and `/private/var` are the same directory on macOS, and `.`-relative and
- * trailing-slash forms are the same workspace. Two keys for one workspace is two
- * engines, two sockets and two projects for it — which is the failure this map exists
- * to prevent, wearing a different hat.
- */
-const canonicalKeys = new Map<string, string>();
-
-export function canonicalWorkspaceKey(workspaceRoot: string): string {
-  // CACHED, because this is on Tower's drain loop.
-  //
-  // `realpathSync` is a synchronous filesystem syscall, and this runs on every engine
-  // lookup — once per agent per 1.5 s tick, inside the sequential loop that three rounds
-  // of this issue went into clearing of blocking work. A network call and a blocking
-  // syscall on that loop differ in magnitude, not in kind.
-  //
-  // Keyed on the RAW input, so two spellings of one workspace each resolve once and then
-  // both hit. The trade is stated rather than hidden: a symlink repointed while Tower is
-  // running keeps its old resolution for the life of the process. That is deliberate — a
-  // workspace root moving underneath a running Tower is not a supported operation, and
-  // re-resolving every tick to catch it costs every tick.
-  const cached = canonicalKeys.get(workspaceRoot);
-  if (cached !== undefined) return cached;
-
-  const absolute = resolve(workspaceRoot).replace(/\/+$/, '') || '/';
-  let key: string;
-  try {
-    key = realpathSync(absolute);
-  } catch {
-    key = absolute;
-  }
-  canonicalKeys.set(workspaceRoot, key);
-  return key;
-}
-
-/**
- * Forget cached path resolutions.
- *
- * For a test that creates and removes temp directories — a path resolving differently
- * across two tests in one process is otherwise a stale hit. Not for production.
- */
-export function clearCanonicalWorkspaceKeys(): void {
-  canonicalKeys.clear();
-}
-
-/**
  * The streaming half of a workspace's t3code connection.
  *
  * WHY THIS IS SEPARATE FROM `ThreadEngine`. The engine is a command surface —
@@ -227,7 +201,7 @@ export interface ThreadStreamer {
 const streamers = new Map<string, ThreadStreamer>();
 
 export function setThreadStreamer(next: ThreadStreamer | undefined, workspaceRoot?: string): void {
-  const key = workspaceRoot === undefined ? UNKEYED : canonicalWorkspaceKey(workspaceRoot);
+  const key = workspaceMapKey(workspaceRoot);
   if (next === undefined) streamers.delete(key);
   else streamers.set(key, next);
 }
@@ -240,11 +214,11 @@ export function setThreadStreamer(next: ThreadStreamer | undefined, workspaceRoo
  * the status vocabulary this feeds is that "not watching" is an answer.
  */
 export function tryGetThreadStreamer(workspaceRoot?: string): ThreadStreamer | undefined {
-  return streamers.get(workspaceRoot === undefined ? UNKEYED : canonicalWorkspaceKey(workspaceRoot));
+  return streamers.get(workspaceMapKey(workspaceRoot));
 }
 
 export function setThreadEngine(next: ThreadEngine | undefined, workspaceRoot?: string): void {
-  const key = workspaceRoot === undefined ? UNKEYED : canonicalWorkspaceKey(workspaceRoot);
+  const key = workspaceMapKey(workspaceRoot);
   if (next === undefined) engines.delete(key);
   else engines.set(key, next);
 }
@@ -253,11 +227,14 @@ export function setThreadEngine(next: ThreadEngine | undefined, workspaceRoot?: 
 export function clearThreadEngines(): void {
   engines.clear();
   streamers.clear();
-  canonicalKeys.clear();
+  // The factory map is keyed by the same workspace and installed alongside the engine, so
+  // leaving it behind would let one test's factory answer `chooseSpawnPath` in the next.
+  clearSpawnThreadFactories();
+  clearCanonicalWorkspaceKeys();
 }
 
 export function tryGetThreadEngine(workspaceRoot?: string): ThreadEngine | undefined {
-  return engines.get(workspaceRoot === undefined ? UNKEYED : canonicalWorkspaceKey(workspaceRoot));
+  return engines.get(workspaceMapKey(workspaceRoot));
 }
 
 export function getThreadEngine(workspaceRoot?: string): ThreadEngine {
@@ -364,7 +341,11 @@ export function createMemoryThreadEngine(): ThreadEngine {
  * root cannot be recovered from it. The installer knows it; the factory remembers it.
  */
 export function installThreadSpawnFactory(workspaceRoot?: string): void {
-  setSpawnThreadFactory(async (input) => getThreadEngine(workspaceRoot).create(input));
+  // Registered UNDER that workspace as well as closed over it. The closure always
+  // dispatched to the right engine; what was global was the module-level slot it sat in,
+  // so the last workspace to install one decided whether every other workspace's
+  // `chooseSpawnPath` said `thread` (issue #227 item 1).
+  setSpawnThreadFactory(async (input) => getThreadEngine(workspaceRoot).create(input), workspaceRoot);
 }
 
 /**
@@ -419,6 +400,16 @@ export function threadIdForAgent(
 ): string | undefined {
   if (kind === 'builder') return getBuilder(agent, workspacePath)?.threadId;
   return getArchitectByName(workspacePath, agent)?.threadId;
+}
+
+/**
+ * The pair an architect thread created right now would run under.
+ *
+ * Read from the engine rather than recomputed, so the value written to the architect row
+ * is the one `create` will use rather than a second opinion about it (issue #227 item 3).
+ */
+export function architectThreadDefaults(workspaceRoot: string): ThreadEngineDefaults | undefined {
+  return tryGetThreadEngine(workspaceRoot)?.defaults;
 }
 
 export async function createArchitectThread(input: {
