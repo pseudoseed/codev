@@ -31,7 +31,7 @@ gates:
   verify-approval:
     status: pending
 iteration: 1
-build_complete: false
+build_complete: true
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -48,7 +48,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_1-iter1-opencode.txt
         stated: true
 started_at: '2026-08-30T04:48:34.619Z'
-updated_at: '2026-08-30T06:10:56.689Z'
+updated_at: '2026-08-30T06:25:27.425Z'
 context_refreshes:
   - boundary: plan-phase:phase_2
     at: '2026-08-30T06:10:51.039Z'
