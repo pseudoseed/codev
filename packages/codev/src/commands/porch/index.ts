@@ -25,6 +25,7 @@ import {
   resolveProjectId,
   resolveArtifactBaseName,
   resolvePorchWorkspaceRoot,
+  StateCommitFailed,
   StatePushFailed,
 } from './state.js';
 import {
@@ -931,8 +932,17 @@ export interface ApproveOutcome {
   /** From `status.yaml`. Absent only on records that predate the field. */
   readonly approvedAt?: string;
   readonly record?: ApprovalRecord;
-  /** Set when the gate write itself was committed but not pushed. */
-  readonly pushFailed?: string;
+  /**
+   * How far the gate write got, when it did not get all the way.
+   *
+   * Absent means written, committed and pushed. The two failure stages are kept
+   * apart because they are different instructions: one needs a push from the
+   * worktree, the other needs the commit investigated — and NEITHER means the
+   * gate is unapproved, which is the thing a caller must not get wrong.
+   */
+  readonly delivery?: 'written-not-committed' | 'committed-not-pushed';
+  /** The failure in the words of whatever failed. */
+  readonly deliveryMessage?: string;
 }
 
 /**
@@ -996,9 +1006,18 @@ export async function approve(
     ? (): void => {}
     : (...args: unknown[]): void => console.log(...args);
 
-  // Annotated on the BINDING, not just the arrow. TypeScript narrows after a
-  // call only when the variable itself is declared to return `never`; without
-  // the annotation every line below a refusal is still considered reachable.
+  /*
+   * NOT REMOVABLE, DESPITE LOOKING LIKE IT. This exists so a caller can be given
+   * a typed refusal instead of having the process exited from under it, and the
+   * verbose annotation is load-bearing: TypeScript narrows after a call only
+   * when the VARIABLE is declared to return `never`. Written as
+   * `const refuse = (...): never =>` it still type-checks, and every line below
+   * a refusal is then treated as reachable — which is how a refusal ends up
+   * falling through into an approval.
+   *
+   * Simplify at your peril; `spec-146-phase-11-approval-writes.test.ts` covers
+   * the behaviour, not this shape.
+   */
   const refuse: (code: string, message: string) => never = (code, message) => {
     if (options.onRefusal === 'throw') throw new ApprovalRefusedError(code, message);
     process.exit(1);
@@ -1070,10 +1089,14 @@ export async function approve(
     try {
       await writeStateAndCommit(statusPath, state, message);
     } catch (error: unknown) {
-      if (error instanceof StatePushFailed) {
+      // BOTH delivery failures, because both leave the gate unapproved when they
+      // happen HERE. Only the gate write's failures are a caveat on a real
+      // approval; these are failures of a preparatory step, and saying "approved
+      // but not pushed" about one would be a completed approval that never was.
+      if (error instanceof StatePushFailed || error instanceof StateCommitFailed) {
         throw new Error(
-          `the ${gateName} gate was NOT approved: a preparatory write was committed but not `
-          + `pushed (${message}). ${error.message}`,
+          `the ${gateName} gate was NOT approved: a preparatory write did not complete `
+          + `(${message}). ${error.message}`,
         );
       }
       throw error;
@@ -1210,14 +1233,24 @@ export async function approve(
    * here the gate IS approved and committed, so a push failure is a caveat on a
    * real approval — and the caller is told which of the two it has.
    */
-  let pushFailed: string | undefined;
+  let delivery: ApproveOutcome['delivery'];
+  let deliveryMessage: string | undefined;
   try {
     await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} ${gateName} gate-approved`);
   } catch (error: unknown) {
-    if (!(error instanceof StatePushFailed)) throw error;
-    pushFailed = error.message;
+    // `writeState` ran before either git step, so `status.yaml` says approved in
+    // both cases and porch reads `status.yaml`. THE GATE IS APPROVED. What
+    // failed is how far that fact travelled, and the caller is told which.
+    if (error instanceof StateCommitFailed) {
+      delivery = 'written-not-committed';
+    } else if (error instanceof StatePushFailed) {
+      delivery = 'committed-not-pushed';
+    } else {
+      throw error;
+    }
+    deliveryMessage = (error as Error).message;
     say('');
-    say(chalk.yellow(`  ${error.message}`));
+    say(chalk.yellow(`  ${deliveryMessage}`));
   }
 
   // Wake the builder iff porch was invoked from OUTSIDE the builder's
@@ -1259,7 +1292,7 @@ export async function approve(
     outcome: 'approved',
     ...(state.gates[gateName].approved_at ? { approvedAt: state.gates[gateName].approved_at } : {}),
     ...(state.gates[gateName].approval ? { record: state.gates[gateName].approval } : {}),
-    ...(pushFailed ? { pushFailed } : {}),
+    ...(delivery ? { delivery, deliveryMessage } : {}),
   };
 }
 

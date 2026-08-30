@@ -189,6 +189,29 @@ export function recordThreadId(statusPath: string, threadId: string): void {
  * and verify skip must commit and push status.yaml. Zero gaps.
  */
 /**
+ * The COMMIT failed, and the state is already written to disk.
+ *
+ * `writeState` runs before `git add` and `git commit`, so a hook, a lock, a
+ * missing identity or a repository error leaves the new state ON DISK and out of
+ * git. For a gate approval that means the gate IS approved — `status.yaml` says
+ * so, and porch reads `status.yaml` — while a caller that saw only a generic
+ * error reports a refusal and sends the human to approve again.
+ *
+ * Same class as {@link StatePushFailed}, one layer in: the write succeeded and
+ * the step that publishes it did not, and an untyped failure describes the
+ * publish as though it were the write.
+ */
+export class StateCommitFailed extends Error {
+  /** Always true. The state is on disk; it is not in a commit. */
+  readonly written = true;
+
+  constructor(readonly statusPath: string, cause: string) {
+    super(`state was written to ${statusPath}, but the commit failed: ${cause}`);
+    this.name = 'StateCommitFailed';
+  }
+}
+
+/**
  * The push failed, and the state is already written and committed.
  *
  * A DISTINCT TYPE BECAUSE THESE ARE DIFFERENT FACTS. `write`, `commit` and
@@ -230,9 +253,13 @@ export async function writeStateAndCommit(
     await execFileAsync('git', ['add', statusPath], { cwd: worktreeRoot });
     await execFileAsync('git', ['commit', '-m', message], { cwd: worktreeRoot });
   } catch (err: unknown) {
-    // If git commit fails because nothing changed, that's a logic bug — don't mask it.
+    // THE STATE IS ALREADY ON DISK. `writeState` ran above, so this is not "the
+    // write failed" — it is "the write is not in git", which is a different
+    // instruction to whoever is told about it. A commit that fails because
+    // nothing changed is still a logic bug and still surfaces; it surfaces with
+    // its own type so a caller can say which half happened.
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`writeStateAndCommit failed: ${msg}`);
+    throw new StateCommitFailed(statusPath, msg);
   }
 
   // THE PUSH IS DELIVERY, NOT DURABILITY. Everything above this line has already

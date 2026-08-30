@@ -1,6 +1,8 @@
 /** codev-agent HTTP surface added beside Tower's terminal routes (Spec 146). */
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import type http from 'node:http';
 import type Database from 'better-sqlite3';
 import { decodeWorkspacePath } from '../lib/tower-client.js';
@@ -25,7 +27,8 @@ import {
 import { MACHINE_SIGNAL, type MachineCredentialStore } from '../lib/machine-credentials.js';
 import { PAIRING_SIGNAL, type PairingStore } from '../lib/pairing.js';
 import { openAgentStateSse, type AgentStreamSnapshot } from './agent-state-stream.js';
-import { readWorkspaceStatuses } from './status-reader.js';
+import { readScopedStatus, readWorkspaceStatuses } from './status-reader.js';
+import type { GateStatus } from '../../commands/porch/types.js';
 import {
   readThreadRegistry,
   type T3codeThreadSnapshot,
@@ -715,6 +718,42 @@ function handleHumanSessionIssue(
 }
 
 /**
+ * What `status.yaml` says about one gate, or null if it cannot be read.
+ *
+ * Used only as a backstop: when an approval request fails unexpectedly, the file
+ * is the authority on whether the gate is approved, and reporting a refusal
+ * without asking it is how a completed approval gets denied.
+ */
+function readScopedGate(
+  workspacePath: string,
+  projectId: string,
+  gateName: string,
+): GateStatus | null {
+  try {
+    for (const root of [workspacePath, ...buildersOf(workspacePath)]) {
+      const status = readScopedStatus(root, join(root, 'codev', 'projects', projectId, 'status.yaml'));
+      if (status.ok && status.status.projectId === projectId) {
+        return status.status.gates[gateName] ?? null;
+      }
+    }
+  } catch {
+    // The backstop cannot report what it cannot read, and says nothing rather
+    // than guessing — the caller then reports the original failure.
+  }
+  return null;
+}
+
+function buildersOf(workspacePath: string): string[] {
+  try {
+    return readdirSync(join(workspacePath, '.builders'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(workspacePath, '.builders', entry.name));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Spend a capability and a nonce by asking porch to approve a gate.
  *
  * PORCH REMAINS THE ONLY WRITER OF `status.yaml`. This route does not touch it;
@@ -807,6 +846,36 @@ function handleGateApprove(
         writeJson(res, 403, { signal: error.code, message: error.message });
         return;
       }
+      /*
+       * AN UNEXPECTED FAILURE IS NOT EVIDENCE THE GATE IS UNAPPROVED.
+       *
+       * The two delivery failures are typed and handled inside `approve`, but
+       * anything else thrown after the gate write — a notification, a phase
+       * advance, a bug — used to reach `guardRouteFailure` as a 503, which the
+       * client renders as a definite refusal, which sends the human to approve
+       * again. `status.yaml` is the authority on whether the gate is approved,
+       * so it is READ, and the answer says what it found.
+       *
+       * This is a backstop for the class rather than for the two members of it
+       * we happen to know about.
+       */
+      const persisted = readScopedGate(workspacePath, projectId, gateName);
+      if (persisted?.status === 'approved') {
+        writeJson(res, 200, {
+          signal: 'GATE_APPROVED',
+          projectId,
+          gateName,
+          machine: persisted.approval?.machine ?? stored.machine,
+          sessionId: persisted.approval?.session_id ?? null,
+          approvedAt: persisted.approved_at ?? null,
+          ...(persisted.approval?.authority ? { authority: persisted.approval.authority } : {}),
+          delivery: 'unknown',
+          deliveryMessage:
+            `the approval is recorded in status.yaml, but this request then failed: `
+            + `${error instanceof Error ? error.message : String(error)}`,
+        });
+        return;
+      }
       throw error;
     }
 
@@ -838,7 +907,9 @@ function handleGateApprove(
       sessionId: record?.session_id ?? null,
       approvedAt: result.approvedAt ?? null,
       ...(record?.authority ? { authority: record.authority } : {}),
-      ...(result.pushFailed ? { pushFailed: result.pushFailed } : {}),
+      ...(result.delivery
+        ? { delivery: result.delivery, deliveryMessage: result.deliveryMessage }
+        : {}),
     });
   }).catch((error: unknown) => guardRouteFailure(res, context, 'gate-approve', error));
 }

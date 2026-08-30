@@ -93,6 +93,43 @@ describe('only the gate write may report "approved but not pushed"', () => {
     expect(body).toContain("outcome: 'approved'");
   });
 
+  /*
+   * NO `process.exit` ON ANY PATH `approve()` REACHES.
+   *
+   * A review asked whether `advanceProtocolPhase`, which `approve()` calls on the
+   * verify-approval path, can still reach the `process.exit(1)` at what was then
+   * line 636. Traced: it cannot. That exit lives in `done()`, a different
+   * exported function, and `advanceProtocolPhase` contains none of its own and
+   * awaits only `writeStateAndCommit`.
+   *
+   * "Not currently reachable" is a fact with a shelf life, and a `process.exit`
+   * inside Tower's request path ends the process and answers the request with
+   * nothing — the worst available spelling of any outcome. So the trace is a
+   * test rather than a note in a review comment.
+   */
+  it('reaches no process.exit from the verify-approval path', () => {
+    const source = readFileSync(join(PORCH, 'index.ts'), 'utf8');
+    const start = source.indexOf('async function advanceProtocolPhase');
+    expect(start, 'advanceProtocolPhase is gone; re-trace what approve() now calls')
+      .toBeGreaterThan(-1);
+    const open = source.indexOf('{', source.indexOf(')', start));
+    let depth = 0;
+    let body = '';
+    for (let i = open; i < source.length; i += 1) {
+      if (source[i] === '{') depth += 1;
+      else if (source[i] === '}') {
+        depth -= 1;
+        if (depth === 0) { body = source.slice(open, i + 1); break; }
+      }
+    }
+    expect(body.length, 'could not read advanceProtocolPhase').toBeGreaterThan(0);
+    expect(body, 'advanceProtocolPhase now exits the process; inside Tower that ends the server '
+      + 'and answers the request with nothing').not.toContain('process.exit');
+    // And it must not have grown a call to something that does. `done()` holds
+    // the exit this trace was about.
+    expect(body).not.toContain('await done(');
+  });
+
   it('never fabricates a timestamp in the route that answers a client', () => {
     const route = readFileSync(
       resolve(dirname(fileURLToPath(import.meta.url)), '..', 'servers', 'agent-routes.ts'),

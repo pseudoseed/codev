@@ -39,6 +39,15 @@ function tmp(): string {
  * removed — the comment beside the call NAMES the missing option, and a check
  * that reads prose is a check that passes on a promise.
  *
+ * ## If this file fails, read the message before assuming a wiring change
+ *
+ * It reads SOURCE, so a refactor of `tower-server.ts` can break it without
+ * anything about the wiring changing. Each failure below says which it is: a
+ * call that moved or was renamed, an argument object it could not parse, an
+ * extraction that went blind, or a `t3codeSnapshot` that genuinely appeared. The
+ * first three are this test needing an update; only the last is a real change,
+ * and it is good news.
+ *
  * The extent is found by BRACE DEPTH rather than by a literal `\n  });`. The
  * indentation-sensitive version failed on a reformat of `tower-server.ts` and
  * read as a wiring regression, sending the next person hunting a change that was

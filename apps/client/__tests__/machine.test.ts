@@ -432,3 +432,34 @@ describe('reconnect backoff', () => {
     expect(delays.slice(0, 5)).toEqual([1, 2, 4, 8, 8]);
   });
 });
+
+describe('an older server', () => {
+  /*
+   * A server that predates the session-state field wants UPGRADING; a corrupt
+   * payload wants investigating. Rendering both as "this client does not
+   * understand" sends the operator to the wrong place.
+   */
+  it('is told apart from a corrupt payload, and says which', async () => {
+    const older = JSON.parse(JSON.stringify(SNAPSHOT)) as Record<string, unknown>;
+    delete (older.protocol as Record<string, unknown>).t3code;
+    const fetchImpl = (async () => new Response(
+      sseBody([frame('protocol-state', { snapshot: older })]),
+      { status: 200 },
+    )) as unknown as typeof globalThis.fetch;
+    const seen = await drive(fetchImpl);
+    const last = seen[seen.length - 1];
+    expect(last.why).toBe('protocol');
+    expect(last.signal).toBe('SNAPSHOT_SCHEMA_OLDER');
+    expect(last.message).toContain('Upgrade');
+  });
+
+  it('still calls a corrupt payload unreadable', async () => {
+    const fetchImpl = (async () => new Response(
+      sseBody([frame('protocol-state', { snapshot: { schemaVersion: 2 } })]),
+      { status: 200 },
+    )) as unknown as typeof globalThis.fetch;
+    const seen = await drive(fetchImpl);
+    expect(seen[seen.length - 1].signal).toBe('SNAPSHOT_UNREADABLE');
+    expect(seen[seen.length - 1].message).toContain('does not understand');
+  });
+});

@@ -80,12 +80,26 @@ export function App() {
             ? `already approved on ${result.machine} at ${result.approvedAt}, by ${by}`
             : `approved on ${result.machine} at ${result.approvedAt}, ${by}`;
           const withAuthority = result.authority ? `${approved} — authority: ${result.authority}` : approved;
-          // The gate IS approved. Saying so first, and naming the push failure
-          // second, is the difference between a caveat and a retry.
+          /*
+           * THE GATE IS APPROVED IN EVERY BRANCH BELOW. Saying so first, and
+           * naming what did not travel second, is the difference between a
+           * caveat and a retry — and the three stages want different things
+           * done, so none of them says "push from the worktree" generically.
+           */
+          const remedy: Record<NonNullable<typeof result.delivery>, string> = {
+            'written-not-committed':
+              'recorded in status.yaml but NOT committed. Do not approve again; commit it from the worktree.',
+            'committed-not-pushed':
+              'committed but NOT pushed. Do not approve again; push from the worktree.',
+            unknown:
+              'recorded, but the request that made it then failed. Do not approve again; check the worktree.',
+          };
           return {
             ok: true,
-            message: result.pushFailed
-              ? `${withAuthority} — but not pushed: ${result.pushFailed}. Do not approve again; push from the worktree.`
+            message: result.delivery
+              ? `${withAuthority} — ${remedy[result.delivery]}${
+                result.deliveryMessage ? ` (${result.deliveryMessage})` : ''
+              }`
               : withAuthority,
           };
         }

@@ -218,6 +218,7 @@ describe('failure matrix signals are distinct', () => {
       HUMAN_SESSION_REQUEST_MALFORMED: '400 for an unreadable body; malformed request',
       HUMAN_SESSION_REFUSED: 'completePairing rejected the attestation; a refusal, not a failure',
       GATE_APPROVED: 'the SUCCESS case of a gate approval',
+      GATE_ALREADY_APPROVED: 'the gate was approved before this request; a success, not a failure',
       // Phase 11 round 3. Both answer "your request was wrong", not "a service
       // failed": one token presented to the wrong ceremony, one mint that named
       // no authority.

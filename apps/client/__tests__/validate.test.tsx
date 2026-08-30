@@ -12,7 +12,7 @@
  */
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { validateSnapshot } from '../src/connection/types.js';
+import { snapshotRejection, validateSnapshot } from '../src/connection/types.js';
 import { buildTree } from '../src/tree/build.js';
 import { Tree } from '../src/tree/Tree.js';
 import type { MachineConfig, MachineState } from '../src/connection/machine.js';
@@ -140,5 +140,39 @@ describe('a malformed machine cannot take down a good one', () => {
     expect(beta.textContent).toContain('does not understand');
     // Named as a protocol problem, not as an empty workspace.
     expect(beta.textContent).toContain('No state has arrived from this machine');
+  });
+});
+
+/**
+ * AN OLDER SERVER IS NOT A CORRUPT ONE.
+ *
+ * The doc comment on `validateSnapshot` claimed this distinction while the code
+ * rejected both identically — a comment asserting a difference the code does not
+ * make, in the function whose whole job is making differences. Same defect class
+ * as everything else in this PR, one level up. These assert the branch exists.
+ */
+describe('why a payload was refused', () => {
+  it('names a missing t3code field as an older server, not as unreadable', () => {
+    const old = snapshot();
+    delete (old.protocol as Record<string, unknown>).t3code;
+    expect(validateSnapshot(old)).toBeNull();
+    expect(snapshotRejection(old)).toBe('older-server');
+  });
+
+  it('does not soften a present-but-wrong value into a version difference', () => {
+    expect(snapshotRejection(snapshot({ t3code: 'sideways' }))).toBe('unreadable');
+  });
+
+  it.each([
+    ['a corrupt identity', snapshot({ identities: [{ nope: true }] })],
+    ['a wrong schemaVersion', { ...snapshot(), schemaVersion: 2 }],
+    ['not an object at all', 'nope'],
+    ['null', null],
+  ])('names %s as unreadable', (_name, payload) => {
+    expect(snapshotRejection(payload)).toBe('unreadable');
+  });
+
+  it('says nothing was wrong with a payload it accepted', () => {
+    expect(snapshotRejection(snapshot())).toBeNull();
   });
 });

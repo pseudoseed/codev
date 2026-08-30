@@ -138,7 +138,7 @@ describe('a session that ended mid-ceremony', () => {
   });
 });
 
-describe('a push that fails after the gate is approved', () => {
+describe('an approval that is recorded but does not travel', () => {
   const session = { sessionId: 's1', presentation: 's1.secret', expiresAt: 'later' };
 
   /*
@@ -148,7 +148,17 @@ describe('a push that fails after the gate is approved', () => {
    * is the defect class of the whole program aimed at the one action the client
    * exists to perform.
    */
-  it('reports the approval as a success carrying a caveat', async () => {
+  /*
+   * THREE STAGES, THREE REMEDIES, AND NONE OF THEM MEANS UNAPPROVED.
+   * `writeState` runs before `git add`, so a commit failure leaves the approved
+   * gate on disk exactly as a push failure leaves it in a commit. Reporting
+   * either as a refusal sends a human to approve again.
+   */
+  it.each([
+    ['written-not-committed', 'the commit failed: pre-commit hook returned 1'],
+    ['committed-not-pushed', 'the push failed: no upstream'],
+    ['unknown', 'the approval is recorded in status.yaml, but this request then failed'],
+  ])('reports %s as a success carrying a caveat', async (delivery, deliveryMessage) => {
     const { fetchImpl } = router({
       '/approval-capabilities': { status: 201, body: { capabilityId: 'c', presentation: 'c.s' } },
       '/approval-nonces': { status: 201, body: { nonce: 'n' } },
@@ -159,13 +169,35 @@ describe('a push that fails after the gate is approved', () => {
           machine: 'alpha',
           sessionId: 's1',
           approvedAt: '2026-08-30T02:00:00Z',
-          pushFailed: 'state was written and committed, but the push failed: no upstream',
+          delivery,
+          deliveryMessage,
         },
       },
     });
     const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
     expect(result.ok).toBe(true);
-    expect(result.ok && result.pushFailed).toContain('push failed');
+    expect(result.ok && result.delivery).toBe(delivery);
+    expect(result.ok && result.deliveryMessage).toBe(deliveryMessage);
+  });
+
+  it('ignores a delivery stage it does not recognise rather than passing it through', async () => {
+    const { fetchImpl } = router({
+      '/approval-capabilities': { status: 201, body: { capabilityId: 'c', presentation: 'c.s' } },
+      '/approval-nonces': { status: 201, body: { nonce: 'n' } },
+      '/gates/approve': {
+        status: 200,
+        body: {
+          signal: 'GATE_APPROVED',
+          machine: 'alpha',
+          sessionId: 's1',
+          approvedAt: '2026-08-30T02:00:00Z',
+          delivery: 'teleported',
+        },
+      },
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.delivery).toBeUndefined();
   });
 
   it('carries no caveat on an ordinary approval', async () => {
@@ -184,7 +216,7 @@ describe('a push that fails after the gate is approved', () => {
     });
     const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
     expect(result.ok).toBe(true);
-    expect(result.ok && result.pushFailed).toBeUndefined();
+    expect(result.ok && result.delivery).toBeUndefined();
   });
 });
 

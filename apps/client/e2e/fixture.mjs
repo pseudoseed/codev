@@ -82,6 +82,12 @@ function statusYaml(projectId, title, gate) {
 export function makeWorkspace(label, gate, options = {}) {
   const root = scratch(`codev-e2e-${label}-`);
   const skipChecks = options.skipChecks !== false;
+  // `breakCommit` installs a pre-commit hook that always fails, so `git commit`
+  // fails for real while `writeState` has already put the approved gate on disk.
+  // `writeStateAndCommit` skips git entirely under VITEST, so this is the only
+  // place in the repo where that failure can actually be produced — the host
+  // runs as a child process with no VITEST set.
+  const breakCommit = options.breakCommit === true;
   const config = JSON.stringify(skipChecks
     ? { porch: { checks: { build: { skip: true }, tests: { skip: true } } } }
     : {});
@@ -124,6 +130,10 @@ export function makeWorkspace(label, gate, options = {}) {
     git(builder.worktree, ['commit', '-m', 'harness: initial state']);
     git(builder.worktree, ['remote', 'add', 'origin', origin]);
     git(builder.worktree, ['push', '-u', 'origin', 'HEAD']);
+    if (breakCommit) {
+      const hook = join(builder.worktree, '.git', 'hooks', 'pre-commit');
+      writeFileSync(hook, '#!/bin/sh\necho "e2e: refusing to commit" >&2\nexit 1\n', { mode: 0o755 });
+    }
   }
 
   const seedPath = join(root, 'seed.json');

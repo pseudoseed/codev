@@ -35,7 +35,11 @@ let staticServer: any;
 let clientOrigin: string;
 let visible: Array<Record<string, unknown>> = [];
 
-async function stand(label: string, gate: unknown, options: { skipChecks?: boolean } = {}): Promise<Machine> {
+async function stand(
+  label: string,
+  gate: unknown,
+  options: { skipChecks?: boolean; breakCommit?: boolean } = {},
+): Promise<Machine> {
   const workspace = makeWorkspace(label, gate, options);
   const host = await startHost({ port: EPHEMERAL, workspace, machine: label });
   return {
@@ -175,6 +179,46 @@ test.describe('approving a real gate', () => {
     await expect(revoked).toContainText('not retrying');
     await expect(revoked).toContainText('MACHINE_CREDENTIAL_REVOKED');
     await expect(page.locator('[data-machine="alpha"] .conn-down')).toHaveCount(0);
+  });
+
+  /*
+   * A COMMIT THAT FAILS AFTER THE GATE IS ALREADY ON DISK.
+   *
+   * `writeState` runs before `git add`, so a failing pre-commit hook leaves
+   * `status.yaml` saying approved and the change out of git. Reported as a
+   * refusal, the human approves again; and this is the ONLY place in the repo
+   * where the failure can be produced at all, because `writeStateAndCommit`
+   * skips git under VITEST and the host here is a real child process.
+   */
+  test('reports an approval whose commit failed as approved, with the remedy', async ({ page }) => {
+    const broken = await stand('commitfail', GATE, { breakCommit: true });
+    try {
+      announce(broken.entry);
+      await openClient(page);
+      const row = page.locator('[data-machine="commitfail"] [data-id="builder-commitfail-gated"]');
+      await expect(row.locator('.gate-panel')).toBeVisible({ timeout: 30_000 });
+
+      await row.locator('.gate-token').fill(
+        await mintPairingTokenFor(broken.host.stateRoot as string),
+      );
+      await row.getByRole('button', { name: /open a session/i }).click();
+      const approveButton = row.getByRole('button', { name: /approve pr/i });
+      await expect(approveButton).toBeVisible({ timeout: 20_000 });
+      await approveButton.click();
+
+      // A SUCCESS carrying a caveat, not a refusal.
+      const result = row.locator('.gate-result.is-ok');
+      await expect(result).toBeVisible({ timeout: 30_000 });
+      await expect(result).toContainText('NOT committed');
+      await expect(result).toContainText('Do not approve again');
+      await expect(row.locator('.gate-result.is-refused')).toHaveCount(0);
+
+      // And the gate really is approved on disk, which is why the caveat is right.
+      const project = broken.workspace.builders.find((b: any) => b.projectId === 'commitfail-gated');
+      expect(readStatus(project.statusPath)).toContain('status: approved');
+    } finally {
+      await broken.host.stop().catch(() => {});
+    }
   });
 
   /*

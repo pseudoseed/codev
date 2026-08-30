@@ -42,13 +42,17 @@ export type ApprovalOutcome =
     /** What the pairing token behind the approving capability claimed. */
     readonly authority?: string;
     /**
-     * Present when the gate WAS approved and committed but the push failed.
+     * How far the approval travelled, when it did not travel all the way.
      *
      * A success with a caveat, never a failure: telling a human their approval
      * did not happen when it did sends them to approve again, chasing a state
-     * that already changed.
+     * that already changed. The three stages need different remedies —
+     * `written-not-committed` wants the commit investigated,
+     * `committed-not-pushed` wants a push, `unknown` wants a look at what the
+     * server said — and none of them means the gate is unapproved.
      */
-    readonly pushFailed?: string;
+    readonly delivery?: 'written-not-committed' | 'committed-not-pushed' | 'unknown';
+    readonly deliveryMessage?: string;
   }
   | {
     readonly ok: false;
@@ -243,7 +247,13 @@ export async function approveGate(
     };
   }
 
-  const pushFailed = text(approved.body, 'pushFailed');
+  const rawDelivery = text(approved.body, 'delivery');
+  const delivery = rawDelivery === 'written-not-committed'
+    || rawDelivery === 'committed-not-pushed'
+    || rawDelivery === 'unknown'
+    ? rawDelivery
+    : undefined;
+  const deliveryMessage = text(approved.body, 'deliveryMessage');
   const authority = text(approved.body, 'authority');
   return {
     ok: true,
@@ -252,7 +262,7 @@ export async function approveGate(
     sessionId,
     ...(alreadyApproved ? { alreadyApproved: true } : {}),
     ...(authority ? { authority } : {}),
-    ...(pushFailed ? { pushFailed } : {}),
+    ...(delivery ? { delivery, ...(deliveryMessage ? { deliveryMessage } : {}) } : {}),
   };
 }
 

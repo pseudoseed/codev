@@ -1,5 +1,5 @@
 import { readSseFrames } from './sse-reader.js';
-import { validateSnapshot, type AgentProtocolSnapshot } from './types.js';
+import { snapshotRejection, validateSnapshot, type AgentProtocolSnapshot } from './types.js';
 
 /** One server. The client holds several, and they succeed and fail independently. */
 export interface MachineConfig {
@@ -351,9 +351,11 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
         }
         const parsed = parseSnapshot(frame.data);
         if (!parsed) {
-          // A payload this build cannot read is NOT an empty workspace.
+          // A payload this build cannot read is NOT an empty workspace — and an
+          // OLDER SERVER is not a corrupt one. They want different things done,
+          // so they are said differently.
           finish();
-          drop('protocol', 'the server sent a snapshot this client does not understand');
+          drop('protocol', rejectionMessage(frame.data), rejectionSignal(frame.data));
           return again();
         }
         progressed = true;
@@ -422,6 +424,33 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
     },
     getState: () => state,
   };
+}
+
+function rejectionSignal(data: string): string {
+  return parseBody(data) !== null && snapshotRejection(payloadOf(data)) === 'older-server'
+    ? 'SNAPSHOT_SCHEMA_OLDER'
+    : 'SNAPSHOT_UNREADABLE';
+}
+
+function rejectionMessage(data: string): string {
+  return rejectionSignal(data) === 'SNAPSHOT_SCHEMA_OLDER'
+    ? 'this server predates the session-state field, so this client cannot read its snapshots. '
+      + 'Upgrade that machine\'s codev-agent.'
+    : 'the server sent a snapshot this client does not understand';
+}
+
+function parseBody(data: string): Record<string, unknown> | null {
+  try {
+    const body: unknown = JSON.parse(data);
+    return body !== null && typeof body === 'object' ? body as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function payloadOf(data: string): unknown {
+  const body = parseBody(data);
+  return body === null ? null : (body.snapshot ?? body);
 }
 
 function parseSnapshot(data: string): AgentProtocolSnapshot | null {

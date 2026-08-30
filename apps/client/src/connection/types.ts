@@ -169,10 +169,37 @@ function signal(value: unknown): value is AgentStateSignal {
  * exists to require. A validator that only guards the outside of the envelope
  * moves the failure somewhere it does more damage; it does not prevent it.
  *
- * A snapshot missing `protocol.t3code` is an OLDER SERVER, and an older server's
- * silence about session state must not be shown as "t3code was asked and said
- * nothing".
+ * ## An older server is not a corrupt one
+ *
+ * A snapshot missing `protocol.t3code` is a server that predates the field, and
+ * that is a DIFFERENT fact from a payload this build cannot parse: one wants
+ * upgrading, the other wants investigating. An earlier version of this comment
+ * claimed the distinction while the code rejected both identically — a comment
+ * asserting a difference the code does not make, in the function whose entire
+ * job is making differences. The branch exists now, and
+ * {@link snapshotRejection} names which it was.
  */
+export type SnapshotRejection = 'older-server' | 'unreadable';
+
+/**
+ * Why a payload was refused, or null when it was accepted.
+ *
+ * Separate from `validateSnapshot` so the common path keeps its
+ * `Snapshot | null` shape, and so a caller that wants the reason asks for it
+ * rather than inferring it.
+ */
+export function snapshotRejection(value: unknown): SnapshotRejection | null {
+  if (validateSnapshot(value) !== null) return null;
+  if (!isRecord(value)) return 'unreadable';
+  const protocol = value.protocol;
+  // The field's ABSENCE is the older-server signal. A present-but-wrong value is
+  // a payload problem, and is not softened into a version difference.
+  if (value.schemaVersion === 1 && isRecord(protocol) && protocol.t3code === undefined) {
+    return 'older-server';
+  }
+  return 'unreadable';
+}
+
 export function validateSnapshot(value: unknown): AgentProtocolSnapshot | null {
   if (!isRecord(value)) return null;
   if (value.schemaVersion !== 1) return null;
