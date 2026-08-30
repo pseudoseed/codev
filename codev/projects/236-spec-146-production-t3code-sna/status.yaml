@@ -30,8 +30,8 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 1
-build_complete: true
+iteration: 2
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -75,8 +75,22 @@ history:
         file: >-
           /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_4-iter1-opencode.txt
         stated: true
+  - iteration: 1
+    plan_phase: phase_5
+    build_output: ''
+    reviews:
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_5-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_5-iter1-opencode.txt
+        stated: true
 started_at: '2026-08-30T04:48:34.619Z'
-updated_at: '2026-08-30T08:38:04.982Z'
+updated_at: '2026-08-30T08:54:29.873Z'
 context_refreshes:
   - boundary: plan-phase:phase_2
     at: '2026-08-30T06:10:51.039Z'
