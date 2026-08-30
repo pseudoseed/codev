@@ -140,9 +140,9 @@ describe('createThreadAdoptionSweeper (issue #241)', () => {
   });
 
   /**
-   * `attach` awaits a subscription's attach budget, so a slow server can make a pass
-   * outlast its interval. Overlapping passes would stack `attach` calls on the same
-   * threads.
+   * `attach` does not await the subscription's attach budget, but it still dispatches
+   * over the socket, so a slow server can make a pass outlast its interval. Overlapping
+   * passes would stack `attach` calls on the same threads.
    */
   it('does not start a second pass while one is running', async () => {
     let inFlight = 0;

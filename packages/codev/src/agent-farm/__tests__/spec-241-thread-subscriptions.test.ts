@@ -455,6 +455,44 @@ describe('ThreadSubscriptionPool (issue #241)', () => {
     pool.stopAll();
   });
 
+  /**
+   * A NAMED TERMINAL FAILURE MUST NOT BE REPORTED AS A TIMEOUT.
+   *
+   * `run()` rejects on a non-retryable stream error, and the entry is dropped. Leaving
+   * the attach promise pending meant `ensure` waited out its whole budget and then said
+   * `SubscriptionNotAttachedError` — "the stream never came up", which is true and says
+   * nothing about why, in place of the server's own sentence that was available
+   * immediately. Same defect class as spelling "I could not tell" like "no".
+   */
+  it('a terminal subscription failure reaches ensure at once, not as a timeout', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'thread-sub-'));
+    const refuses: ThreadSubscriber = {
+      stream: () => {
+        // `name` is how ResumingSubscription classifies terminal errors.
+        const error = new Error('the server rejected the subscribe payload');
+        error.name = 'RpcFailureError';
+        return Promise.reject(error);
+      },
+      cancel: () => {},
+    };
+    const errors: string[] = [];
+    const pool = createThreadSubscriptionPool({
+      subscriber: refuses,
+      workspaceRoot: dir,
+      observe: () => {},
+      log: (level, message) => { if (level === 'ERROR') errors.push(message); },
+      // Deliberately long: a budget-shaped wait would blow the test's own timeout.
+      attachTimeoutMs: 60_000,
+      retryDelayMs: 1,
+    });
+
+    const began = Date.now();
+    await expect(pool.ensure(THREAD)).rejects.toThrow(/rejected the subscribe payload/);
+    expect(Date.now() - began).toBeLessThan(5_000);
+    expect(errors.join('\n')).toContain('will not retry');
+    pool.stopAll();
+  });
+
   it('ensure names the failure when a subscription never attaches', async () => {
     dir = mkdtempSync(join(tmpdir(), 'thread-sub-'));
     const neverAttaches: ThreadSubscriber = {

@@ -28,7 +28,7 @@ instead of only when somebody messages them.
 - `packages/codev/src/agent-farm/thread-runtime.ts` (+24 / -0)
 - `codev/plans/241-spec-146-nothing-in-production.md` (+299 / -0)
 - `codev/state/pir-241_thread.md` (+139 / -0)
-- `codev/state/241-spec-146-nothing-in-production/status.yaml` (+91 / -0)
+- `codev/projects/241-spec-146-nothing-in-production/status.yaml` (+91 / -0)
 
 ## Commits
 
@@ -156,6 +156,22 @@ never measured.
 
 ## Consultation
 
+### Porch's review-phase pass (2-way)
+
+**claude: APPROVE** (HIGH). Five findings, none blocking. Three were fixed here — two comments
+that still claimed `attach` awaits the subscription's attach budget (it calls `start`, which
+returns at once), and `ensure` waiting out its full 30s budget when `run()` rejects for a NAMED
+terminal reason, reporting "the stream never came up" in place of the server's own sentence that
+was available immediately. The remaining two are one cause and are filed as **#259**. It also
+caught a factual error in this file: the status.yaml path is `codev/projects/`, not
+`codev/state/`.
+
+**opencode: NO VERDICT.** The lane exited 1 after 361s having written nothing. It is recorded as
+a lane that did not review, not as an approval — the same lane succeeded on the PR pass 17
+minutes earlier, so this is transient rather than configuration.
+
+### The earlier advisory CMAP pass at the PR
+
 One advisory CMAP pass, **three real verdicts**: codex `REQUEST_CHANGES`, claude `COMMENT`,
 opencode (`xai/grok-4.6`) `COMMENT`. The gemini lane **skipped** — `agy` exited 1 on quota,
 which is `LANE_DID_NOT_REVIEW` and not an approval, so it is not counted as one of the three;
@@ -166,6 +182,13 @@ fixed in `a1ab36084`; the suite was green afterwards.
 
 ## Follow-ups
 
+- **#259** — Tower's pool never prunes. `subscriptions.stop` is reachable only through
+  `removeWorktree` → `cleanup.ts`, which runs in the **afx CLI process**; Tower's own paths hold
+  only `stopAll` on socket close. So a thread that leaves `global.db` keeps its subscription
+  until Tower restarts, and a stale `thread_id` is re-adopted and WARNs every 5s forever.
+  `T3codeSessionCache` reconciles both directions; `ThreadAdoptionSweeper` reconciles one.
+  Raised by the claude lane, grounded by reading the call sites, and filed rather than folded in
+  so this PR does not grow on the critical path.
 - **#251** — fold `T3codeSessionCache`'s display subscription onto this one. Its `watching` /
   `stale` vocabulary is built on a stream that ends, and a `ResumingSubscription` never does, so
   it is a rewrite of that vocabulary plus its tests rather than a wiring change.

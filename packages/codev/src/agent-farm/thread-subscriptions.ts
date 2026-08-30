@@ -290,9 +290,14 @@ export function createThreadSubscriptionPool(
     const cursor = PersistentCursor.load(path);
 
     let markAttached!: () => void;
-    const attached = new Promise<void>((res) => {
+    let failAttached!: (reason: unknown) => void;
+    const attached = new Promise<void>((res, rej) => {
       markAttached = res;
+      failAttached = rej;
     });
+    // Attached so a subscription that fails before anyone awaits it does not surface as
+    // an unhandled rejection. The `ensure` caller still sees it.
+    attached.catch(() => {});
 
     const entry: Partial<Entry> & { isAttached: boolean } = { isAttached: false };
 
@@ -386,6 +391,14 @@ export function createThreadSubscriptionPool(
           `settle until it is re-adopted.`,
       );
       if (entries.get(threadId) === (entry as Entry)) entries.delete(threadId);
+      // SURFACED NOW, not at the end of the attach budget.
+      //
+      // A caller in `ensure` is racing this promise against a 30s timer. Leaving it
+      // pending meant a subscription that had already failed for a NAMED, terminal
+      // reason was reported 30s later as `SubscriptionNotAttachedError` — "the stream
+      // never came up", which is true and says nothing about why, in place of the
+      // server's own sentence that was available immediately.
+      failAttached(error);
     });
 
     Object.assign(entry, { subscription, cursor, attached, running });
@@ -553,9 +566,10 @@ export function createThreadAdoptionSweeper(
   }
 
   async function sweep(): Promise<void> {
-    // One pass at a time. `attach` awaits a subscription attach budget, so a slow
-    // server can make a pass outlast its interval, and overlapping passes would
-    // stack `attach` calls on the same threads.
+    // One pass at a time. `attach` does NOT await the subscription's attach budget —
+    // it calls `start`, which returns at once — but it still dispatches commands over
+    // the socket, so a slow server can make a pass outlast its interval and
+    // overlapping passes would stack `attach` calls on the same threads.
     if (running) return;
     running = true;
     try {
