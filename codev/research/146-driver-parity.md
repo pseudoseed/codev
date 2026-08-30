@@ -37,7 +37,11 @@ T3_NODE=/absolute/path/to/node tools/t3-server/full-protocol-run.sh 3803 claude 
 T3_NODE=/absolute/path/to/node tools/t3-server/full-protocol-run.sh 3804 opencode xai/grok-4.6    3600 opencode-1h
 ```
 
-Raw evidence: `codev/research/146-phase10-live-evidence.json`.
+Raw evidence: `codev/research/146-phase10-live-evidence.json`, regenerated from the run outputs
+by `tools/t3-server/collect-phase10-evidence.mjs`, which also fills the table below. It exits 3
+— not 1 — when a named run is missing: "the run has not finished" and "the run failed" are
+different facts, and the collector never gets to make the second claim on the strength of the
+first.
 
 <!-- results:begin -->
 <!-- results:end -->

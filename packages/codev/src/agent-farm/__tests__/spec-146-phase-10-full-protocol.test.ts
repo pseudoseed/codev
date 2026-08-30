@@ -33,7 +33,7 @@
  * with no evidence behind it, and it must not be able to hide inside a green run.
  */
 import { describe, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -155,6 +155,30 @@ describe('Spec 146 Phase 10 — the recorded full-protocol runs', () => {
       expect(parity, `146-driver-parity.md does not mention the ${run.harness} run`).toContain(run.harness);
       expect(parity).toContain(run.model);
     }
+  });
+
+  it('regenerates from a script, and that script cannot report "missing" as "failed"', () => {
+    /*
+     * The evidence is regenerated whenever the runs are, because the staleness
+     * guard below forces it. A regeneration procedure that lives in someone's
+     * memory gets done differently the second time, and the difference lands in
+     * the one file whose whole job is to be trustworthy — so it is a script.
+     *
+     * What is asserted here is its EXIT CODE, which is the part that decays
+     * silently. A run that has not finished yet and a run that finished badly are
+     * different facts. The collector exits 3 for the first, and if it ever
+     * regressed to 1 a CI job would read "the phase 10 evidence is bad" from
+     * "the phase 10 evidence is not there".
+     */
+    const collector = join(repoRoot, 'tools', 't3-server', 'collect-phase10-evidence.mjs');
+    expect(existsSync(collector), 'the evidence collector is missing').toBe(true);
+    const result = spawnSync(process.execPath, [collector, 'a-run-that-does-not-exist'], {
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    expect(result.status, 'a missing run must exit 3 (could not check), never 1 (it failed)').toBe(3);
+    expect(result.stderr).toMatch(/could not check/);
+    expect(result.stderr).toMatch(/This is not "the run failed"/);
   });
 
   it('is not older than the runner it describes', () => {
