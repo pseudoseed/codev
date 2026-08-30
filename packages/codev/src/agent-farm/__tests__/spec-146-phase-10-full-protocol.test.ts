@@ -438,6 +438,71 @@ describe('Spec 146 Phase 10 — a refusal is not a timeout', () => {
     await expect(started.settled).resolves.toBeUndefined();
   });
 
+  it('restores the role prompt when the session refuses the turn', async () => {
+    /*
+     * `DriverThread` consumes `#pendingRole` once the dispatch is accepted,
+     * because an accepted dispatch used to be the only confirmation that the
+     * role went. `SessionStartFailedError` is a second, later confirmation in
+     * the other direction: the command was accepted and the turn never ran, so
+     * the role reached nobody.
+     *
+     * Leaving it consumed means a caller that retries — the natural response to
+     * "the provider is disabled in T3 Code settings", once somebody enables it —
+     * gets an agent working without its instructions. That is the worse of the
+     * two ways to be wrong, and this class already chose against it in a comment
+     * before this PR made the case reachable.
+     */
+    const { DriverThread } = await import('@cluesmith/porch-driver/thread');
+    const { DispatchJournal } = await import('@cluesmith/porch-driver/commands');
+    const { TurnTracker } = await import('@cluesmith/porch-driver/turn');
+    const work = mkdtempSync(join(tmpdir(), 'air-235-role-'));
+    try {
+      const tracker = new TurnTracker();
+      const thread = await DriverThread.create(
+        {
+          dispatcher: { call: async () => ({ ok: true }) },
+          journal: new DispatchJournal(join(work, 'c.jsonl')),
+          tracker,
+        },
+        {
+          projectId: 'p1',
+          title: 'role',
+          harnessName: 'claude',
+          model: 'claude-haiku-4-5',
+          worktreePath: work,
+          branch: 'b',
+          threadId: 'role-thread',
+          roleContent: 'YOU ARE THE BUILDER',
+        },
+      );
+      expect(thread.roleDelivered, 'the role should still be pending before any turn').toBe(false);
+
+      const started = await thread.beginTurn('do the thing');
+      // Consumed on an accepted dispatch, which is the existing rule.
+      expect(thread.roleDelivered, 'the role should be consumed once the dispatch is accepted').toBe(true);
+
+      // ...and then the session refuses it.
+      tracker.observe({
+        kind: 'event',
+        event: {
+          sequence: started.startSequence + 1,
+          aggregateId: 'role-thread',
+          type: 'thread.session-set',
+          payload: { session: { status: 'error', activeTurnId: null, lastError: 'disabled in settings' } },
+        },
+      });
+      await expect(started.running).rejects.toThrow(/failed before the turn started/);
+      // Give the rejection handler its microtask.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(
+        thread.roleDelivered,
+        'the turn never ran, so the role reached nobody and must be pending again for the retry',
+      ).toBe(false);
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
   it('the launcher opts the driver in, because t3code ships some drivers off', () => {
     /*
      * The other half of the same finding. Every run gets its own `--base-dir`,
