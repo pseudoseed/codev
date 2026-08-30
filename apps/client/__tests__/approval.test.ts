@@ -663,6 +663,49 @@ describe('approveGate, asynchronously', () => {
   }, 20_000);
 
   /*
+   * THE SAME RULE AS THE THROWN FETCH, one status class over. The server writes
+   * the operation record BEFORE the 202, so a 5xx after that point leaves an
+   * approval running while answering with a failure.
+   */
+  it('reports a 5xx on the submit as unconfirmed, because the operation may exist', async () => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': { status: 503, body: { signal: 'AGENT_ROUTE_FAILED' } },
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, unconfirmed: true, signal: 'GATE_APPROVAL_UNCONFIRMED' });
+  }, 20_000);
+
+  it('keeps a 400 on the submit a refusal, because that answer is definite', async () => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': { status: 400, body: { signal: 'APPROVAL_REQUEST_MALFORMED', message: 'bad' } },
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, signal: 'APPROVAL_REQUEST_MALFORMED' });
+    expect((result as { unconfirmed?: boolean }).unconfirmed).toBeUndefined();
+  }, 20_000);
+
+  /*
+   * A host that accepted an operation and then does not know it has answered
+   * definitely — re-asking cannot change it, and spinning to the deadline left
+   * the progress line on screen for thirty minutes over a settled question.
+   */
+  it('stops on a poll 404 rather than retrying for thirty minutes', async () => {
+    const { fetchImpl, calls } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-14', state: 'submitted' } },
+        { status: 404, body: { signal: 'APPROVAL_OPERATION_UNKNOWN' } },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, unconfirmed: true });
+    expect((result as { message: string }).message).toContain('op-14');
+    expect(calls).toHaveLength(4);
+  }, 20_000);
+
+  /*
    * A CONFLICT IS NOT A REFUSAL OF THIS GATE. An approval for this project is
    * already running and the server names it, so the human is told to wait rather
    * than to try again.

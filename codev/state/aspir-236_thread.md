@@ -673,3 +673,25 @@ page. Ran against the current tree: 62 classes emitted, 0 unstyled.
 e2e re-run after the changes: 7 passing.
 
 Suites: client 229 passing (13 files), e2e 7 passing, server 7053 passing.
+
+### Phase 6 iteration 3 — APPROVE + COMMENT, and the pattern again
+
+opencode APPROVE, claude COMMENT with two residuals — both explicitly advisory, both fixed,
+because both are the **same "one step too narrow" shape** I had just named in my own iteration-2
+rebuttal:
+
+1. **A 5xx on the SUBMIT was still a refusal.** `handleApprovalSubmit` writes the operation record
+   *before* it writes the 202, so a server error after that point leaves an approval running while
+   answering with a failure. I had fixed the thrown-`fetch` sibling one round earlier and left the
+   status-carrying one. Now `unconfirmed` for 5xx; a 4xx stays a refusal, because malformed,
+   unknown-workspace and wrong-session are definite answers about the request.
+2. **A poll 404 spun to the 30-minute deadline.** A host that accepted an operation and then does
+   not know it has answered definitely; re-asking cannot change it. Now stops, reported
+   `unconfirmed` — both facts are true and neither is a verdict on the gate.
+
+Four rounds of review on this phase found six defects and **five were this same shape**: the rule
+applied in one place and not the adjacent one. Poll but not submit. 403 but not 401. Element but
+not rule. Thrown fetch but not 5xx. 401/403 but not 404. Worth carrying forward as a thing to
+look for rather than as six separate misses.
+
+Client: 232 passing, 13 files.

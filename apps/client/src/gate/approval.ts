@@ -362,6 +362,28 @@ async function pollApproval(
   gate: { readonly projectId: string; readonly gateName: string },
   onProgress?: (progress: ApprovalProgress) => void,
 ): Promise<ApprovalOutcome> {
+  /*
+   * A 5xx ON THE SUBMIT MAY HAVE CREATED THE OPERATION.
+   *
+   * `handleApprovalSubmit` writes the record BEFORE it writes the 202, so a
+   * server error after that point leaves an approval running and answers with a
+   * failure. Reporting a refusal there is the same wrong verdict as the thrown
+   * `fetch` beside it — which was fixed last round while this sibling was not.
+   *
+   * A 4xx is a definite answer about the request itself (malformed, unknown
+   * workspace, wrong session, already in flight) and stays a refusal.
+   */
+  if (submitted.status >= 500) {
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'GATE_APPROVAL_UNCONFIRMED',
+      message:
+        `this host answered ${submitted.status} to the request to approve ${gate.gateName}. The `
+        + 'operation is recorded before the response is written, so it may be running — check '
+        + 'before approving again.',
+    };
+  }
   if (submitted.status === 409) {
     // A conflict is not a refusal of this gate: an approval for this project is
     // already running, and the message names it. Reported as a refusal with the
@@ -423,6 +445,26 @@ async function pollApproval(
      */
     if (polled.status === 403 || polled.status === 401) {
       return refusal(polled, 'this session can no longer read that approval');
+    }
+    /*
+     * 404 IS DEFINITE TOO, and re-asking cannot change it: this host does not
+     * know the operation it accepted a moment ago. Spinning to the deadline over
+     * that left the progress line on screen for thirty minutes for an answer
+     * already given.
+     *
+     * Reported as UNCONFIRMED rather than refused, because the two facts are
+     * both true and neither is a verdict on the gate: it WAS accepted, and the
+     * host no longer knows it.
+     */
+    if (polled.status === 404) {
+      return {
+        ok: false,
+        unconfirmed: true,
+        signal: 'GATE_APPROVAL_UNCONFIRMED',
+        message:
+          `this host accepted approval ${operationId} and now does not know it. Whether the gate `
+          + 'was approved is unknown; check before approving again.',
+      };
     }
     if (polled.status !== 200) {
       await new Promise((wait) => setTimeout(wait, POLL_INTERVAL_MS));
