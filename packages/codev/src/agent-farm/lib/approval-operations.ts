@@ -53,6 +53,17 @@ export const APPROVAL_OPERATION_SIGNAL = {
   APPROVAL_OPERATION_SUBMITTED: 'APPROVAL_OPERATION_SUBMITTED',
   APPROVAL_OPERATION_UNKNOWN: 'APPROVAL_OPERATION_UNKNOWN',
   APPROVAL_OPERATION_STORE_UNREADABLE: 'APPROVAL_OPERATION_STORE_UNREADABLE',
+  /**
+   * A LOCK TIMEOUT, WHICH IS NOT A CORRUPT FILE.
+   *
+   * The first cut passed `APPROVAL_OPERATION_STORE_UNREADABLE` as the lock code,
+   * so a 2s contention miss reported the store as unparseable. Two remedies —
+   * "retry, it will work" and "go and look at that file" — spelled with one word,
+   * in the store whose whole purpose is keeping such pairs apart. Every sibling
+   * store has had its own `*_STORE_LOCKED` from the start; `atomic-store.ts` takes
+   * the code as a parameter precisely so these stay different.
+   */
+  APPROVAL_OPERATION_STORE_LOCKED: 'APPROVAL_OPERATION_STORE_LOCKED',
   APPROVAL_OPERATION_INTERRUPTED: 'APPROVAL_OPERATION_INTERRUPTED',
   APPROVAL_ALREADY_IN_FLIGHT: 'APPROVAL_ALREADY_IN_FLIGHT',
   APPROVAL_CONCURRENCY_LIMIT: 'APPROVAL_CONCURRENCY_LIMIT',
@@ -88,11 +99,32 @@ export type ApprovalOperationState =
   | 'failed'
   | 'interrupted';
 
-/** Which process owns an operation, so a second host cannot resolve it. */
+/**
+ * Which process owns an operation, so a second host cannot resolve it.
+ *
+ * `runId` IS NOT REDUNDANT WITH `pid`, and the case it exists for is the one that
+ * would otherwise never heal: a Tower crashes, and the restarted Tower is given
+ * **the same pid** by the OS. A pass keyed on pid alone then asks "is 4242
+ * alive?", gets `true` — because it is 4242 — and leaves the dead run's record
+ * `running` forever, which is the exact state this pass exists to make
+ * unreachable. `runId` is minted once per process, so "my pid, not my run" is
+ * decidable and means the previous holder is definitively gone.
+ */
 export interface OperationOwner {
   readonly host: string;
   readonly pid: number;
+  /** Absent on records written before run ids existed; treated as unknown, never as mine. */
+  readonly runId?: string;
 }
+
+/**
+ * This process's identity, minted once.
+ *
+ * Module-scoped rather than per-store so two stores in one process agree about
+ * whose operations are whose — the alternative would have a Tower resolving its
+ * own live work through a second store instance.
+ */
+const PROCESS_RUN_ID = randomUUID();
 
 export interface ApprovalOperation {
   readonly operationId: string;
@@ -208,7 +240,7 @@ export class ApprovalOperationStore {
     this.#path = join(options.root ?? defaultApprovalRoot(), 'approval-operations.json');
     this.#now = options.now ?? Date.now;
     this.#retentionMs = options.retentionMs ?? DEFAULT_RETENTION_MS;
-    this.#owner = options.owner ?? { host: hostname(), pid: process.pid };
+    this.#owner = options.owner ?? { host: hostname(), pid: process.pid, runId: PROCESS_RUN_ID };
     this.#isAlive = options.isAlive ?? defaultIsAlive;
   }
 
@@ -239,6 +271,10 @@ export class ApprovalOperationStore {
     return operations.filter((operation) => {
       if (!isTerminal(operation.state)) return true;
       const settled = Date.parse(operation.settledAt ?? operation.submittedAt);
+      // A TIMESTAMP THAT WILL NOT PARSE IS KEPT, deliberately. It says nothing
+      // about how old the record is, and dropping it would let an unreadable
+      // field delete an operator's only account of an approval — "I could not
+      // tell" acted on as "it is old enough to discard".
       return Number.isNaN(settled) || settled > cutoff;
     });
   }
@@ -265,7 +301,7 @@ export class ApprovalOperationStore {
   }): { readonly accepted: true; readonly operation: ApprovalOperation }
     | { readonly accepted: false; readonly code: ApprovalOperationSignal; readonly message: string } {
     const maxConcurrent = input.maxConcurrent ?? 2;
-    return withStoreLock(this.#path, APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_STORE_UNREADABLE, () => {
+    return withStoreLock(this.#path, APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_STORE_LOCKED, () => {
       const operations = this.#sweep(this.#read());
       const live = operations.filter((operation) => !isTerminal(operation.state));
 
@@ -337,7 +373,7 @@ export class ApprovalOperationStore {
   }
 
   #update(operationId: string, mutate: (operation: ApprovalOperation) => void): void {
-    withStoreLock(this.#path, APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_STORE_UNREADABLE, () => {
+    withStoreLock(this.#path, APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_STORE_LOCKED, () => {
       const operations = this.#read();
       const operation = operations.find((candidate) => candidate.operationId === operationId);
       // A caller settling an operation that is not there is a bug in the caller,
@@ -348,9 +384,47 @@ export class ApprovalOperationStore {
           `${APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_UNKNOWN}: no operation ${operationId} in this store`,
         );
       }
+      // A TERMINAL RECORD IS FINAL. Overwriting one would let a late callback
+      // from an abandoned run rewrite the outcome an operator has already been
+      // shown — reporting a second answer for a question already answered.
+      if (isTerminal(operation.state)) {
+        throw new Error(
+          `${APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_UNKNOWN}: operation ${operationId} `
+          + `already settled as ${operation.state}; it cannot be changed`,
+        );
+      }
       mutate(operation);
       this.#write(operations);
     });
+  }
+
+  /**
+   * Is the process that owned this operation definitively gone?
+   *
+   * Four cases, and the third is the one a pid check alone gets wrong:
+   *
+   * 1. **Another host.** Not ours to judge — its pids mean nothing here.
+   * 2. **Our own run.** Live by definition: it is executing in this process right
+   *    now, and resolving it would interrupt work in flight. `isAlive` is
+   *    deliberately not consulted, because asking whether we are alive is silly
+   *    and answering "no" would be catastrophic.
+   * 3. **Our pid, a different run.** The previous holder of this pid is gone —
+   *    we have that pid now. Without `runId` this asked "is my pid alive?",
+   *    answered `true`, and left a crashed Tower's record `running` forever on
+   *    every restart that happened to reuse the pid.
+   * 4. **Some other pid on this host.** Ask the OS.
+   */
+  #ownerIsGone(owner: OperationOwner): boolean {
+    if (owner.host !== this.#owner.host) return false;
+    if (owner.runId !== undefined && owner.runId === this.#owner.runId) return false;
+    if (owner.pid === this.#owner.pid) {
+      // Same pid, and not this run. A record with no `runId` predates the field,
+      // so "is it mine?" is unanswerable — and treating an unknown as MINE would
+      // strand it, while treating it as gone at worst re-reports a gate this host
+      // is about to report anyway.
+      return owner.runId !== this.#owner.runId;
+    }
+    return !this.#isAlive(owner.pid);
   }
 
   /** One operation, or null when this store has never held it. */
@@ -383,16 +457,12 @@ export class ApprovalOperationStore {
   resolveInterrupted(
     readGate: (operation: ApprovalOperation) => 'approved' | 'pending' | 'unreadable',
   ): ApprovalOperation[] {
-    return withStoreLock(this.#path, APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_STORE_UNREADABLE, () => {
+    return withStoreLock(this.#path, APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_STORE_LOCKED, () => {
       const operations = this.#sweep(this.#read());
       const resolved: ApprovalOperation[] = [];
       for (const operation of operations) {
         if (isTerminal(operation.state)) continue;
-        if (operation.owner.host !== this.#owner.host) continue;
-        // A record this process itself owns is live by definition — it is running
-        // right now, in this process. Resolving it would interrupt work in flight.
-        if (operation.owner.pid === this.#owner.pid) continue;
-        if (this.#isAlive(operation.owner.pid)) continue;
+        if (!this.#ownerIsGone(operation.owner)) continue;
 
         operation.state = 'interrupted';
         operation.settledAt = new Date(this.#now()).toISOString();

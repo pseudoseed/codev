@@ -434,3 +434,36 @@ successes and refusals (`APPROVAL_OPERATION_SUBMITTED`, `APPROVAL_ALREADY_IN_FLI
 each: they answer "your request was wrong, or it worked", not "a service or file failed".
 
 Suite: 7030 passing, 0 failing.
+
+### Phase 4 iteration 1 — both lanes REQUEST_CHANGES on the same collapse
+
+Both found it independently: **I passed `APPROVAL_OPERATION_STORE_UNREADABLE` as `withStoreLock`'s
+`lockedCode`**, so a 2s contention miss reported the store as a corrupt file. "Retry, it will
+work" and "go and look at that file" spelled with one word — in the store whose entire purpose is
+keeping such pairs apart, written by someone who had just spent three phases on that exact rule.
+Every sibling store has had its own `*_STORE_LOCKED` from the start, and `atomic-store.ts` takes
+the code as a parameter precisely so they stay different. Added `APPROVAL_OPERATION_STORE_LOCKED`.
+
+The failure-matrix collector then failed on the new code being unclassified — which is the
+collector doing its job, and the reason phase 4 put both new files into its scanned list.
+
+claude's three others, all real:
+
+- **No held-lock test**, unlike all three sibling stores. Added, named for what it exercises (it
+  does not run two processes and must not be read as a concurrency proof) and asserting LOCKED
+  rather than UNREADABLE.
+- **`resolveInterrupted` skipped by raw pid equality**, so a Tower that crashed and restarted with
+  the *same pid* would ask "is 4242 alive?", get `true` because it is now itself, and leave the
+  dead run's record `running` forever — on exactly the restart meant to clean it up. Added a
+  per-process `runId`: same host + same pid + different run means the previous holder is
+  definitively gone. An absent `runId` (a record predating the field) is treated as not-mine,
+  because stranding a record forever is worse than re-reporting a gate.
+- **`#sweep` kept records with an unparseable `settledAt` without saying why.** It is deliberate —
+  an unreadable timestamp says nothing about age, and dropping the record would act on "I could
+  not tell" as "old enough to discard" — and now says so.
+
+opencode's non-blocking note taken too: `markRunning`/`settle` could overwrite a terminal record,
+so a late callback from an abandoned run could rewrite an outcome an operator had already been
+shown. Now refused.
+
+Suite: 7036 passing, 0 failing.

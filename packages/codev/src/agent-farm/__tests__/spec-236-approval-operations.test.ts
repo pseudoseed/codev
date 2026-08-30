@@ -26,6 +26,7 @@ import {
   ApprovalOperationStore,
   isTerminal,
   type ApprovalOperation,
+  type OperationOwner,
 } from '../lib/approval-operations.js';
 
 const roots: string[] = [];
@@ -40,7 +41,7 @@ function scratch(): string {
 const THIS_HOST = { host: 'tower-a', pid: 4242 };
 
 function storeAt(root: string, over: {
-  owner?: { host: string; pid: number };
+  owner?: OperationOwner;
   now?: () => number;
   retentionMs?: number;
   isAlive?: (pid: number) => boolean;
@@ -311,15 +312,42 @@ describe('the resolution pass is scoped, because the store is not keyed by host'
     expect(resolved).toHaveLength(0);
   });
 
+  /*
+   * THE PID-REUSE CASE, which a pid check alone never heals. A Tower crashes and
+   * the restarted Tower is handed the same pid; a pass asking "is 4242 alive?"
+   * gets `true` — because it IS 4242 — and leaves the dead run's record running
+   * forever, on exactly the restart that was supposed to clean it up.
+   */
+  it('resolves a record left by a previous run that had this pid', () => {
+    const root = scratch();
+    const crashed = storeAt(root, {
+      owner: { host: THIS_HOST.host, pid: THIS_HOST.pid, runId: 'run-before-the-crash' },
+    });
+    const theirs = submit(crashed);
+    crashed.markRunning(theirs.operationId);
+
+    // Same host, same pid, different run — and `isAlive` says yes, because that
+    // pid is now US. Only the run id can tell the two apart.
+    const restarted = storeAt(root, {
+      owner: { host: THIS_HOST.host, pid: THIS_HOST.pid, runId: 'run-after-the-restart' },
+      isAlive: () => true,
+    });
+    expect(restarted.resolveInterrupted(() => 'pending')).toHaveLength(1);
+    expect(restarted.describe(theirs.operationId)!.state).toBe('interrupted');
+  });
+
   it('leaves the running process\'s own operations alone', () => {
     const root = scratch();
-    const store = storeAt(root, { isAlive: () => false });
+    // `isAlive` answers NO for everything, so only the run-id check can save
+    // this record — which is the point: asking whether we are alive is silly, and
+    // answering "no" would interrupt work in flight.
+    const store = storeAt(root, {
+      owner: { ...THIS_HOST, runId: 'this-run' },
+      isAlive: () => false,
+    });
     const mine = submit(store);
     store.markRunning(mine.operationId);
 
-    // A record this process itself owns is live by definition — it is running
-    // right now, in this process. Resolving it would interrupt work in flight,
-    // and `isAlive` is deliberately not consulted for it.
     expect(store.resolveInterrupted(() => 'pending')).toHaveLength(0);
     expect(store.describe(mine.operationId)!.state).toBe('running');
   });
@@ -340,6 +368,66 @@ describe('retention', () => {
     submit(store, { projectId: 'c' });
     expect(store.describe(settled.operationId)).toBeNull();
     expect(store.describe(live.operationId)!.state).toBe('submitted');
+  });
+});
+
+describe('a lock timeout is not a corrupt file', () => {
+  /*
+   * NAMED FOR WHAT IT EXERCISES. This does not run two processes, so it is not a
+   * concurrency proof and must not be read as one. It asserts the lock is
+   * genuinely taken, and — the point of this phase's fix — that a contention miss
+   * reports LOCKED rather than UNREADABLE. Those are two remedies: "retry, it
+   * will work" and "go and look at that file". The first cut spelled both as
+   * UNREADABLE, in the store whose whole purpose is keeping such pairs apart.
+   */
+  it('a held lock blocks a submit and says LOCKED, not UNREADABLE', () => {
+    const root = scratch();
+    const store = storeAt(root);
+    submit(store);
+    const lockPath = join(root, 'approval-operations.json.lock');
+    writeFileSync(lockPath, '');
+    try {
+      expect(() => submit(store, { projectId: 'b' }))
+        .toThrow(/APPROVAL_OPERATION_STORE_LOCKED/);
+      expect(() => submit(store, { projectId: 'b' }))
+        .not.toThrow(/UNREADABLE/);
+    } finally {
+      rmSync(lockPath, { force: true });
+    }
+    // Released, and the blocked submit left nothing behind.
+    expect(submit(store, { projectId: 'b' }).state).toBe('submitted');
+  });
+});
+
+describe('a terminal record is final', () => {
+  /*
+   * A late callback from an abandoned run must not rewrite an outcome an operator
+   * has already been shown — that is reporting a second answer to a question that
+   * was already answered.
+   */
+  it.each([
+    ['succeeded', { state: 'succeeded' as const, record: { machine: 'ipad' } }],
+    ['refused', { state: 'refused' as const, code: 'PHASE_CHECKS_FAILED', message: 'x' }],
+    ['failed', { state: 'failed' as const, message: 'x' }],
+  ])('refuses to re-settle a %s operation', (_name, outcome) => {
+    const root = scratch();
+    const store = storeAt(root);
+    const operation = submit(store);
+    store.settle(operation.operationId, outcome);
+    expect(() => store.settle(operation.operationId, { state: 'failed', message: 'later' }))
+      .toThrow(/already settled/);
+    expect(() => store.markRunning(operation.operationId)).toThrow(/already settled/);
+    expect(store.describe(operation.operationId)!.state).toBe(outcome.state);
+  });
+
+  it('refuses to re-run an interrupted operation', () => {
+    const root = scratch();
+    const dying = storeAt(root, { owner: { host: THIS_HOST.host, pid: 999, runId: 'run-dead' } });
+    const operation = submit(dying);
+    dying.markRunning(operation.operationId);
+    const store = storeAt(root, { isAlive: () => false });
+    store.resolveInterrupted(() => 'approved');
+    expect(() => store.markRunning(operation.operationId)).toThrow(/already settled/);
   });
 });
 
