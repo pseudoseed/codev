@@ -290,3 +290,57 @@ finding this PR set out to record: `towerKey` on a production type nobody had
 followed to the browser, a validator guarding only the envelope, and a threat
 model asserting a property its code never had. The pattern is not something that
 happened to earlier phases.
+
+## Slice 6: review round 4
+
+### The one that was my own reporting
+
+`PairingStore.issue()` gaining required arguments broke `phase7-pairing.e2e.test.ts`
+at four call sites. `packages/codev`'s vitest config excludes `**/*.e2e.test.ts`,
+so the 6,813-passing run I quoted **could not reach the file my change broke**. I
+reported it carefully and honestly and it was untrue of CI.
+
+That is this PR's own subject arriving in my own reporting: a measurement taken
+where the thing being measured is not present. Fixed, and the README now carries
+a table of which suite covers what, because I am not the last person who will
+quote a green unit run at this repo.
+
+The Tower integration suite passes: 23 files, 183 tests.
+
+### The document, not just the comments
+
+Round 3 rewrote the comments in three source files and left
+`codev/resources/146-approval-threat-model.md` — the authoritative one — still
+saying the pairing ceremony is the root of trust and that a builder is stopped by
+having no paired session. Correcting the code's prose and leaving the document is
+half a fix, and the half that is left is the half people read.
+
+Rewritten, with the residual test named as the reference, a table separating what
+is enforced from what is not, and a closing line that says what this actually
+buys: provenance, not prevention.
+
+### Two from codex, both real
+
+`approveGate` treated any 200 as confirmation and filled the gaps from local
+state — the timestamp from the browser's clock, the machine from the configured
+label, the session from the one already in hand. An empty body rendered as
+"approved on alpha at &lt;now&gt;, session s1", every word of it manufactured, at
+the one moment the client has no business guessing. An unreadable success is
+UNCONFIRMED now, with its own band: the gate may actually be approved, so calling
+it a refusal sends someone to approve twice.
+
+The backoff reset arrived one wait too late, **and my own test agreed with the
+bug** — `[1, 2, 4, 1, 2]` with a comment describing the fix. The 4 is the penalty
+the two prior failures earned, served out after the reset. A test whose prose
+says one thing and whose expectation encodes another is worse than no test.
+
+### The count so far
+
+Ten blockers across four rounds. Seven were the same shape: a claim that outran
+what had been established. A secret on a production type nobody had followed to
+the browser; a validator guarding only the envelope; a threat model asserting a
+property its code never had; a client inventing the evidence it displayed; a test
+agreeing with the bug it named; and twice, my own reports — "a re-run was clean"
+after one clean run, and a green suite quoted for files it could not see.
+
+The pattern is not something that happened to earlier phases.
