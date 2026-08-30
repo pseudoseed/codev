@@ -44,6 +44,16 @@ different facts, and the collector never gets to make the second claim on the st
 first.
 
 <!-- results:begin -->
+
+| Run | Driver kind | Gate | Criteria | Wall clock |
+|---|---|---|---|---|
+| `claude` / `claude-haiku-4-5` | `claudeAgent` | 3600s | 10/10 met | 3961s end to end |
+| `opencode` / `xai/grok-4.6` | `opencode` | 3600s | 10/10 met | 4004s end to end |
+
+Every criterion above is `met`. The runner records `met`, `not-met` and `undetermined`
+separately and the test accepts only `met`, so a criterion that could not be evaluated cannot
+hide inside this table.
+
 <!-- results:end -->
 
 ## Differences found
