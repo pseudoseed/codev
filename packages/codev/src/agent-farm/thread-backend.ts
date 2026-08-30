@@ -12,6 +12,7 @@
  * never be spelled the same way as a server that was never named.
  */
 import { join, resolve } from 'node:path';
+import { statSync } from 'node:fs';
 import { DispatchJournal } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
 import { createPorchThreadEngine } from './porch-thread-engine.js';
@@ -19,10 +20,12 @@ import {
   canonicalWorkspaceKey,
   installThreadSpawnFactory,
   setThreadEngine,
+  setThreadStreamer,
   tryGetThreadEngine,
+  type ThreadStream,
 } from './thread-runtime.js';
 import { logger } from './utils/logger.js';
-import { loadConfig } from '../lib/config.js';
+import { configLayerPaths, loadConfig } from '../lib/config.js';
 
 /**
  * How long a socket may sit connected-but-not-upgraded before it is called a failure.
@@ -201,6 +204,12 @@ async function connectDispatcher(
   onClosed: () => void,
 ): Promise<{
   dispatcher: { call: (m: string, p: unknown) => Promise<unknown> };
+  /**
+   * The READ side of the same socket, for an observer that never issues a
+   * command. One socket rather than two, because opening a second would spend
+   * the bootstrap token — see `token-refused` below for why that is one-time.
+   */
+  streamer: { stream: (m: string, p: unknown, onValue: (v: unknown) => void) => ThreadStream };
   accessToken: string;
   /**
    * Hang up. Every path that abandons this connection before an engine owns it must
@@ -291,6 +300,39 @@ async function connectDispatcher(
   });
   return {
     dispatcher: { call: (method: string, payload: unknown) => client.call(method, payload) },
+    streamer: {
+      /*
+       * The request id is captured as it is minted so `cancel` can name THIS
+       * stream. `T3Client.cancel` has always been public; `stream` minted its id
+       * privately, so a long-lived subscription had no way to be stopped and the
+       * only interrupt that could fire was the idle timeout's.
+       *
+       * `cancel` is idempotent and safe before the id arrives (it cannot, in
+       * practice — `onRequestId` fires synchronously inside `stream` — but a
+       * guard costs nothing and an ordering assumption written as a guarantee is
+       * how this repository has been bitten before).
+       */
+      stream: (method: string, payload: unknown, onValue: (value: unknown) => void): ThreadStream => {
+        let requestId: number | undefined;
+        let cancelled = false;
+        const done = client.stream(method, payload, (value) => {
+          if (!cancelled) onValue(value);
+        }, undefined, (id) => { requestId = id; });
+        return {
+          done,
+          cancel: () => {
+            if (cancelled) return;
+            cancelled = true;
+            if (requestId === undefined) return;
+            try {
+              client.cancel(requestId);
+            } catch {
+              /* the socket is already gone; there is nothing to interrupt through */
+            }
+          },
+        };
+      },
+    },
     accessToken: access.access_token,
     close: () => {
       try {
@@ -421,6 +463,66 @@ const pendingInit = new Map<string, Promise<'not-configured' | 'already-installe
  */
 const FAILED_CONNECT_COOLDOWN_MS = 60_000;
 
+/**
+ * The last "this workspace has no usable thread config" answer, and what it was
+ * computed from.
+ *
+ * ## Why a cache at all
+ *
+ * Tower sweeps every KNOWN workspace every 5s, and asks this function per
+ * workspace. `ready`, `connecting` and `cooling-down` all answer from memory
+ * before any file is touched — but `not-configured` and `misconfigured` are the
+ * verdicts that require the read, and they are the verdicts of every workspace
+ * that never opted in. So the workspaces that use nothing were paying a full
+ * five-layer `loadConfig` — four reads, four deep merges, the validators — on
+ * Tower's event loop, twelve times a minute each, scaling with how many
+ * workspaces have ever been registered rather than with how many are in use.
+ *
+ * ## Why a signature and not a TTL
+ *
+ * A TTL makes an operator who has just written their t3 config wait it out, and
+ * picking the number trades that wait against the saving. A signature has no such
+ * dial: the moment a layer file changes, appears or disappears, the cached answer
+ * is discarded and the real read happens on that very pass.
+ *
+ * Cost per pass drops to `existsSync` on the project layers plus one `statSync`
+ * each — no reads, no parses, no merges, no validation.
+ *
+ * KNOWN LIMIT, stated rather than papered over: two different contents with the
+ * same size AND the same mtime read as unchanged. Every mtime-based cache carries
+ * this, and the alternative is the read it exists to avoid.
+ */
+interface CachedNegative {
+  readonly verdict: ThreadBackendAvailability;
+  readonly signature: string;
+}
+const negativeConfig = new Map<string, CachedNegative>();
+
+/**
+ * A cheap fingerprint of everything `readThreadBackendConfig` consults.
+ *
+ * The env vars are in it because they are checked FIRST and short-circuit the
+ * files: a token exported into Tower's environment must not be masked by an
+ * answer computed before it existed.
+ */
+function configSignature(workspaceRoot: string): string {
+  const parts = [
+    `env:${process.env.CODEV_T3_URL ?? ''}\u0000${process.env.CODEV_T3_TOKEN ?? ''}`,
+  ];
+  for (const path of configLayerPaths(workspaceRoot)) {
+    const stat = statSync(path, { throwIfNoEntry: false });
+    // The PATH is part of it, so a layer appearing or disappearing changes the
+    // signature even when nothing that already existed was touched.
+    parts.push(`${path}:${stat ? `${stat.mtimeMs}:${stat.size}` : 'absent'}`);
+  }
+  return parts.join('\n');
+}
+
+/** Forget every cached negative verdict. For a test's teardown, not for production. */
+export function clearThreadBackendConfigCache(): void {
+  negativeConfig.clear();
+}
+
 /** When each workspace's last connect attempt failed, and why. */
 const lastFailure = new Map<string, { at: number; message: string }>();
 
@@ -472,15 +574,56 @@ export function requestThreadBackend(
 
   // Read the config synchronously — files, no network — so a workspace with no server
   // named costs the tick nothing and starts nothing.
+  //
+  // Unless nothing it reads has changed since the last negative answer, in which
+  // case the answer is reused and the read is skipped. Only the NEGATIVE verdicts
+  // are cached: `connecting` below has a side effect, and `ready` /
+  // `cooling-down` never reach here.
+  /*
+   * INSIDE THE TRY, AND THAT IS THE WHOLE POINT OF THIS FUNCTION.
+   *
+   * `requestThreadBackend` is documented and relied on as NEVER THROWING — it is
+   * the synchronous, always-answers contract Tower's drain tick is built on. The
+   * first version of this cache computed the signature above the try, and
+   * `configLayerPaths` reaches `resolveProjectConfigPath`, which throws on a
+   * legacy `af-config.json`. The caller that catches leaves the workspace at
+   * `connecting` forever and the caller that does not catch takes the throw: an
+   * "I could not tell" rendered as a state, with no error anywhere.
+   *
+   * A signature that cannot be computed is a reason to READ, never a reason to
+   * throw — so it degrades to an uncacheable answer and the read below decides.
+   */
+  let signature: string | null;
+  try {
+    signature = configSignature(workspaceRoot);
+  } catch {
+    signature = null;
+  }
+  if (signature !== null) {
+    const remembered = negativeConfig.get(key);
+    if (remembered && remembered.signature === signature) return remembered.verdict;
+  }
+
+  /** Cache only when the signature is known; otherwise nothing could invalidate it. */
+  const remember = (verdict: ThreadBackendAvailability): ThreadBackendAvailability => {
+    if (signature !== null) negativeConfig.set(key, { verdict, signature });
+    return verdict;
+  };
+
   let config;
   try {
     config = readThreadBackendConfig(resolve(workspaceRoot));
   } catch (err) {
     // Half-configured is a mistake, not a decision to stay on PTY, and it is not a
     // connect failure either — no cooldown, because nothing was attempted.
-    return { kind: 'misconfigured', message: err instanceof Error ? err.message : String(err) };
+    return remember({
+      kind: 'misconfigured', message: err instanceof Error ? err.message : String(err),
+    });
   }
-  if (!config) return { kind: 'not-configured' };
+  if (!config) return remember({ kind: 'not-configured' });
+  // Configured after all: drop any negative so a later failure is recomputed
+  // rather than answered from a verdict this pass just disproved.
+  negativeConfig.delete(key);
 
   void ensureThreadBackendReady(workspaceRoot).then(
     () => {
@@ -499,6 +642,7 @@ export function requestThreadBackend(
 /** Forget every recorded connect failure. For a test's teardown, not for production. */
 export function clearThreadBackendFailures(): void {
   lastFailure.clear();
+  negativeConfig.clear();
 }
 
 async function initialiseThreadBackend(
@@ -544,6 +688,10 @@ async function initialiseThreadBackend(
       closed = true;
       if (registered !== undefined && tryGetThreadEngine(key) === registered) {
         setThreadEngine(undefined, key);
+        // Same socket, same eviction. Guarded by the ENGINE's identity rather
+        // than the streamer's for the same reason the engine is: a close
+        // arriving late must not drop what a later reconnect installed.
+        setThreadStreamer(undefined, key);
       }
     });
   } catch (err) {
@@ -580,7 +728,7 @@ async function initialiseThreadBackend(
 
   const { createProject } = await import('@cluesmith/porch-driver/thread');
   const journal = new DispatchJournal(join(config.workspaceRoot, '.codev', 'commands.jsonl'));
-  const { dispatcher, accessToken } = connection;
+  const { dispatcher, streamer, accessToken } = connection;
 
   /**
    * Nothing owns this socket until an engine is registered on it.
@@ -657,11 +805,16 @@ async function initialiseThreadBackend(
     defaultModel: config.defaultModel,
   });
   setThreadEngine(registered, key);
+  // Registered WITH the engine and evicted WITH it, because they are one socket:
+  // a streamer outliving its engine would hand an observer a connection nothing
+  // is keeping alive, and it would report "watching" while reading a dead wire.
+  setThreadStreamer(streamer, key);
   // And after, because the close could have landed between the check above and this
   // write. The handler evicts when it can see `registered`; this covers the case where
   // it could not. Both are cheap, and only one of them has to be right.
   if (closed) {
     setThreadEngine(undefined, key);
+    setThreadStreamer(undefined, key);
     registered = undefined;
     abandonConnection();
     throw closedDuringInit(config.serverUrl, config.workspaceRoot);

@@ -38,8 +38,14 @@ pnpm dev
 ```
 
 `pair-dev.mjs` mints a pairing token, redeems it for a **real** machine
-credential, and appends the machine to `.dev-machines.json`. Revoke it with
-`DELETE /api/agent/v1/machines/<name>`.
+credential, and appends the machine to `.dev-machines.json`.
+
+**Revoke it with `afx pair revoke <name>`.** This used to say
+`DELETE /api/agent/v1/machines/<name>`, which is the instruction that does not
+work: that route is `human-session`, `human-session` includes
+`machine-credential`, and so revoking required already holding the credential you
+were trying to withdraw. `afx pair revoke` writes the store directly, needs no
+session, and works with Tower stopped.
 
 ## `.dev-machines.json`
 
@@ -162,8 +168,14 @@ away. The page carries per-machine credentials instead.
 
 `~/.agent-farm/client-machines.json` (or `$CODEV_AGENT_FARM_DIR/client-machines.json`),
 **mode 0600**, the same array shape as `.dev-machines.json` above. Tower does not
-create it and does not mint the credentials in it; an `afx pair` command for that
-does not exist yet and is tracked separately.
+create it and does not mint the credentials in it.
+
+**`afx pair issue` is how a machine gets one** — `--purpose machine-credential`
+for a device, `--purpose client-session` for the session that an approval costs.
+`afx pair list` shows what is outstanding and `afx pair revoke <machine>`
+withdraws it. This paragraph said the command "does not exist yet and is tracked
+separately"; spec 236 shipped it, and the sentence outlived the fact by one
+release.
 
 **`origin` must be `https://` for anything that is not loopback.** A remote
 `http://` entry would send that machine's credential in the clear, so the proxy
@@ -267,34 +279,46 @@ because approving removes the gate and unmounts the panel holding the message.
 
 Open it and look at it before calling a change to this app done.
 
-## Known gap: approving a gate whose phase has checks
+## Approving a gate whose phase has checks
 
-The client can approve a gate **only when the phase's checks are disabled or
-absent.** With checks enabled — which is every real project — the route answers
-`PHASE_CHECKS_REQUIRED` and names them, and the operator approves from the CLI.
+**The client approves a gate on an ordinary project** — one whose phase declares
+checks, which is every real one. Spec 236 closed what phase 11 recorded here as a
+gap.
 
-Not an oversight and not fixable with a timeout. Approving runs porch's phase
-checks, which for an AIR `implement` phase are the repository's build and test
-suite: minutes of work on an open HTTP request. A client that gives up does not
-stop porch, so a timeout would abandon a call that goes on to approve the gate
-anyway — reporting one outcome while another happened, which is the defect this
-whole client is built against. Refusing before starting is bounded by
-construction and says what is needed.
+The obstacle was never a missing feature. Approving runs porch's phase checks,
+which for an AIR `implement` phase are the repository's build and test suite:
+minutes of work. On an open HTTP request that is unbounded, so the synchronous
+route refuses with `PHASE_CHECKS_REQUIRED` and names them — **and it still does**,
+for any caller that has not opted into the other path.
 
-The durable fix is an asynchronous approval — submit, poll, report — and it
-belongs with phase 12's static mount rather than here.
+**A timeout was never the alternative.** A client that gives up does not stop
+porch, so it would abandon a call that goes on to approve the gate anyway,
+reporting one outcome while another happened. So the approval outlives its
+request instead: submit, poll, report.
 
-Spec 146 criterion 9b is therefore **unmet**, and deliberately not narrowed. The
-approval works end to end — session id, machine, authority and timestamp land in
-`status.yaml` — but only where the phase's checks do not run, and no real project
-is like that. The spec and the phase plan are human-approved and this app's
-documentation does not get to redefine one of their acceptance criteria; a
-criterion quietly rewritten to match what was built is the thing this phase is
-about.
+- `POST .../gates/approvals` answers **202** with an operation id. The gate is not
+  approved at that moment, and 202 rather than 200 is how the client knows.
+- `GET .../gates/approvals/<id>` reports one of six states. The panel shows the
+  server's own phase and check names while it runs, because "Approving…" for four
+  minutes is indistinguishable from stuck.
+- The terminal report carries **what porch persisted** — never a value the client
+  or the route composed. An already-approved gate reports the approval that
+  exists, including when it is somebody else's.
 
-**Owner: phase 12**, with the asynchronous approval and the static mount. Both
-branches are tested here — `two-machines.spec.ts` covers the approval and the
-refusal — so the gap is measured rather than assumed.
+**Three outcomes are not refusals**, and the client renders each as unknown
+rather than as "not approved": an interruption (this host stopped; the gate may
+be approved, and the server has read `status.yaml` to say which), a poll or
+submit that could not complete (this client stopping does not stop porch), and a
+success the client cannot parse. Reporting any of them as a refusal would send a
+human to approve a gate that may already be approved.
+
+A host that wires no operation store answers **501**, and the client falls back
+to the synchronous route — so a host running an older build still approves
+everything it ever could.
+
+Spec 146 criterion 9b is **met**. `two-machines.spec.ts` drives both halves
+against the same kind of project: the synchronous route refuses it, and the
+client approves it.
 
 ## What a paired session proves
 
@@ -315,15 +339,59 @@ sees the claim an approval was made under rather than a verification nobody
 performed. Tokens are also bound to one ceremony, so a token minted to pair a
 device cannot open a session.
 
-## Known gap: session state
+## Session state
 
-`t3codeSnapshot` is not wired in `tower-server.ts`, so every snapshot from a real
-Tower carries `t3code: 'not-provided'` and no row can report **working**,
-**turning** or **settled**. Blocked rows work, because gates come from porch. The
-client states this once per machine rather than inventing a status, and
-`spec-146-phase-11-production-wiring.test.ts` asserts it, so the gap stays
-recorded. Spec 146 criterion 3 is **unmet** for that reason.
+`tower-server.ts` wires a `t3codeSnapshot` provider (spec 236). The obstacle that
+kept it unwired was real — the provider is synchronous and a t3 connection is not
+— and it is resolved by splitting the halves: a background maintainer owns the
+connect, the per-thread `orchestration.subscribeThread` subscriptions and the
+`global.db` rescan, and the synchronous reader returns what it last wrote plus
+how old that is. The read path performs no I/O.
 
-The obstacle is real: `t3codeSnapshot` is synchronous, a t3 connection is not, so
-a provider needs a cached background subscription plus per-workspace t3 config
-Tower does not hold. That is phase 10 or 12 work.
+**What a row can now say, and what it still cannot.**
+
+`t3code` carries eight statuses rather than three. Tower's provider emits **six**
+of them. The two it does not are excluded for different reasons: `unreachable` is
+reserved for a producer that genuinely observes one (this connector's union has no
+such state, so a failed connect is `cooling-down`), and `not-provided` is what a
+host wiring *no* provider reports — this one is the provider.
+
+This paragraph said "seven" while the test pinning it listed six; the count was
+not recomputed when the second exclusion was found.
+
+| Status | Means |
+|---|---|
+| `not-configured` | this workspace names no t3code server |
+| `misconfigured` | the `threads` block is half-written; carries which part |
+| `connecting` | a connect or a subscription is in flight and will resolve itself |
+| `cooling-down` | the last connect failed; carries when and why, and it will not retry until a timer passes |
+| `available` | observed — including "connected, and there is nothing here to watch" |
+| `stale` | observed, and no longer being watched; carries the age |
+
+The eighth, `unreachable`, is **not** produced by Tower: a failed connect becomes
+`cooling-down`, which says more. It stays in the vocabulary for a host that
+observes unreachability another way — `tools/codev-agent-host` wires no provider
+at all and reports `not-provided`, which is the ninth thing this set can say and
+the one that used to be the only thing.
+
+`connecting` and `cooling-down` are deliberately not folded into one another: the
+first resolves on its own and the second will not until a timer passes, which is
+the difference between "wait" and "go look at your server".
+
+`stale` carries an age, and a row whose last-known content read as finished
+reports the age instead of `SETTLED` — "it had finished when I last looked" is
+not "it has finished".
+
+Per row, session status and thread settledness travel separately, because t3code
+keeps them apart: a `stopped` session on a settled thread finished, and on an
+unsettled one it did not. The client maps every value in the contract's enum,
+adds `STOPPED` and `ERROR` so a crashed or torn-down session is never rendered as
+`SETTLED`, and still reports `UNKNOWN` naming any value it does not recognise.
+
+**The bound that remains, stated because criterion 3 is easy to over-read.** A
+row with no `thread_id` has no session to observe, and every architect and builder
+row in `global.db` is terminal-backed today. Those rows report *this row has no
+t3code thread* — which is a third answer, distinct from "not provided" and from
+"t3code returned nothing for this thread". Being able to tell the three apart is
+what was actually missing; a `WORKING` stamp on a row with nothing running would
+have been the older failure wearing a newer word.

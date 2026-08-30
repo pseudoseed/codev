@@ -17,6 +17,8 @@ import { machineHeaders, type MachineConfig } from '../connection/machine.js';
 
 export const HUMAN_SESSION_HEADER = 'x-codev-human-session';
 export const PAIRING_TOKEN_HEADER = 'x-codev-pairing-token';
+/** The approval receipt. A header, not a query parameter: URLs are logged. */
+export const APPROVAL_RECEIPT_HEADER = 'x-codev-approval-receipt';
 
 export interface HumanSession {
   readonly sessionId: string;
@@ -179,6 +181,15 @@ export async function approveGate(
   config: MachineConfig,
   session: HumanSession,
   gate: { readonly projectId: string; readonly gateName: string },
+  /**
+   * Called with what the server says while the work runs.
+   *
+   * OPTIONAL BUT NOT DECORATIVE. Phase checks take minutes, and a button that
+   * says "Approving…" for four minutes with nothing behind it is indistinguishable
+   * from one that is stuck. What is reported is the server's own phase and check
+   * names, never a guess made here.
+   */
+  onProgress?: (progress: ApprovalProgress) => void,
 ): Promise<ApprovalOutcome> {
   const authed = { ...machineHeaders(config), [HUMAN_SESSION_HEADER]: session.presentation };
 
@@ -202,6 +213,78 @@ export async function approveGate(
   }
 
   const workspace = encodeURIComponent(encodeWorkspace(config.workspacePath));
+
+  /*
+   * THE ASYNCHRONOUS ROUTE FIRST, because it is the only one that works on an
+   * ordinary project.
+   *
+   * The synchronous route refuses any project whose phase declares checks — an
+   * HTTP request will not hold a connection open for a repository's test suite —
+   * so before this existed a human reaching a gate in this client was sent to the
+   * CLI. The submit returns at once and the work is polled.
+   *
+   * A HOST THAT DOES NOT OFFER IT ANSWERS 501, and then the synchronous route is
+   * used. Falling back is right rather than merely kind: the older path still
+   * approves everything it ever could, so a host that has not been upgraded loses
+   * nothing it had. Nothing in this repository wires such a host any more — the
+   * agent-host tool gained an operation store in the same change — so this is for
+   * a host running an older build, which is exactly when a client must not assume.
+   */
+  /*
+   * A SUBMIT THAT NEVER COMPLETED IS NOT A REFUSAL EITHER.
+   *
+   * The poll learned this rule; the submit had not. A thrown `fetch` here
+   * reached the panel's own catch, which carries no `unconfirmed`, so a request
+   * that may well have reached the server and started an approval rendered as
+   * "not approved" — the same defect as the poll's, one call earlier.
+   *
+   * There is no way to know from here whether the server received it, and that
+   * is precisely what `unconfirmed` is for.
+   */
+  let submitted: Json;
+  try {
+    submitted = await send(fetchImpl, api(config, `/workspaces/${workspace}/gates/approvals`), authed, {
+      projectId: gate.projectId,
+      gateName: gate.gateName,
+      capability,
+      nonce,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'GATE_APPROVAL_UNCONFIRMED',
+      message:
+        `the request to approve ${gate.gateName} did not complete (${(error as Error).message}), so `
+        + 'whether this host received it is unknown. It may already be running — check before '
+        + 'approving again.',
+    };
+  }
+  /*
+   * WHAT AN OLDER HOST ACTUALLY ANSWERS, not what this code wished it answered.
+   *
+   * The fallback triggered on 501 alone, and the comment above promised
+   * compatibility with a host running an older build. A host running an older
+   * build has no such route at all: its dispatcher answers **404
+   * AGENT_ROUTE_NOT_FOUND**. 501 is what a CURRENT host says when it recognises
+   * the route and wires no operation store — a real case, and not the one the
+   * comment described.
+   *
+   * So an upgraded client lost gate approval entirely against an older Tower,
+   * while the fixture that was supposed to prove otherwise labelled its 501 "an
+   * older host". The test agreed with the code, which is why it passed.
+   *
+   * NARROW ON THE SIGNAL, NOT ON THE STATUS. Other 404s from this route are real
+   * answers — an unknown workspace, a workspace this host does not serve — and
+   * treating those as "no async route here" would silently run the synchronous
+   * path against a host that would have refused the request outright.
+   */
+  const unrouted = submitted.status === 404
+    && text(submitted.body, 'signal') === 'AGENT_ROUTE_NOT_FOUND';
+  if (submitted.status !== 501 && !unrouted) {
+    return await pollApproval(fetchImpl, config, authed, workspace, submitted, gate, onProgress);
+  }
+
   const approved = await send(fetchImpl, api(config, `/workspaces/${workspace}/gates/approve`), authed, {
     projectId: gate.projectId,
     gateName: gate.gateName,
@@ -263,6 +346,424 @@ export async function approveGate(
     ...(alreadyApproved ? { alreadyApproved: true } : {}),
     ...(authority ? { authority } : {}),
     ...(delivery ? { delivery, ...(deliveryMessage ? { deliveryMessage } : {}) } : {}),
+  };
+}
+
+/** What the server says while an approval runs. Never invented by this client. */
+export interface ApprovalProgress {
+  readonly state: 'submitted' | 'running';
+  readonly operationId: string;
+  /** The phase the server says it is running in, when it has said. */
+  readonly phase?: string;
+  /** The check names the server says it will run. */
+  readonly checks?: readonly string[];
+}
+
+/**
+ * How long between polls, and how long before this client stops waiting.
+ *
+ * FLAT, NOT BACKED OFF, AND THAT IS A REAL COST. A gate that runs the full 30
+ * minutes is 1,800 requests, each of which reads and parses an operations file
+ * holding up to 24 hours of records. Backing off would cut that by an order of
+ * magnitude at the price of a settled approval sitting unnoticed for however
+ * long the current interval had grown to.
+ *
+ * Kept flat here because a human is watching this panel and the delay they see
+ * is the product: an approval that finished 45 seconds ago and still says
+ * "running" is the spinner this whole phase exists to remove. The cost is one
+ * client, on one host, for the duration of one approval.
+ *
+ * If it ever needs to change, the right shape is a bound — back off to a ceiling
+ * of a few seconds rather than growing without limit, so the worst case a human
+ * sees stays small.
+ */
+const POLL_INTERVAL_MS = 1_000;
+const POLL_LIMIT_MS = 30 * 60_000;
+
+const TERMINAL_STATES = new Set(['succeeded', 'refused', 'failed', 'interrupted']);
+
+/**
+ * Follow one submitted approval to its end.
+ *
+ * ## Why giving up is reported as UNCONFIRMED, never as a refusal
+ *
+ * This client stopping does not stop porch. If it gives up waiting, the approval
+ * is still running and may well succeed — so reporting "not approved" would be
+ * the very failure the asynchronous path exists to prevent, reintroduced in the
+ * client. The bound exists so a tab does not poll forever; what it produces is
+ * "I could not tell", with the operation id to look up.
+ */
+async function pollApproval(
+  fetchImpl: typeof globalThis.fetch,
+  config: MachineConfig,
+  authed: Record<string, string>,
+  workspace: string,
+  submitted: Json,
+  gate: { readonly projectId: string; readonly gateName: string },
+  onProgress?: (progress: ApprovalProgress) => void,
+): Promise<ApprovalOutcome> {
+  /*
+   * A 5xx ON THE SUBMIT MAY HAVE CREATED THE OPERATION.
+   *
+   * `handleApprovalSubmit` writes the record BEFORE it writes the 202, so a
+   * server error after that point leaves an approval running and answers with a
+   * failure. Reporting a refusal there is the same wrong verdict as the thrown
+   * `fetch` beside it — which was fixed last round while this sibling was not.
+   *
+   * A 4xx is a definite answer about the request itself (malformed, unknown
+   * workspace, wrong session, already in flight) and stays a refusal.
+   */
+  if (submitted.status >= 500) {
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'GATE_APPROVAL_UNCONFIRMED',
+      message:
+        `this host answered ${submitted.status} to the request to approve ${gate.gateName}. The `
+        + 'operation is recorded before the response is written, so it may be running — check '
+        + 'before approving again.',
+    };
+  }
+  if (submitted.status === 409) {
+    /*
+     * A CONFLICT IS NOT A REFUSAL OF THIS GATE, AND THIS USED TO SAY IT WAS.
+     *
+     * The already-in-flight code means an approval for this project is RUNNING.
+     * It may
+     * be about to succeed. Rendering it as a refusal — the same red the panel
+     * gives a genuinely refused approval — told the operator their gate was
+     * refused about one that was still deciding, on the single action this
+     * client exists to perform.
+     *
+     * The submitter's own retry no longer reaches here at all: the host answers
+     * 202 and resumes it. What is left is a conflict raised against SOMEONE
+     * ELSE's run, which this client cannot poll and must not claim to know the
+     * outcome of. That is `unconfirmed` — the band already built for exactly
+     * this, and the message names the operation so the human can look.
+     */
+    const running = text(submitted.body, 'operationId');
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'APPROVAL_ALREADY_IN_FLIGHT',
+      message:
+        `an approval for this project is already running${running ? ` as operation ${running}` : ''}`
+        + ', started by another session. This gate may be approved by that run, so nothing here '
+        + 'says it was not — wait for it, and check the gate before submitting again.',
+    };
+  }
+  const operationId = text(submitted.body, 'operationId');
+  if (submitted.status !== 202 || !operationId) {
+    return refusal(submitted, 'the server did not accept the approval');
+  }
+
+  /*
+   * THE RECEIPT IS CARRIED ON EVERY POLL, and it is what makes an interrupted
+   * approval readable at all.
+   *
+   * Human sessions live in the host's memory, so the restart that resolves an
+   * operation to `interrupted` destroys the session that submitted it. A poll
+   * authorised on session identity alone would 403 forever on exactly the record
+   * that state exists to deliver. The receipt, presented from the same machine,
+   * is the second way in — so this client keeps polling across a host restart
+   * instead of losing the answer it was waiting for.
+   */
+  /*
+   * A 202 WITHOUT A RECEIPT IS NOT A DURABLE OPERATION.
+   *
+   * The receipt is what makes an interrupted approval readable after the restart
+   * that destroys the submitting session — the durable path built over rounds 2
+   * and 3. Accepting a 202 without one and polling on the memory-backed session
+   * alone silently gives that up: it works right up until the host restarts,
+   * which is the one case the receipt exists for.
+   *
+   * The contract always returns one, so its absence is not an older host being
+   * accommodated — it is something wrong with this answer. Unconfirmed, because
+   * the operation may well be running; what cannot be trusted is this client's
+   * ability to follow it.
+   */
+  const receipt = text(submitted.body, 'receipt');
+  if (!receipt) {
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'GATE_APPROVAL_UNCONFIRMED',
+      message:
+        `this host accepted approval ${operationId} without a receipt, so this client cannot `
+        + 'read the outcome if the host restarts. The approval may be running; check the gate '
+        + 'rather than submitting again.',
+    };
+  }
+  /*
+   * IN A HEADER, NEVER IN THE URL. It is a bearer secret, and a URL is copied by
+   * things that were not asked: Tower logs `req.url` during the boot window and
+   * on every authentication failure — which is precisely when a client polling
+   * across a restart arrives — and reverse proxies log query strings as a matter
+   * of course. `agent-auth.ts` had already written this rule down for the pairing
+   * token; the first draft of this line crossed it.
+   */
+  const polling = { ...authed, [APPROVAL_RECEIPT_HEADER]: receipt };
+
+  /*
+   * THE OPERATION MUST BE THIS GATE'S, AND THE CLIENT CHECKS RATHER THAN ASSUMES.
+   *
+   * The host may hand back an operation it already had running — that is the
+   * recovery for a lost 202. Single-flight is PROJECT-wide, so "an operation for
+   * this project" is not the same claim as "an operation for this gate", and a
+   * host that got that wrong would have this client report GATE B APPROVED from
+   * gate A's record: a false thing reported as true, attributed to the wrong
+   * object, on the approval path.
+   *
+   * The server now restricts recovery to the same workspace, project and gate.
+   * This check is not redundant with it: it is the half that does not depend on
+   * the other half being right, and the outcome of an approval is not a place to
+   * trust a single implementation.
+   */
+  /*
+   * REQUIRED AND EQUAL, NOT "EQUAL IF PRESENT".
+   *
+   * The first version of this checked `if (project && project !== …)`, so a body
+   * that OMITTED the fields passed — and a body that says nothing about which
+   * gate it describes is precisely the body that must not settle one. Treating
+   * absent as matching is this project's own defect inverted: an "I could not
+   * tell" acted on as agreement.
+   *
+   * Requiring them is safe against every host that can produce a 202 here. A host
+   * predating this route answers 404 and the synchronous path is taken; a current
+   * host with no operation store answers 501 and the same. So any 202 reaching
+   * this point comes from a host whose contract always names the project and the
+   * gate — and if one does not, that is the anomaly worth stopping on.
+   *
+   * ABSENT AND DIFFERENT GET DIFFERENT WORDS, because they send a reader to
+   * different places: one is a host that did not say, the other is a host that
+   * said something else.
+   */
+  const identityMismatch = (body: Record<string, unknown>): string | null => {
+    const project = text(body, 'projectId');
+    const named = text(body, 'gateName');
+    if (!project) return `no project id, so it cannot be shown to describe ${gate.projectId}`;
+    if (project !== gate.projectId) return `project ${project} rather than ${gate.projectId}`;
+    if (!named) return `no gate name, so it cannot be shown to describe ${gate.gateName}`;
+    if (named !== gate.gateName) return `gate ${named} rather than ${gate.gateName}`;
+    return null;
+  };
+  const submittedMismatch = identityMismatch(submitted.body);
+  if (submittedMismatch) {
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'GATE_APPROVAL_UNCONFIRMED',
+      message:
+        `this host answered the request to approve ${gate.gateName} with an operation for `
+        + `${submittedMismatch}. Nothing here says whether ${gate.gateName} was approved; it was `
+        + 'not reported as approved on the strength of another gate\'s record.',
+    };
+  }
+
+  const url = api(config, `/workspaces/${workspace}/gates/approvals/${encodeURIComponent(operationId)}`);
+  const deadline = Date.now() + POLL_LIMIT_MS;
+  while (Date.now() < deadline) {
+    /*
+     * A POLL THAT CANNOT READ THE STATE SAYS NOTHING ABOUT THE APPROVAL.
+     *
+     * This mapped every non-200 — and a thrown `fetch` — onto a plain refusal,
+     * which the panel renders identically to `state: 'failed'`. So a 503, which
+     * is the server's own "the operation store could not be read", told a human
+     * their gate was NOT approved. The server took care to distinguish unreadable
+     * from unknown and the client collapsed the two back together.
+     *
+     * The timeout below already knows the rule — this client stopping does not
+     * stop porch — and a transport failure is the same case arriving sooner. So
+     * these are retried until the deadline and then reported as unconfirmed,
+     * never as a refusal.
+     */
+    let polled: Json;
+    try {
+      const response = await fetchImpl(url, { headers: polling });
+      let parsed: unknown;
+      try {
+        parsed = await response.json();
+      } catch {
+        parsed = {};
+      }
+      polled = {
+        status: response.status,
+        body: (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>,
+      };
+    } catch {
+      // The request never completed. Nothing has been learned about the gate.
+      await new Promise((wait) => setTimeout(wait, POLL_INTERVAL_MS));
+      continue;
+    }
+
+    /*
+     * TWO DEFINITE ANSWERS, and only two. 403 says this session may not read this
+     * operation; 401 says the session is gone — expired, idled out or revoked.
+     * Neither changes by retrying, and the 401 matters more than it looks: the
+     * synchronous path already treats it as `sessionEnded`, so retrying it here
+     * for thirty minutes and then reporting a bare `unconfirmed` left the dead
+     * session in place and the human with an Approve button they could only
+     * escape by reloading. The two paths must agree about what a 401 means.
+     *
+     * Every other failure is "I could not read it", which is not a verdict on
+     * the gate.
+     */
+    if (polled.status === 403 || polled.status === 401) {
+      return refusal(polled, 'this session can no longer read that approval');
+    }
+    /*
+     * 404 IS DEFINITE TOO, and re-asking cannot change it: this host does not
+     * know the operation it accepted a moment ago. Spinning to the deadline over
+     * that left the progress line on screen for thirty minutes for an answer
+     * already given.
+     *
+     * Reported as UNCONFIRMED rather than refused, because the two facts are
+     * both true and neither is a verdict on the gate: it WAS accepted, and the
+     * host no longer knows it.
+     */
+    if (polled.status === 404) {
+      return {
+        ok: false,
+        unconfirmed: true,
+        signal: 'GATE_APPROVAL_UNCONFIRMED',
+        message:
+          `this host accepted approval ${operationId} and now does not know it. Whether the gate `
+          + 'was approved is unknown; check before approving again.',
+      };
+    }
+    if (polled.status !== 200) {
+      await new Promise((wait) => setTimeout(wait, POLL_INTERVAL_MS));
+      continue;
+    }
+
+    /*
+     * AND AGAIN ON EVERY POLL, because the record read is the one reported. A
+     * body naming another gate cannot settle this one, in either direction.
+     */
+    const polledMismatch = identityMismatch(polled.body);
+    if (polledMismatch) {
+      return {
+        ok: false,
+        unconfirmed: true,
+        signal: 'GATE_APPROVAL_UNCONFIRMED',
+        message:
+          `operation ${operationId} describes ${polledMismatch}, so it cannot say whether `
+          + `${gate.gateName} was approved. Check the gate rather than treating this as an answer.`,
+      };
+    }
+
+    const state = text(polled.body, 'state');
+    if (state && TERMINAL_STATES.has(state)) return terminalOutcome(polled, state, gate);
+    if (state === 'submitted' || state === 'running') {
+      onProgress?.({
+        state,
+        operationId,
+        ...(text(polled.body, 'phase') ? { phase: text(polled.body, 'phase') } : {}),
+        ...(Array.isArray(polled.body.checks)
+          ? { checks: (polled.body.checks as unknown[]).filter((c): c is string => typeof c === 'string') }
+          : {}),
+      });
+    } else {
+      // A state this build does not know is not a reason to claim an outcome.
+      return {
+        ok: false,
+        unconfirmed: true,
+        signal: 'GATE_APPROVAL_UNCONFIRMED',
+        message:
+          `the server reported approval state "${String(state)}", which this client does not `
+          + `recognise. Look up operation ${operationId} before approving again.`,
+      };
+    }
+    await new Promise((wait) => setTimeout(wait, POLL_INTERVAL_MS));
+  }
+
+  return {
+    ok: false,
+    unconfirmed: true,
+    signal: 'GATE_APPROVAL_UNCONFIRMED',
+    message:
+      `this client stopped waiting after ${Math.round(POLL_LIMIT_MS / 60_000)} minutes, but that `
+      + `does not stop the approval — operation ${operationId} may still be running or may have `
+      + 'succeeded. Look it up before approving again.',
+  };
+}
+
+/** Turn a settled operation into the outcome a human reads. */
+function terminalOutcome(
+  polled: Json,
+  state: string,
+  gate: { readonly projectId: string; readonly gateName: string },
+): ApprovalOutcome {
+  if (state === 'refused') {
+    return {
+      ok: false,
+      signal: text(polled.body, 'code') ?? 'GATE_APPROVAL_REFUSED',
+      message: text(polled.body, 'message') ?? `${gate.gateName} was not approved`,
+      sessionEnded: false,
+    };
+  }
+  if (state === 'failed') {
+    return {
+      ok: false,
+      signal: 'GATE_APPROVAL_FAILED',
+      message: text(polled.body, 'message') ?? 'the approval failed and the server gave no reason',
+      sessionEnded: false,
+    };
+  }
+  if (state === 'interrupted') {
+    /*
+     * NOT A FAILURE. The host stopped while the work ran, and the gate may well
+     * be approved — the server has read `status.yaml` and its message says which
+     * it found. Reporting this as "not approved" would send a human to approve
+     * something already approved, which is the whole reason this state exists.
+     */
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'APPROVAL_OPERATION_INTERRUPTED',
+      message: text(polled.body, 'message')
+        ?? 'the host stopped while this approval was running; check status.yaml before retrying',
+    };
+  }
+
+  const record = polled.body.record;
+  const fields = (record && typeof record === 'object' ? record : {}) as Record<string, unknown>;
+  const approvedAt = typeof fields.approvedAt === 'string' ? fields.approvedAt : undefined;
+  const machine = typeof fields.machine === 'string' ? fields.machine : undefined;
+  if (!approvedAt || !machine) {
+    // The same rule as the synchronous path: a success this client cannot read
+    // is UNCONFIRMED, never a refusal, because the gate may be approved.
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'GATE_APPROVAL_UNCONFIRMED',
+      message:
+        'the server reported the approval succeeded but not with a result this client can read, '
+        + 'so whether the gate was approved is unknown. Check status.yaml before approving again.',
+    };
+  }
+
+  const rawDelivery = typeof fields.delivery === 'string' ? fields.delivery : undefined;
+  const delivery = rawDelivery === 'written-not-committed'
+    || rawDelivery === 'committed-not-pushed'
+    || rawDelivery === 'unknown'
+    ? rawDelivery
+    : undefined;
+  return {
+    ok: true,
+    approvedAt,
+    machine,
+    sessionId: typeof fields.sessionId === 'string' ? fields.sessionId : null,
+    ...(fields.outcome === 'already-approved' ? { alreadyApproved: true } : {}),
+    ...(typeof fields.authority === 'string' ? { authority: fields.authority } : {}),
+    ...(delivery
+      ? {
+        delivery,
+        ...(typeof fields.deliveryMessage === 'string'
+          ? { deliveryMessage: fields.deliveryMessage }
+          : {}),
+      }
+      : {}),
   };
 }
 

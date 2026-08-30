@@ -16,11 +16,65 @@ export interface GateActionResult {
   readonly message: string;
 }
 
+/**
+ * What the server says while an approval runs. Never composed here.
+ *
+ * A button that says "Approving…" for four minutes with nothing behind it is
+ * indistinguishable from one that is stuck — and phase checks take minutes, which
+ * is the entire reason the approval outlives its request. So the panel shows the
+ * server's own phase and check names, or it shows that it has not been told yet.
+ */
+export interface GateProgress {
+  readonly state: 'submitted' | 'running';
+  readonly operationId: string;
+  readonly phase?: string;
+  readonly checks?: readonly string[];
+}
+
 export interface GateApprovalHandle {
   /** Null until a session is open on this machine. */
   readonly session: { readonly sessionId: string } | null;
   readonly openSession: (pairingToken: string) => Promise<GateActionResult>;
-  readonly approve: (gate: { projectId: string; gateName: string }) => Promise<GateActionResult>;
+  readonly approve: (
+    gate: { projectId: string; gateName: string },
+    onProgress?: (progress: GateProgress) => void,
+  ) => Promise<GateActionResult>;
+}
+
+/**
+ * What a waiting human is told, from what the server has actually said.
+ *
+ * The phases of this are FOUR different facts and they are not merged: nothing
+ * has been submitted yet; the submit has been accepted and nothing has started;
+ * the work is running and the server has not yet named what; the work is running
+ * and these are the checks. A single "Approving…" for all four is the spinner
+ * this phase exists to stop.
+ *
+ * ## The first one used to claim the second
+ *
+ * `null` means `onProgress` has not fired, and it fires only once the host has
+ * answered 202. So `null` is the window in which the capability is being issued,
+ * the nonce minted and the POST sent — none of which has necessarily happened,
+ * and any of which may be hanging. It read "Submitted. Waiting for the server to
+ * start the work.", which tells the human a thing happened that has not, on the
+ * one action this panel exists to perform.
+ */
+function progressWords(progress: GateProgress | null): string {
+  if (!progress) {
+    return 'Requesting authorization and submitting. Nothing has been accepted yet — '
+      + 'if it stops here, the approval was not started.';
+  }
+  if (progress.state === 'submitted') {
+    return `Accepted as operation ${progress.operationId}. Not started yet.`;
+  }
+  if (progress.checks && progress.checks.length > 0) {
+    return `Running the ${progress.phase ?? 'current'} phase checks: ${progress.checks.join(', ')}. `
+      + 'This takes as long as they take; leaving the page does not stop it.';
+  }
+  if (progress.phase) {
+    return `Running in the ${progress.phase} phase, which declares no checks.`;
+  }
+  return `Running as operation ${progress.operationId}. Leaving the page does not stop it.`;
 }
 
 /**
@@ -60,12 +114,14 @@ export function GatePanel({
 }) {
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<GateProgress | null>(null);
 
   if (status.kind !== 'blocked' || !status.gate) return null;
   const request: GateRequest | undefined = status.gateRequest;
 
   const run = async (action: () => Promise<GateActionResult>): Promise<void> => {
     setBusy(true);
+    setProgress(null);
     onResult({ ok: true, message: '' });
     try {
       onResult(await action());
@@ -73,6 +129,7 @@ export function GatePanel({
       onResult({ ok: false, message: (error as Error).message });
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   };
 
@@ -151,11 +208,25 @@ export function GatePanel({
             className="gate-button is-primary"
             type="button"
             disabled={busy}
-            onClick={() => void run(() => approval.approve({ projectId, gateName: status.gate! }))}
+            onClick={() => void run(() => approval.approve(
+              { projectId, gateName: status.gate! },
+              setProgress,
+            ))}
           >
             {busy ? 'Approving…' : `Approve ${status.gate}`}
           </button>
           <span className="gate-note">session {approval.session.sessionId}</span>
+          {busy ? (
+            /*
+              * `submitting`, NOT `submitted`. The attribute is the machine-readable
+              * half of the sentence beside it, and spelling the pre-submission
+              * window `submitted` would make a test asserting the state agree with
+              * the claim the text used to make.
+              */
+            <p className="gate-progress" data-state={progress?.state ?? 'submitting'}>
+              {progressWords(progress)}
+            </p>
+          ) : null}
         </div>
       )}
     </section>

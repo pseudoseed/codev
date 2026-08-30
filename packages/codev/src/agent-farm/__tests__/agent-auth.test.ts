@@ -512,7 +512,13 @@ describe('pairing tokens', () => {
   it('a store that throws inside an approval body does not become an unhandled rejection', async () => {
     const h = harness();
     const credential = h.machines.issue({ machine: 'laptop' });
-    const session = h.sessions.completePairing({ pairingId: 'p', principalKind: 'human-client' });
+    const session = h.sessions.completePairing({
+      pairingId: 'p', principalKind: 'human-client',
+      // BOUND TO THE MACHINE WHOSE CREDENTIAL THIS TEST PRESENTS. The route
+      // always supplies this from the authenticated caller; a session minted
+      // without it is presentable from nowhere, which is the point.
+      machine: 'laptop',
+    });
     h.approvals.issue = () => { throw new Error('store gone'); };
 
     const out = fakeRes();
@@ -732,7 +738,13 @@ describe('per-machine credentials', () => {
     const h = harness();
     h.machines.issue({ machine: 'ipad' });
     const operator = h.machines.issue({ machine: 'laptop' });
-    const session = h.sessions.completePairing({ pairingId: 'p', principalKind: 'human-client' });
+    const session = h.sessions.completePairing({
+      pairingId: 'p', principalKind: 'human-client',
+      // BOUND TO THE MACHINE WHOSE CREDENTIAL THIS TEST PRESENTS. The route
+      // always supplies this from the authenticated caller; a session minted
+      // without it is presentable from nowhere, which is the point.
+      machine: 'laptop',
+    });
     const headers = {
       [MACHINE_CREDENTIAL_HEADER]: operator.presentation,
       [HUMAN_SESSION_HEADER]: `${session.sessionId}.${session.credential}`,
@@ -777,7 +789,13 @@ describe('per-machine credentials', () => {
     const h = harness();
     h.machines.issue({ machine: 'ipad' });
     const operator = h.machines.issue({ machine: 'laptop' });
-    const session = h.sessions.completePairing({ pairingId: 'p', principalKind: 'human-client' });
+    const session = h.sessions.completePairing({
+      pairingId: 'p', principalKind: 'human-client',
+      // BOUND TO THE MACHINE WHOSE CREDENTIAL THIS TEST PRESENTS. The route
+      // always supplies this from the authenticated caller; a session minted
+      // without it is presentable from nowhere, which is the point.
+      machine: 'laptop',
+    });
     const capability = h.approvals.issue({ sessionId: session.sessionId, machine: 'ipad' });
     expect(h.approvals.verify(capability.presentation, { machine: 'ipad' }).authorized).toBe(true);
 
@@ -1135,15 +1153,31 @@ describe('remote-access runbook', () => {
     expect(text).toContain('the value Tower actually has');
   });
 
-  it('does not document a revocation nobody can perform yet', () => {
+  /*
+   * THIS TEST USED TO PIN TEXT THAT HAD STOPPED BEING TRUE.
+   *
+   * It asserted the runbook says "Today, revoke at the host" and that
+   * `completePairing` "has no production caller" — both correct when phase 7
+   * wrote them, both false since. Phase 11 added
+   * `POST /api/agent/v1/human-sessions` as that caller, and spec 236 added
+   * `afx pair revoke`. So a test whose job was to keep the runbook honest had
+   * become the thing keeping it stale: any correct update reddened it.
+   *
+   * What it pins now is the property that still matters — the runbook names a
+   * revocation an operator can actually perform, and does not send them to a
+   * route that requires the credential they are withdrawing.
+   */
+  it('documents a revocation an operator can actually perform', () => {
     const text = runbook();
-    // `completePairing` has no production caller, so the HTTP revocation route
-    // cannot be reached by a person until the client phase lands. A runbook step
-    // that cannot be followed is worse than no step.
-    expect(text).toContain('Today, revoke at the host');
-    expect(text).toContain('has no production caller');
-    // And the host-side path covers BOTH stores, which the one HTTP call does.
-    expect(text).toContain('revokeMachine');
+    expect(text).toContain('afx pair revoke');
+    // BOTH stores, because revoking only the credential leaves a withdrawn
+    // device holding a live approval capability.
+    expect(text).toContain('approval capabilities');
+    // And it says why the HTTP route is not the one to reach for at a terminal,
+    // rather than presenting it as the way to revoke.
+    expect(text).toContain('requires already holding the credential');
+    // The claim that is now false must not come back.
+    expect(text).not.toMatch(/^Today, revoke at the host/m);
   });
 
   it('states the blast radius of one unparseable credential file', () => {

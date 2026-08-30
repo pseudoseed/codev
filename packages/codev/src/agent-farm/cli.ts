@@ -847,6 +847,81 @@ export async function runAgentFarm(args: string[]): Promise<void> {
       }
     });
 
+  /*
+   * Pairing commands (Spec 236) — the operator entry point for pairing.
+   *
+   * DIRECT STORE OPERATIONS, not HTTP calls, and that is the security decision
+   * this command group exists to make. Revoking a machine over the API needs a
+   * live human session, which needs a live machine credential — so the operator
+   * who wants to WITHDRAW access is the one who cannot. Minting only ever needed
+   * write access to a file. Doing both here makes the cheap operation the one
+   * that reduces access, and makes `revoke` work with no credential and with
+   * Tower down, which is when an operator most wants it.
+   */
+  const pairCmd = program
+    .command('pair')
+    .description('Issue, list and revoke pairing tokens and machine credentials');
+
+  pairCmd
+    .command('issue')
+    .description('Mint a pairing token and print it once (never logged, never in argv)')
+    .requiredOption(
+      '--purpose <purpose>',
+      'machine-credential (pair a device) or client-session (open an approval session). '
+      + 'No default: a token is refused at the other ceremony, so a wrong guess fails later '
+      + 'and elsewhere.',
+    )
+    .option(
+      '--authority <text>',
+      'What authorized this mint, recorded verbatim and never interpreted. '
+      + 'Defaults to naming this command and the invoking account; it does not assert that a '
+      + 'human was present, because nothing here can verify that.',
+    )
+    .option('--ttl-minutes <minutes>', 'How long the token stays redeemable (default 10, max 60)')
+    .action(async (options) => {
+      // AWAITED, like every other action here. `parseAsync` awaits what an action
+      // returns, so a `void (async () => …)()` wrapper hands it nothing to wait
+      // for: the process exits before the dynamic import resolves and the command
+      // prints nothing, silently, with exit code 0.
+      const { pairIssue } = await import('./commands/pair.js');
+      try {
+        pairIssue({
+          purpose: options.purpose,
+          authority: options.authority,
+          ttlMinutes: options.ttlMinutes ? parseInt(options.ttlMinutes, 10) : undefined,
+        });
+      } catch (error) {
+        logger.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+    });
+
+  pairCmd
+    .command('list')
+    .description('Show outstanding tokens and paired machines (no secrets are printed)')
+    .action(async () => {
+      const { pairList } = await import('./commands/pair.js');
+      try {
+        pairList();
+      } catch (error) {
+        logger.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+    });
+
+  pairCmd
+    .command('revoke <machine>')
+    .description('Withdraw a machine\'s credential AND its approval capabilities')
+    .action(async (machine: string) => {
+      const { pairRevoke } = await import('./commands/pair.js');
+      try {
+        pairRevoke(machine);
+      } catch (error) {
+        logger.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+    });
+
   // Inbox commands (Spec 1313) — list/dismiss held (undelivered) mailbox messages
   const inboxCmd = program
     .command('inbox')

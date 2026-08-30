@@ -79,9 +79,9 @@ export function App() {
         setSessions((prev) => ({ ...prev, [machineKey]: result.session }));
         return { ok: true, message: `session open until ${result.session.expiresAt}` };
       },
-      approve: async (gate) => {
+      approve: async (gate, onProgress) => {
         if (!session) return { ok: false, message: 'no human session is open on this machine' };
-        const result = await approveGate(fetchImpl, config, session, gate);
+        const result = await approveGate(fetchImpl, config, session, gate, onProgress);
         if (result.ok) {
           /*
            * EVERY WORD OF THIS COMES FROM THE SERVER'S RECORD.

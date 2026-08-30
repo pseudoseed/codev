@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GatePanel, type GateApprovalHandle } from '../src/gate/GatePanel.js';
+import { GatePanel, type GateActionResult, type GateApprovalHandle } from '../src/gate/GatePanel.js';
 import { ThreadRowView } from '../src/tree/ThreadRowView.js';
 import type { ThreadRow } from '../src/tree/build.js';
 import type { RowStatus } from '../src/status/derive.js';
@@ -152,7 +152,13 @@ describe('approving from the client', () => {
     }));
     render(<ThreadRowView row={rowWith(BLOCKED)} approval={handle({ approve })} />);
     fireEvent.click(screen.getByRole('button', { name: /approve plan-approval/i }));
-    await waitFor(() => expect(approve).toHaveBeenCalledWith({ projectId: '146', gateName: 'plan-approval' }));
+    // The second argument is the progress sink the panel passes so the server can
+    // say what it is running. Asserted as "a function" rather than ignored: a
+    // panel that stopped passing it would silently go back to a bare spinner.
+    await waitFor(() => expect(approve).toHaveBeenCalledWith(
+      { projectId: '146', gateName: 'plan-approval' },
+      expect.any(Function),
+    ));
     await waitFor(() => expect(document.querySelector('.gate-result.is-ok')).toBeTruthy());
   });
 
@@ -171,5 +177,197 @@ describe('approving from the client', () => {
     );
     expect(screen.getByText(/no porch record/i)).toBeTruthy();
     expect(screen.queryByRole('button')).toBeNull();
+  });
+});
+
+/**
+ * WHAT A WAITING HUMAN IS TOLD.
+ *
+ * Phase checks take minutes — that is the entire reason an approval outlives its
+ * request — and a button reading "Approving…" for four of them is
+ * indistinguishable from one that is stuck. What is shown comes from the server
+ * and nowhere else.
+ */
+describe('while an approval is running', () => {
+  function handleThatReports(
+    updates: Array<Parameters<NonNullable<Parameters<GateApprovalHandle['approve']>[1]>>[0]>,
+  ): GateApprovalHandle {
+    let release: () => void = () => {};
+    const finished = new Promise<void>((resolve) => { release = resolve; });
+    return {
+      session: { sessionId: 's1' },
+      openSession: async () => ({ ok: true, message: '' }),
+      approve: async (_gate, onProgress) => {
+        for (const update of updates) onProgress?.(update);
+        await finished;
+        return { ok: true, message: 'approved' };
+      },
+      // Exposed for the test to end the wait.
+      ...({ release: () => release() } as Record<string, unknown>),
+    } as GateApprovalHandle & { release: () => void };
+  }
+
+  it('names the phase and the checks the server said it is running', async () => {
+    const approval = handleThatReports([
+      { state: 'running', operationId: 'op-1', phase: 'review', checks: ['build', 'tests'] },
+    ]) as GateApprovalHandle & { release: () => void };
+    render(
+      <GatePanel status={BLOCKED} projectId="146" approval={approval} onResult={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /approve plan-approval/i }));
+
+    await waitFor(() => {
+      const progress = document.querySelector('.gate-progress')!;
+      expect(progress.textContent).toContain('review');
+      expect(progress.textContent).toContain('build, tests');
+      // And it says the work survives the page, which is what makes waiting safe.
+      expect(progress.textContent).toContain('leaving the page does not stop it');
+    });
+    approval.release();
+  });
+
+  it('says a phase with no checks declares none, rather than showing an empty list', async () => {
+    const approval = handleThatReports([
+      { state: 'running', operationId: 'op-2', phase: 'verify', checks: [] },
+    ]) as GateApprovalHandle & { release: () => void };
+    render(
+      <GatePanel status={BLOCKED} projectId="146" approval={approval} onResult={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /approve plan-approval/i }));
+
+    await waitFor(() => {
+      expect(document.querySelector('.gate-progress')!.textContent)
+        .toContain('verify phase, which declares no checks');
+    });
+    approval.release();
+  });
+
+  /*
+   * BEFORE THE HOST HAS ANSWERED, THE PANEL MUST NOT SAY IT HAS.
+   *
+   * Clicking Approve sets `busy` immediately, and `onProgress` does not fire
+   * until the host answers 202 — so there is a window covering capability
+   * issuance, nonce minting and the POST, any of which may be hanging. It read
+   * "Submitted. Waiting for the server to start the work.", telling the human a
+   * thing happened that had not, on the one action this panel performs.
+   */
+  it('does not claim the approval was submitted before the host has accepted it', async () => {
+    // A handle that never reports progress and never resolves: exactly the
+    // window between the click and the host's answer.
+    let release: () => void = () => {};
+    const approval: GateApprovalHandle = {
+      session: { sessionId: 's1' },
+      openSession: async () => ({ ok: true, message: '' }),
+      approve: async () => new Promise((resolve) => {
+        release = () => resolve({ ok: true, message: 'approved' });
+      }),
+    };
+    render(
+      <GatePanel status={BLOCKED} projectId="146" approval={approval} onResult={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /approve plan-approval/i }));
+
+    await waitFor(() => {
+      const progress = document.querySelector('.gate-progress')!;
+      expect(progress.textContent, 'the panel claims a submission that has not happened')
+        .not.toMatch(/^Submitted\./);
+      expect(progress.textContent).toContain('Nothing has been accepted yet');
+      // The machine-readable half must not say `submitted` either, or a test
+      // asserting the state would agree with the claim the text used to make.
+      expect(progress.getAttribute('data-state')).toBe('submitting');
+    });
+    release();
+  });
+
+  it('distinguishes accepted-not-started from running', async () => {
+    const approval = handleThatReports([
+      { state: 'submitted', operationId: 'op-3' },
+    ]) as GateApprovalHandle & { release: () => void };
+    render(
+      <GatePanel status={BLOCKED} projectId="146" approval={approval} onResult={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /approve plan-approval/i }));
+
+    await waitFor(() => {
+      const progress = document.querySelector('.gate-progress')!;
+      expect(progress.textContent).toContain('op-3');
+      expect(progress.textContent).toContain('Not started yet');
+    });
+    approval.release();
+  });
+
+  it('shows nothing about progress once the approval has finished', async () => {
+    const approval: GateApprovalHandle = {
+      session: { sessionId: 's1' },
+      openSession: async () => ({ ok: true, message: '' }),
+      approve: async (_gate, onProgress) => {
+        onProgress?.({ state: 'running', operationId: 'op-4', phase: 'review', checks: ['build'] });
+        return { ok: true, message: 'approved' };
+      },
+    };
+    render(
+      <GatePanel status={BLOCKED} projectId="146" approval={approval} onResult={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /approve plan-approval/i }));
+    // The panel stops claiming work is in flight the moment it is not.
+    await waitFor(() => expect(document.querySelector('.gate-progress')).toBeNull());
+  });
+});
+
+/**
+ * FOUR OUTCOMES, THREE APPEARANCES, AND THE MIDDLE ONE IS THE POINT.
+ *
+ * `failed` and `refused` both mean the gate was not approved and share the
+ * refused treatment, their messages carrying which. `interrupted` does NOT: the
+ * host stopped and the gate may well be approved, so it renders as unknown —
+ * rendering it as a refusal would send a human to approve something already
+ * approved.
+ */
+describe('how each terminal outcome reaches the row', () => {
+  function handleReturning(result: GateActionResult): GateApprovalHandle {
+    return {
+      session: { sessionId: 's1' },
+      openSession: async () => ({ ok: true, message: '' }),
+      approve: async () => result,
+    };
+  }
+
+  async function resultClassFor(result: GateActionResult): Promise<string> {
+    const seen: GateActionResult[] = [];
+    render(
+      <GatePanel
+        status={BLOCKED}
+        projectId="146"
+        approval={handleReturning(result)}
+        onResult={(r) => { if (r.message) seen.push(r); }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /approve plan-approval/i }));
+    await waitFor(() => expect(seen).toHaveLength(1));
+    return seen[0].unconfirmed ? 'is-unknown' : seen[0].ok ? 'is-ok' : 'is-refused';
+  }
+
+  it('renders a failed approval as refused, carrying its reason', async () => {
+    expect(await resultClassFor({
+      ok: false, message: 'GATE_APPROVAL_FAILED: ENOSPC writing status.yaml',
+    })).toBe('is-refused');
+  });
+
+  it('renders an interrupted approval as unknown, never as refused', async () => {
+    expect(await resultClassFor({
+      ok: false,
+      unconfirmed: true,
+      message: 'this host stopped while it ran, and status.yaml now shows pr APPROVED.',
+    })).toBe('is-unknown');
+  });
+
+  it('renders a refusal as refused', async () => {
+    expect(await resultClassFor({
+      ok: false, message: 'PHASE_CHECKS_FAILED: the checks did not pass',
+    })).toBe('is-refused');
+  });
+
+  it('renders a success as a success', async () => {
+    expect(await resultClassFor({ ok: true, message: 'approved on alpha' })).toBe('is-ok');
   });
 });

@@ -53,6 +53,22 @@ export const MACHINE_CREDENTIAL_HEADER = 'x-codev-machine-credential';
  * lands in `ps` output and shell history.
  */
 export const PAIRING_TOKEN_HEADER = 'x-codev-pairing-token';
+/**
+ * The approval receipt, handed back once at submit and presented to read that
+ * operation's outcome after a restart has destroyed the submitting session.
+ *
+ * A HEADER FOR THE SAME REASON AS EVERY OTHER CREDENTIAL HERE, and this one was
+ * a query parameter first — which crossed the rule written three lines above it.
+ * URLs are logged: Tower logs `req.url` during the boot window, and again on
+ * every authentication failure, which is exactly when a client polling across a
+ * restart arrives. Reverse proxies log query strings as a matter of course, so
+ * the exposure was never bounded by our own logging either.
+ *
+ * `spec-236-receipt-not-in-url.test.ts` asserts the absence: no poll URL and no
+ * log line may contain a receipt. Assert the absence, because the query string is
+ * the convenient place to put it and convenience is what put it there.
+ */
+export const APPROVAL_RECEIPT_HEADER = 'x-codev-approval-receipt';
 
 export const TRANSPORT_SIGNAL = {
   ORIGIN_NOT_ALLOWED: 'ORIGIN_NOT_ALLOWED',
@@ -138,6 +154,36 @@ export const AGENT_ROUTES: readonly AgentRoute[] = [
       + 'is why the capability phase 6 issued had no way to be used until this route.',
   },
   {
+    id: 'approval-submit',
+    method: 'POST',
+    pattern: /^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approvals$/,
+    probe: `${AGENT_ROUTE_PREFIX}/workspaces/probe/gates/approvals`,
+    authentication: 'human-session',
+    rationale:
+      'Spec 236: the ASYNCHRONOUS half of gate approval. `gate-approve` refuses any project '
+      + 'whose phase declares checks, because an HTTP request will not hold a connection open '
+      + 'for a repository\'s test suite — and a timeout is not the fix, since a client that '
+      + 'gives up does not stop porch. This submits and returns an operation id. Same '
+      + 'authentication as the synchronous route: it spends the same capability and nonce.',
+  },
+  {
+    id: 'approval-operation',
+    method: 'GET',
+    pattern: /^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approvals\/([^/]+)$/,
+    probe: `${AGENT_ROUTE_PREFIX}/workspaces/probe/gates/approvals/probe`,
+    authentication: 'machine-credential',
+    rationale:
+      'reports one submitted approval. `machine-credential`, NOT `human-session`, and the '
+      + 'difference is the whole of criterion 10: sessions live in memory, so the restart that '
+      + 'resolves an approval to `interrupted` destroys the session that submitted it. Under '
+      + '`human-session` the client was refused 401 at AUTHENTICATION — before the handler could '
+      + 'look at anything — so the durable record whose only purpose is surviving that restart '
+      + 'was unreadable by the client that needed it. A real restart test drives that path. '
+      + 'The content is still not public: the handler requires the submitting session OR the '
+      + 'unguessable receipt handed back at submit, presented from the machine that submitted it, '
+      + 'and it refuses an operation belonging to another workspace.',
+  },
+  {
     id: 'session-probe',
     method: 'GET',
     pathname: `${AGENT_ROUTE_PREFIX}/session`,
@@ -187,7 +233,14 @@ export const AGENT_ROUTES: readonly AgentRoute[] = [
     pattern: /^\/api\/agent\/v1\/approval-capabilities\/machine\/([^/]+)$/,
     probe: `${AGENT_ROUTE_PREFIX}/approval-capabilities/machine/probe`,
     authentication: 'human-session',
-    rationale: 'revocation is privileged: an agent that could revoke could deny a human their gate.',
+    rationale:
+      'revocation is privileged HERE, over HTTP: an agent that could revoke could deny a human '
+      + 'their gate. Spec 236 added `afx pair revoke`, which writes the store directly and needs '
+      + 'no session — so this is not the only path, and the reason is recorded rather than left '
+      + 'contradicting the command: over the API the operator who wanted to withdraw access was '
+      + 'the one who could not, because human-session includes machine-credential. A same-uid '
+      + 'agent could already write these stores, so the CLI makes that denial convenient rather '
+      + 'than possible. See 146-approval-threat-model.md, "Who can revoke".',
   },
   {
     id: 'machine-credential-revoke',
@@ -197,7 +250,10 @@ export const AGENT_ROUTES: readonly AgentRoute[] = [
     authentication: 'human-session',
     rationale:
       'success criterion 15: revoking one machine fails that subtree closed and leaves the '
-      + 'others working. Privileged for the same reason as approval revocation.',
+      + 'others working. Privileged for the same reason as approval revocation — and, like it, '
+      + 'no longer the only path: `afx pair revoke` writes both stores directly, because an '
+      + 'operator holding nothing must still be able to withdraw access. The trade is recorded '
+      + 'in 146-approval-threat-model.md rather than left as two documents disagreeing.',
   },
 ];
 
@@ -250,11 +306,18 @@ export function isUpgradeOriginAllowed(req: http.IncomingMessage): boolean {
 }
 
 export interface HumanSessionRecognizer {
-  recognize(presentation: string | undefined): {
+  /**
+   * @param machine The paired machine the request authenticated as. Given here,
+   *   the session must be the one opened from THAT machine — the two credentials
+   *   are compared against each other rather than merely both being valid.
+   */
+  recognize(presentation: string | undefined, machine: string): {
     readonly paired: boolean;
     readonly sessionId?: string;
     /** What the token that paired this session claimed. Recorded, not verified. */
     readonly authority?: string;
+    /** The machine the session was opened from. */
+    readonly machine?: string;
     readonly reason?: string;
   };
 }
@@ -387,14 +450,60 @@ export function authenticateAgentRequest(
     return { allowed: true, route, machine: machine.machine };
   }
 
-  const recognition = context.humanSessions.recognize(header(req, HUMAN_SESSION_HEADER));
-  if (!recognition.paired) {
+  /*
+   * THE SESSION MUST BELONG TO THE MACHINE THAT JUST AUTHENTICATED.
+   *
+   * These two credentials used to be verified independently: a valid machine
+   * credential, a valid session, and nothing compared them. So a session opened
+   * on machine A could be replayed alongside machine B's credential to issue
+   * capabilities, submit approvals or poll operations — the per-device ownership
+   * and revocation model of this whole surface, defeated by presenting two
+   * things that were never checked against each other.
+   *
+   * Passing the authenticated machine name is what closes it, and it is passed
+   * HERE, at the single choke point, rather than in each handler: a route that
+   * forgot would be a hole with no visible cause.
+   */
+  /*
+   * AN AUTHORISED CREDENTIAL THAT NAMES NO MACHINE CANNOT BIND A SESSION.
+   *
+   * `verify` types `machine` as optional, and making the argument below required
+   * is what surfaced that: the previous signature accepted `undefined` and
+   * silently skipped the binding for exactly the record that could not be bound.
+   * Refused rather than admitted — a credential with no machine name is a broken
+   * record, and "I cannot tell which device this is" is not "it is the right
+   * one".
+   */
+  if (machine.machine === undefined) {
     return {
       allowed: false,
       route,
       status: 401,
-      signal: recognition.reason === 'REVOKED' ? 'HUMAN_SESSION_REVOKED' : 'HUMAN_SESSION_REQUIRED',
-      message: 'this route requires a paired client session',
+      signal: MACHINE_SIGNAL.MACHINE_CREDENTIAL_MALFORMED,
+      message: 'that credential names no machine, so no session can be bound to it',
+    };
+  }
+  const recognition = context.humanSessions.recognize(
+    header(req, HUMAN_SESSION_HEADER),
+    machine.machine,
+  );
+  if (!recognition.paired) {
+    return {
+      allowed: false,
+      route,
+      // A FOREIGN MACHINE IS 403, NOT 401. The session is real and this caller
+      // may hold it legitimately on another device; what is refused is using it
+      // from HERE. Answering "authenticate" would send a client into a re-pair
+      // loop that cannot fix the thing that is actually wrong.
+      status: recognition.reason === 'FOREIGN_MACHINE' ? 403 : 401,
+      signal: recognition.reason === 'REVOKED'
+        ? 'HUMAN_SESSION_REVOKED'
+        : recognition.reason === 'FOREIGN_MACHINE'
+          ? 'HUMAN_SESSION_FOREIGN_MACHINE'
+          : 'HUMAN_SESSION_REQUIRED',
+      message: recognition.reason === 'FOREIGN_MACHINE'
+        ? 'that session was opened from a different machine; open one from this machine instead'
+        : 'this route requires a paired client session',
       reason: recognition.reason,
     };
   }

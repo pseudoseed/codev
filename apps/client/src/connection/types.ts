@@ -72,9 +72,25 @@ export interface ThreadIdentity {
   readonly management: 'managed' | 'unmanaged';
   readonly porch?: PorchStatusProjection;
   readonly spawnedByArchitect?: string;
-  readonly sessionState?: string;
+  /**
+   * The live t3code session for this row's thread, when one was observed.
+   *
+   * Structured rather than a bare word: deciding whether a row is finished needs
+   * the session's status AND the thread's settledness, which are two facts on
+   * two objects in t3code's contract. `status` arrives unmapped, so a value this
+   * build does not know is visible as itself rather than bucketed.
+   */
+  readonly session?: ThreadSessionState;
   /** Absent means none. Whether any could be read is `messageLog` on the snapshot. */
   readonly messages?: readonly AgentMessage[];
+}
+
+export interface ThreadSessionState {
+  /** t3code's `session.status`, verbatim and unmapped. */
+  readonly status: string;
+  /** From the thread's `settledAt` / `settledOverride`, never from the session. */
+  readonly settled: boolean;
+  readonly lastError?: string;
 }
 
 export interface AgentStateSignal {
@@ -87,8 +103,61 @@ export interface AgentStateSignal {
   readonly roleId?: string;
 }
 
-/** Whether session state was observable at all. Never inferred from its absence. */
-export type T3codeReachability = 'not-provided' | 'unreachable' | 'available';
+/**
+ * Whether session state was observable at all, and if not, WHICH not. Never
+ * inferred from its absence.
+ *
+ * Eight values, mirroring `T3codeThreadSnapshot` on the server. `connecting` and
+ * `cooling-down` are deliberately not folded into `unreachable`: one resolves on
+ * its own and the other will not until a timer passes, which is the difference
+ * between "wait" and "go look at your server".
+ */
+export type T3codeReachability =
+  | 'not-provided'
+  | 'not-configured'
+  | 'misconfigured'
+  | 'connecting'
+  | 'cooling-down'
+  | 'unreachable'
+  | 'available'
+  | 'stale';
+
+const T3CODE_REACHABILITY: readonly string[] = [
+  'not-provided',
+  'not-configured',
+  'misconfigured',
+  'connecting',
+  'cooling-down',
+  'unreachable',
+  'available',
+  'stale',
+];
+
+/**
+ * When the reported session content was observed, and how old the SERVER said it
+ * was. Present on `available` and `stale`.
+ *
+ * A sibling of `t3code` rather than a promotion of it to an object, and the
+ * reason is this file: {@link snapshotRejection} distinguishes an older server
+ * from a corrupt payload by whether `t3code` is ABSENT. Making `t3code` an
+ * object would make this build reject an older server's bare string as corrupt
+ * and blank the whole machine — a second cross-version failure on top of the one
+ * that is accepted deliberately. A sibling leaves that direction working: an
+ * older server validates, carries no observation, and the age reads as unknown.
+ *
+ * AN UNKNOWN AGE IS NOT FRESHNESS. A consumer that cannot see how old the
+ * content is must not derive "finished" from it.
+ */
+export interface T3codeObservation {
+  /** Present only when content was actually observed. */
+  readonly observedAt?: string;
+  /** Present only alongside `observedAt`. An absent age is UNKNOWN, never small. */
+  readonly ageMs?: number;
+  /** The server's own words, for a status that has some. */
+  readonly message?: string;
+  /** `cooling-down` only: when the failure that started the timer happened. */
+  readonly since?: string;
+}
 
 /**
  * Whether the message log was readable.
@@ -103,6 +172,7 @@ export type MessageLogReachability = 'not-provided' | 'unreadable' | 'available'
 
 export interface ThreadRegistrySnapshot {
   readonly t3code: T3codeReachability;
+  readonly t3codeObservation?: T3codeObservation;
   readonly architects: Readonly<Record<string, string>>;
   readonly builders: Readonly<Record<string, string>>;
   readonly identities: readonly ThreadIdentity[];
@@ -190,9 +260,35 @@ function identity(value: unknown): value is ThreadIdentity {
     && (value.management === 'managed' || value.management === 'unmanaged')
     && (value.porch === undefined || porch(value.porch))
     && optionalStr(value.spawnedByArchitect)
-    && optionalStr(value.sessionState)
+    && (value.session === undefined || session(value.session))
     && (value.messages === undefined
       || (Array.isArray(value.messages) && value.messages.every(message)));
+}
+
+function session(value: unknown): value is ThreadSessionState {
+  return isRecord(value)
+    && str(value.status)
+    && typeof value.settled === 'boolean'
+    && optionalStr(value.lastError);
+}
+
+/**
+ * Every member is optional, and a PRESENT one must still be well formed.
+ *
+ * `observedAt` and `ageMs` are checked as a PAIR: half of them is a payload this
+ * build cannot read, not a partial answer to make the best of. An age without a
+ * time it was taken cannot be sanity-checked, and a time without an age would
+ * invite the consumer to subtract it from its own clock — which is a different
+ * clock, and the reason the server computes the age at all.
+ */
+function observation(value: unknown): value is T3codeObservation {
+  if (!isRecord(value)) return false;
+  if (!optionalStr(value.observedAt)) return false;
+  if (value.ageMs !== undefined && (typeof value.ageMs !== 'number' || !Number.isFinite(value.ageMs))) {
+    return false;
+  }
+  if ((value.observedAt === undefined) !== (value.ageMs === undefined)) return false;
+  return optionalStr(value.message) && optionalStr(value.since);
 }
 
 function signal(value: unknown): value is AgentStateSignal {
@@ -252,7 +348,12 @@ export function validateSnapshot(value: unknown): AgentProtocolSnapshot | null {
 
   const protocol = value.protocol;
   if (!isRecord(protocol)) return null;
-  if (protocol.t3code !== 'not-provided' && protocol.t3code !== 'unreachable' && protocol.t3code !== 'available') {
+  if (!str(protocol.t3code) || !T3CODE_REACHABILITY.includes(protocol.t3code)) return null;
+  // ABSENT IS FINE AND MEANS "AGE UNKNOWN": a server that predates the field
+  // sends a valid status and no observation, and refusing that would blank a
+  // machine over a version difference. Present-but-malformed is refused, because
+  // that is a payload this build cannot read.
+  if (protocol.t3codeObservation !== undefined && !observation(protocol.t3codeObservation)) {
     return null;
   }
   if (!isRecord(protocol.architects) || !Object.values(protocol.architects).every(str)) return null;

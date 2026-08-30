@@ -1,0 +1,180 @@
+id: '236'
+title: spec-146-production-t3code-sna
+protocol: aspir
+phase: implement
+plan_phases:
+  - id: phase_1
+    title: Snapshot status vocabulary and the session-state mapping
+    status: complete
+  - id: phase_2
+    title: The t3code session cache and the production provider
+    status: complete
+  - id: phase_3
+    title: afx pair issue/list/revoke
+    status: complete
+  - id: phase_4
+    title: Durable approval operation store
+    status: complete
+  - id: phase_5
+    title: Asynchronous gate approval routes
+    status: complete
+  - id: phase_6
+    title: Client submits and polls an approval
+    status: complete
+  - id: phase_7
+    title: Threat model, failure matrix, and the dev-check revocation
+    status: in_progress
+current_plan_phase: phase_7
+gates:
+  pr:
+    status: approved
+    approved_at: '2026-08-30T13:42:41.222Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-30T13:42:41.222Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
+  verify-approval:
+    status: pending
+iteration: 3
+build_complete: false
+history:
+  - iteration: 1
+    plan_phase: phase_1
+    build_output: ''
+    reviews:
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_1-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_1-iter1-opencode.txt
+        stated: true
+  - iteration: 1
+    plan_phase: phase_2
+    build_output: ''
+    reviews:
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_2-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_2-iter1-opencode.txt
+        stated: true
+  - iteration: 1
+    plan_phase: phase_4
+    build_output: ''
+    reviews:
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_4-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_4-iter1-opencode.txt
+        stated: true
+  - iteration: 1
+    plan_phase: phase_5
+    build_output: ''
+    reviews:
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_5-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_5-iter1-opencode.txt
+        stated: true
+  - iteration: 1
+    plan_phase: phase_6
+    build_output: ''
+    reviews:
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_6-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_6-iter1-opencode.txt
+        stated: true
+  - iteration: 2
+    plan_phase: phase_6
+    build_output: ''
+    reviews:
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_6-iter2-claude.txt
+        stated: true
+      - model: opencode
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_6-iter2-opencode.txt
+        stated: true
+  - iteration: 1
+    plan_phase: phase_7
+    build_output: ''
+    reviews:
+      - model: claude
+        verdict: APPROVE
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_7-iter1-claude.txt
+        stated: true
+      - model: opencode
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_7-iter1-opencode.txt
+        stated: true
+  - iteration: 2
+    plan_phase: phase_7
+    build_output: ''
+    reviews:
+      - model: claude
+        verdict: REQUEST_CHANGES
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_7-iter2-claude.txt
+        stated: true
+      - model: opencode
+        verdict: COMMENT
+        file: >-
+          /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_7-iter2-opencode.txt
+        stated: true
+started_at: '2026-08-30T04:48:34.619Z'
+updated_at: '2026-08-30T13:46:44.554Z'
+context_refreshes:
+  - boundary: plan-phase:phase_2
+    at: '2026-08-30T06:10:51.039Z'
+    acknowledged_at: '2026-08-30T06:10:56.688Z'
+  - boundary: plan-phase:phase_3
+    at: '2026-08-30T07:05:56.990Z'
+    acknowledged_at: '2026-08-30T07:06:08.844Z'
+  - boundary: plan-phase:phase_4
+    at: '2026-08-30T07:31:41.581Z'
+    acknowledged_at: '2026-08-30T07:35:09.235Z'
+  - boundary: plan-phase:phase_5
+    at: '2026-08-30T08:17:01.259Z'
+    acknowledged_at: '2026-08-30T08:38:04.982Z'
+  - boundary: plan-phase:phase_6
+    at: '2026-08-30T09:11:55.604Z'
+    acknowledged_at: '2026-08-30T09:15:23.033Z'
+  - boundary: plan-phase:phase_7
+    at: '2026-08-30T10:17:35.787Z'
+    acknowledged_at: '2026-08-30T10:28:42.757Z'
+pr_history:
+  - phase: implement
+    pr_number: 246
+    branch: builder/aspir-236
+    created_at: '2026-08-30T10:43:49.353Z'
+pr_ready_for_human: false

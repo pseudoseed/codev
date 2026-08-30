@@ -216,6 +216,15 @@ html, body, #root {
 .stamp-turning { color: var(--moss); }
 .stamp-working { color: var(--graphite); }
 .stamp-settled { color: var(--graphite); border-style: dashed; }
+.stamp-stopped { color: var(--ochre); border-style: dashed; }
+/*
+ * Solid, not dotted: an errored session is a definite observation, not an absent
+ * one. `rustdark` rather than `rust` so it is not byte-identical to `.stamp-gate`
+ * — two statuses that mean different things must not be one treatment with two
+ * words, which is the #112 lesson (a status carried only by colour) read the
+ * other way round.
+ */
+.stamp-error { color: var(--chalk); background: var(--rustdark); border-color: var(--rustdark); }
 .stamp-unknown { color: var(--ochre); border-style: dotted; }
 
 /* ---------- signals ---------- */
@@ -346,6 +355,32 @@ html, body, #root {
 .gate-button:disabled { opacity: 0.5; cursor: default; }
 
 .gate-note { flex-basis: 100%; margin: 0; font-size: 11px; color: var(--graphite); line-height: 1.4; }
+
+/*
+ * What a waiting human is told while an approval runs.
+ *
+ * SIZED AND SPACED EXPLICITLY, because nothing above it sets either: a bare
+ * <p> here inherits the browser's 16px and its default margins, so the one new
+ * element in this phase would have rendered half again the size of every line
+ * around it, inside an 11px panel. No test in this suite can see that — which is
+ * exactly the class of defect #112 shipped, and the reason a rule is written the
+ * moment an element is.
+ *
+ * Ochre rather than moss or rust: this is neither a result nor a fault, it is
+ * work in progress, and borrowing either colour would say something the state
+ * does not.
+ */
+.gate-progress {
+  flex-basis: 100%;
+  margin: 6px 0 0;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  line-height: 1.4;
+  color: var(--graphite);
+  border-left: var(--rule) solid var(--ochre);
+  background: var(--bone);
+}
 
 .gate-result {
   margin: 8px 0 0;
@@ -522,11 +557,27 @@ html, body, #root {
 /* Said out loud, in ochre, because a cut body that looks whole is the failure. */
 .msg-truncated { margin: 2px 0 0; font-size: 10px; color: var(--ochre); letter-spacing: 0.08em; }
 
-/* Three absences, three appearances. `is-empty` is a fact; `is-unknown` is not. */
+/*
+ * Three absences, three appearances. `is-empty` is a fact; `is-unknown` is not.
+ *
+ * The `is-empty` rule was MISSING — the comment promised three appearances and
+ * the stylesheet defined two, so a known-empty log rendered identically to the
+ * base note. Found by `styled.test.ts` when spec 236 merged main: a comment
+ * asserting a difference the code does not make is the pattern this repo keeps
+ * finding, and it is why that guard exists.
+ *
+ * Muted rather than ochre, because that is the distinction the comment draws: we
+ * KNOW there are none, which is settled, not a caution.
+ */
 .msg-note { margin: 0; font-size: 12px; color: var(--graphite); }
+.msg-note.is-empty { color: var(--concrete); font-style: italic; }
 .msg-note.is-unknown { color: var(--ochre); }
 
 /* ---------- the architect strip (criterion 4b) ---------- */
+
+/* Same missing rule as `.msg-note.is-empty`, same reason: an absence stated as a
+ * fact reads muted, not as a fault. */
+.architect-strip.is-empty { color: var(--graphite); font-style: italic; }
 
 .architect-strip {
   border: var(--rule) solid var(--ink);

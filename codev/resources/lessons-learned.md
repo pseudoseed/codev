@@ -315,6 +315,43 @@ just its inputs.
 
 ## Testing
 
+- [From #236] **To find every caller relying on an absent value, change the type and read the
+  compiler errors.** A permissive `machine?: string` parameter on an identity check hid three call
+  sites passing `undefined` — the very values that cannot be bound. Making it required enumerated
+  all three at once, and those errors were the *evidence*, not the consequence of a fix. This
+  matters because the alternatives sample and a type change enumerates: across four fail-opens in
+  one project, two review lanes, a targeted grep and a reviewer's instruction each found one
+  instance, and none of them could report the complete list. When a value must be present for a
+  rule to hold, express that in the type rather than in a check — a check tests one call site, a
+  type interrogates all of them. Where a value genuinely may be absent, pass a sentinel that
+  cannot match rather than reintroducing the conditional, or the shape comes straight back.
+
+- [From #236] **Documentation written from memory is a claim, not a record.** Two flag
+  descriptions in a new CLI skill entry were wrong, and a status count ("seven emitted") was wrong
+  in four separate files — all written confidently, none checked against the thing they described.
+  Verify a doc against the CLI or the code, and when a reviewer names a stale line, **grep for the
+  claim rather than fixing the line**: the two lines named turned out to be four sites, and a
+  count is a derived fact stated as a literal that nothing ever recomputes.
+
+- [From #236] **A guard that pins documentation text can become the thing keeping the
+  documentation stale — and it fails in the direction that looks like working correctly.**
+  `agent-auth.test.ts` asserted the remote-access runbook contained the strings "Today, revoke at
+  the host" and `completePairing` "has no production caller". Both were true when written, and
+  the test existed for a good reason: to stop the runbook documenting a step nobody could follow.
+  Phase 11 then added `POST /api/agent/v1/human-sessions` as that production caller, and spec 236
+  added `afx pair revoke`. From that moment the runbook was wrong, and **the test was what kept it
+  wrong**: every correct update to the document reddened the suite, so the cheap move was always
+  to leave the prose alone.
+  Two things generalise. First, a check whose subject is *prose* has no way to notice that the
+  world it describes has moved — the assertion is still true of the file, which is exactly why it
+  passes. Second, the failure mode is invisible from inside: the guard is green, doing precisely
+  what it was written to do, and the defect is that what it was written to do stopped being
+  desirable. Pin the **property** the documentation must have ("names a revocation an operator can
+  actually perform"), never the sentence it currently uses to have it — and when a claim is
+  time-bound ("not yet", "until X lands"), the guard should assert the condition, not the wording.
+  Found by review, not by any suite, and it is the sharpest of the seven findings in that round
+  because the check was working as specified the whole time.
+
 - [From #130] **"Same failures with my changes reverted" proves *not caused by my diff*, not *pre-existing upstream* — and stating the second is how a phantom failure gets written into a PR.** A builder's full suite showed 78 failures across 16 files, A/B'd identically with its diff reverted, and it reported them as pre-existing on main. Main was green at that SHA (6009 passed), its branch was 0 commits behind, and one of the named files passed standalone in its own worktree. The cause was a second full suite running concurrently against the same `~/.agent-farm`, the same Tower and the same fixed ports. Interference is *stable* — same count, same files, across an A/B — so it wears the shape of a real breakage, and the only way to tell is to check the claim against the upstream branch itself rather than against your own tree twice.
 
 

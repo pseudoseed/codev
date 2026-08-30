@@ -10,15 +10,128 @@ import { recentByAgent, type RecentAgentMessage } from '../db/mailbox.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 import type { AgentStateSignal, PorchStatusProjection, StatusReadResult } from './status-reader.js';
 
-export interface LiveThread {
-  readonly threadId: string;
-  readonly state?: string;
+/**
+ * What t3code says about one thread's session, kept STRUCTURED rather than
+ * flattened to a word.
+ *
+ * It was one optional string, and that could not carry this phase's mapping:
+ * t3code reports a session `status` (`idle | starting | running | ready |
+ * interrupted | stopped | error`) and carries settledness SEPARATELY, on the
+ * thread, as `settledAt` / `settledOverride`. A consumer deciding whether a row
+ * is finished needs both — a `stopped` session on a settled thread finished,
+ * and a `stopped` session on an unsettled one did not — and one string cannot
+ * say both without inventing a vocabulary neither side speaks.
+ *
+ * `status` is t3code's own word, VERBATIM and unmapped. Translating here would
+ * put the mapping in two places and would silently swallow a status a newer
+ * server invented; the consumer maps, and says so when it meets a word it does
+ * not know.
+ */
+export interface LiveThreadSession {
+  /** t3code's `session.status`, unmapped. */
+  readonly status: string;
+  /** From the thread's `settledAt` / `settledOverride`, not from the session. */
+  readonly settled: boolean;
+  /** Present only when the session reported one. */
+  readonly lastError?: string;
 }
 
+export interface LiveThread {
+  readonly threadId: string;
+  readonly session?: LiveThreadSession;
+}
+
+/**
+ * What the provider can say about its own answer, beyond the status word.
+ *
+ * ON THE WIRE AS A SIBLING OF `t3code`, NOT FOLDED INTO IT. A cached snapshot
+ * that cannot say how old it is reintroduces exactly the failure the STALE band
+ * exists to prevent: "it had finished when I last looked" rendered as "it has
+ * finished". `ageMs` is computed where the snapshot is built rather than by the
+ * consumer, because the consumer's clock is a different clock.
+ *
+ * EVERY MEMBER IS OPTIONAL BECAUSE DIFFERENT STATUSES HAVE DIFFERENT THINGS TO
+ * SAY, and the alternative was worse: `message` and `since` previously died at
+ * this boundary, so `cooling-down` reached the client as a bare word with no
+ * when and no why, and `misconfigured`'s explanation of what is half-written
+ * reached it nowhere at all — an operator told only "your configuration is
+ * incomplete" has to go and diff it themselves. A status with nothing to add
+ * carries no observation, which is not the same as carrying an empty one.
+ *
+ * `observedAt` and `ageMs` travel together or not at all. Absence of `ageMs` is
+ * an UNKNOWN age, and a consumer must not read that as a small one.
+ */
+export interface T3codeObservation {
+  /** Present only when content was actually observed. */
+  readonly observedAt?: string;
+  /** Present only alongside `observedAt`. */
+  readonly ageMs?: number;
+  /** The provider's own words, for a status that has some. */
+  readonly message?: string;
+  /** `cooling-down` only: when the failure that started the timer happened. */
+  readonly since?: string;
+}
+
+/**
+ * Whether session state was observable, and if not, WHICH not.
+ *
+ * Eight statuses, and none of them is a taxonomy for its own sake — six are the
+ * exact answers `requestThreadBackend` already computes, and collapsing any pair
+ * spells two different operator remedies with one word.
+ *
+ * `connecting` and `cooling-down` are the pair most likely to be merged into
+ * `unreachable` by someone tidying up, and they must not be: one resolves on its
+ * own, the other will not until a timer passes. That is the difference between
+ * "wait" and "go look at your server".
+ *
+ * `not-provided` is a host that wires no provider at all. It is NOT the same as
+ * `not-configured`, which is a host that asked and found this workspace names no
+ * t3code server.
+ *
+ * ## `unreachable` is RESERVED, not emitted by Tower's provider
+ *
+ * Stated here because a status a consumer is told to expect and no producer can
+ * emit is worse than one that does not exist: it invites a branch nothing will
+ * ever take, and a reader who sees it in the union assumes somebody sends it.
+ *
+ * `ThreadBackendAvailability` — what Tower's connector actually answers — has no
+ * `unreachable` kind. A failed connect becomes `cooling-down`, which is strictly
+ * MORE informative: it carries when the failure was, why, and that no retry
+ * happens until a timer passes. A connect in flight is `connecting`. There is no
+ * third state where Tower knows the server is unreachable and has nothing to add.
+ *
+ * It is kept rather than deleted, deliberately. Deleting it would fold
+ * "unreachable" into "cooling-down" at the type level, and the next producer that
+ * genuinely observes unreachability — a host watching a socket it did not open,
+ * a future connector that reports a hard refusal separately from a backoff —
+ * would have to reintroduce it or lie. `readThreadRegistry` signals
+ * `T3CODE_UNREACHABLE` on it, and `agent-failure-matrix` carries that row.
+ *
+ * `spec-236-t3code-session-cache.test.ts` pins the set Tower's provider can
+ * actually emit, so this paragraph cannot quietly stop being true.
+ */
 export type T3codeThreadSnapshot =
   | { readonly status: 'not-provided' }
+  | { readonly status: 'not-configured' }
+  | { readonly status: 'misconfigured'; readonly message: string }
+  | { readonly status: 'connecting' }
+  | { readonly status: 'cooling-down'; readonly message: string; readonly since: string }
   | { readonly status: 'unreachable'; readonly message: string }
-  | { readonly status: 'available'; readonly threads: readonly LiveThread[] };
+  | {
+      readonly status: 'available';
+      readonly observedAt: string;
+      readonly threads: readonly LiveThread[];
+    }
+  | {
+      /**
+       * Observed, but no longer being watched. The content is last-known and is
+       * labelled as such; a consumer must not derive "finished" from it.
+       */
+      readonly status: 'stale';
+      readonly observedAt: string;
+      readonly ageMs: number;
+      readonly threads: readonly LiveThread[];
+    };
 
 export interface ThreadIdentity {
   /**
@@ -46,11 +159,15 @@ export interface ThreadIdentity {
    */
   readonly spawnedByArchitect?: string;
   /**
-   * The live t3code session state, present ONLY when t3code was reachable. Its
-   * absence is not "settled" — see `t3code` on the snapshot for which of the two
-   * this is.
+   * The live t3code session, present ONLY when t3code was observed AND returned
+   * one for this thread. Its absence is not "settled" — see `t3code` on the
+   * snapshot for which of the two this is.
+   *
+   * Structured rather than a bare word because deciding whether a row is
+   * finished needs the session's status AND the thread's settledness, and those
+   * are two facts on two objects in t3code's own contract.
    */
-  readonly sessionState?: string;
+  readonly session?: LiveThreadSession;
   /**
    * The last few messages addressed to this agent, newest first (Spec 146,
    * Phase 12). Absent when this agent has none.
@@ -72,6 +189,18 @@ export interface ThreadRegistrySnapshot {
    * first. Same word, two different situations.
    */
   readonly t3code: T3codeThreadSnapshot['status'];
+  /**
+   * When the reported content was observed, present on `available` and `stale`.
+   *
+   * A SIBLING FIELD RATHER THAN A PROMOTION OF `t3code` TO AN OBJECT, and the
+   * reason is cross-version. A consumer that predates this field distinguishes
+   * "older server" from "unreadable payload" by whether `t3code` is ABSENT, so
+   * turning `t3code` into an object makes a NEWER consumer reject an OLDER
+   * server's bare string as corrupt and blank the whole machine. A sibling
+   * leaves that direction validating, carrying no observation, which reads as an
+   * unknown age — and an unknown age is not freshness.
+   */
+  readonly t3codeObservation?: T3codeObservation;
   readonly architects: Readonly<Record<string, string>>;
   readonly builders: Readonly<Record<string, string>>;
   readonly identities: readonly ThreadIdentity[];
@@ -113,12 +242,44 @@ interface BuilderRow {
  * layer — no state was observed for this thread — and the snapshot's `t3code`
  * field is what distinguishes "we could not ask" from "we asked".
  */
-function sessionStateOf(
+function sessionOf(
   live: Map<string, LiveThread> | null,
   threadId: string,
-): { sessionState?: string } {
-  const state = live?.get(threadId)?.state;
-  return state === undefined ? {} : { sessionState: state };
+): { session?: LiveThreadSession } {
+  const session = live?.get(threadId)?.session;
+  return session === undefined ? {} : { session };
+}
+
+/**
+ * The observation to publish for a snapshot, or nothing.
+ *
+ * `available` is fresh by construction — the provider only calls it that while
+ * it is still watching — so its age is zero rather than absent. Publishing no
+ * age there would make "fresh" and "age unknown" the same payload.
+ *
+ * The failure statuses publish their MESSAGE, and `cooling-down` also publishes
+ * `since`. This function used to return `{}` for all of them, which meant the
+ * provider computed a reason and the wire threw it away: the client could say
+ * "this server is waiting before it retries" and never why, or for how long.
+ * A status word with the detail stripped off is a diagnosis with the evidence
+ * removed.
+ */
+function observationOf(t3code: T3codeThreadSnapshot): { t3codeObservation?: T3codeObservation } {
+  switch (t3code.status) {
+    case 'available':
+      return { t3codeObservation: { observedAt: t3code.observedAt, ageMs: 0 } };
+    case 'stale':
+      return { t3codeObservation: { observedAt: t3code.observedAt, ageMs: t3code.ageMs } };
+    case 'cooling-down':
+      return { t3codeObservation: { message: t3code.message, since: t3code.since } };
+    case 'unreachable':
+    case 'misconfigured':
+      return { t3codeObservation: { message: t3code.message } };
+    default:
+      // `not-provided`, `not-configured` and `connecting` have nothing to add
+      // beyond the word itself. Carrying an empty object would say they did.
+      return {};
+  }
 }
 
 function dbSignal(error: unknown): AgentStateSignal {
@@ -309,18 +470,42 @@ export function readThreadRegistry(
     `).all(workspace) as BuilderRow[];
   } catch (error) {
     signals.push(dbSignal(error));
-    return { t3code: t3code.status, architects: {}, builders: {}, identities: [], statuses, signals, messageLog: 'unreadable' };
+    return {
+      t3code: t3code.status,
+      ...observationOf(t3code),
+      architects: {},
+      builders: {},
+      identities: [],
+      statuses,
+      signals,
+      messageLog: 'unreadable',
+    };
   }
 
   const architectMap: Record<string, string> = {};
   const builderMap: Record<string, string> = {};
   const identities: ThreadIdentity[] = [];
   const consumed = new Set<string>();
-  const live = t3code.status === 'available'
+  // STALE CARRIES CONTENT TOO, and it has to.
+  //
+  // This attached only on `available`, so a stale snapshot published no per-row
+  // session at all — and the stale rule downstream ("a row whose last-known
+  // content would read as finished renders UNKNOWN with the age") had nothing to
+  // act on. Withholding the content does not make the answer safer; it makes it
+  // indistinguishable from "t3code returned no state for this thread", which is
+  // a different fact. The snapshot's `t3code` field is what says the content is
+  // last-known, and the consumer is what must not derive "finished" from it.
+  const live = t3code.status === 'available' || t3code.status === 'stale'
     ? new Map(t3code.threads.map((thread) => [thread.threadId, thread]))
     : null;
 
-  if (t3code.status === 'unreachable') {
+  // `cooling-down` IS a form of unreachable and emits the same signal, carrying
+  // its own message so the timer is visible. `misconfigured` and `not-configured`
+  // deliberately emit NOTHING here: neither is a statement about reachability,
+  // and borrowing T3CODE_UNREACHABLE for a workspace that simply names no server
+  // would send an operator to check a server that does not exist. Both are
+  // carried by the snapshot status itself and stated once at the machine.
+  if (t3code.status === 'unreachable' || t3code.status === 'cooling-down') {
     signals.push({ code: 'T3CODE_UNREACHABLE', message: t3code.message });
   }
 
@@ -370,7 +555,7 @@ export function readThreadRegistry(
       roleId: row.id,
       workspacePath: workspace,
       management: 'unmanaged',
-      ...sessionStateOf(live, row.thread_id),
+      ...sessionOf(live, row.thread_id),
     });
     if (live && !live.has(row.thread_id)) {
       signals.push({
@@ -425,7 +610,7 @@ export function readThreadRegistry(
       management,
       ...(porch ? { porch } : {}),
       ...(row.spawned_by_architect ? { spawnedByArchitect: row.spawned_by_architect } : {}),
-      ...sessionStateOf(live, row.thread_id),
+      ...sessionOf(live, row.thread_id),
     });
     if (!porch && resolved.candidates > 1) {
       // NOT "unmanaged". Several porch records live under this worktree and none
@@ -506,7 +691,7 @@ export function readThreadRegistry(
         role: 'unmanaged',
         workspacePath: workspace,
         management: 'unmanaged',
-        ...(thread.state !== undefined ? { sessionState: thread.state } : {}),
+        ...(thread.session !== undefined ? { session: thread.session } : {}),
       });
       signals.push({
         code: 'THREAD_UNMANAGED',
@@ -547,6 +732,7 @@ export function readThreadRegistry(
 
   return {
     t3code: t3code.status,
+    ...observationOf(t3code),
     architects: architectMap,
     builders: builderMap,
     identities: withMessages,

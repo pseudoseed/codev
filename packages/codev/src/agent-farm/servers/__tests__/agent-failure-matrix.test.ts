@@ -226,6 +226,30 @@ describe('failure matrix signals are distinct', () => {
       PAIRING_AUTHORITY_REQUIRED: 'argument validation thrown by issue()',
       // Stream event types, not signal codes. STATE_STREAM_WATCH_FAILED is both —
       // it carries a signal whose code equals the event type.
+      // Spec 236 phase 4: approval operations. The three FAILURE states are matrix
+      // rows; these are the successes and the refusals, which answer "your request
+      // was wrong, or it worked" rather than "a service or file failed".
+      APPROVAL_OPERATION_STORE_LOCKED: 'the store lock could not be taken; a retry succeeds, like APPROVAL_STORE_LOCKED',
+      APPROVAL_OPERATION_ALREADY_SETTLED: 'a caller tried to change a settled record; a caller bug, distinct from UNKNOWN',
+      APPROVAL_OPERATIONS_NOT_AVAILABLE: '501 from a host that wires no operation store; a capability statement, not a failure',
+      APPROVAL_OPERATION_SUBMITTED: 'the SUCCESS case of submitting an approval',
+      APPROVAL_OPERATION_SETTLED: 'an operation reached a terminal state; `state` says which, and none of them is a service failure',
+      FOREIGN_MACHINE: 'a session presented from a machine it was not opened on; the route answers HUMAN_SESSION_FOREIGN_MACHINE, which is the operator-facing code',
+      HUMAN_SESSION_FOREIGN_MACHINE: '403 for a session used from another device; a per-request refusal, and the device that owns it still works',
+      APPROVAL_OPERATION_RESUMED: 'the submitter asked again after losing its 202 and was handed its own operation back; a recovery, and the opposite of a failure',
+      APPROVAL_ALREADY_IN_FLIGHT: 'a second submit for one project by ANOTHER session; the client reports it unconfirmed, never refused, because that run may approve the gate',
+      APPROVAL_CONCURRENCY_LIMIT: 'a bound deliberately refusing work; not a failure of anything',
+      // Spec 236 phase 3: `afx pair`. Operator-facing command outcomes, all of
+      // them answering "your argument was wrong" or naming a store fault the
+      // command already explains in full. None is a codev-agent service failure a
+      // client renders, which is what the matrix is about.
+      PAIR_PURPOSE_REQUIRED: 'argument validation; --purpose has no default by design',
+      PAIR_PURPOSE_UNKNOWN: 'argument validation; the message names both valid values',
+      PAIR_AUTHORITY_EMPTY: 'argument validation; an explicitly empty authority is refused',
+      PAIR_TTL_INVALID: 'argument validation; a non-numeric --ttl-minutes',
+      PAIR_MACHINE_REQUIRED: 'argument validation; revoke needs a name',
+      PAIR_STORE_UNREADABLE: 'a CLI-side restatement of a store fault, for an operator at a terminal',
+      PAIR_REVOKE_PARTIAL: 'the credential was revoked and the capability half was not; a partial outcome the command prints in full',
       PROTOCOL_STATE_SNAPSHOT: 'stream event type, not a failure signal',
       PROTOCOL_STATE_RECONCILED: 'stream event type; the repair is STREAM_PROJECTION_REPAIRED',
       STREAM_AUTHORIZATION_LOST: 'stream event type announcing WHY a stream closed; the code it carries (e.g. MACHINE_CREDENTIAL_REVOKED) is the matrix row',
@@ -339,14 +363,22 @@ describe('failure matrix signals are distinct', () => {
       '../lib/approval-capability.ts',
       '../lib/machine-credentials.ts',
       '../lib/pairing.ts',
+      // Spec 236. Added with the phases that introduced them, so their codes are
+      // classified at the moment they exist rather than discovered later by
+      // somebody reading the matrix and finding it short.
+      '../lib/approval-operations.ts',
+      '../commands/pair.ts',
     ];
     const serversDir = join(dirname(fileURLToPath(import.meta.url)), '..');
     const present = readdirSync(serversDir);
     const libPresent = readdirSync(join(serversDir, '..', 'lib'));
+    const commandsPresent = readdirSync(join(serversDir, '..', 'commands'));
     // If a file is renamed away, fail rather than silently scanning less.
     for (const file of CODEV_AGENT_FILES) {
       if (file.startsWith('../lib/')) expect(libPresent).toContain(file.slice('../lib/'.length));
-      else expect(present).toContain(file);
+      else if (file.startsWith('../commands/')) {
+        expect(commandsPresent).toContain(file.slice('../commands/'.length));
+      } else expect(present).toContain(file);
     }
 
     // THE GUARD ASSERTS ITS OWN REACH.
@@ -1169,7 +1201,12 @@ describe('failure matrix', () => {
       machineCredentials: machine.store,
       pairings: new PairingStore({ root: tmp() }),
     });
-    const issued = sessions.completePairing({ pairingId: 'pair-ok', principalKind: 'human-client' });
+    const issued = sessions.completePairing({
+      pairingId: 'pair-ok', principalKind: 'human-client',
+      // The machine whose credential these requests carry. A session is bound
+      // to one device, so a fixture that omits it is presentable from nowhere.
+      machine: 'matrix-test-machine',
+    });
     const out = fakeRes();
     const req = {
       method: 'GET',
@@ -1298,7 +1335,12 @@ describe('failure matrix', () => {
       machineCredentials: machine.store,
       pairings: new PairingStore({ root: tmp() }),
     });
-    const issued = sessions.completePairing({ pairingId: 'pair-issue', principalKind: 'human-client' });
+    const issued = sessions.completePairing({
+      pairingId: 'pair-issue', principalKind: 'human-client',
+      // The machine whose credential these requests carry. A session is bound
+      // to one device, so a fixture that omits it is presentable from nowhere.
+      machine: 'matrix-test-machine',
+    });
     const headers = { ...machine.headers, [HUMAN_SESSION_HEADER]: `${issued.sessionId}.${issued.credential}` };
     const url = new URL('http://localhost/api/agent/v1/approval-capabilities');
 

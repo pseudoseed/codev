@@ -74,7 +74,17 @@ import {
 import { ApprovalCapabilityStore, ApprovalNonceStore } from '../lib/approval-capability.js';
 import { MachineCredentialStore } from '../lib/machine-credentials.js';
 import { PairingStore } from '../lib/pairing.js';
+import { T3codeSessionCache } from './t3code-session-cache.js';
+import { ApprovalOperationStore } from '../lib/approval-operations.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
+
+/**
+ * The live session cache, so shutdown can stop its interval.
+ *
+ * Module-scoped rather than passed around because shutdown is a module-level
+ * function here, the same way every other subsystem in this file is torn down.
+ */
+let t3codeSessionCache: T3codeSessionCache | null = null;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -235,7 +245,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // 6b. Close per-workspace .codev/config(.local).json watchers.
   stopAllCodevConfigWatchers();
 
-  // 6c. Stop accepting codev-agent state/session work.
+  // 6c. Stop accepting codev-agent state/session work. The session cache stops
+  // FIRST: its sweep reads global.db, and a pass landing after the database is
+  // closed would log a failure that reads like a t3code problem.
+  t3codeSessionCache?.stop();
+  t3codeSessionCache = null;
   shutdownAgentRoutes();
 
   // 7. Tear down instance module (Spec 0105 Phase 3)
@@ -731,6 +745,11 @@ async function bootSequence(): Promise<void> {
   // The registry is in-memory: a restart expires every human session instead
   // of resurrecting a replayable credential.
   const humanSessions = new HumanPairedSessionRegistry();
+  // Spec 236 phase 2: the background half of the t3code session provider. Started
+  // after the routes are wired so a sweep cannot race an unset route context, and
+  // held at module scope so shutdown can stop its interval.
+  const t3codeSessions = new T3codeSessionCache({ db: getGlobalDb, log });
+  t3codeSessionCache = t3codeSessions;
   // Spec 146 Phase 6: capabilities outlive a Tower restart (a human should not
   // re-pair to approve a gate after a crash), so unlike the session registry
   // these are file-backed. What is stored is a verifier, never a credential.
@@ -740,6 +759,9 @@ async function bootSequence(): Promise<void> {
     humanSessions,
     approvalCapabilities: new ApprovalCapabilityStore(),
     approvalNonces: new ApprovalNonceStore(),
+    // Spec 236: where an approval lives between its submit and its report, so a
+    // project whose phase declares checks can be approved from the client at all.
+    approvalOperations: new ApprovalOperationStore(),
     // Spec 146 Phase 7: per-machine credentials, one file per machine, so
     // revoking one machine cannot disturb another's bytes.
     machineCredentials: new MachineCredentialStore(),
@@ -748,20 +770,23 @@ async function bootSequence(): Promise<void> {
       const wanted = normalizeWorkspacePath(workspacePath);
       return getKnownWorkspacePaths().some((known) => normalizeWorkspacePath(known) === wanted);
     },
-    // NO `t3codeSnapshot`, AND THAT IS A STATED GAP RATHER THAN AN OVERSIGHT.
+    // Spec 236: the provider phase 11 recorded as a stated gap.
     //
-    // Spec 146 criterion 3 wants working / turning / settled on every row, and
-    // those come from t3code's session state. `t3codeSnapshot` is SYNCHRONOUS
-    // and a t3 connection is not, so a real provider needs a cached background
-    // subscription plus per-workspace t3 connection config Tower does not hold
-    // yet. Until that exists, every snapshot this server sends carries
-    // `t3code: 'not-provided'`, and the client renders session state as UNKNOWN
-    // with that reason rather than inventing one.
+    // `t3codeSnapshot` is SYNCHRONOUS and a t3 connection is not, which is why it
+    // went unwired. The cache resolves that by splitting the two halves: a
+    // background maintainer owns the connect, the subscriptions and the
+    // `global.db` rescan, and this reader returns what it last wrote plus how old
+    // that is. Nothing on this line performs I/O.
     //
-    // `spec-146-phase-11-production-wiring.test.ts` asserts exactly this, so the
-    // gap is recorded and a future phase that wires a provider will have to
-    // update the record rather than discover it.
+    // WHAT THIS DOES NOT MAKE TRUE, said here because the criterion is easy to
+    // over-read: a row with no `thread_id` has no session to observe, and every
+    // architect and builder row in `global.db` is terminal-backed today. Those
+    // rows report that they have no thread — which is a different answer from
+    // "not provided", and the point of wiring this is that the difference is now
+    // sayable.
+    t3codeSnapshot: (workspacePath) => t3codeSessions.snapshot(workspacePath),
   });
+  t3codeSessions.start();
 
   // Spec 399: Initialize cron scheduler after instances are ready.
   // Spec 1313 (Phase 6): cron delivers through the mailbox + gate via `deliverCronMessage`

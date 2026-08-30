@@ -17,6 +17,7 @@ import {
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 import {
   AGENT_ROUTE_PREFIX,
+  APPROVAL_RECEIPT_HEADER,
   HUMAN_SESSION_HEADER,
   MACHINE_CREDENTIAL_HEADER,
   PAIRING_TOKEN_HEADER,
@@ -25,6 +26,12 @@ import {
   type AgentAuthOutcome,
 } from './agent-auth.js';
 import { MACHINE_SIGNAL, type MachineCredentialStore } from '../lib/machine-credentials.js';
+import {
+  APPROVAL_OPERATION_SIGNAL,
+  mayRead,
+  type ApprovalOperationState,
+  type ApprovalOperationStore,
+} from '../lib/approval-operations.js';
 import { PAIRING_SIGNAL, type PairingStore } from '../lib/pairing.js';
 import { openAgentStateSse, type AgentStreamSnapshot } from './agent-state-stream.js';
 import { readWorkspaceStatuses } from './status-reader.js';
@@ -50,6 +57,20 @@ interface StoredHumanSession {
   readonly expiresAt: number;
   /** Carried from the token, so an approval can record what authorized it. */
   readonly authority?: string;
+  /**
+   * The PAIRED MACHINE this session was opened from.
+   *
+   * A session is not a free-floating credential: it belongs to one device. The
+   * registry stored no machine, and the machine credential and the session were
+   * verified INDEPENDENTLY of each other — so a session issued on machine A
+   * could be presented alongside machine B's credential and both checks passed.
+   * That defeats the per-device ownership and revocation model this whole spec
+   * builds, by presenting two credentials that were never compared.
+   *
+   * Optional only for sessions minted before this field existed; `recognize`
+   * treats an absent machine as "unbindable" rather than as "matches anything".
+   */
+  readonly machine?: string;
   lastSeenAt: number;
 }
 
@@ -60,6 +81,8 @@ export interface HumanPairingAttestation {
   readonly principalKind: 'human-client' | 'builder' | 'architect';
   readonly pairedAt?: number;
   readonly lifetimeMs?: number;
+  /** The paired machine opening this session, from its machine credential. */
+  readonly machine?: string;
   /**
    * WHAT AUTHORIZED THE TOKEN THIS SESSION WAS PAIRED WITH, verbatim.
    *
@@ -84,7 +107,12 @@ export interface HumanSessionRecognition {
   readonly sessionId?: string;
   /** What the token this session was paired with claimed as its authority. */
   readonly authority?: string;
-  readonly reason?: 'MISSING' | 'MALFORMED' | 'UNKNOWN' | 'EXPIRED' | 'IDLE' | 'INVALID' | 'REVOKED';
+  /** The machine this session was opened from, for callers that must compare it. */
+  readonly machine?: string;
+  readonly reason?:
+    | 'MISSING' | 'MALFORMED' | 'UNKNOWN' | 'EXPIRED' | 'IDLE' | 'INVALID' | 'REVOKED'
+    /** Presented from a different machine than the one it was opened from. */
+    | 'FOREIGN_MACHINE';
 }
 
 function verifier(credential: string): Buffer {
@@ -99,6 +127,20 @@ function verifier(credential: string): Buffer {
  * The host retains only a verifier, sessions die on codev-agent restart, expire
  * after at most eight hours, and also expire after thirty idle minutes.
  */
+/**
+ * The machine name used when an authenticated outcome carries none.
+ *
+ * `AgentAuthOutcome.machine` is typed optional, and a route reached with no
+ * machine name cannot bind a session to a device. This value can never equal a
+ * stored machine — sessions record the name from a verified credential, and a
+ * credential with no name is refused at authentication — so passing it REFUSES,
+ * where passing `undefined` used to skip the check entirely.
+ *
+ * A sentinel rather than a conditional, because the conditional is the shape
+ * that keeps producing fail-opens here: absent read as permitted.
+ */
+const UNNAMED_MACHINE = '\u0000unnamed-machine';
+
 export class HumanPairedSessionRegistry {
   readonly #sessions = new Map<string, StoredHumanSession>();
   /** sessionId → original expiresAt. Dropped once that time passes. */
@@ -126,6 +168,7 @@ export class HumanPairedSessionRegistry {
       pairedAt,
       expiresAt,
       ...(attestation.authority ? { authority: attestation.authority } : {}),
+      ...(attestation.machine ? { machine: attestation.machine } : {}),
       lastSeenAt: pairedAt,
     });
     return {
@@ -136,7 +179,26 @@ export class HumanPairedSessionRegistry {
     };
   }
 
-  recognize(presentation: string | undefined): HumanSessionRecognition {
+  /**
+   * Recognise a presented session, and require that it is the machine the session
+   * was opened from.
+   *
+   * THE MACHINE ARGUMENT IS THE WHOLE POINT. Without it the caller has verified
+   * two credentials that were never compared with each other, which is not the
+   * same as having verified one device.
+   *
+   * REQUIRED, NOT OPTIONAL, AND THAT IS THE FOURTH TIME. It was `machine?`, so a
+   * caller that omitted it got no binding at all and no error — the same
+   * absent-reads-as-permitted shape as the identity field checked only when
+   * present, the receipt accepted when missing, and the machine that authorised
+   * `mayRead` by being undefined. Every production caller passes one; making it
+   * required is what stops the fifth caller from being the exception, and it
+   * fails at compile time rather than at a boundary nobody is watching.
+   *
+   * A caller that genuinely has no machine has not authenticated one, and cannot
+   * be answered honestly here — so there is no value to pass and no call to make.
+   */
+  recognize(presentation: string | undefined, machine: string): HumanSessionRecognition {
     if (presentation === undefined || presentation.length === 0) return { paired: false, reason: 'MISSING' };
     const separator = presentation.indexOf('.');
     if (separator <= 0 || separator === presentation.length - 1) return { paired: false, reason: 'MALFORMED' };
@@ -160,8 +222,25 @@ export class HumanPairedSessionRegistry {
     }
     const presented = verifier(credential);
     if (!timingSafeEqual(presented, stored.verifier)) return { paired: false, reason: 'INVALID' };
+    /*
+     * THE SESSION BELONGS TO ONE DEVICE, and the check happens BEFORE
+     * `lastSeenAt` is touched: a request from the wrong machine must not keep a
+     * session alive, or a replaying device could hold someone else's session
+     * open indefinitely by failing this very check.
+     *
+     * A session with no recorded machine predates this field. It is refused
+     * rather than admitted: "I do not know which device this belongs to" is not
+     * "it belongs to this one", and sessions are memory-only, so the entire
+     * population of unbindable sessions dies with the next restart.
+     */
+    if (stored.machine !== machine) return { paired: false, reason: 'FOREIGN_MACHINE' };
     stored.lastSeenAt = now;
-    return { paired: true, sessionId, ...(stored.authority ? { authority: stored.authority } : {}) };
+    return {
+      paired: true,
+      sessionId,
+      ...(stored.authority ? { authority: stored.authority } : {}),
+      ...(stored.machine ? { machine: stored.machine } : {}),
+    };
   }
 
   revoke(sessionId: string): boolean {
@@ -204,12 +283,46 @@ export interface AgentRouteContext {
   readonly pairings: PairingStore;
   /** Optional only because the browser normally joins t3code itself. */
   readonly t3codeSnapshot?: (workspacePath: string) => T3codeThreadSnapshot;
+  /**
+   * Spec 236: where an approval lives between its submit and its report.
+   *
+   * Optional because a host may serve the read surface without accepting work it
+   * has nowhere to record — `tools/codev-agent-host` is one. The routes answer
+   * 501 rather than accepting and losing it.
+   */
+  readonly approvalOperations?: ApprovalOperationStore;
 }
 
 let routeContext: AgentRouteContext | null = null;
 
 export function initAgentRoutes(context: AgentRouteContext): void {
   routeContext = context;
+  /*
+   * RESOLVE INTERRUPTED APPROVALS BEFORE THE SURFACE CAN ANSWER A POLL.
+   *
+   * A record left `running` by a killed Tower would otherwise be reported as in
+   * progress for the rest of the store's life — "running forever" as a reachable
+   * state rather than an impossible one. Done here, synchronously, because
+   * `routeContext` is set on the line above and a request can arrive immediately
+   * after this function returns.
+   */
+  if (context.approvalOperations) {
+    try {
+      const resolved = context.approvalOperations.resolveInterrupted((operation) => {
+        const gate = readScopedGate(operation.workspacePath, operation.projectId, operation.gateName);
+        if (gate === null) return 'unreadable';
+        return gate.status === 'approved' ? 'approved' : 'pending';
+      });
+      for (const operation of resolved) {
+        context.log('WARN', `approval ${operation.operationId}: ${operation.message ?? 'interrupted'}`);
+      }
+    } catch (error) {
+      // A store that will not open must not stop Tower from starting. The
+      // records stay unresolved and the next start tries again; saying nothing
+      // would make that silent.
+      context.log('ERROR', `could not resolve interrupted approvals: ${(error as Error).message}`);
+    }
+  }
   // Startup reconciliation is read-only.  Phase 8 can begin writing thread_id
   // without changing this code; any two-store disagreement is logged, not fixed.
   for (const workspacePath of knownWorkspaceCandidates(context.db())) {
@@ -395,6 +508,8 @@ function handleApprovalRoute(
   context: AgentRouteContext,
   humanSessionId: string,
   humanSessionAuthority: string | undefined,
+  /** The PAIRED CLIENT's name, from its machine credential. Not this host's. */
+  callerMachine: string,
 ): void {
   if (req.method === 'POST' && url.pathname === `${AGENT_ROUTE_PREFIX}/approval-capabilities`) {
     void readJsonBody(req).then((body) => {
@@ -430,6 +545,13 @@ function handleApprovalRoute(
         humanSession: { paired: true, sessionId: humanSessionId, authority: humanSessionAuthority },
         declaredPrincipal: typeof body.principalKind === 'string' ? body.principalKind : undefined,
         machine: declaredMachine,
+        /*
+         * The DEVICE, alongside the host. Two namespaces, and the record needs
+         * both: `machine` is who verifies, `pairedMachine` is who holds it. With
+         * only the first, `afx pair revoke laptop` matched nothing and said so
+         * truthfully while the laptop kept working.
+         */
+        pairedMachine: callerMachine,
         lifetimeMs: typeof body.lifetimeMs === 'number' ? body.lifetimeMs : undefined,
       });
       if (!outcome.issued) {
@@ -688,6 +810,14 @@ function handleHumanSessionIssue(
         principalKind: 'human-client',
         lifetimeMs: typeof body.lifetimeMs === 'number' ? body.lifetimeMs : undefined,
         authority: redemption.authority,
+        /*
+         * THE SESSION IS BOUND TO THIS DEVICE AT BIRTH.
+         *
+         * This route is `machine-credential`, so the machine here is the
+         * authenticated caller's own — not a value it asked for. Recording it is
+         * what makes the session presentable from this machine and nowhere else.
+         */
+        machine,
       });
     } catch (error) {
       // The token was spent on a ceremony that did not complete. Put it back
@@ -927,6 +1057,563 @@ function handleGateApprove(
 }
 
 /**
+ * Submit an approval that outlives its request (Spec 236, phase 5).
+ *
+ * ## Why this exists beside `handleGateApprove` rather than replacing it
+ *
+ * The synchronous route sets `refuseIfChecksWouldRun: true` and keeps doing so.
+ * That refusal is correct for a caller that must answer inside its request, and
+ * it is what a client gets if it does not opt into this path. **Nothing that
+ * works today changes behaviour.**
+ *
+ * What this adds is the case the refusal could not serve: an ordinary project
+ * whose phase declares checks. Porch runs them here in the background, and the
+ * client polls. A request timeout was never the alternative — a client that gives
+ * up does not stop porch, so it would abandon a call that goes on to approve the
+ * gate anyway.
+ *
+ * ## Everything is checked BEFORE an operation exists
+ *
+ * A capability belonging to another session must not create a record. An
+ * operation is a durable artifact an operator can see; creating one and then
+ * refusing it would put a failed approval in their history for a request that
+ * never had the right to make one.
+ *
+ * ## Named to share no prefix with `handleGateApprove`
+ *
+ * `spec-146-phase-11-approval-writes.test.ts` slices this file from
+ * `indexOf('function handleGateApprove')`. Any name beginning with that string —
+ * `handleGateApproveAsync`, `handleGateApprovalStatus` — placed earlier would
+ * capture the match and fail that test against the wrong function, reading as a
+ * regression in code that is fine.
+ */
+function handleApprovalSubmit(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  workspacePath: string,
+  context: AgentRouteContext,
+  humanSessionId: string,
+  /** The PAIRED CLIENT's name, from the machine credential. Not this host's. */
+  callerMachine: string,
+): void {
+  void readJsonBody(req).then((body) => {
+    const projectId = body && typeof body.projectId === 'string' ? body.projectId : '';
+    const gateName = body && typeof body.gateName === 'string' ? body.gateName : '';
+    const capability = body && typeof body.capability === 'string' ? body.capability : '';
+    const nonce = body && typeof body.nonce === 'string' ? body.nonce : '';
+    if (!projectId || !gateName || !capability || !nonce) {
+      writeJson(res, 400, {
+        signal: 'APPROVAL_REQUEST_MALFORMED',
+        message: 'projectId, gateName, capability and nonce are all required',
+      });
+      return;
+    }
+
+    const operations = context.approvalOperations;
+    if (!operations) {
+      // A host that wired no operation store cannot accept work it has nowhere to
+      // record. Saying so beats accepting and losing it.
+      writeJson(res, 501, {
+        signal: 'APPROVAL_OPERATIONS_NOT_AVAILABLE',
+        message: 'this host does not accept asynchronous approvals; use the synchronous route',
+      });
+      return;
+    }
+
+    // The same session check the synchronous route makes, and for the same
+    // reason — one session must not spend another's capability — but made BEFORE
+    // an operation record exists.
+    const capabilityId = capability.split('.')[0] ?? '';
+    const stored = context.approvalCapabilities.describe(capabilityId);
+    if (!stored || stored.revokedAt || Date.parse(stored.expiresAt) <= Date.now()) {
+      writeJson(res, 404, {
+        signal: APPROVAL_SIGNAL.APPROVAL_CAPABILITY_UNKNOWN,
+        message: 'no live capability with that id on this host',
+      });
+      return;
+    }
+    if (stored.sessionId !== humanSessionId) {
+      writeJson(res, 403, {
+        signal: APPROVAL_SIGNAL.APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION,
+        message: 'that capability was issued to a different human session',
+      });
+      return;
+    }
+
+    const submission = operations.submit({
+      workspacePath,
+      projectId,
+      gateName,
+      sessionId: humanSessionId,
+      /*
+       * THE PAIRED CLIENT, NOT THE HOST — and they are different namespaces.
+       *
+       * `stored.machine` is the CAPABILITY's machine, which is the Tower host
+       * (`ApprovalCapabilityStore` defaults it to `hostname()`) because a
+       * capability is issued for the host that will verify it. The authenticated
+       * caller is the paired DEVICE — 'laptop', 'ipad'. Recording the host here
+       * made `mayRead` compare a hostname against a device name after a restart,
+       * so the receipt path could never match and the fix that added it did
+       * nothing on any real device.
+       */
+      machine: callerMachine,
+    });
+    if (!submission.accepted) {
+      /*
+       * THE SUBMITTER ASKING AGAIN IS A RECOVERY, NOT A CONFLICT.
+       *
+       * The case that produces the already-in-flight code is the retry after a
+       * lost 202
+       * — the human clicked, nothing came back, they clicked again. Answering
+       * that with a refusal tells them their approval was REFUSED about one that
+       * may be succeeding, on the single action this client exists to perform.
+       *
+       * Same human session AND same machine is the submitter itself, so it is
+       * handed back the operation it started, receipt included, and its poll
+       * loop picks up where the lost response left off. Anyone else still gets
+       * the 409 below: they did not start it and must not be given its receipt.
+       */
+      const running = submission.inFlight;
+      if (
+        running
+        && submission.code === APPROVAL_OPERATION_SIGNAL.APPROVAL_ALREADY_IN_FLIGHT
+        && running.sessionId === humanSessionId
+        && running.machine === callerMachine
+        /*
+         * THE SAME GATE, THE SAME PROJECT, THE SAME WORKSPACE — ALL THREE.
+         *
+         * Single-flight is PROJECT-wide: one approval per project at a time,
+         * whichever gate it is for. So the in-flight record handed back here may
+         * belong to a DIFFERENT GATE of the same project, and resuming it would
+         * hand this request another gate's operation. The client would then poll
+         * it, see it succeed, and report THIS gate approved on the strength of a
+         * record about a different one.
+         *
+         * That is a false thing reported as true, attributed to the wrong object,
+         * on the approval path — categorically worse than the unknown-reported-
+         * as-false conflations this project has spent its rounds removing.
+         *
+         * A different gate of the same project gets the 409 below, which is
+         * correct: its approval genuinely cannot start yet.
+         */
+        && running.gateName === gateName
+        && running.projectId === projectId
+        && running.workspacePath === workspacePath
+      ) {
+        writeJson(res, 202, {
+          signal: APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_RESUMED,
+          operationId: running.operationId,
+          receipt: running.receipt,
+          projectId: running.projectId,
+          gateName: running.gateName,
+          // THE OPERATION'S REAL STATE, not 'submitted'. It may have started
+          // running, or settled between the lost response and this retry, and
+          // saying 'submitted' about a finished run is a label contradicting the
+          // record the client is about to poll.
+          state: running.state,
+          message:
+            `this approval was already submitted as operation ${running.operationId}; `
+            + 'resuming it rather than starting a second run of the same checks.',
+        });
+        return;
+      }
+      // 409, not 400: the request is well formed and would be valid at another
+      // moment. A client told "bad request" retries with different input; one
+      // told "conflict" polls the operation it was just handed the id of — which
+      // is why the id is in the body and not only in the prose.
+      writeJson(res, 409, {
+        signal: submission.code,
+        message: submission.message,
+        ...(running ? { operationId: running.operationId } : {}),
+      });
+      return;
+    }
+
+    const { operationId, receipt } = submission.operation;
+    // ACCEPTED, not approved. 202 is the whole point of this route: the gate is
+    // NOT approved at this moment, and a client that read 200 as done would
+    // report an outcome that has not happened.
+    writeJson(res, 202, {
+      signal: APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_SUBMITTED,
+      operationId,
+      /*
+       * RETURNED ONCE, AND IT IS WHAT MAKES THE INTERRUPTED STATE READABLE.
+       *
+       * Human sessions are memory-only, so the restart that resolves an
+       * operation to `interrupted` also destroys the session that submitted it —
+       * and a poll authorised on session identity alone could never succeed
+       * afterwards. The durable record whose whole purpose is surviving that
+       * restart would have been unobservable by the client that needed it.
+       *
+       * Hold it for as long as you care about this approval; present it with the
+       * same machine credential to read the outcome after a restart.
+       */
+      receipt,
+      projectId,
+      gateName,
+      state: 'submitted',
+      // NO `poll` URL. The first draft echoed one back, built by interpolating
+      // AGENT_ROUTE_PREFIX — which put a path literal in this file that names no
+      // route, and the dispatcher-literal guard in `agent-auth.test.ts` caught it.
+      // That guard exists to find a path the router serves without a table entry,
+      // and a URL the server merely *quotes* is exactly the noise that would
+      // train someone to loosen it. The client already holds both halves: it just
+      // called this route on this workspace, and it now has the id.
+    });
+
+    // The response is already sent. From here nothing may write to `res`, and
+    // every outcome goes into the store instead — which is what the client polls.
+    void runApprovalOperation({
+      context,
+      operations,
+      operationId,
+      workspacePath,
+      projectId,
+      gateName,
+      capability,
+      nonce,
+      fallbackMachine: stored.machine,
+    });
+  }).catch((error: unknown) => guardRouteFailure(res, context, 'approval-submit', error));
+}
+
+/**
+ * Run one approval to completion, recording every outcome in the store.
+ *
+ * THE RESPONSE HAS ALREADY GONE. So this function's only job is to leave the
+ * store holding something true, and its failure mode is not "the client sees an
+ * error" but "the client sees nothing, or sees the wrong thing, forever".
+ *
+ * `refuseIfChecksWouldRun` is deliberately NOT set: running the checks is the
+ * entire reason this path exists. `onRefusal: 'throw'` is not optional — porch's
+ * CLI answers a refusal with `process.exit(1)`, and that inside Tower would end
+ * the process.
+ */
+async function runApprovalOperation(input: {
+  readonly context: AgentRouteContext;
+  readonly operations: ApprovalOperationStore;
+  readonly operationId: string;
+  readonly workspacePath: string;
+  readonly projectId: string;
+  readonly gateName: string;
+  readonly capability: string;
+  readonly nonce: string;
+  readonly fallbackMachine: string;
+}): Promise<void> {
+  const { context, operations, operationId } = input;
+  try {
+    // WHAT IS BEING RUN, read before it starts.
+    //
+    // `markRunning` took these from the first commit and nothing ever passed
+    // them, so `phase` and `checks` could never appear in a poll response — the
+    // store accepted them, the response spread them, and the one call that would
+    // populate them passed neither. An operator polling `running` got the word
+    // and nothing to wait on, which is a spinner.
+    operations.markRunning(
+      operationId,
+      await describeWork(input.workspacePath, input.projectId, input.gateName),
+    );
+    const { approve } = await import('../../commands/porch/index.js');
+    const result = await approve(input.workspacePath, input.projectId, input.gateName, true, undefined, {
+      // The SAME deliberately minimal environment the synchronous route uses.
+      // Inheriting process.env would carry Tower's own CODEV_ARCHITECT_NAME /
+      // CODEV_WORKTREE_ROOT into the caller attribution and record this approval
+      // as an architect session, which it is not.
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        ...(process.env.CODEV_AGENT_FARM_DIR
+          ? { CODEV_AGENT_FARM_DIR: process.env.CODEV_AGENT_FARM_DIR }
+          : {}),
+        [CAPABILITY_ENV_VAR]: input.capability,
+        [NONCE_ENV_VAR]: input.nonce,
+      },
+      cwd: input.workspacePath,
+      capabilities: context.approvalCapabilities,
+      nonces: context.approvalNonces,
+      onRefusal: 'throw',
+      // NOT SET, and that is this route's whole reason for existing.
+    });
+
+    const record = result.record;
+    operations.settle(operationId, {
+      state: 'succeeded',
+      record: {
+        // EVERY FIELD FROM WHAT PORCH PERSISTED. `approve` returns normally when
+        // the gate was ALREADY approved, so reporting the requesting session and
+        // a fresh timestamp would claim this session approved a gate somebody
+        // else had — the defect the synchronous route was fixed for.
+        machine: record?.machine ?? input.fallbackMachine,
+        sessionId: record?.session_id ?? null,
+        approvedAt: result.approvedAt ?? null,
+        ...(record?.authority ? { authority: record.authority } : {}),
+        outcome: result.outcome,
+        // FORWARDED, as the synchronous route has always done. Dropping these
+        // reported a `committed-not-pushed` approval as plain success — a caveat
+        // on a real approval, removed on the path ordinary projects must use.
+        ...(result.delivery
+          ? { delivery: result.delivery, deliveryMessage: result.deliveryMessage }
+          : {}),
+      },
+    });
+  } catch (error) {
+    await settleApprovalFailure(input, error);
+  }
+}
+
+/**
+ * The phase this approval will run, and the checks it will run there.
+ *
+ * Asked with PORCH'S OWN COMPUTATION — `getPhaseChecks` after overrides — rather
+ * than a second reading of the protocol that could drift from it. The names an
+ * operator is shown while waiting are then the names of the commands that
+ * actually run.
+ *
+ * Best effort by design: this is display content for a `running` record, and a
+ * project whose protocol cannot be loaded still has an approval worth running.
+ * It reports what it could read and nothing it could not.
+ */
+async function describeWork(
+  workspacePath: string,
+  projectId: string,
+  gateName: string,
+): Promise<{ phase?: string; checks?: readonly string[] }> {
+  try {
+    const status = readWorkspaceStatuses(workspacePath, buildersOf(workspacePath))
+      .find((result) => result.ok && result.status.projectId === projectId);
+    if (!status?.ok) return {};
+
+    /*
+     * `verify-approval` MOVES THE PHASE BEFORE THE CHECKS ARE COMPUTED.
+     *
+     * `approve()` enters `verify` first — its own comment says why: so the checks
+     * below are the verify phase's, which are none. Reading the phase off
+     * `status.yaml` therefore names the phase the project is LEAVING, and would
+     * report `review`'s check set for a run that executes verify's.
+     *
+     * This is the one case where this display could be confidently wrong rather
+     * than merely absent, so it is special-cased rather than left to the general
+     * read. The answer does not depend on the transition succeeding: if it
+     * cannot, `approve` throws and nothing runs.
+     */
+    if (gateName === 'verify-approval') return { phase: 'verify', checks: [] };
+    const { loadProtocol, getPhaseChecks } = await import('../../commands/porch/protocol.js');
+    const { loadCheckOverrides } = await import('../../commands/porch/config.js');
+    const protocol = loadProtocol(workspacePath, status.status.protocol);
+    const overrides = loadCheckOverrides(workspacePath, status.status.protocol);
+    const checks = Object.keys(
+      getPhaseChecks(protocol, status.status.phase, overrides ?? undefined, workspacePath),
+    );
+    return { phase: status.status.phase, ...(checks.length > 0 ? { checks } : {}) };
+  } catch {
+    // A protocol that will not load is not a reason to refuse the approval —
+    // porch will reach the same problem and report it properly. Saying nothing
+    // here is honest; guessing a phase name would not be.
+    return {};
+  }
+}
+
+/**
+ * Record why an approval did not succeed — refusal, or failure, or neither.
+ *
+ * THE THIRD CASE IS THE ONE THAT MATTERS. Anything thrown AFTER porch wrote the
+ * gate — a notification, a phase advance, a bug — would otherwise be recorded as
+ * `failed`, telling an operator to approve a gate that is already approved. So
+ * `status.yaml` is read before that conclusion is drawn, exactly as the
+ * synchronous route's backstop does.
+ */
+async function settleApprovalFailure(
+  input: {
+    readonly context: AgentRouteContext;
+    readonly operations: ApprovalOperationStore;
+    readonly operationId: string;
+    readonly workspacePath: string;
+    readonly projectId: string;
+    readonly gateName: string;
+    readonly fallbackMachine: string;
+  },
+  error: unknown,
+): Promise<void> {
+  const { context, operations, operationId } = input;
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    const { ApprovalRefusedError } = await import('../../commands/porch/index.js');
+    if (error instanceof ApprovalRefusedError) {
+      // A REFUSAL IS NOT A FAILURE. Porch declining because a precondition is
+      // unmet is porch working; recording it as `failed` would send an operator
+      // to debug a host when their checks did not pass.
+      operations.settle(operationId, { state: 'refused', code: error.code, message: error.message });
+      return;
+    }
+
+    const persisted = readScopedGate(input.workspacePath, input.projectId, input.gateName);
+    if (persisted?.status === 'approved') {
+      operations.settle(operationId, {
+        state: 'succeeded',
+        record: {
+          machine: persisted.approval?.machine ?? input.fallbackMachine,
+          sessionId: persisted.approval?.session_id ?? null,
+          approvedAt: persisted.approved_at ?? null,
+          ...(persisted.approval?.authority ? { authority: persisted.approval.authority } : {}),
+          outcome: 'approved',
+        },
+      });
+      context.log('WARN', `approval ${operationId} wrote the gate and then failed: ${message}`);
+      return;
+    }
+    operations.settle(operationId, { state: 'failed', message });
+  } catch (settleError) {
+    // The store itself would not take the outcome. Nothing can be recorded, so
+    // say so where an operator will find it — the record stays `running` until
+    // the next startup pass resolves it, which is exactly what that pass is for.
+    context.log(
+      'ERROR',
+      `approval ${operationId} could not be settled (${(settleError as Error).message}); `
+      + `the outcome it could not record was: ${message}`,
+    );
+  }
+}
+
+/**
+ * The signal that matches an operation's state.
+ *
+ * `succeeded`, `refused` and `failed` share `APPROVAL_OPERATION_SETTLED` because
+ * `state` already says which — a second code per outcome would be two places to
+ * keep in step for one fact. `interrupted` keeps its own, because it is the one
+ * terminal state that says something about THIS HOST rather than about the
+ * approval, and the matrix classifies it as a failure row for that reason.
+ */
+function signalForState(state: ApprovalOperationState): string {
+  if (state === 'interrupted') return APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_INTERRUPTED;
+  if (state === 'submitted' || state === 'running') {
+    return APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_SUBMITTED;
+  }
+  return APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_SETTLED;
+}
+
+/** Report one submitted approval. Every field is what the store holds. */
+function handleApprovalOperation(
+  res: http.ServerResponse,
+  url: URL,
+  context: AgentRouteContext,
+  caller: {
+    /** Present only when a live session was ALSO presented; absent after a restart. */
+    readonly sessionId?: string;
+    readonly machine?: string;
+    /*
+     * From the approval-receipt header. NEVER from the URL — see the header
+     * constant in agent-auth.ts for why.
+     *
+     * The constant is named in prose rather than in backticks deliberately: the
+     * failure-matrix collector matches any quoted SCREAMING_SNAKE token, comments
+     * included, and would classify the header name as an unrouted signal code.
+     */
+    readonly receipt?: string;
+  },
+  /** The workspace named in the URL, which the record must agree with. */
+  workspacePath: string,
+): void {
+  const match = url.pathname.match(/^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approvals\/([^/]+)$/);
+  const operationId = match ? decodeURIComponent(match[2]) : '';
+  const operations = context.approvalOperations;
+  if (!operations) {
+    writeJson(res, 501, {
+      signal: 'APPROVAL_OPERATIONS_NOT_AVAILABLE',
+      message: 'this host does not accept asynchronous approvals',
+    });
+    return;
+  }
+
+  let operation;
+  try {
+    operation = operations.describe(operationId);
+  } catch (error) {
+    // UNREADABLE IS NOT UNKNOWN. Answering "no such operation" here would tell a
+    // client its approval never existed because a file on this host is corrupt.
+    context.log('ERROR', `approval operation store unreadable: ${(error as Error).message}`);
+    writeJson(res, 503, {
+      signal: APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_STORE_UNREADABLE,
+      message: 'the approval operation store could not be read',
+    });
+    return;
+  }
+
+  if (!operation) {
+    writeJson(res, 404, {
+      signal: APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_UNKNOWN,
+      message: 'no approval operation with that id on this host',
+    });
+    return;
+  }
+
+  /*
+   * THE URL'S WORKSPACE MUST BE THE RECORD'S WORKSPACE.
+   *
+   * The dispatcher checks only that the URL names SOME workspace this host
+   * serves, so without this an operation was readable through ANY registered
+   * workspace's URL — a cross-workspace read of an approval, its gate, its
+   * approving machine and the authority it was made under. Found independently
+   * by two review lanes, which is why it is checked here rather than argued
+   * about: the record names one workspace and that is the only one it belongs to.
+   *
+   * 404, not 403: through the wrong workspace this operation does not exist, and
+   * saying "forbidden" would confirm that it exists somewhere else.
+   */
+  if (operation.workspacePath !== workspacePath) {
+    writeJson(res, 404, {
+      signal: APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_UNKNOWN,
+      message: 'no approval operation with that id in this workspace',
+    });
+    return;
+  }
+  /*
+   * One session must not read another's approval, for the same reason it cannot
+   * spend another's capability — but session identity ALONE cannot be the rule.
+   *
+   * Sessions are memory-only. The restart that resolves an operation to
+   * `interrupted` destroys the session that submitted it, so a session-only
+   * check would 403 forever on exactly the record that state exists to deliver,
+   * and a fresh pairing would fare no better. The receipt handed back at submit,
+   * presented from the same machine, is the second way in.
+   */
+  if (!mayRead(operation, {
+    ...(caller.sessionId ? { sessionId: caller.sessionId } : {}),
+    machine: caller.machine,
+    receipt: caller.receipt,
+  })) {
+    writeJson(res, 403, {
+      signal: APPROVAL_SIGNAL.APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION,
+      message:
+        'that approval was submitted by a different human session. If this host restarted, '
+        + 'present the receipt returned when it was submitted, from the same machine.',
+    });
+    return;
+  }
+
+  writeJson(res, 200, {
+    // DERIVED FROM THE STATE, not fixed at "submitted". A settled operation
+    // answering `APPROVAL_OPERATION_SUBMITTED` is a label that contradicts the
+    // field beside it, and a label is what gets read.
+    signal: signalForState(operation.state),
+    operationId: operation.operationId,
+    projectId: operation.projectId,
+    gateName: operation.gateName,
+    state: operation.state,
+    submittedAt: operation.submittedAt,
+    ...(operation.startedAt ? { startedAt: operation.startedAt } : {}),
+    ...(operation.settledAt ? { settledAt: operation.settledAt } : {}),
+    ...(operation.phase ? { phase: operation.phase } : {}),
+    ...(operation.checks ? { checks: operation.checks } : {}),
+    ...(operation.code ? { code: operation.code } : {}),
+    ...(operation.message ? { message: operation.message } : {}),
+    ...(operation.record ? { record: operation.record } : {}),
+    ...(operation.gateAfterInterruption
+      ? { gateAfterInterruption: operation.gateAfterInterruption }
+      : {}),
+  });
+}
+
+/**
  * Return true when the request belongs to codev-agent.
  *
  * THE ROUTE TABLE IS THE ROUTER. Every request resolves through
@@ -981,16 +1668,31 @@ export function handleAgentRoute(
       return true;
 
     case 'session-probe': {
-      // The machine is authenticated; this reports whether a HUMAN session is
-      // also live, which is what a client asks before it tries to approve.
+      /*
+       * The machine is authenticated; this reports whether a HUMAN session is
+       * also live, which is what a client asks before it tries to approve.
+       *
+       * BOUND TO THIS MACHINE HERE TOO. A probe that answers "yes, live" for a
+       * session this machine cannot actually use would send the client into an
+       * approval that fails at the next route, and the reason it failed would be
+       * one this answer had already denied.
+       */
       const header = req.headers[HUMAN_SESSION_HEADER];
-      const recognition = context.humanSessions.recognize(Array.isArray(header) ? header[0] : header);
-      writeJson(res, recognition.paired ? 200 : 401, {
+      // `outcome.machine` is typed optional; on a machine-credential route it is
+      // set. Falling back to a name no session can carry refuses rather than
+      // skipping the binding — the absence must not become permission.
+      const recognition = context.humanSessions.recognize(
+        Array.isArray(header) ? header[0] : header,
+        outcome.machine ?? UNNAMED_MACHINE,
+      );
+      writeJson(res, recognition.paired ? 200 : recognition.reason === 'FOREIGN_MACHINE' ? 403 : 401, {
         signal: recognition.paired
           ? 'HUMAN_SESSION_RECOGNISED'
           : recognition.reason === 'REVOKED'
             ? 'HUMAN_SESSION_REVOKED'
-            : 'HUMAN_SESSION_REQUIRED',
+            : recognition.reason === 'FOREIGN_MACHINE'
+              ? 'HUMAN_SESSION_FOREIGN_MACHINE'
+              : 'HUMAN_SESSION_REQUIRED',
         ...recognition,
       });
       return true;
@@ -1011,6 +1713,7 @@ export function handleAgentRoute(
         req, res, url, context,
         outcome.humanSessionId as string,
         outcome.humanSessionAuthority,
+        outcome.machine as string,
       );
       return true;
 
@@ -1026,6 +1729,60 @@ export function handleAgentRoute(
         return true;
       }
       handleGateApprove(req, res, workspace, context, outcome.humanSessionId as string);
+      return true;
+    }
+
+    case 'approval-submit': {
+      const match = url.pathname.match(/^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approvals$/);
+      const workspace = match ? decodeWorkspace(match[1]) : null;
+      if (!workspace) {
+        writeJson(res, 400, { signal: 'WORKSPACE_PATH_INVALID' });
+        return true;
+      }
+      if (!context.isKnownWorkspace(workspace)) {
+        writeJson(res, 404, { signal: 'WORKSPACE_NOT_REGISTERED' });
+        return true;
+      }
+      handleApprovalSubmit(
+        req, res, workspace, context,
+        outcome.humanSessionId as string,
+        outcome.machine as string,
+      );
+      return true;
+    }
+
+    case 'approval-operation': {
+      const match = url.pathname.match(/^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approvals\/([^/]+)$/);
+      const workspace = match ? decodeWorkspace(match[1]) : null;
+      if (!workspace) {
+        writeJson(res, 400, { signal: 'WORKSPACE_PATH_INVALID' });
+        return true;
+      }
+      if (!context.isKnownWorkspace(workspace)) {
+        writeJson(res, 404, { signal: 'WORKSPACE_NOT_REGISTERED' });
+        return true;
+      }
+      /*
+       * A SESSION IF THERE IS ONE, AND THE ROUTE DOES NOT REQUIRE ONE.
+       *
+       * This route is `machine-credential`, so `outcome.humanSessionId` is
+       * undefined. A live session is still the ordinary way in, so it is read
+       * opportunistically here and `mayRead` prefers it; after a restart there is
+       * none and the receipt is what authorises.
+       */
+      const presented = req.headers[HUMAN_SESSION_HEADER];
+      const recognition = context.humanSessions.recognize(
+        Array.isArray(presented) ? presented[0] : presented,
+        outcome.machine ?? UNNAMED_MACHINE,
+      );
+      const receiptHeader = req.headers[APPROVAL_RECEIPT_HEADER];
+      handleApprovalOperation(res, url, context, {
+        ...(recognition.paired && recognition.sessionId
+          ? { sessionId: recognition.sessionId }
+          : {}),
+        machine: outcome.machine,
+        receipt: Array.isArray(receiptHeader) ? receiptHeader[0] : receiptHeader,
+      }, workspace);
       return true;
     }
 

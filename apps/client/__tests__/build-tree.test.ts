@@ -34,23 +34,25 @@ function machine(over: Partial<MachineState> = {}): MachineState {
 }
 
 const architect: ThreadIdentity = {
+  backing: 'thread',
   threadId: 'th-arch',
   role: 'architect',
   roleId: 'main',
   workspacePath: '/w',
   management: 'unmanaged',
-  sessionState: 'ready',
+  session: { status: 'ready', settled: false },
 };
 
 function builder(id: string, over: Partial<ThreadIdentity> = {}): ThreadIdentity {
   return {
+    backing: 'thread',
     threadId: `th-${id}`,
     role: 'builder',
     roleId: id,
     workspacePath: '/w',
     worktree: `/w/.builders/${id}`,
     management: 'managed',
-    sessionState: 'running',
+    session: { status: 'running', settled: false },
     ...over,
   };
 }
@@ -77,6 +79,7 @@ describe('buildTree', () => {
   it('renders a thread with no porch record as unmanaged rather than hiding it', () => {
     const tree = buildTree([machine({
       snapshot: snapshot([{
+        backing: 'thread',
         threadId: 'th-loose',
         role: 'unmanaged',
         workspacePath: '/w',

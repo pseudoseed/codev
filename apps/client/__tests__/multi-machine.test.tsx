@@ -31,7 +31,6 @@ function snapshot(workspacePath: string, builderId: string): AgentProtocolSnapsh
           roleId: 'main',
           workspacePath,
           management: 'unmanaged',
-          sessionState: 'ready',
         },
         {
           backing: 'terminal',
@@ -41,7 +40,6 @@ function snapshot(workspacePath: string, builderId: string): AgentProtocolSnapsh
           worktree: `${workspacePath}/.builders/${builderId}`,
           management: 'managed',
           spawnedByArchitect: 'main',
-          sessionState: 'running',
         },
       ],
       statuses: [],

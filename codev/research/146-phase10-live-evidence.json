@@ -62,7 +62,7 @@
         },
         "restart-loses-no-completion": {
           "outcome": "met",
-          "detail": "a process sharing nothing with this one read cursor 36 off disk (file contained \"36\"), resubscribed with afterSequence=36, and the turn's completion event — sequence 54, emitted while nothing was subscribed — came back in the CATCH-UP replay rather than live"
+          "detail": "a process sharing nothing with this one read cursor 36 off disk (file contained \"36\"), resubscribed with afterSequence=36, and the turn's completion event \u2014 sequence 54, emitted while nothing was subscribed \u2014 came back in the CATCH-UP replay rather than live"
         },
         "check-passes-after-the-fix": {
           "outcome": "met",
@@ -74,7 +74,7 @@
         },
         "gate-resumes-with-context": {
           "outcome": "met",
-          "detail": "after 3600s idle — measured monotonically — the thread returned the codeword established before the gate, which was verified to exist in no file in the tree"
+          "detail": "after 3600s idle \u2014 measured monotonically \u2014 the thread returned the codeword established before the gate, which was verified to exist in no file in the tree"
         },
         "gate-dispatched-nothing": {
           "outcome": "met",
@@ -220,7 +220,7 @@
         },
         "restart-loses-no-completion": {
           "outcome": "met",
-          "detail": "a process sharing nothing with this one read cursor 38 off disk (file contained \"38\"), resubscribed with afterSequence=38, and the turn's completion event — sequence 53, emitted while nothing was subscribed — came back in the CATCH-UP replay rather than live"
+          "detail": "a process sharing nothing with this one read cursor 38 off disk (file contained \"38\"), resubscribed with afterSequence=38, and the turn's completion event \u2014 sequence 53, emitted while nothing was subscribed \u2014 came back in the CATCH-UP replay rather than live"
         },
         "check-passes-after-the-fix": {
           "outcome": "met",
@@ -232,7 +232,7 @@
         },
         "gate-resumes-with-context": {
           "outcome": "met",
-          "detail": "after 3600s idle — measured monotonically — the thread returned the codeword established before the gate, which was verified to exist in no file in the tree"
+          "detail": "after 3600s idle \u2014 measured monotonically \u2014 the thread returned the codeword established before the gate, which was verified to exist in no file in the tree"
         },
         "gate-dispatched-nothing": {
           "outcome": "met",
@@ -361,5 +361,10 @@
     "startedAt": "2026-08-30T08:28:53Z",
     "gateSeconds": 86400,
     "harness": "claude"
+  },
+  "supersededBy": {
+    "change": "packages/t3-client/src/client.ts gained an optional `onRequestId` callback on `stream()`, so a caller can name the request it opened and cancel it. Spec 236 (#236) needed it: T3codeSessionCache subscribes per thread and had no way to stop a subscription whose reason had gone \u2014 `cancel(id)` was public while `stream` minted its id privately, so the only interrupt that could ever fire was the idle timeout's.",
+    "why": "These runs were recorded against a client.ts that could not expose a stream's request id, so they cannot describe the cancellation path that now exists. The change is PURELY ADDITIVE \u2014 a new optional parameter, no behaviour altered for any existing caller, and every phase-10 assertion in spec-146-phase-10-full-protocol.test.ts still passes against it \u2014 but this guard is content-addressed on purpose and 'it is only additive' is exactly the argument that would let a real change through. Re-running needs a live t3code server, which this workspace has none configured for, so the evidence is declared superseded rather than regenerated on a machine that cannot produce it.",
+    "at": "2026-08-30"
   }
 }

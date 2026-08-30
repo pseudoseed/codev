@@ -1,5 +1,11 @@
 import type { GateApprovalHandle } from '../gate/GatePanel.js';
 import type { MachineNode } from './build.js';
+// ONE age formatter for the whole client. There were two, and they disagreed:
+// the same 240,000 ms read "4m ago" under a row and "240s" at the machine, and a
+// one-hour stale entry read "3600s". Two spellings of one number in one view is
+// a reader doing arithmetic to check whether they are the same fact.
+import { ageWords } from '../status/derive.js';
+import type { T3codeObservation, T3codeReachability } from '../connection/types.js';
 import { ThreadRowView } from './ThreadRowView.js';
 
 function relative(iso: string, nowMs: number): string {
@@ -104,6 +110,61 @@ function ConnectionStrip({ node, nowMs }: { node: MachineNode; nowMs: number }) 
   );
 }
 
+/**
+ * The machine-level account of why rows cannot report a session.
+ *
+ * STATED ONCE, HERE, and never repeated under every row: a server-wide cause
+ * printed on each line buries the rows that have something specific to say under
+ * identical text. Each branch names a different remedy — upgrade the server,
+ * configure one, fix the config, wait, wait for a timer, check the server — so
+ * none of them may be merged for brevity.
+ *
+ * `stale` is the branch that must not read as an outage. The server has content
+ * and has stopped watching, so the rows still show their last-known word; what
+ * this says is how much to trust it.
+ */
+function sessionVisibilityNote(
+  visibility: T3codeReachability,
+  observation: T3codeObservation | undefined,
+): string {
+  const porchIsCurrent = ' Gates and phases come from porch and are current.';
+  switch (visibility) {
+    case 'not-configured':
+      return 'This workspace has no t3code server configured, so no row has a session to report.'
+        + porchIsCurrent;
+    case 'misconfigured':
+      // The server's own words say WHICH part is half-written. Dropping them
+      // leaves an operator to go and diff their config to learn what this
+      // process already knew.
+      return 'This workspace\u2019s t3code configuration is incomplete, so no session could be '
+        + `observed${observation?.message ? `: ${observation.message}` : ''}. `
+        + 'This is a configuration fault, not an unreachable server.' + porchIsCurrent;
+    case 'connecting':
+      return 'This server is still connecting to t3code. Session state should appear shortly.'
+        + porchIsCurrent;
+    case 'cooling-down':
+      // WHEN it failed and WHY, not just that it is waiting. "Waiting before it
+      // retries" with neither is a status with its evidence removed.
+      return 'This server\u2019s last t3code connection failed'
+        + `${observation?.since ? ` at ${observation.since}` : ''}`
+        + `${observation?.message ? ` (${observation.message})` : ''}`
+        + ' and it is waiting before it retries, so session state is unavailable until then.'
+        + porchIsCurrent;
+    case 'unreachable':
+      return 'This machine cannot reach t3code, so no row can say whether its session is '
+        + `working, turning or settled${observation?.message ? `: ${observation.message}` : ''}.`
+        + porchIsCurrent;
+    case 'stale':
+      return 'This server has stopped watching t3code. Session words below are last-known, '
+        + `observed ${ageWords(observation?.ageMs)} `
+        + 'ago, and a row that looked settled is reported as unknown rather than finished.'
+        + porchIsCurrent;
+    default:
+      return 'This server does not report session state, so no row can say whether its session '
+        + 'is working, turning or settled.' + porchIsCurrent;
+  }
+}
+
 export function MachineSubtree({ node, nowMs, approval }: {
   node: MachineNode;
   nowMs: number;
@@ -143,9 +204,7 @@ export function MachineSubtree({ node, nowMs, approval }: {
 
           {workspace.sessionVisibility !== 'available' ? (
             <p className="session-note">
-              {workspace.sessionVisibility === 'unreachable'
-                ? 'This machine cannot reach t3code, so no row can say whether its session is working, turning or settled. Gates and phases come from porch and are current.'
-                : 'This server does not report session state, so no row can say whether its session is working, turning or settled. Gates and phases come from porch and are current.'}
+              {sessionVisibilityNote(workspace.sessionVisibility, workspace.sessionObservation)}
             </p>
           ) : null}
 

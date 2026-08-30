@@ -5,11 +5,16 @@
  *   node scripts/pair-dev.mjs [--origin http://127.0.0.1:4100] [--workspace <abs path>]
  *                             [--machine dev-local] [--id local]
  *
- * Pairing is normally an operator action with a token read off another screen.
- * There is no CLI for it yet, and a client that cannot authenticate cannot show
- * anything, so this does both halves — issue, then redeem — in one place. It
- * writes a REAL credential to the real store; revoke it with
- * `DELETE /api/agent/v1/machines/<name>`.
+ * Pairing is normally an operator action with a token read off another screen,
+ * and `afx pair issue --purpose machine-credential` is the command for it. This
+ * script does both halves — issue, then redeem — in one place because a DEV
+ * client that cannot authenticate cannot show anything, and one command beats
+ * two on every `pnpm dev`.
+ *
+ * It writes a REAL credential to the real store. **Revoke it with
+ * `afx pair revoke <name>`**, not with `DELETE /api/agent/v1/machines/<name>`:
+ * that route is `human-session`, so it requires already holding the credential
+ * you are trying to withdraw.
  *
  * For a self-contained tree with no Tower at all, use `scripts/dev-servers.mjs`.
  */
