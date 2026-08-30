@@ -387,3 +387,50 @@ Deferred with agreement: the new `PAIR_*` codes are not in the failure-matrix co
 file list. Criterion 19 is assigned to phases 4 and 7, and claude said to track it there.
 
 Suite: 7008 passing, 0 failing.
+
+## Phase 4 — durable approval operation store
+
+### A protocol mistake of mine first
+
+After phase 3's approval I ran `porch next` (which advanced to phase_4) and then `porch done`
+blindly, in one command, to trigger what I thought was phase 3's iteration-2 review. That
+`porch done` marked **phase 4's build complete before phase 4 existed**, and the next `porch next`
+offered a phase_4 consultation on an empty phase. I caught it at that point and implemented the
+phase before running any review, so nothing was reviewed that was not there — but the lesson is
+that `porch done` is a claim, and running it without having done the work makes a false one.
+Do not pipeline `porch next` into `porch done`.
+
+### The store
+
+File-backed beside the capability and nonce stores, same root, same lock, same
+"exists but will not parse" discipline. Not `global.db`: an approval operation is short-lived
+operational state in the approval domain, and putting it there would mean a schema migration for
+a record whose natural retention is hours.
+
+Six states — `submitted`, `running`, `succeeded`, `refused`, `failed`, `interrupted` — kept apart
+because they send an operator six different places. `refused` is deliberately not `failed`: porch
+declining because a precondition is unmet is porch working, and merging them would send someone
+to debug a host when the answer is that their checks did not pass. `running` carries the phase and
+the check set, because "running" with nothing beside it is a spinner.
+
+**Each record names its owning host and pid.** The store is keyed by `CODEV_AGENT_FARM_DIR`, not
+by host, so an unscoped resolution pass would let a second Tower mark a *live* host's operations
+interrupted — a running approval reported as dead, which is the failure the store exists to
+prevent, committed by its own recovery. The pass skips other hosts, live pids, and this process's
+own records (live by definition). `EPERM` from `kill(pid, 0)` reads as **alive**, because it means
+the process exists and belongs to someone else.
+
+`interrupted` reads `status.yaml` and reports what it found. The approved case is the one that
+matters: a host that died *after* porch wrote the gate leaves a running record and an approved
+gate, and calling that a failure would send an operator to approve something already approved.
+
+### Criterion 19, including phase 3's deferred codes
+
+Added `../lib/approval-operations.ts` **and** `../commands/pair.ts` to the failure-matrix
+collector's scanned list (the collector needed a `../commands/` branch in its rename guard).
+Three new matrix rows — `APPROVAL_OPERATION_INTERRUPTED`, `_UNKNOWN`, `_STORE_UNREADABLE`. The
+successes and refusals (`APPROVAL_OPERATION_SUBMITTED`, `APPROVAL_ALREADY_IN_FLIGHT`,
+`APPROVAL_CONCURRENCY_LIMIT`) and all seven `PAIR_*` codes went to `NON_MATRIX` with a reason
+each: they answer "your request was wrong, or it worked", not "a service or file failed".
+
+Suite: 7030 passing, 0 failing.

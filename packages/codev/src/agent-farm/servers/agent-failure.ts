@@ -34,6 +34,17 @@ export const FAILURE_MATRIX_SIGNAL = {
   // changes now reach the client only via the reconciliation backstop, so the stream
   // is degraded rather than broken — and saying nothing would spell that as healthy.
   STATE_STREAM_WATCH_FAILED: 'STATE_STREAM_WATCH_FAILED',
+  // Spec 236. An approval outlives its request, so its failures are a client's
+  // only account of what happened to work it can no longer watch directly.
+  //
+  // The three are kept apart for the reason every trio here is: "this host
+  // stopped while it ran", "no such operation" and "the store cannot be read"
+  // send an operator to three different places. Merging the last two would tell a
+  // client its approval never existed because a file was corrupt — which is the
+  // spelling of "I could not tell" as "no", in the store built to prevent it.
+  APPROVAL_OPERATION_INTERRUPTED: 'APPROVAL_OPERATION_INTERRUPTED',
+  APPROVAL_OPERATION_UNKNOWN: 'APPROVAL_OPERATION_UNKNOWN',
+  APPROVAL_OPERATION_STORE_UNREADABLE: 'APPROVAL_OPERATION_STORE_UNREADABLE',
 } as const;
 
 export type FailureMatrixSignal =
