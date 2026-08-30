@@ -38,6 +38,7 @@ import {
   HumanPairedSessionRegistry,
   handleAgentRoute,
   initAgentRoutes,
+  readScopedGate,
   shutdownAgentRoutes,
 } from '../servers/agent-routes.js';
 import { ApprovalCapabilityStore, ApprovalNonceStore } from '../lib/approval-capability.js';
@@ -68,10 +69,16 @@ function tmp(): string {
 }
 
 /** A workspace with one real AIR project sitting on a requested `pr` gate. */
+/**
+ * @param options `directorySuffix` names the project directory `<id><suffix>`.
+ *   REAL PROJECTS ARE NAMED `<id>-<slug>`, never bare `<id>` — a fixture that
+ *   uses the bare form hides any code that builds a path from the id, which is
+ *   exactly what the approval backstop did until this parameter existed.
+ */
 function workspaceWithRequestedGate(
   projectId: string,
   gateName: string,
-  options: { readonly checksPass?: boolean } = {},
+  options: { readonly checksPass?: boolean; readonly directorySuffix?: string } = {},
 ): string {
   const root = tmp();
   // The phase's own checks, skipped through the mechanism porch supports for it.
@@ -84,7 +91,7 @@ function workspaceWithRequestedGate(
       porch: { checks: { build: { skip: true }, tests: { skip: true } } },
     }));
   }
-  const projectDir = join(root, 'codev', 'projects', projectId);
+  const projectDir = join(root, 'codev', 'projects', `${projectId}${options.directorySuffix ?? ''}`);
   mkdirSync(projectDir, { recursive: true });
   writeFileSync(join(projectDir, 'status.yaml'), yaml.dump({
     id: projectId,
@@ -408,6 +415,64 @@ describe('a client can get from nothing to an approved gate', () => {
  * binding, and provenance — and these tests pin each of those, plus the residual
  * itself, so nobody rediscovers it as a surprise.
  */
+/**
+ * THE BACKSTOP HAS TO WORK ON A REAL DIRECTORY LAYOUT.
+ *
+ * When an approval request fails unexpectedly after the gate write, the route
+ * reads `status.yaml` rather than reporting a refusal it cannot justify. Its
+ * first version built `codev/projects/<projectId>/status.yaml`, and no real
+ * project lives there: directories are `<id>-<slug>`. It would have found
+ * nothing in production and fallen through to the 503 it exists to prevent —
+ * passing all the while, because fixtures named directories for the id.
+ *
+ * So this one does not. The suffix is what a real workspace looks like.
+ */
+describe('the approval backstop, on real directory names', () => {
+  /*
+   * TESTED DIRECTLY, BECAUSE THE PATH THAT USES IT CANNOT BE REACHED HERE.
+   *
+   * The backstop runs only when an approval throws unexpectedly AFTER the gate
+   * write, and nothing in this suite can produce that. My first attempt at this
+   * test drove a successful approval against a realistically-named directory and
+   * passed — while never executing the backstop at all. A test that passes
+   * without running the code it names is the failure this whole PR is about, so
+   * the function is exported and called.
+   */
+  it('finds the gate when the project directory is <id>-<slug>', () => {
+    const workspace = workspaceWithRequestedGate('992', 'pr', {
+      directorySuffix: '-spec-146-phase-11-codev-client',
+    });
+    const gate = readScopedGate(workspace, '992', 'pr');
+    expect(gate, 'the backstop could not find a project in a real-shaped directory').not.toBeNull();
+    expect(gate?.status).toBe('pending');
+  });
+
+  it('finds it in a builder worktree, which is where a builder\'s project lives', () => {
+    const workspace = tmp();
+    const worktree = join(workspace, '.builders', 'air-993');
+    const projectDir = join(worktree, 'codev', 'projects', '993-some-slug');
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, 'status.yaml'), yaml.dump({
+      id: '993',
+      title: 'in a worktree',
+      protocol: 'air',
+      phase: 'implement',
+      plan_phases: [],
+      current_plan_phase: null,
+      gates: { pr: { status: 'approved', approved_at: '2026-08-30T02:00:00.000Z' } },
+      iteration: 1,
+      build_complete: false,
+      history: [],
+    }));
+    expect(readScopedGate(workspace, '993', 'pr')?.status).toBe('approved');
+  });
+
+  it('says nothing rather than guessing when the project is not there', () => {
+    expect(readScopedGate(workspaceWithRequestedGate('994', 'pr'), '995', 'pr')).toBeNull();
+    expect(readScopedGate(workspaceWithRequestedGate('996', 'pr'), '996', 'nonexistent-gate')).toBeNull();
+  });
+});
+
 describe('what a paired session establishes', () => {
   it('records the minter\'s stated authority all the way into status.yaml', async () => {
     const workspace = workspaceWithRequestedGate('987', 'pr');

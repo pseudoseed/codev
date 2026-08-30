@@ -27,7 +27,7 @@ import {
 import { MACHINE_SIGNAL, type MachineCredentialStore } from '../lib/machine-credentials.js';
 import { PAIRING_SIGNAL, type PairingStore } from '../lib/pairing.js';
 import { openAgentStateSse, type AgentStreamSnapshot } from './agent-state-stream.js';
-import { readScopedStatus, readWorkspaceStatuses } from './status-reader.js';
+import { readWorkspaceStatuses } from './status-reader.js';
 import type { GateStatus } from '../../commands/porch/types.js';
 import {
   readThreadRegistry,
@@ -723,17 +723,29 @@ function handleHumanSessionIssue(
  * Used only as a backstop: when an approval request fails unexpectedly, the file
  * is the authority on whether the gate is approved, and reporting a refusal
  * without asking it is how a completed approval gets denied.
+ *
+ * ## It SCANS rather than constructing a path, and that is the whole point
+ *
+ * The first version built `codev/projects/<projectId>/status.yaml`. **No real
+ * project lives there.** Directories are named `<id>-<slug>` —
+ * `0087-porch-timeout-termination-retries`, `220-spec-146-phase-11-codev-client`
+ * — so the lookup would have found nothing in production, returned null, and
+ * fallen through to the 503 refusal this backstop exists to prevent. It passed
+ * only because the e2e fixture happens to name its directories for the id.
+ *
+ * The same false premise cost phase 5 its reconciliation criterion. So this
+ * reuses `readWorkspaceStatuses`, which reads what is on disk, and matches on
+ * the `projectId` INSIDE each file rather than on a directory name.
  */
-function readScopedGate(
+export function readScopedGate(
   workspacePath: string,
   projectId: string,
   gateName: string,
 ): GateStatus | null {
   try {
-    for (const root of [workspacePath, ...buildersOf(workspacePath)]) {
-      const status = readScopedStatus(root, join(root, 'codev', 'projects', projectId, 'status.yaml'));
-      if (status.ok && status.status.projectId === projectId) {
-        return status.status.gates[gateName] ?? null;
+    for (const result of readWorkspaceStatuses(workspacePath, buildersOf(workspacePath))) {
+      if (result.ok && result.status.projectId === projectId) {
+        return result.status.gates[gateName] ?? null;
       }
     }
   } catch {
