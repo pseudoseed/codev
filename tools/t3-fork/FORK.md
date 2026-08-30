@@ -58,7 +58,11 @@ ordinary test run would have written a fork sha into the read-only clone the mom
 | `packages/t3-client/live/integration.mjs` | upstream | spec 146 / #241 live tests, meaning unchanged |
 | `packages/codev/src/__tests__/spec-146-t3-contract.test.ts` | both | upstream suite asserts upstream, fork suite asserts fork |
 
-The mapping is resolved in one place, `tools/t3-fork/identities.mjs`. Nothing re-derives it.
+The mapping is resolved in one place, `tools/t3-fork/identities.mjs`. The one deliberate
+exception is `packages/t3-client/live/integration.mjs`, which reads `T3CODE_ROOT` directly and
+**requires** it (#214): a missing input there must read as a sentence rather than as a failure
+inside the server, and keeping it required also means the fork's path cannot arrive by accident.
+It never reads `T3CODE_FORK_ROOT`, and a test asserts that.
 
 ## Verifying
 

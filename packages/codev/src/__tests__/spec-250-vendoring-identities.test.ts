@@ -573,7 +573,7 @@ describe('spec 250: nothing writes a fork sha into the upstream clone', () => {
   });
 });
 
-// ---------------------------------------------------------------- the seventh readers
+// ---------------------------------------------------------------- the root readers
 
 describe('spec 250: every T3CODE_ROOT reader is assigned to an identity', () => {
   /**
