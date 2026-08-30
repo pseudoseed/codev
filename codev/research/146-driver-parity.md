@@ -200,6 +200,18 @@ Worth stating, because each was suspected and tested rather than assumed:
 
 ## What this does not tell you
 
+- **That porch restarts mid-protocol.** The plan's acceptance criterion 2 has three clauses, and
+  this evidence carries two of them. A process sharing nothing with the runner resubscribes with
+  `afterSequence` from a cursor read off disk, and the completion event emitted while nothing was
+  subscribed comes back in the catch-up replay — clauses 2 and 3. Clause 1 is not demonstrated:
+  the fresh process confirms the replay and exits, and the original carries the protocol on with
+  its `DriverThread`, `TurnTracker`, waiter promises and journal intact.
+
+  Recorded as **partially met** rather than ticked with a caveat, because the tick is what people
+  read and the prose is what they skip. It also could not have been satisfied: #241 records that
+  nothing in production subscribes to a thread at all, so "porch restarts and resumes the
+  protocol" cannot be demonstrated today by anyone.
+
 - **Whether porch's own orchestration works over a thread.** The runner reenacts the BUGFIX
   protocol's phases, checks and gate rather than driving porch through them; it performs no porch
   phase transition and requests no gate approval. The test derives the phase ids, the fix phase's
