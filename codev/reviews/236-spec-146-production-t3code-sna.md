@@ -131,8 +131,25 @@ Poll but not submit. 403 but not 401. Element but not its CSS rule. Thrown fetch
 401/403 but not 404. Each fix was correct and each was too narrow by exactly one step.
 
 **A second shape, and it is the more dangerous one: the fixture sharing the code's premise.**
-Three findings in the final round were invisible to a green suite because the test agreed with
-the bug.
+Four separate instances in this one project, which makes it a pattern rather than bad luck — and
+**all four were found by reverting the fix and watching what failed, never by a test going red on
+its own.** That is the whole reason the habit is worth the minutes it costs: a fixture that agrees
+with the bug is, by construction, invisible to the suite it lives in.
+
+The four:
+
+1. `pair revoke` set the capability store's host and the paired device both to `'ipad'`, so
+   revocation matching on the host passed while the command withdrew nothing in any real
+   deployment.
+2. The subscription-cancellation test called the fake stream's `forget()` itself, so it asserted
+   the effect while production never called the caller.
+3. The receipt-in-query guard sent its attempt from a *different* machine, so `mayRead` refused it
+   on the machine mismatch — the test passed with the query channel wide open.
+4. The different-gate regression test drove a real approval for `plan-approval`, which is not
+   valid for that protocol and phase, so the operation settled instantly and the test measured
+   nothing.
+
+The first three were invisible to a green suite because the test agreed with the bug.
 
 - `pair revoke` had a passing test in which the capability store's host and the paired device
   were both `'ipad'`. Capabilities key on the *verifying host*, so `revokeMachine('laptop')`
@@ -267,6 +284,30 @@ before the retry lands, so the retry legitimately starts a new one and the test 
 recovery rather than a claim of one: the outcome observed is the ORIGINAL operation's, and
 exactly one operation exists for the episode, so the checks did not run twice.
 
+## Making one report honest opened a way for another to lie
+
+This is the strongest thing this project has to say, and it is an argument for reviewing the FIX
+rather than only the bug.
+
+Round 4 fixed a real reporting defect: an in-flight approval was rendered as a refusal, so the
+operator was told their gate was refused about a run that might be succeeding. The fix was a
+recovery — recognise the submitter, hand back the operation it already started, resume polling it.
+Correct in its own terms, tested, and reviewed.
+
+Round 5 found that the fix had opened a worse defect than the one it closed. Single-flight is
+project-wide, so the operation handed back might belong to a different gate, and the client would
+then report **that** gate approved from **this** record.
+
+Nothing about the round-4 change looked like it touched correctness of attribution. It was
+recognisably a fix to how an outcome is *reported*, and it created a way for an outcome to be
+reported about the wrong object. A review that had checked only the original bug — is an in-flight
+approval still rendered as refused? — would have passed it.
+
+The corollary, which is why the client-side check exists: **two checks that share an assumption
+are one check.** The client validates the operation's project and gate independently of the
+server's restriction, because the server getting it wrong is precisely the case that needs
+catching, and a check derived from the same premise cannot catch it.
+
 ## The worst shape, and it was mine for one round
 
 Round 4's recovery matched an in-flight operation on session and machine. Single-flight is
@@ -376,13 +417,16 @@ alternative is the read it exists to avoid.
 
 No test was skipped or annotated as flaky by this project, and nothing was routed around.
 
-One pre-existing test timed out once, on the round-5 full run:
+One pre-existing test timed out once on the round-5 full run —
 `src/terminal/__tests__/session-manager.test.ts > "no stderr tail logged for file-based stderr
-(Bugfix #324)"` — a 30s timeout under a fully parallel suite. It passes running its file alone
-(91/91), it is `it.skipIf(!!process.env.CI)` so CI never runs it, and it touches the PTY session
-manager, which this project does not. Load-sensitive, not caused here. Recorded rather than
-re-annotated: adding a flaky marker to someone else's test on the strength of one timeout would
-be a claim I have not earned.
+(Bugfix #324)"`. It passes running its file alone (91/91), it is `it.skipIf(!!process.env.CI)` so
+CI never runs it, and it touches the PTY session manager, which this project does not.
+
+**Recorded on issue #200, not here.** That issue is exactly this failure — the test runs out a
+poll and then asserts, so a timeout and a product failure are spelled the same way — and it
+already carries a night of evidence from another builder. One more instance is worth more
+attached to that evidence than sitting in a review nobody will grep. Annotating someone else's
+test as flaky on the strength of one timeout would have been a claim not earned here.
 
 ## Environment notes for the next builder in a fresh worktree
 

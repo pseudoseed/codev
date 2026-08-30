@@ -1045,3 +1045,21 @@ Two changes, and they are deliberately different rules:
   is a build and test suite in this process — so counting a foreign host's runs throttled us for
   work we were not doing. Plus a new host-wide cap of 4, because per-workspace alone does not
   bound a Tower serving many workspaces (claude's finding, the same hole from the other side).
+
+## The pattern worth carrying out of this project
+
+**Four fixtures in one project quietly stopped measuring what they named, and all four were found
+by reverting the fix rather than by a test going red.** A fixture that agrees with the bug is by
+construction invisible to its own suite, so the only way to see it is to break the code on purpose
+and check the test notices. It costs a minute per guard.
+
+**And a fix can open a worse defect than it closes.** Round 4's recovery for "in-flight rendered
+as refused" was correct in its own terms and created the different-gate false success in round 5.
+Nothing in it looked like it touched attribution. A review that checked only the original bug
+would have passed it — which is the argument for reviewing the fix, not the bug.
+
+Corollary, and it is why the client-side gate check is not redundant: **two checks that share an
+assumption are one check.**
+
+The session-manager timeout went to issue #200 rather than this project's Flaky Tests section —
+that issue is this exact failure and already has another builder's night of evidence on it.
