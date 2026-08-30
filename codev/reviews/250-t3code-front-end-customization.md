@@ -178,13 +178,32 @@ It is now exercised, in `tools/t3-fork/criterion-8b.mjs`, recorded to
 | Fork's real guard resumes | added `codev_parent_thread_id`, found `codev_role` present |
 | Pre-fork server opens the fully applied file | opened and answered |
 
-This needed a new harness verb. `restart` is stop-then-start and refuses when nothing is running;
-`start` wipes the data dir. Neither can open a database the run did not just create, so a criterion
-about opening an existing file could not be expressed at all. `start --keep-data` closes that gap.
+#### Why `start --keep-data` had to exist
 
-That absence is itself worth recording: the criterion had been unprovable with the tools available
-for as long as it had existed, and nothing said so. A criterion nobody can run reads exactly like a
-criterion that passes.
+This is the part a future reader of a green 8b most needs, because a passing criterion carries no
+trace of having once been unprovable.
+
+Writing the real test failed before it ran, on the harness rather than on the code. Criterion 8b
+requires opening a database that a *previous* run left behind, and neither existing verb can:
+
+| Verb | What it does | Why it cannot host 8b |
+|---|---|---|
+| `start` | wipes the data dir, then starts | deletes the half-applied file the criterion is about |
+| `restart` | stop-then-start, keeping data | refuses when nothing is running — and after a kill, nothing is |
+
+So the criterion had **no expressible form**, and had had none for as long as it had existed. That
+is the finding, and it outranks the code: the in-memory simulation was not laziness, it was the
+only thing the available tools could express. Whoever wrote it had a green check and no way to
+learn it was green for free.
+
+Nothing reported the gap. There was no failing test, no error, no skip — the criterion sat in the
+plan reading exactly like one that passes, and **it took writing the test to discover the test
+could not be written**. That is a rung below "a check that answers when it could not observe": there
+was no check, because nothing could host one, and an absence has no output to inspect.
+
+`start --keep-data` closes it. The verb exists solely so a criterion about opening an existing
+database can be stated at all, which is why it is worth a line in the harness README and this
+paragraph here rather than a one-word changelog entry. Filed as evidence on #199.
 
 ## Flaky Tests
 
