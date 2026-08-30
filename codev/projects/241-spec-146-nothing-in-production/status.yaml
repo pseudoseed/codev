@@ -6,7 +6,7 @@ plan_phases: []
 current_plan_phase: null
 gates:
   plan-approval:
-    status: pending
+    status: approved
     requested_at: '2026-08-30T15:24:07.966Z'
     request:
       question: >-
@@ -31,6 +31,12 @@ gates:
         Verified in tree: no production caller of DriverThread.observe / TurnTracker.observe.
         engine.attach has one production caller (mailbox-wiring.ts:529), so nothing re-adopts
         threads after a Tower restart -- plan adds an adoption sweeper on Tower's interval.
+    approved_at: '2026-08-30T15:37:55.611Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-30T15:37:55.611Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
   dev-approval:
     status: pending
   pr:
@@ -39,4 +45,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-30T15:18:07.177Z'
-updated_at: '2026-08-30T15:24:19.805Z'
+updated_at: '2026-08-30T15:37:55.620Z'
