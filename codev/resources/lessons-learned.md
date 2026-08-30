@@ -747,6 +747,15 @@ so it survives review. Pin the constant to the highest migration block in a test
 
 ## Debugging and Root Cause Analysis
 
+- [Demoted from the hot tier, #250] **When stuck (2 failed hypotheses or ~30 min), get an outside
+  model's perspective and build a minimal repro — captured raw data beats guessing.** Still true;
+  demoted rather than deleted when the hot tier's slot was needed for "a test that cannot fail is
+  not a test". The displacement rationale was that this overlaps the neighbouring "get an outside
+  perspective" territory, while nothing in the tier covered whether a check is capable of failing
+  at all — which spec 250 violated five times in one day (two tests asserting nothing, an in-memory
+  simulation standing in for a kill test, a raw `ALTER TABLE` standing in for a migrator run, and
+  decider-only coverage of a discriminant the engine was deleting).
+
 - [From #47] **The repair and the evidence are often the same action, so count occurrences or every recurrence looks like the first.** Forwarding a misrouted message fixes it and erases it; reconciling porch state by hand fixes it and erases it; a builder noticing it was handed the wrong spec and working the issue anyway saves the hour and erases the collision — two of three builders did exactly that and it read as zero occurrences until the third did not notice. Nothing is left behind that a later reader could find. Write the occurrence down at the moment you repair it, and note that a bug you keep quietly working around has a recurrence count of zero by construction.
 
 - [From #12] **Killing a process is not the same as unblocking the caller, and a zero exit is not the same as success.** A shell timeout helper wrapped `tea api` in `$(...)`, killed it on schedule, printed its timeout message on time — and the command substitution stayed blocked for minutes, because a grandchild still held the write end of the pipe. Give the wrapped command a temp file instead of the caller's pipe, and redirect the watchdog's own stdout to `/dev/null` for the same reason. The second trap is subtler: classifying "we killed it" from the exit status (143/137) looks equivalent to recording it and is not — POSIX defines operand-less `wait` as *always* returning zero, so a wrapper script killed by SIGTERM reports success with an empty body, and the caller then misdiagnoses the empty response as a different failure entirely. Have the watchdog record that it fired; infer nothing.

@@ -10,6 +10,7 @@ STARTER: a few universal lessons are seeded; add your project's as you learn the
 - Check for existing work (PRs, git history) before building from scratch.
 - "It compiled" / "tests pass" is not "it works" — verify the real user path before calling it done.
 - When stuck (2 failed hypotheses or ~30 min), get an outside perspective instead of guessing.
+- A test that cannot fail is not a test — revert the fix and confirm the test fails before trusting it.
 - <Add your project's hard-won, cross-cutting lessons; keep <=10, one line each.>
 
 ## Map of lessons-learned.md (consult when…)
