@@ -1,12 +1,18 @@
 id: '250'
 title: t3code-is-the-front-end-privat
 protocol: spir
-phase: specify
+phase: plan
 plan_phases: []
 current_plan_phase: null
 gates:
   spec-approval:
-    status: pending
+    status: approved
+    approved_at: '2026-08-30T19:30:31.598Z'
+    approval:
+      authorization: pre-approved-artifact
+      approved_at: '2026-08-30T19:30:31.598Z'
+      machine: chriss-MacBook-Pro.local
+      caller: pre-approval frontmatter on codev/specs/250-t3code-front-end-customization.md
   plan-approval:
     status: pending
   pr:
@@ -17,4 +23,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-30T19:30:16.299Z'
+updated_at: '2026-08-30T19:30:31.599Z'
