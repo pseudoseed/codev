@@ -49,3 +49,43 @@ prose cannot do that, and a number that drifts is worse than none.
 | A builder worktree holds several porch records and none names the thread | `PORCH_JOIN_AMBIGUOUS` | The managing record is **unknown, not absent**. Distinct from `THREAD_UNMANAGED`, which asserts nothing manages the thread — a different fact with a different remedy. Resolved once Phase 8 writes `thread_id`. | No |
 | Porch record names a thread, t3code still has it, but `global.db` has no identity row | `PORCH_RECORD_UNMAPPED` | Record kept; the missing join is named. Distinct from `PORCH_THREAD_NO_LONGER_EXISTS`, which asserts t3code lost the thread — a different fact with a different remedy. | No |
 | A row carries both terminal-backed and thread-backed state | `IDENTITY_SHAPE_CONFLICT` | Row is refused as a join and reported. This is the guard behind Phase 8's "a row carrying both a `terminal_id` and a `thread_id` is rejected". | No |
+
+## Spec 236: the t3code session provider and asynchronous approvals
+
+Three additions to the emitter, each a row because each is a state an operator
+diagnoses rather than a request that was wrong.
+
+| Failure | Signal | Client renders | Auto-resolved |
+|---|---|---|---|
+| This host stopped while an approval was running | `APPROVAL_OPERATION_INTERRUPTED` | **Not a failure of the approval.** The record carries what `status.yaml` says about that gate NOW — including `approved`, because a host can die after porch wrote the gate. Rendered as unknown, never as refused: telling a human their gate was not approved would send them to approve one that already is. | No — but the gate state IS re-read, so the answer is current |
+| An approval operation id this host has never held | `APPROVAL_OPERATION_UNKNOWN` | "No such operation", which sends a caller to check the id it was given. Distinct from the row below. | No |
+| The approval operation store exists and will not parse | `APPROVAL_OPERATION_STORE_UNREADABLE` | "The store could not be read", which sends someone to the host. Spelling this as `UNKNOWN` would tell a client its approval never existed because a file is corrupt. The client retries it rather than reporting a refusal, because an unreadable store is not a verdict on the gate. | No |
+
+### Session state is not in this matrix, and that is deliberate
+
+Spec 236 wired the `t3codeSnapshot` provider, and the eight statuses it publishes
+(`not-provided`, `not-configured`, `misconfigured`, `connecting`, `cooling-down`,
+`unreachable`, `available`, `stale`) are **not** matrix rows. Only `unreachable`
+and `cooling-down` are failures at all, and both already emit the existing
+`T3CODE_UNREACHABLE` row. The rest describe what this host is doing — reading
+config, connecting, waiting out a timer, holding content it has stopped watching
+— and a matrix that listed them would be describing a state machine, not
+diagnosing a fault.
+
+The distinction the matrix does care about is preserved: `not-configured`
+(this workspace names no t3code server) never borrows `T3CODE_UNREACHABLE`, because
+sending an operator to check a server that does not exist is a confident wrong
+diagnosis, which is worse than a missing one.
+
+### Where the completeness guarantee lives
+
+Unchanged, and worth restating because this section adds emitters:
+`agent-failure-matrix.test.ts` scans the emitting files directly — now including
+`lib/approval-operations.ts` and `commands/pair.ts` — and fails on any code that
+is neither a row above nor an explicitly justified exclusion. The successes and
+refusals from both (`APPROVAL_OPERATION_SUBMITTED`, `APPROVAL_OPERATION_SETTLED`,
+`APPROVAL_ALREADY_IN_FLIGHT`, `APPROVAL_CONCURRENCY_LIMIT`,
+`APPROVAL_OPERATION_ALREADY_SETTLED`, `APPROVAL_OPERATION_STORE_LOCKED`,
+`APPROVAL_OPERATIONS_NOT_AVAILABLE` and the seven `PAIR_*` codes) are exclusions
+carrying a reason each: they answer "your request was wrong, or it worked", never
+"a service or file failed".

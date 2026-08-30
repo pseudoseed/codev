@@ -695,3 +695,36 @@ not rule. Thrown fetch but not 5xx. 401/403 but not 404. Worth carrying forward 
 look for rather than as six separate misses.
 
 Client: 232 passing, 13 files.
+
+## Phase 7 — threat model, failure matrix, and the dev-check revocation
+
+Landed. The documentation now agrees with the code, and the credential the issue was written
+around is gone.
+
+**The threat model** gained *"Who can revoke, and the trade that decides it"*, answering the
+objection the route table actually raises — **availability**, not confidentiality. A same-uid
+agent can already write these stores, so it can already deny a human their gate; the command
+makes that denial convenient, not possible. And the alternative was never "an operator who cannot
+be denied", it was the status quo where the human cannot revoke and the agent still can. Stated
+as a trade rather than as a win.
+
+**Both route `rationale` strings** now say the same thing the command does. Before this the
+repository asserted, in code an operator reads, that revocation is privileged — while shipping a
+CLI that revokes without a session.
+
+**The failure matrix** gained three rows and one section explaining what is deliberately *not* a
+row: the eight snapshot statuses are a state machine, not faults, and only two of them are
+failures at all (both already covered by `T3CODE_UNREACHABLE`). `not-configured` never borrows
+that code, because sending an operator to check a server that does not exist is a confident wrong
+diagnosis.
+
+**`dev-check` is revoked.** Run once by hand against the real `~/.agent-farm`:
+`credential revoked`, `0 capability record(s) revoked`, read back as
+`REVOKED at 2026-08-30T10:19:11.703Z`. Recorded in the review with the recovery (re-pair) and
+with why it must never become a suite step: it writes outside `CODEV_AGENT_FARM_DIR` and
+`revoke()` is not idempotent, so automating it would have CI revoke real credentials.
+
+`agent-approval-path.test.ts`'s residual assertion still passes — no claim of verified human
+presence was added anywhere in this project.
+
+Suite: 7053 passing, 0 failing.

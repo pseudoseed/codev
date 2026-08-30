@@ -149,6 +149,40 @@ distinguishable from a capability that was never issued.
 
 Revocation is a tombstone rather than a deletion for exactly that reason.
 
+#### Who can revoke, and the trade that decides it (Spec 236)
+
+**Until spec 236 the operator who wanted to withdraw access was the one who could not.**
+`DELETE /api/agent/v1/machines/<id>` and
+`DELETE /api/agent/v1/approval-capabilities/machine/<id>` are both declared `human-session` in
+the route table, and `human-session` includes `machine-credential` — so revoking required
+already holding the credential being revoked. Minting, meanwhile, required nothing but write
+access to a file. A real credential on the development machine (`dev-check`, issued by a smoke
+test) sat unrevokable for exactly that reason.
+
+`afx pair revoke` writes the two stores directly. Revoking now costs precisely what minting
+costs, and works with no credential and with Tower not running — which is when an operator most
+wants it.
+
+**The objection this has to answer is availability, not confidentiality.** The route table's own
+rationale privileges revocation because *"an agent that could revoke could deny a human their
+gate"*. That is a denial-of-service argument, and the reply that fits the *Storage* section
+above — a same-uid agent can already forge a capability — does not reach it.
+
+What does reach it: **a same-uid agent can already write these stores directly.** It can revoke,
+forge, delete or corrupt them, exactly as it can mint itself a token. So it can already perform
+that denial. The command makes the denial *convenient*, not *possible*.
+
+And the alternative on offer was not "an operator who cannot be denied". It was the status quo,
+in which the human cannot revoke and the agent still can. That is the trade, stated as a trade:
+convenience of an attack that was already available, in exchange for withdrawal being possible
+at all.
+
+**What it does not change.** Revocation still cannot be made trustworthy against a same-uid
+adversary, because nothing on a single-uid host can be. The HTTP routes keep their
+`human-session` requirement for clients that hold one; the command is not a relaxation of them,
+it is a second path with a different — and honestly weaker — boundary, which is filesystem write
+access to `~/.agent-farm`.
+
 ### Replay
 
 Every capability-backed approval consumes a **single-use nonce bound to the project id and

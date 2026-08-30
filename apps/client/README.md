@@ -153,34 +153,46 @@ because approving removes the gate and unmounts the panel holding the message.
 
 Open it and look at it before calling a change to this app done.
 
-## Known gap: approving a gate whose phase has checks
+## Approving a gate whose phase has checks
 
-The client can approve a gate **only when the phase's checks are disabled or
-absent.** With checks enabled — which is every real project — the route answers
-`PHASE_CHECKS_REQUIRED` and names them, and the operator approves from the CLI.
+**The client approves a gate on an ordinary project** — one whose phase declares
+checks, which is every real one. Spec 236 closed what phase 11 recorded here as a
+gap.
 
-Not an oversight and not fixable with a timeout. Approving runs porch's phase
-checks, which for an AIR `implement` phase are the repository's build and test
-suite: minutes of work on an open HTTP request. A client that gives up does not
-stop porch, so a timeout would abandon a call that goes on to approve the gate
-anyway — reporting one outcome while another happened, which is the defect this
-whole client is built against. Refusing before starting is bounded by
-construction and says what is needed.
+The obstacle was never a missing feature. Approving runs porch's phase checks,
+which for an AIR `implement` phase are the repository's build and test suite:
+minutes of work. On an open HTTP request that is unbounded, so the synchronous
+route refuses with `PHASE_CHECKS_REQUIRED` and names them — **and it still does**,
+for any caller that has not opted into the other path.
 
-The durable fix is an asynchronous approval — submit, poll, report — and it
-belongs with phase 12's static mount rather than here.
+**A timeout was never the alternative.** A client that gives up does not stop
+porch, so it would abandon a call that goes on to approve the gate anyway,
+reporting one outcome while another happened. So the approval outlives its
+request instead: submit, poll, report.
 
-Spec 146 criterion 9b is therefore **unmet**, and deliberately not narrowed. The
-approval works end to end — session id, machine, authority and timestamp land in
-`status.yaml` — but only where the phase's checks do not run, and no real project
-is like that. The spec and the phase plan are human-approved and this app's
-documentation does not get to redefine one of their acceptance criteria; a
-criterion quietly rewritten to match what was built is the thing this phase is
-about.
+- `POST .../gates/approvals` answers **202** with an operation id. The gate is not
+  approved at that moment, and 202 rather than 200 is how the client knows.
+- `GET .../gates/approvals/<id>` reports one of six states. The panel shows the
+  server's own phase and check names while it runs, because "Approving…" for four
+  minutes is indistinguishable from stuck.
+- The terminal report carries **what porch persisted** — never a value the client
+  or the route composed. An already-approved gate reports the approval that
+  exists, including when it is somebody else's.
 
-**Owner: phase 12**, with the asynchronous approval and the static mount. Both
-branches are tested here — `two-machines.spec.ts` covers the approval and the
-refusal — so the gap is measured rather than assumed.
+**Three outcomes are not refusals**, and the client renders each as unknown
+rather than as "not approved": an interruption (this host stopped; the gate may
+be approved, and the server has read `status.yaml` to say which), a poll or
+submit that could not complete (this client stopping does not stop porch), and a
+success the client cannot parse. Reporting any of them as a refusal would send a
+human to approve a gate that may already be approved.
+
+A host that wires no operation store answers **501**, and the client falls back
+to the synchronous route — so a host running an older build still approves
+everything it ever could.
+
+Spec 146 criterion 9b is **met**. `two-machines.spec.ts` drives both halves
+against the same kind of project: the synchronous route refuses it, and the
+client approves it.
 
 ## What a paired session proves
 

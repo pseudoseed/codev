@@ -212,7 +212,14 @@ export const AGENT_ROUTES: readonly AgentRoute[] = [
     pattern: /^\/api\/agent\/v1\/approval-capabilities\/machine\/([^/]+)$/,
     probe: `${AGENT_ROUTE_PREFIX}/approval-capabilities/machine/probe`,
     authentication: 'human-session',
-    rationale: 'revocation is privileged: an agent that could revoke could deny a human their gate.',
+    rationale:
+      'revocation is privileged HERE, over HTTP: an agent that could revoke could deny a human '
+      + 'their gate. Spec 236 added `afx pair revoke`, which writes the store directly and needs '
+      + 'no session — so this is not the only path, and the reason is recorded rather than left '
+      + 'contradicting the command: over the API the operator who wanted to withdraw access was '
+      + 'the one who could not, because human-session includes machine-credential. A same-uid '
+      + 'agent could already write these stores, so the CLI makes that denial convenient rather '
+      + 'than possible. See 146-approval-threat-model.md, "Who can revoke".',
   },
   {
     id: 'machine-credential-revoke',
@@ -222,7 +229,10 @@ export const AGENT_ROUTES: readonly AgentRoute[] = [
     authentication: 'human-session',
     rationale:
       'success criterion 15: revoking one machine fails that subtree closed and leaves the '
-      + 'others working. Privileged for the same reason as approval revocation.',
+      + 'others working. Privileged for the same reason as approval revocation — and, like it, '
+      + 'no longer the only path: `afx pair revoke` writes both stores directly, because an '
+      + 'operator holding nothing must still be able to withdraw access. The trade is recorded '
+      + 'in 146-approval-threat-model.md rather than left as two documents disagreeing.',
   },
 ];
 
