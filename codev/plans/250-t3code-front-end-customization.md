@@ -540,9 +540,11 @@ This repository:
 #### Deliverables
 
 - [ ] Regeneration runs against `/Users/chris/dev/t3code-codev`, not the upstream clone.
-- [ ] The closure is unchanged — still the nine files. If the new code makes `orchestration.ts`
-      import something outside the closure, the generator fails and the widening is a deliberate
-      decision, not a silent follow.
+- [ ] The closure is unchanged — still the nine files, and this is checkable in advance rather
+      than discovered at generation time. `ThreadId` is defined in `baseSchemas.ts`
+      (`:55-56`), which is already on the closure list, and `role` is a plain
+      `Schema.Literals` union, so neither new field reaches outside. If some later edit does, the
+      generator fails and the widening is a deliberate decision, not a silent follow.
 - [ ] `source-hash.json` carries both the fork hashes and the upstream-at-`upstreamBase` hashes
       from phase 1.
 - [ ] `shape-check.ts` is **not** relaxed. Its stated semantics — a lower bound in one direction,
@@ -672,7 +674,12 @@ In `/Users/chris/dev/t3code-codev`:
 - `apps/web/src/codev/hierarchy.ts` — new. Pure grouping: shells in, tree out.
 - `apps/web/src/components/Sidebar.logic.ts` — consume it.
 - `apps/web/src/components/Sidebar.tsx` — render the nesting.
-- `apps/web/src/sidebarProjectGrouping.ts` — extend rather than replace.
+- `apps/web/src/sidebarProjectGrouping.ts` — **composed with, not extended.** Verified: this
+  module groups *environments* (`EnvironmentPresence` is `local-only` / `remote-only` / `mixed`,
+  and `allRemoteMembersAreDesktopLocal` distinguishes a WSL sandbox from a real remote). That is
+  a different axis from architect-to-builder thread nesting, so the first draft's "extend rather
+  than replace" was the wrong relationship. Codev's hierarchy is its own pure module that runs
+  over the threads inside a group this one has already formed.
 - `apps/web/src/codev/hierarchy.test.ts` — new.
 - `apps/web/src/components/Sidebar.logic.test.ts` — extend.
 This repository:
