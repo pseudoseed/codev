@@ -269,3 +269,27 @@ Also: gate commands must stay out of `ClientOrchestrationCommand` /
 internal-only precedent. And `generate.mjs:335` walks `pin.methods`, not `OrchestrationRpcSchemas`,
 so the new method must be listed in `pin.json` or it is never vendored — the `vcs.*` entries are
 there for exactly this reason.
+
+## plan-approval gate reached
+
+`porch done 250` passed all three checks and stopped at `plan-approval`. Structured gate request
+recorded via `porch gate 250 --request-file`, architect notified.
+
+Round 1 ran three lanes — claude, codex, opencode — all `REQUEST_CHANGES`, all findings accepted.
+Nothing in the disagree column, which is unusual and worth noting: two of the findings were errors
+of mine that would have caused real damage, and opencode found a hole in the fix I had just made
+for codex's finding. That is the case for three lanes rather than porch's two.
+
+Waiting on the human decision. The one item I flagged for a look before phase 1 starts is
+`gh repo fork pingdotgg/t3code` — a public fork under `pseudoseed`, outward-facing and not quietly
+undoable. The gate request offers the architect the option of creating it themselves instead.
+
+Commits this phase:
+- `2882b2eb2` initial plan, 11 phases
+- `6c1d5d870` claude round
+- `8d25ac891` schema guard grounded in upstream's idiom
+- `245296d5e` codex round + architect ruling, spec risk row amended
+- `abf5f3d6a` browser harness moved out of the fork
+- `987c5a416` porch-level lane note
+- `46285ad8c` opencode round
+- rebuttals committed separately
