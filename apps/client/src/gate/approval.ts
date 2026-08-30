@@ -21,7 +21,18 @@ export interface HumanSession {
 
 export type ApprovalOutcome =
   | { readonly ok: true; readonly approvedAt: string; readonly machine: string; readonly sessionId: string }
-  | { readonly ok: false; readonly signal: string; readonly message: string };
+  | {
+    readonly ok: false;
+    readonly signal: string;
+    readonly message: string;
+    /**
+     * True when the session this was attempted with is gone — expired, idled
+     * out, or revoked. The caller drops it, so the panel offers a pairing token
+     * again instead of a dead Approve button the human can only escape by
+     * reloading the page.
+     */
+    readonly sessionEnded?: boolean;
+  };
 
 interface Json {
   readonly status: number;
@@ -56,11 +67,27 @@ function text(body: Record<string, unknown>, key: string): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-function refusal(result: Json, fallback: string): { ok: false; signal: string; message: string } {
+/** Signals that mean "this session is over", as distinct from "this was refused". */
+const SESSION_ENDED = new Set([
+  'HUMAN_SESSION_REQUIRED',
+  'HUMAN_SESSION_REVOKED',
+  'APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION',
+]);
+
+function refusal(result: Json, fallback: string): {
+  ok: false;
+  signal: string;
+  message: string;
+  sessionEnded: boolean;
+} {
+  const signal = text(result.body, 'signal') ?? `HTTP_${result.status}`;
   return {
     ok: false,
-    signal: text(result.body, 'signal') ?? `HTTP_${result.status}`,
+    signal,
     message: text(result.body, 'message') ?? fallback,
+    // A 401 on any step of this path means the session went away mid-ceremony;
+    // sessions idle out after 30 minutes, so this is ordinary, not exceptional.
+    sessionEnded: SESSION_ENDED.has(signal) || result.status === 401,
   };
 }
 

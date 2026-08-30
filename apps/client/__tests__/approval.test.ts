@@ -106,3 +106,34 @@ describe('approveGate', () => {
     expect(result.ok).toBe(false);
   });
 });
+
+describe('a session that ended mid-ceremony', () => {
+  const session = { sessionId: 's1', presentation: 's1.secret', expiresAt: 'later' };
+
+  /*
+   * Sessions idle out after 30 minutes, so this is the ordinary case, not the
+   * exceptional one. Without the flag the caller kept a dead session and left an
+   * Approve button that could only fail, escapable only by reloading the page.
+   */
+  it.each([
+    ['HUMAN_SESSION_REQUIRED', 401],
+    ['HUMAN_SESSION_REVOKED', 401],
+    ['APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION', 403],
+  ])('reports %s as a session that ended', async (signal, status) => {
+    const { fetchImpl } = router({
+      '/approval-capabilities': { status, body: { signal, message: 'gone' } },
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, signal, sessionEnded: true });
+  });
+
+  it('does not call an ordinary refusal a dead session', async () => {
+    const { fetchImpl } = router({
+      '/approval-capabilities': { status: 201, body: { capabilityId: 'c', presentation: 'c.s' } },
+      '/approval-nonces': { status: 201, body: { nonce: 'n' } },
+      '/gates/approve': { status: 403, body: { signal: 'PHASE_CHECKS_FAILED', message: 'checks failed' } },
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, signal: 'PHASE_CHECKS_FAILED', sessionEnded: false });
+  });
+});

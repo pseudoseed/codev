@@ -59,7 +59,13 @@ export function ThreadRowView({ row, approval }: { row: ThreadRow; approval?: Ga
         ) : null}
       </div>
 
-      {row.status.kind === 'unknown' && row.status.why ? (
+      {/*
+        * The reason is on the STAMP as a title and stated once at the machine.
+        * Repeating the same sentence under every row buried the rows that had
+        * something specific to say — an unrecognised session state, say — in a
+        * wall of identical text.
+        */}
+      {row.status.kind === 'unknown' && row.status.why && row.status.whyIsRowSpecific ? (
         <p className="row-why">{row.status.why}</p>
       ) : null}
 

@@ -65,12 +65,30 @@ export function App() {
       approve: async (gate) => {
         if (!session) return { ok: false, message: 'no human session is open on this machine' };
         const result = await approveGate(fetchImpl, config, session, gate);
-        return result.ok
-          ? {
+        if (result.ok) {
+          return {
             ok: true,
             message: `approved on ${result.machine} at ${result.approvedAt}, session ${result.sessionId}`,
-          }
-          : { ok: false, message: `${result.signal}: ${result.message}` };
+          };
+        }
+        /*
+         * A session that has ended is DROPPED, so the panel offers a pairing
+         * token again. Sessions idle out after 30 minutes; keeping a dead one in
+         * state left an Approve button that could only ever fail, and the only
+         * way back was to reload the page.
+         */
+        if (result.sessionEnded) {
+          setSessions((prev) => {
+            const next = { ...prev };
+            delete next[machineKey];
+            return next;
+          });
+          return {
+            ok: false,
+            message: `${result.signal}: ${result.message} — that session has ended; pair again to approve.`,
+          };
+        }
+        return { ok: false, message: `${result.signal}: ${result.message}` };
       },
     };
   }, [configs, sessions]);

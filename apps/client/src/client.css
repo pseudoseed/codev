@@ -374,3 +374,45 @@ html, body, #root {
 .conn-revoked .conn-why { color: var(--bone); }
 
 .conn-signal { flex-basis: 100%; margin: 4px 0 0; font-size: 10px; letter-spacing: 0.06em; opacity: 0.75; }
+
+/*
+ * "Could not check" is neither of the other two. Ochre rather than rust, because
+ * rust is reserved for a decision — a gate, or a withdrawal — and this is an
+ * unfinished question that may answer itself.
+ */
+.conn-indeterminate {
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 8px,
+    rgba(192, 138, 46, 0.12) 8px 16px
+  );
+  border-bottom: var(--rule) solid var(--ochre);
+}
+
+.conn-indeterminate .conn-word { color: var(--ink); background: var(--ochre); border-color: var(--ochre); }
+
+/*
+ * Connected, but the state under it is not current. Ochre like CANNOT VERIFY,
+ * because both are "the answer is incomplete" rather than "the answer is no".
+ */
+.conn-degraded {
+  background: rgba(192, 138, 46, 0.10);
+  border-bottom: var(--rule) solid var(--ochre);
+}
+
+.conn-degraded .conn-word { color: var(--ink); background: var(--ochre); border-color: var(--ochre); }
+
+/*
+ * Said once, at the machine. Every row under it reads UNKNOWN, and a tree full
+ * of UNKNOWN with no stated cause reads as a broken client rather than an
+ * honest one.
+ */
+.session-note {
+  margin: 0 0 10px;
+  padding: 6px 8px;
+  border-left: var(--rule) solid var(--ochre);
+  background: var(--bone);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--graphite);
+}

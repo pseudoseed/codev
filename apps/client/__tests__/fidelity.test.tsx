@@ -230,7 +230,7 @@ describe('honest degradation', () => {
     expect(strip.textContent).toContain('not authorized');
   });
 
-  it('reports an unobservable session as unknown, with the reason on the row', () => {
+  it('reports an unobservable session as unknown, with the reason stated once', () => {
     const base = snapshot();
     renderMachine({
       snapshot: {
@@ -245,7 +245,35 @@ describe('honest degradation', () => {
     const row = document.querySelector('[data-id="air-220"]')!;
     expect(row.getAttribute('data-status')).toBe('unknown');
     expect(row.querySelector('.status-stamp')!.textContent).toBe('UNKNOWN');
-    expect(row.querySelector('.row-why')!.textContent).toContain('not reporting session state');
+    // The cause is server-wide, so it is stated at the machine and NOT repeated
+    // under every row — three identical sentences buried the rows that had
+    // something specific to say.
+    expect(row.querySelector('.row-why')).toBeNull();
+    const note = document.querySelector('.session-note')!;
+    expect(note.textContent).toContain('does not report session state');
+    expect(note.textContent).toContain('Gates and phases come from porch');
+    expect(document.querySelectorAll('.session-note')).toHaveLength(1);
+    // The stamp still carries it for anyone hovering a single row.
+    expect(row.querySelector('.status-stamp')!.getAttribute('title'))
+      .toContain('not reporting session state');
+  });
+
+  it('still puts a ROW-SPECIFIC reason on the row it belongs to', () => {
+    const base = snapshot();
+    renderMachine({
+      snapshot: {
+        ...base,
+        protocol: {
+          ...base.protocol,
+          identities: base.protocol.identities.map((identity) =>
+            identity.roleId === 'air-220' ? { ...identity, sessionState: 'hibernating' } : identity),
+        },
+      },
+    });
+    const row = document.querySelector('[data-id="air-220"]')!;
+    expect(row.querySelector('.row-why')!.textContent).toContain('hibernating');
+    // And a server that IS reporting says nothing at the machine level.
+    expect(document.querySelector('.session-note')).toBeNull();
   });
 });
 

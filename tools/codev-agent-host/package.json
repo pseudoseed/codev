@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Spec 146 Phase 11: codev-agent's protocol-state surface on a port of its own, over a database snapshot. Two machines are a hard requirement, and a second Tower against the live ~/.agent-farm would share the real global.db, cron and PTY manager with the one driving actual builders.",
   "scripts": {
-    "start": "tsx agent-host.ts"
+    "start": "tsx agent-host.ts",
+    "check-types": "tsc --noEmit"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0"

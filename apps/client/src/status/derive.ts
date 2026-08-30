@@ -22,6 +22,13 @@ export interface RowStatus {
   readonly gateRequestedAt?: string;
   /** Present on `unknown`: what could not be observed, and why. */
   readonly why?: string;
+  /**
+   * True when `why` is about THIS row rather than about the whole server.
+   *
+   * A server-wide cause is stated once at the machine; repeating it under every
+   * row buried the rows with something specific to say in identical text.
+   */
+  readonly whyIsRowSpecific?: boolean;
 }
 
 const WORD: Record<RowStatusKind, string> = {
@@ -57,6 +64,7 @@ function fromSessionState(sessionState: string): RowStatus {
       return {
         kind: 'unknown',
         why: `the server reported session state "${sessionState}", which this client does not recognise`,
+        whyIsRowSpecific: true,
       };
   }
 }
@@ -68,7 +76,11 @@ function sessionUnobservable(t3code: T3codeReachability): RowStatus {
   if (t3code === 'not-provided') {
     return { kind: 'unknown', why: 'this server is not reporting session state' };
   }
-  return { kind: 'unknown', why: 't3code returned no state for this thread' };
+  return {
+    kind: 'unknown',
+    why: 't3code returned no state for this thread',
+    whyIsRowSpecific: true,
+  };
 }
 
 /**

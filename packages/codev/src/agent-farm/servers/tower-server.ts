@@ -748,6 +748,19 @@ async function bootSequence(): Promise<void> {
       const wanted = normalizeWorkspacePath(workspacePath);
       return getKnownWorkspacePaths().some((known) => normalizeWorkspacePath(known) === wanted);
     },
+    // NO `t3codeSnapshot`, AND THAT IS A STATED GAP RATHER THAN AN OVERSIGHT.
+    //
+    // Spec 146 criterion 3 wants working / turning / settled on every row, and
+    // those come from t3code's session state. `t3codeSnapshot` is SYNCHRONOUS
+    // and a t3 connection is not, so a real provider needs a cached background
+    // subscription plus per-workspace t3 connection config Tower does not hold
+    // yet. Until that exists, every snapshot this server sends carries
+    // `t3code: 'not-provided'`, and the client renders session state as UNKNOWN
+    // with that reason rather than inventing one.
+    //
+    // `spec-146-phase-11-production-wiring.test.ts` asserts exactly this, so the
+    // gap is recorded and a future phase that wires a provider will have to
+    // update the record rather than discover it.
   });
 
   // Spec 399: Initialize cron scheduler after instances are ready.

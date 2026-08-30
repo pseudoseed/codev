@@ -1,63 +1,101 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
+const CLIENT_ROOT = path.dirname(fileURLToPath(import.meta.url));
+const MACHINES_FILE = path.join(CLIENT_ROOT, '.dev-machines.json');
+
+interface DevMachine {
+  readonly id: string;
+  readonly origin: string;
+}
+
+/** Read per request, so re-pairing takes effect on reload rather than restart. */
+function devMachines(): DevMachine[] {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(MACHINES_FILE, 'utf8'));
+    return Array.isArray(parsed) ? parsed as DevMachine[] : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
- * Serve the machines `scripts/pair-dev.ts` paired, as JSON on this origin.
+ * Serve the machine list, and reverse-proxy each machine under `/m/<id>/`.
  *
- * NOT an injected inline script. The CSP is `script-src 'self'` precisely
- * because this page holds N machines' credentials, and punching an
- * `unsafe-inline` hole in it to deliver configuration would trade the
- * deliverable for a convenience.
+ * THE PROXY IS DERIVED FROM THE FILE, not a hardcoded port table. An earlier
+ * version named alpha on 4101 and beta on 4102, which worked only for whoever
+ * happened to start those two hosts on those two ports — and failed silently for
+ * anyone else, because an unproxied path 404s into the SPA fallback.
  *
- * `apply: 'serve'` — a built bundle never carries a credential. The file is
- * gitignored and read per request, so re-pairing takes effect on reload.
+ * It is a middleware rather than Vite's `proxy` option because these responses
+ * are SSE streams: they must be piped, and the connection must be torn down when
+ * the upstream dies rather than left open forever.
+ *
+ * `apply: 'serve'` — a built bundle never carries a credential. `scripts/serve.mjs`
+ * is the equivalent for the built bundle.
  */
-function serveDevMachines(): Plugin {
+function devMachineServer(): Plugin {
   return {
-    name: 'serve-dev-machines',
+    name: 'dev-machine-server',
     apply: 'serve',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
-        if (!req.url || req.url.split('?')[0] !== '/client/machines.json') return next();
-        let body = '[]';
-        try {
-          body = fs.readFileSync(path.join(__dirname, '.dev-machines.json'), 'utf8');
-        } catch {
-          /* not paired yet; an empty list is the honest answer */
+        const url = req.url ?? '';
+        if (url.split('?')[0] === '/client/machines.json') {
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Cache-Control', 'no-store');
+          res.end(JSON.stringify(devMachines().map((machine) => ({ ...machine, origin: `/m/${machine.id}` }))));
+          return;
         }
-        res.setHeader('Content-Type', 'application/json');
-        res.setHeader('Cache-Control', 'no-store');
-        res.end(body);
+
+        const proxied = /^\/m\/([^/]+)(\/.*)$/.exec(url);
+        if (!proxied) return next();
+        const machine = devMachines().find((candidate) => candidate.id === proxied[1]);
+        if (!machine) {
+          res.statusCode = 404;
+          res.setHeader('Content-Type', 'application/json');
+          res.end('{"signal":"UNKNOWN_MACHINE"}');
+          return;
+        }
+        const target = new URL(machine.origin);
+        const upstream = http.request({
+          host: target.hostname,
+          port: target.port,
+          path: proxied[2],
+          method: req.method,
+          headers: { ...req.headers, host: target.host },
+        }, (answer) => {
+          res.writeHead(answer.statusCode ?? 502, answer.headers);
+          answer.pipe(res);
+          // `pipe` does not end the destination when the source errors, and this
+          // response is a stream that never ends on its own.
+          answer.on('aborted', () => res.destroy());
+          answer.on('error', () => res.destroy());
+        });
+        upstream.on('error', () => {
+          if (!res.headersSent) {
+            res.statusCode = 502;
+            res.setHeader('Content-Type', 'application/json');
+          }
+          res.end('{"signal":"UPSTREAM_GONE"}');
+        });
+        req.pipe(upstream);
+        res.on('close', () => upstream.destroy());
       });
     },
   };
 }
 
-/**
- * The client holds credentials for N machines, so an XSS here steals credentials
- * rather than defacing a page. The CSP is declared in `index.html` so it applies
- * to the built bundle wherever it is served from, not only behind a dev proxy.
- */
 export default defineConfig({
-  plugins: [react(), serveDevMachines()],
+  plugins: [react(), devMachineServer()],
   server: {
-    /**
-     * `frame-ancestors` cannot be delivered by a <meta> CSP, so it is a header.
-     * Whatever serves the built bundle has to send the same one.
-     */
+    // `frame-ancestors` cannot be delivered by a <meta> CSP, so it is a header.
+    // `scripts/serve.mjs` sends the same one for the built bundle.
     headers: { 'Content-Security-Policy': "frame-ancestors 'none'" },
-    /**
-     * Each machine is proxied under a path prefix of its own, so the browser
-     * reaches every server same-origin. That is what lets `connect-src 'self'`
-     * stay closed in development instead of being widened to reach a second
-     * port. `machines.json` names these prefixes as each machine's `origin`.
-     */
-    proxy: {
-      '/m/alpha': { target: 'http://127.0.0.1:4101', rewrite: (p) => p.replace(/^\/m\/alpha/, '') },
-      '/m/beta': { target: 'http://127.0.0.1:4102', rewrite: (p) => p.replace(/^\/m\/beta/, '') },
-    },
   },
   base: '/client/',
   build: {

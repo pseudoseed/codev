@@ -9,7 +9,11 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "pnpm build && playwright test"
+    "test:e2e": "pnpm build && playwright test",
+    "dev:servers": "node scripts/dev-servers.mjs",
+    "dev:pair": "node scripts/pair-dev.mjs",
+    "serve": "node scripts/serve.mjs",
+    "check-types": "tsc --noEmit"
   },
   "dependencies": {
     "react": "^19.0.0",

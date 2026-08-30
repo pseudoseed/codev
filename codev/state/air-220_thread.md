@@ -123,3 +123,60 @@ repositories with real remotes (porch commits every state write), and porch's ow
 
 Both are the same shape as the defects this initiative keeps finding, one layer down: a thing that
 reported success while the thing it named had not happened.
+
+
+## Slice 3: the review round on #224
+
+Four blockers, all fair, and two of them found defects of the same shape this
+whole initiative is about.
+
+### 1. Criterion 3 is UNMET, and now says so
+
+`tower-server.ts` calls `initAgentRoutes` with no `t3codeSnapshot`, so the
+registry always takes its `not-provided` branch and no row from a real Tower can
+ever derive to working, turning or settled. Blocked rows work, because gates come
+from porch. My tests injected session states, so they passed — the fourth
+instance of the pattern, inside the PR asked to record it.
+
+Not wiring a provider, and the reason is a real constraint rather than an excuse:
+`t3codeSnapshot` is synchronous and a t3 connection is not, so a provider needs a
+cached background subscription plus per-workspace t3 config Tower does not hold.
+Phase 10 or 12.
+
+`spec-146-phase-11-production-wiring.test.ts` reads the real `initAgentRoutes`
+call and asserts it passes no provider, so the gap is a tripwire rather than an
+assumption. The client states the cause **once per machine** now; three identical
+sentences under three rows had buried the rows with something specific to say.
+
+### 2. A stale tree could be labelled LIVE forever
+
+`protocol-state-error` emitted a message and continued, so status stayed `live`,
+heartbeats kept the silence deadline from firing, and the strip did not render
+the message in its live branch. A persistent read failure showed an old tree
+under a LIVE badge indefinitely — the exact property the disconnected state gets
+right, one branch over. There is a `degraded` status and a STALE band now, and
+`lastLiveAt` is not advanced by a failed read.
+
+### 3 and 4. CI, and a client only I could run
+
+Neither `apps/client` unit tests nor its Playwright suite ran anywhere: the root
+`pnpm test` filters to `@cluesmith/codev`. 95 tests existed and CI had never seen
+one. Added both, plus `check-types` for `tools/codev-agent-host`, whose import of
+`AgentRouteContext` would otherwise rot the two-machine harness silently.
+
+`vite.config.ts` named a `scripts/pair-dev.ts` that did not exist, the proxy
+hardcoded two ports, and the built bundle asked for a `machines.json` no server
+answered. Now: `scripts/dev-servers.mjs` (two real hosts and a written
+`.dev-machines.json` in one command), `scripts/pair-dev.mjs` (pair with a real
+Tower), `scripts/serve.mjs` (serve the built bundle with the `frame-ancestors`
+header a meta CSP cannot carry), a proxy derived from the machines file rather
+than a port table, and a README with the file's shape.
+
+### Found while screenshotting, same class again
+
+`MACHINE_STORE_UNREADABLE` was rendering as a permanent fail-closed, and then as
+a bare "the server answered 503" with the signal dropped — because only 401 and
+403 were read for their signal, and an unreadable store answers 503 deliberately.
+"I could not check" is transient: it retries now, under a third band (CANNOT
+VERIFY), so withdrawn, unverifiable and unreachable are three appearances,
+asserted pairwise distinct.

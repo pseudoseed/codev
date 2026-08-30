@@ -232,7 +232,7 @@ describe('a revoked credential is not a generic disconnect', () => {
     ]), { status: 200 })) as unknown as typeof globalThis.fetch;
     const seen = await drive(fetchImpl);
     const last = seen[seen.length - 1];
-    expect(last.why).toBe('auth');
+    expect(last.why).not.toBe('revoked');
     expect(last.signal).toBe('MACHINE_STORE_UNREADABLE');
   });
 
@@ -244,5 +244,115 @@ describe('a revoked credential is not a generic disconnect', () => {
     const seen = await drive(fetchImpl);
     expect(seen[seen.length - 1].why).toBe('auth');
     expect(seen[seen.length - 1].signal).toBe('MACHINE_CREDENTIAL_UNKNOWN');
+  });
+});
+
+describe('a credential the host could not check', () => {
+  /*
+   * The host reached NO VERDICT. Failing the subtree closed over that states
+   * something nobody established, and it stays failed after the condition
+   * clears — the same defect as calling it revoked, with a longer tail.
+   */
+  it('keeps retrying an unreadable credential store and says it could not verify', async () => {
+    const fetchImpl = (async () => new Response(sseBody([
+      frame('protocol-state', { snapshot: SNAPSHOT }),
+      frame('protocol-state-unauthorized', {
+        type: 'STREAM_AUTHORIZATION_LOST',
+        code: 'MACHINE_STORE_UNREADABLE',
+        message: 'credential could not be re-checked',
+      }),
+    ]), { status: 200 })) as unknown as typeof globalThis.fetch;
+    const seen = await drive(fetchImpl);
+    const last = seen[seen.length - 1];
+    expect(last.why).toBe('indeterminate');
+    expect(last.signal).toBe('MACHINE_STORE_UNREADABLE');
+    expect(last.retrying).toBe(true);
+  });
+
+  it('keeps retrying a locked store presented at the handshake', async () => {
+    const fetchImpl = (async () => new Response(
+      JSON.stringify({ signal: 'MACHINE_STORE_LOCKED', message: 'the store is locked' }),
+      { status: 503 },
+    )) as unknown as typeof globalThis.fetch;
+    const seen = await drive(fetchImpl);
+    expect(seen[seen.length - 1].retrying).toBe(true);
+  });
+
+  it('still refuses an unknown credential permanently', async () => {
+    const fetchImpl = (async () => new Response(
+      JSON.stringify({ signal: 'MACHINE_CREDENTIAL_UNKNOWN', message: 'no such credential here' }),
+      { status: 401 },
+    )) as unknown as typeof globalThis.fetch;
+    const seen = await drive(fetchImpl);
+    expect(seen[seen.length - 1].why).toBe('auth');
+    expect(seen[seen.length - 1].retrying).toBe(false);
+  });
+});
+
+describe('a server that says it could not read some state', () => {
+  /*
+   * THE STREAM STAYS OPEN, SO NOTHING ELSE WOULD EVER CATCH THIS. Heartbeats
+   * keep the silence deadline from firing, so a persistent read failure showed
+   * an old tree under a LIVE badge indefinitely — the exact property the
+   * disconnected state gets right, one branch over.
+   */
+  it('stops calling the tree live once the server reports a read failure', async () => {
+    const fetchImpl = (async () => new Response(sseBody([
+      frame('protocol-state', { snapshot: SNAPSHOT }),
+      frame('protocol-state-error', {
+        type: 'STATE_STREAM_WATCH_FAILED',
+        signal: { code: 'STATUS_UNREADABLE', message: 'status.yaml cannot be read: EACCES' },
+        code: 'STATUS_UNREADABLE',
+        message: 'status.yaml cannot be read: EACCES',
+      }),
+      ': heartbeat\n\n',
+    ]), { status: 200 })) as unknown as typeof globalThis.fetch;
+
+    const seen: MachineState[] = [];
+    const link = connectMachine(config, {
+      fetch: fetchImpl,
+      now: () => '2026-08-29T12:00:01Z',
+      onState: (state) => seen.push(state),
+      backoffMs: [50_000],
+      sleep: () => new Promise(() => {}),
+    });
+    await vi.waitFor(() => expect(seen.some((s) => s.status === 'degraded')).toBe(true));
+    link.stop();
+
+    const degraded = seen.find((s) => s.status === 'degraded')!;
+    expect(degraded.message).toContain('EACCES');
+    expect(degraded.signal).toBe('STATUS_UNREADABLE');
+    // The tree is retained and dated, and the date is NOT advanced past the last
+    // complete snapshot.
+    expect(degraded.snapshot).not.toBeNull();
+    expect(degraded.lastLiveAt).toBe('2026-08-29T12:00:01Z');
+  });
+
+  it('returns to live when a good snapshot arrives after the failure', async () => {
+    const fetchImpl = (async () => new Response(sseBody([
+      frame('protocol-state', { snapshot: SNAPSHOT }),
+      frame('protocol-state-error', { code: 'STATUS_UNREADABLE', message: 'transient' }),
+      frame('protocol-state', { snapshot: SNAPSHOT }),
+    ]), { status: 200 })) as unknown as typeof globalThis.fetch;
+
+    const seen: MachineState[] = [];
+    const link = connectMachine(config, {
+      fetch: fetchImpl,
+      onState: (state) => seen.push(state),
+      backoffMs: [50_000],
+      sleep: () => new Promise(() => {}),
+    });
+    await vi.waitFor(() => {
+      const degradedAt = seen.findIndex((s) => s.status === 'degraded');
+      expect(degradedAt).toBeGreaterThanOrEqual(0);
+      expect(seen.slice(degradedAt).some((s) => s.status === 'live')).toBe(true);
+    });
+    link.stop();
+    // The recovery clears the reason, rather than leaving a stale explanation
+    // sitting under a LIVE badge.
+    const degradedAt = seen.findIndex((state) => state.status === 'degraded');
+    const recovered = seen.slice(degradedAt).find((state) => state.status === 'live')!;
+    expect(recovered.message).toBeNull();
+    expect(recovered.signal).toBeNull();
   });
 });

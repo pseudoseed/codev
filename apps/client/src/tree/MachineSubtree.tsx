@@ -31,6 +31,26 @@ function ConnectionStrip({ node, nowMs }: { node: MachineNode; nowMs: number }) 
       </div>
     );
   }
+  /*
+   * Connected, answering, and telling us it could not read part of what it was
+   * about to send. Not LIVE — the tree under it is last-known — and not
+   * DISCONNECTED, because the connection is fine and the reason is specific.
+   */
+  if (connection.status === 'degraded') {
+    return (
+      <div className="conn-strip conn-degraded">
+        <span className="stamp conn-word">STALE</span>
+        <span className="conn-detail">
+          {connection.lastLiveAt
+            ? `last complete ${relative(connection.lastLiveAt, nowMs)} · ${connection.lastLiveAt}`
+            : 'no complete snapshot has arrived'}
+          {' · connected'}
+        </span>
+        {connection.message ? <p className="conn-why">{connection.message}</p> : null}
+        {connection.signal ? <p className="conn-signal stamp">{connection.signal}</p> : null}
+      </div>
+    );
+  }
   if (connection.status === 'connecting') {
     return (
       <div className="conn-strip conn-connecting">
@@ -48,9 +68,18 @@ function ConnectionStrip({ node, nowMs }: { node: MachineNode; nowMs: number }) 
    * coming — the retry line says so out loud for that reason.
    */
   const revoked = connection.why === 'revoked';
+  /*
+   * A THIRD BAND, because the host reached no verdict at all. Its credential
+   * store would not parse, so it could not say whether this machine is
+   * authorized — and rendering that as either "disconnected" or "revoked" states
+   * something nobody established.
+   */
+  const indeterminate = connection.why === 'indeterminate';
+  const band = revoked ? 'conn-revoked' : indeterminate ? 'conn-indeterminate' : 'conn-down';
+  const word = revoked ? 'ACCESS REVOKED' : indeterminate ? 'CANNOT VERIFY' : 'DISCONNECTED';
   return (
-    <div className={`conn-strip ${revoked ? 'conn-revoked' : 'conn-down'}`}>
-      <span className="stamp conn-word">{revoked ? 'ACCESS REVOKED' : 'DISCONNECTED'}</span>
+    <div className={`conn-strip ${band}`}>
+      <span className="stamp conn-word">{word}</span>
       <span className="conn-detail">
         {connection.lastLiveAt
           ? `last live ${relative(connection.lastLiveAt, nowMs)} · ${connection.lastLiveAt}`
@@ -64,6 +93,12 @@ function ConnectionStrip({ node, nowMs }: { node: MachineNode; nowMs: number }) 
           can be live.
         </p>
       ) : null}
+      {indeterminate ? (
+        <p className="conn-why">
+          The host could not check this machine&rsquo;s credential, which is not the same as
+          refusing it. Still trying; this clears on its own if the store becomes readable.
+        </p>
+      ) : null}
       {connection.signal ? <p className="conn-signal stamp">{connection.signal}</p> : null}
     </div>
   );
@@ -74,6 +109,8 @@ export function MachineSubtree({ node, nowMs, approval }: {
   nowMs: number;
   approval?: GateApprovalHandle | null;
 }) {
+  // Anything that is not a complete, current snapshot leaves the tree labelled
+  // stale — `degraded` included, which is the whole point of having it.
   const down = node.connection.status !== 'live';
   const workspace = node.workspace;
   return (
@@ -101,6 +138,14 @@ export function MachineSubtree({ node, nowMs, approval }: {
           {down ? (
             <p className="stale-note">
               Showing the last state received. It is not current.
+            </p>
+          ) : null}
+
+          {workspace.sessionVisibility !== 'available' ? (
+            <p className="session-note">
+              {workspace.sessionVisibility === 'unreachable'
+                ? 'This machine cannot reach t3code, so no row can say whether its session is working, turning or settled. Gates and phases come from porch and are current.'
+                : 'This server does not report session state, so no row can say whether its session is working, turning or settled. Gates and phases come from porch and are current.'}
             </p>
           ) : null}
 

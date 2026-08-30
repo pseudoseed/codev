@@ -942,6 +942,19 @@ export async function approve(
   //
   // The flag is checked first only because it is the cheaper, more actionable
   // message; failing it is not an authorization decision.
+  /*
+   * NOTHING IS PRINTED WHEN A PROGRAM IS CALLING.
+   *
+   * Every line below went to stdout, and `onRefusal: 'throw'` means codev-agent
+   * is calling this in Tower's process — so an approval from the client wrote
+   * ANSI-coloured porch output into Tower's log, where it is noise at best and,
+   * on a refusal, a second and differently-worded account of an answer the
+   * caller already has as a typed error. The CLI is unchanged.
+   */
+  const say = options.onRefusal === 'throw'
+    ? (): void => {}
+    : (...args: unknown[]): void => console.log(...args);
+
   // Annotated on the BINDING, not just the arrow. TypeScript narrows after a
   // call only when the variable itself is declared to return `never`; without
   // the annotation every line below a refusal is still considered reachable.
@@ -951,13 +964,13 @@ export async function approve(
   };
 
   if (!hasHumanFlag) {
-    console.log('');
-    console.log(chalk.red('ERROR: Human approval required.'));
-    console.log('');
-    console.log('  To approve, please run:');
-    console.log('');
-    console.log(chalk.cyan(`    porch approve ${projectId} ${gateName} --a-human-explicitly-approved-this`));
-    console.log('');
+    say('');
+    say(chalk.red('ERROR: Human approval required.'));
+    say('');
+    say('  To approve, please run:');
+    say('');
+    say(chalk.cyan(`    porch approve ${projectId} ${gateName} --a-human-explicitly-approved-this`));
+    say('');
     refuse('HUMAN_APPROVAL_REQUIRED', 'this call did not assert an explicit human approval');
   }
 
@@ -971,21 +984,21 @@ export async function approve(
     nonces: options.nonces ?? new ApprovalNonceStore(),
   });
   if (!approvalDecision.authorized) {
-    console.log('');
-    console.log(chalk.red(`ERROR: approval refused (${approvalDecision.code}).`));
-    console.log(`  ${approvalDecision.message}`);
-    console.log('');
-    console.log('  Approve from the client, or from a shell holding a capability:');
-    console.log(chalk.cyan(`    ${CAPABILITY_ENV_VAR}=<id>.<secret> ${NONCE_ENV_VAR}=<nonce> \\`));
-    console.log(chalk.cyan(`      porch approve ${projectId} ${gateName} --a-human-explicitly-approved-this`));
-    console.log('');
+    say('');
+    say(chalk.red(`ERROR: approval refused (${approvalDecision.code}).`));
+    say(`  ${approvalDecision.message}`);
+    say('');
+    say('  Approve from the client, or from a shell holding a capability:');
+    say(chalk.cyan(`    ${CAPABILITY_ENV_VAR}=<id>.<secret> ${NONCE_ENV_VAR}=<nonce> \\`));
+    say(chalk.cyan(`      porch approve ${projectId} ${gateName} --a-human-explicitly-approved-this`));
+    say('');
     refuse(approvalDecision.code, approvalDecision.message);
   }
   const approvalRecord = approvalDecision.record;
   if (approvalRecord.authorization === 'flag-only') {
     // Said out loud rather than left silent: this approval carries no evidence
     // of who made it. Silence here would read as "a human was verified".
-    console.log(chalk.yellow('  Approving with no capability: this approval records no session id.'));
+    say(chalk.yellow('  Approving with no capability: this approval records no session id.'));
   }
 
   const state = readState(statusPath);
@@ -1011,7 +1024,7 @@ export async function approve(
   }
 
   if (state.gates[gateName].status === 'approved') {
-    console.log(chalk.yellow(`Gate ${gateName} is already approved.`));
+    say(chalk.yellow(`Gate ${gateName} is already approved.`));
     return;
   }
 
@@ -1046,13 +1059,13 @@ export async function approve(
   if (phaseCheckNames.length > 0) {
     const checkEnv: CheckEnv = { PROJECT_ID: state.id, PROJECT_TITLE: resolveArtifactBaseName(artifactRoot, state.id, state.title, scopedResolver) };
 
-    console.log('');
-    console.log(chalk.bold('RUNNING CHECKS...'));
+    say('');
+    say(chalk.bold('RUNNING CHECKS...'));
     logCheckOverrides(phaseCheckNames, checks, overrides);
 
     if (Object.keys(checks).length > 0) {
       const results = await runPhaseChecks(checks, artifactRoot, checkEnv, undefined, scopedResolver);
-      console.log(formatCheckResults(results));
+      say(formatCheckResults(results));
 
       if (!allChecksPassed(results)) {
         // The CLI exits here. A server MUST NOT: failing checks are a refusal
@@ -1066,7 +1079,7 @@ export async function approve(
         exitChecksNotPassed(results, 'Cannot approve gate.');
       }
     } else {
-      console.log(chalk.dim('  (all checks skipped via .codev/config.json)'));
+      say(chalk.dim('  (all checks skipped via .codev/config.json)'));
     }
   }
 
@@ -1076,10 +1089,10 @@ export async function approve(
   // re-mint through the authenticated route for no reason.
   const nonceCommit = approvalDecision.consumeNonce?.();
   if (nonceCommit && !nonceCommit.accepted) {
-    console.log('');
-    console.log(chalk.red(`ERROR: approval refused (${nonceCommit.code}).`));
-    console.log(`  ${nonceCommit.message}`);
-    console.log('');
+    say('');
+    say(chalk.red(`ERROR: approval refused (${nonceCommit.code}).`));
+    say(`  ${nonceCommit.message}`);
+    say('');
     refuse(nonceCommit.code, nonceCommit.message);
   }
 
@@ -1115,8 +1128,8 @@ export async function approve(
     });
   }
 
-  console.log('');
-  console.log(chalk.green(`Gate ${gateName} approved.`));
+  say('');
+  say(chalk.green(`Gate ${gateName} approved.`));
 
   // For verify-approval: auto-advance to terminal state (convenience — one command)
   // NOTE: The 'verified' state is committed to the builder branch, which may not
@@ -1126,9 +1139,9 @@ export async function approve(
   if (gateName === 'verify-approval') {
     await advanceProtocolPhase(workspaceRoot, state, protocol, statusPath, resolver);
   } else {
-    console.log(`\n  Run: porch done ${state.id} (to advance)`);
+    say(`\n  Run: porch done ${state.id} (to advance)`);
   }
-  console.log('');
+  say('');
 }
 
 /**

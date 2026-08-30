@@ -150,3 +150,87 @@ describe('two machines in one tree', () => {
     expect(beta.textContent).toContain('No state has arrived from this machine');
   });
 });
+
+describe('three refusals, three appearances', () => {
+  /*
+   * Withdrawn, unverifiable and unreachable are three different instructions to
+   * an operator. Rendering any two of them the same way is the defect this
+   * client exists to avoid, so this asserts they are pairwise distinct rather
+   * than asserting each one's wording in isolation.
+   */
+  function bandFor(over: Partial<MachineState>): { className: string; text: string } {
+    cleanup();
+    renderTree([machine('alpha', '/srv/alpha', 'air-220', {
+      status: 'disconnected',
+      lastLiveAt: '2026-08-30T00:59:00Z',
+      ...over,
+    })]);
+    const strip = document.querySelector('.conn-strip')!;
+    return { className: strip.className, text: strip.textContent ?? '' };
+  }
+
+  it('keeps revoked, cannot-verify and disconnected visually and verbally apart', () => {
+    const revoked = bandFor({
+      why: 'revoked', retrying: false, signal: 'MACHINE_CREDENTIAL_REVOKED',
+      message: 'credential alpha was revoked',
+    });
+    const cannotVerify = bandFor({
+      why: 'indeterminate', retrying: true, signal: 'MACHINE_STORE_UNREADABLE',
+      message: 'credential could not be re-checked',
+    });
+    const down = bandFor({ why: 'transport', retrying: true, message: 'the server answered 502' });
+
+    const classes = [revoked.className, cannotVerify.className, down.className];
+    expect(new Set(classes).size).toBe(3);
+
+    expect(revoked.text).toContain('ACCESS REVOKED');
+    expect(revoked.text).toContain('not retrying');
+    expect(cannotVerify.text).toContain('CANNOT VERIFY');
+    expect(cannotVerify.text).toContain('retrying');
+    expect(cannotVerify.text).toContain('not the same as');
+    expect(down.text).toContain('DISCONNECTED');
+
+    // And each still carries a last-updated timestamp.
+    for (const band of [revoked, cannotVerify, down]) {
+      expect(band.text).toContain('2026-08-30T00:59:00Z');
+    }
+  });
+
+  it('does not tell an operator to re-pair a machine that was never refused', () => {
+    const cannotVerify = bandFor({
+      why: 'indeterminate', retrying: true, signal: 'MACHINE_STORE_UNREADABLE',
+      message: 'credential could not be re-checked',
+    });
+    expect(cannotVerify.text).not.toContain('Reconnecting will not help');
+    expect(cannotVerify.text).not.toContain('paired again');
+  });
+});
+
+describe('connected but not current', () => {
+  /*
+   * The failure the disconnected band was built to prevent, arriving through the
+   * one branch that kept the connection open. A LIVE badge over a tree the
+   * server has just said it could not fully read is the same lie in a different
+   * place.
+   */
+  it('never shows LIVE over a tree the server said it could not read', () => {
+    renderTree([machine('alpha', '/srv/alpha', 'air-220', {
+      status: 'degraded',
+      message: 'status.yaml cannot be read: EACCES',
+      signal: 'STATUS_UNREADABLE',
+      lastLiveAt: '2026-08-30T00:59:00Z',
+    })]);
+    const strip = document.querySelector('.conn-strip')!;
+    expect(strip.className).toContain('conn-degraded');
+    expect(strip.textContent).toContain('STALE');
+    expect(strip.textContent).not.toContain('LIVE');
+    expect(strip.textContent).toContain('last complete 2m ago');
+    expect(strip.textContent).toContain('EACCES');
+    expect(strip.textContent).toContain('STATUS_UNREADABLE');
+    // Still says the connection itself is fine, so nobody goes looking at the box.
+    expect(strip.textContent).toContain('connected');
+    // And the tree under it is marked stale, not blanked.
+    expect(document.querySelector('.workspace.is-stale')).toBeTruthy();
+    expect(document.querySelectorAll('.thread-row')).toHaveLength(2);
+  });
+});

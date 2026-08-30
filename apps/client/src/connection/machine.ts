@@ -31,12 +31,37 @@ export interface MachineConfig {
  * is down — and reconnecting fixes exactly one of them. The server already keeps
  * these apart across seven machine-credential codes; collapsing them here would
  * undo that at the last step, which is where it would actually be read.
+ *
+ * `indeterminate` is the third one, and leaving it out was a real defect in the
+ * first version of this file. When the credential STORE cannot be read, the
+ * server has not refused this machine — it could not tell. Treating that as a
+ * refusal fails the subtree closed forever over a condition that clears the
+ * moment the file is readable again, which is "I could not tell" spelled as
+ * "no", one level up from where this project keeps finding it.
  */
-export type DisconnectWhy = 'auth' | 'revoked' | 'transport' | 'protocol';
+export type DisconnectWhy = 'auth' | 'revoked' | 'indeterminate' | 'transport' | 'protocol';
+
+/**
+ * Codes that mean the host could not reach a verdict, rather than reaching a
+ * negative one. These keep retrying; everything else in the refusal family does
+ * not, because no amount of reconnecting turns an unknown credential into a
+ * known one.
+ */
+const INDETERMINATE = new Set(['MACHINE_STORE_UNREADABLE', 'MACHINE_STORE_LOCKED']);
 
 export interface MachineState {
   readonly config: MachineConfig;
-  readonly status: 'connecting' | 'live' | 'disconnected';
+  /**
+   * `degraded` is CONNECTED BUT NOT CURRENT.
+   *
+   * The stream is open and the server is answering, and it has told us it could
+   * not read some of the state it was about to send. Leaving that as `live`
+   * showed an old tree under a LIVE badge for as long as the failure lasted —
+   * heartbeats keep the silence deadline from firing, so nothing else would ever
+   * catch it. Precisely the property the disconnected state gets right, one
+   * branch over.
+   */
+  readonly status: 'connecting' | 'live' | 'degraded' | 'disconnected';
   readonly why: DisconnectWhy | null;
   readonly message: string | null;
   /** The server's own code, verbatim, when it gave one. Never invented. */
@@ -160,11 +185,16 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
   }
 
   /**
-   * Turn a refusal into the two facts a human acts on: was it withdrawn, and
-   * what did the server call it. A body this client cannot parse yields no
-   * signal rather than a guessed one.
+   * Turn a refusal into the facts a human acts on: was it withdrawn, was it
+   * merely uncheckable, and what did the server call it. A body this client
+   * cannot parse yields no signal rather than a guessed one.
    */
-  async function refusal(response: Response): Promise<{ why: DisconnectWhy; message: string; signal: string | null }> {
+  async function refusal(response: Response): Promise<{
+    why: DisconnectWhy;
+    retry: boolean;
+    message: string;
+    signal: string | null;
+  }> {
     let body: { signal?: unknown; message?: unknown } = {};
     try {
       body = await response.json() as typeof body;
@@ -173,17 +203,14 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
     }
     const signal = typeof body.signal === 'string' ? body.signal : null;
     const message = typeof body.message === 'string' ? body.message : null;
-    if (signal === 'MACHINE_CREDENTIAL_REVOKED') {
-      return {
-        why: 'revoked',
-        signal,
-        message: message ?? 'this machine\'s access was withdrawn',
-      };
-    }
+    const refused = response.status === 401 || response.status === 403;
+    const verdict = classify(signal, refused);
     return {
-      why: 'auth',
+      ...verdict,
       signal,
-      message: message ?? `the server refused this machine's credential (HTTP ${response.status})`,
+      message: message ?? (refused
+        ? `the server refused this machine's credential (HTTP ${response.status})`
+        : `the server answered ${response.status}`),
     };
   }
 
@@ -210,17 +237,25 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
     }
     if (stopped) { release(); return 'failed-closed'; }
 
-    if (response.status === 401 || response.status === 403) {
-      release();
-      const refused = await refusal(response);
-      failClosed(refused.why, refused.message, refused.signal);
-      return 'failed-closed';
-    }
+    /*
+     * EVERY non-200 IS READ FOR ITS SIGNAL, not only 401 and 403.
+     *
+     * An unreadable credential store answers 503, deliberately — the host cannot
+     * say whether this machine is authorized, so it does not answer 401. Reading
+     * the code only on the refusal statuses flattened that into "the server
+     * answered 503", which names the number and drops the one fact an operator
+     * would act on. It looked exactly like a server having a bad minute.
+     */
     if (response.status !== 200 || !response.body) {
       release();
+      const refused = await refusal(response);
       void response.body?.cancel().catch(() => {});
-      drop('transport', `the server answered ${response.status}`);
-      return 'retry';
+      if (refused.retry) {
+        drop(refused.why, refused.message, refused.signal);
+        return 'retry';
+      }
+      failClosed(refused.why, refused.message, refused.signal);
+      return 'failed-closed';
     }
 
     /*
@@ -272,16 +307,31 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
           // stream was open. The server re-checks and names the code; it is not
           // re-derived from the fact that the stream stopped.
           const code = parseField(frame.data, 'code');
-          failClosed(
-            code === 'MACHINE_CREDENTIAL_REVOKED' ? 'revoked' : 'auth',
-            parseMessage(frame.data, 'this stream is no longer authorized'),
-            code,
-          );
+          // The stream event IS the refusal — the server terminated the stream
+          // because its own re-check said no — so an unrecognised code here is a
+          // refusal, not a bad response.
+          const verdict = classify(code, true);
+          const message = parseMessage(frame.data, 'this stream is no longer authorized');
+          if (verdict.retry) {
+            drop(verdict.why, message, code);
+            return 'retry';
+          }
+          failClosed(verdict.why, message, code);
           return 'failed-closed';
         }
         if (frame.event === 'protocol-state-error') {
-          // The stream is still open; the server is telling us one read failed.
-          emit({ message: parseMessage(frame.data, 'the server reported a state-read failure') });
+          /*
+           * The stream is open and the server has told us a read failed. The
+           * tree on screen is therefore last-known, not current — so the row
+           * says so, and `lastLiveAt` is NOT advanced. A later good snapshot
+           * clears this by setting `live` again.
+           */
+          emit({
+            status: 'degraded',
+            why: null,
+            message: parseMessage(frame.data, 'the server reported a state-read failure'),
+            signal: parseField(frame.data, 'code'),
+          });
           continue;
         }
         const parsed = parseSnapshot(frame.data);
@@ -291,7 +341,14 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
           drop('protocol', 'the server sent a snapshot this client does not understand');
           return 'retry';
         }
-        emit({ status: 'live', why: null, message: null, snapshot: parsed, lastLiveAt: now() });
+        emit({
+          status: 'live',
+          why: null,
+          message: null,
+          signal: null,
+          snapshot: parsed,
+          lastLiveAt: now(),
+        });
       }
     } catch (error) {
       finish();
@@ -336,6 +393,20 @@ function parseSnapshot(data: string): AgentProtocolSnapshot | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Withdrawn, unverifiable, plainly refused, or merely a bad response — and
+ * whether to keep trying.
+ *
+ * `refused` says the STATUS was 401/403. Without it, an unrecognised signal on a
+ * 500 would be classified as a permanent authentication failure and the subtree
+ * would fail closed over a server restart.
+ */
+function classify(signal: string | null, refused: boolean): { why: DisconnectWhy; retry: boolean } {
+  if (signal === 'MACHINE_CREDENTIAL_REVOKED') return { why: 'revoked', retry: false };
+  if (signal !== null && INDETERMINATE.has(signal)) return { why: 'indeterminate', retry: true };
+  return refused ? { why: 'auth', retry: false } : { why: 'transport', retry: true };
 }
 
 function parseField(data: string, key: string): string | null {

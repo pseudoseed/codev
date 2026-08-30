@@ -30,6 +30,12 @@ export interface WorkspaceNode {
   readonly key: string;
   readonly path: string;
   readonly generatedAt: string;
+  /**
+   * Whether this server could observe session state at all. Reported once, at
+   * the machine, rather than repeated on every row — and never omitted, because
+   * a tree full of UNKNOWN with no stated cause reads as a broken client.
+   */
+  readonly sessionVisibility: 'not-provided' | 'unreachable' | 'available';
   readonly architects: readonly ArchitectGroup[];
   /**
    * Builders `global.db` does not attribute to an architect present here. They
@@ -112,6 +118,7 @@ function buildWorkspace(connection: MachineState, machineKey: string): Workspace
     key: `${machineKey}:${snapshot.workspacePath}`,
     path: snapshot.workspacePath,
     generatedAt: snapshot.generatedAt,
+    sessionVisibility: t3code,
     architects: architectRows.map((architect) => ({
       key: architect.key,
       architect,
