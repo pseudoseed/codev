@@ -289,3 +289,37 @@ because a failed connect becomes `cooling-down`, which says more. It stays in th
 a host that observes unreachability another way.
 
 Suite after fixes: 6975 passing, 0 failing.
+
+### Phase 2 iteration 2 — APPROVE + COMMENT, and a NUL byte
+
+claude APPROVE, opencode COMMENT. Both confirmed the two iteration-1 bugs are fixed and tested.
+I took all four remaining items, because three of them are the same honesty class the phase is
+about and the fourth is cheap.
+
+1. **`#threadIds` turned a failed read into "nothing to watch"** (opencode). It caught a failed
+   query and returned `[]`; the sweep then stamped a zero count, deleted every entry, and
+   published `available` with an empty thread list — "I could not tell" spelled as "there is
+   nothing here", in the module I had just fixed twice for exactly that. It returns `null` now
+   and the sweep leaves the previous answer standing, which is the rule `#workspaces` already
+   followed.
+2. **`sweep()`'s try/catch wrapped the whole loop** (claude), so one throwing workspace skipped
+   every workspace after it, and theirs then aged into `stale` — a t3code problem reported in
+   workspaces that never had one. Per-workspace now.
+3. **`#subscribed` keys were never cleared** (claude). The live socket was the smaller half: the
+   real damage is that a thread which left and came back would be considered already subscribed
+   and never watched again, silently.
+4. Left as-is with reasoning recorded: the machine-level age takes the oldest entry, so one
+   dropped thread marks the whole snapshot `stale`. Conservative, and inherent to one age per
+   snapshot on the phase-1 wire.
+
+**The NUL byte.** Fixing (3) surfaced something that had been in the file since phase 2's first
+commit: `#ensureSubscribed` built its key as `` `${key}\x00${threadId}` `` — a literal NUL where
+I intended a space — and my new `#forget` built it with a real space. The two never matched, so
+the `delete` silently missed. Nothing could show it: the separator is invisible in an editor and
+in a diff, and it was harmless for as long as exactly one place both wrote and read the key. It
+only became a bug when a second call site had to agree with the first.
+
+Both sites now go through one `subscriptionKeyFor()`. I also scanned all 29 files changed on
+this branch for NUL bytes — none remain.
+
+Suite: 6979 passing, 0 failing.

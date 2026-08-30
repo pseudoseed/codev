@@ -85,6 +85,22 @@ const DEFAULT_DISCARD_AFTER_MS = 10 * 60_000;
 /** How often the maintainer reconciles subscriptions against `global.db`. */
 const DEFAULT_SWEEP_MS = 5_000;
 
+/**
+ * The key one open subscription is tracked under.
+ *
+ * ONE FUNCTION, because two call sites building this string by hand is how it
+ * went wrong: the reader's template carried a literal NUL byte and the writer's
+ * carried a space, so the two keys never matched and a `delete` silently missed.
+ * Nothing showed it — the separator is invisible in an editor and in a diff — and
+ * it only surfaced when a second call site had to agree with the first.
+ *
+ * A visible separator, once, for both. Workspace keys are absolute paths and
+ * thread ids are opaque server strings, so a space cannot collide.
+ */
+function subscriptionKeyFor(workspaceKey: string, threadId: string): string {
+  return `${workspaceKey} ${threadId}`;
+}
+
 interface CachedThread {
   readonly threadId: string;
   session?: LiveThreadSession;
@@ -400,12 +416,26 @@ export class T3codeSessionCache {
    * last was — which would then age into `stale` and look like a t3code problem.
    */
   sweep(): void {
+    let workspaces: string[];
     try {
-      for (const workspacePath of this.#workspaces()) {
-        this.#sweepWorkspace(workspacePath);
-      }
+      workspaces = this.#workspaces();
     } catch (error) {
-      this.options.log('ERROR', `t3code session sweep failed: ${(error as Error).message}`);
+      this.options.log('ERROR', `t3code session sweep could not begin: ${(error as Error).message}`);
+      return;
+    }
+    for (const workspacePath of workspaces) {
+      // PER WORKSPACE, not per pass. The catch used to wrap the whole loop, so a
+      // throw from one workspace's connector skipped every workspace after it —
+      // and their entries then aged into `stale`, which reads as a t3code problem
+      // in workspaces that never had one.
+      try {
+        this.#sweepWorkspace(workspacePath);
+      } catch (error) {
+        this.options.log(
+          'ERROR',
+          `t3code session sweep failed for ${workspacePath}: ${(error as Error).message}`,
+        );
+      }
     }
   }
 
@@ -431,7 +461,9 @@ export class T3codeSessionCache {
     // nothing to become current again, so publishing it would be a permanent
     // stale answer for a workspace that simply opted out.
     if (availability.kind === 'not-configured' || availability.kind === 'misconfigured') {
-      cache.threads.clear();
+      for (const threadId of [...cache.threads.keys()]) this.#forget(key, cache, threadId);
+      cache.threadIdCount = undefined;
+      cache.threadsReadAt = undefined;
       return;
     }
     if (availability.kind !== 'ready') return;
@@ -442,6 +474,10 @@ export class T3codeSessionCache {
     if (!streamer) return;
 
     const threadIds = this.#threadIds(workspacePath);
+    // A read that FAILED leaves the previous answer standing. Stamping a fresh
+    // time and a zero count here would turn a locked database into an assertion
+    // that this workspace has no threads.
+    if (threadIds === null) return;
     // Stamped even when the set is EMPTY: "connected, and this workspace has no
     // thread-backed agents" is a fact this pass established, and it is what
     // distinguishes it from a workspace the maintainer has never reached.
@@ -460,8 +496,22 @@ export class T3codeSessionCache {
     // row will not be published either, so keeping the entry would grow the cache
     // for the life of the process.
     for (const threadId of [...cache.threads.keys()]) {
-      if (!threadIds.includes(threadId)) cache.threads.delete(threadId);
+      if (!threadIds.includes(threadId)) this.#forget(key, cache, threadId);
     }
+  }
+
+  /**
+   * Drop a thread's entry AND its subscription bookkeeping.
+   *
+   * Deleting only the entry left the `#subscribed` key behind, so the stream went
+   * on running against a server for a thread nothing was reading — a live socket
+   * outliving its reason. It also meant that if the thread came back, this
+   * maintainer would consider it already subscribed and never re-open a stream
+   * for it, so a returning thread would be silently unwatched forever.
+   */
+  #forget(key: string, cache: WorkspaceCache, threadId: string): void {
+    cache.threads.delete(threadId);
+    this.#subscribed.delete(subscriptionKeyFor(key, threadId));
   }
 
   /** Every workspace `global.db` knows about. Same query shape the routes use. */
@@ -483,8 +533,20 @@ export class T3codeSessionCache {
     }
   }
 
-  /** The thread ids this workspace currently holds, architects and builders. */
-  #threadIds(workspacePath: string): string[] {
+  /**
+   * The thread ids this workspace currently holds, or `null` when the read failed.
+   *
+   * NULL IS NOT AN EMPTY LIST, and the distinction is the whole point. This
+   * returned `[]` on a failed read, and the caller then stamped
+   * `threadIdCount = 0`, deleted every entry, and published `available` with
+   * nothing to watch — spelling "I could not tell" exactly like "there is nothing
+   * here". A locked or unreadable `global.db` says nothing about how many threads
+   * a workspace has.
+   *
+   * The caller skips the thread-set update entirely on null, keeping the last
+   * answer, which is the same rule `#workspaces` already follows.
+   */
+  #threadIds(workspacePath: string): string[] | null {
     try {
       const rows = this.options.db().prepare(`
         SELECT thread_id FROM architect WHERE workspace_path = ? AND thread_id IS NOT NULL
@@ -494,7 +556,7 @@ export class T3codeSessionCache {
       return rows.map((row) => row.thread_id);
     } catch (error) {
       this.options.log('WARN', `t3code session cache could not read thread ids: ${(error as Error).message}`);
-      return [];
+      return null;
     }
   }
 
@@ -510,7 +572,7 @@ export class T3codeSessionCache {
    * ageing, and the next pass re-subscribes if the backend is ready again.
    */
   #ensureSubscribed(key: string, threadId: string, stream: ThreadStream): void {
-    const subscriptionKey = `${key} ${threadId}`;
+    const subscriptionKey = subscriptionKeyFor(key, threadId);
     if (this.#subscribed.has(subscriptionKey)) return;
     this.#subscribed.add(subscriptionKey);
 

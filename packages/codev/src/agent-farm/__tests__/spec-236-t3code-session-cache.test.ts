@@ -80,8 +80,26 @@ function heldStream() {
     stream,
     emit(threadId: string, frame: unknown) { sinks.get(threadId)?.(frame); },
     end(threadId: string) { settle.get(threadId)?.(); },
+    /** Drop the record of a subscription, so a re-subscribe is observable. */
+    forget(threadId: string) { sinks.delete(threadId); settle.delete(threadId); },
     subscribed() { return [...sinks.keys()].sort(); },
   };
+}
+
+/**
+ * The same database with `prepare` broken, so a read throws where a locked or
+ * corrupt `global.db` would. Not a mock of the module — the real object, with the
+ * one call under test made to fail.
+ */
+function brokenDb(db: Database.Database): Database.Database {
+  return new Proxy(db, {
+    get(target, property, receiver) {
+      if (property === 'prepare') {
+        return () => { throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' }); };
+      }
+      return Reflect.get(target, property, receiver) as unknown;
+    },
+  });
 }
 
 function snapshotFrame(over: Record<string, unknown> = {}): unknown {
@@ -467,6 +485,125 @@ describe('against the real connector, not an injected one', () => {
     // subscription, no connect, and no cooldown entry to heal later.
     expect(cache.snapshot(workspace)).toEqual({ status: 'not-configured' });
     expect(streamerFor).not.toHaveBeenCalled();
+  });
+});
+
+describe('a failed read is not an answer', () => {
+  /*
+   * THE SAME DEFECT AS THE TWO ITERATION-1 BUGS, ONE LAYER DOWN, and found by
+   * review after both were fixed. `#threadIds` caught a failed query and returned
+   * an empty array; the sweep then stamped a zero count, dropped every entry, and
+   * published `available` with nothing to watch. A locked `global.db` says
+   * nothing whatever about how many threads a workspace has.
+   */
+  it('keeps the previous thread set when global.db cannot be read', () => {
+    const workspace = tmp();
+    const db = seededDb(workspace, ['th-1']);
+    const held = heldStream();
+    let readable = true;
+    const cache = new T3codeSessionCache({
+      // `#workspaces` keeps its own last answer, so this only breaks the
+      // thread-set read — which is the path under test.
+      db: () => (readable ? db : brokenDb(db)),
+      log: () => {},
+      availabilityFor: () => ({ kind: 'ready' }),
+      streamerFor: () => ({ stream: held.stream }),
+    });
+    cache.sweep();
+    held.emit('th-1', snapshotFrame());
+    expect(cache.snapshot(workspace).status).toBe('available');
+
+    readable = false;
+    cache.sweep();
+    const snapshot = cache.snapshot(workspace);
+    // NOT `available` with an empty list, which would assert that this workspace
+    // has no threads on the strength of a query that never ran.
+    expect(snapshot.status).toBe('available');
+    expect(snapshot.status === 'available' && snapshot.threads.map((t) => t.threadId)).toEqual(['th-1']);
+  });
+
+  /*
+   * PER WORKSPACE, NOT PER PASS. One throwing workspace used to skip every
+   * workspace after it in the same sweep, and their entries then aged into
+   * `stale` — which reads as a t3code problem in workspaces that never had one.
+   */
+  it('lets one workspace fail without skipping the rest of the pass', () => {
+    const first = tmp();
+    const second = tmp();
+    const db = new Database(':memory:');
+    dbs.push(db);
+    db.exec(GLOBAL_SCHEMA);
+    for (const workspace of [first, second].sort()) {
+      db.prepare('INSERT OR IGNORE INTO known_workspaces (workspace_path, name) VALUES (?, ?)')
+        .run(workspace, 'ws');
+      db.prepare(`
+        INSERT INTO builders (workspace_path, id, name, worktree, branch, thread_id, spawned_by_architect)
+        VALUES (?, ?, ?, ?, 'b', ?, 'main')
+      `).run(workspace, `b-${workspace}`, `b-${workspace}`, join(workspace, '.builders', 'b'), `th-${workspace}`);
+    }
+    const [earlier, later] = [first, second].sort();
+    const held = heldStream();
+    const cache = new T3codeSessionCache({
+      db: () => db,
+      log: () => {},
+      availabilityFor: (workspace) => {
+        if (workspace === earlier) throw new Error('connector exploded');
+        return { kind: 'ready' };
+      },
+      streamerFor: () => ({ stream: held.stream }),
+    });
+    cache.sweep();
+    expect(held.subscribed()).toEqual([`th-${later}`]);
+  });
+});
+
+describe('a subscription does not outlive its reason', () => {
+  /*
+   * Deleting the entry alone left the `#subscribed` key behind, so the stream ran
+   * on for a thread nothing was reading. Worse than the live socket: if the
+   * thread came back, the maintainer considered it already subscribed and never
+   * opened a stream for it again — silently unwatched forever.
+   */
+  it('re-subscribes to a thread that leaves global.db and returns', () => {
+    const workspace = tmp();
+    const db = seededDb(workspace, ['th-1']);
+    const held = heldStream();
+    const cache = cacheFor({ db, workspace, stream: held.stream });
+    cache.sweep();
+    expect(held.subscribed()).toEqual(['th-1']);
+
+    db.prepare('DELETE FROM builders WHERE thread_id = ?').run('th-1');
+    cache.sweep();
+    held.forget('th-1');
+    expect(held.subscribed()).toEqual([]);
+
+    db.prepare(`
+      INSERT INTO builders (workspace_path, id, name, worktree, branch, thread_id, spawned_by_architect)
+      VALUES (?, 'again', 'again', ?, 'b', 'th-1', 'main')
+    `).run(workspace, join(workspace, '.builders', 'again'));
+    cache.sweep();
+    expect(held.subscribed()).toEqual(['th-1']);
+  });
+
+  it('re-subscribes after a workspace stops and resumes being configured', () => {
+    const workspace = tmp();
+    const db = seededDb(workspace, ['th-1']);
+    const held = heldStream();
+    let availability: ThreadBackendAvailability = { kind: 'ready' };
+    const cache = new T3codeSessionCache({
+      db: () => db,
+      log: (level, message) => console.log('LOG', level, message),
+      availabilityFor: () => availability,
+      streamerFor: () => ({ stream: held.stream }),
+    });
+    cache.sweep();
+    held.forget('th-1');
+
+    availability = { kind: 'not-configured' };
+    cache.sweep();
+    availability = { kind: 'ready' };
+    cache.sweep();
+    expect(held.subscribed()).toEqual(['th-1']);
   });
 });
 
