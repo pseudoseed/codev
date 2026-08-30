@@ -18,7 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -467,6 +467,50 @@ describe('spec 250: verify asserts each checkout against its own pin', () => {
     }
   });
 
+  /**
+   * Review finding: the `git status` catch fell through to the empty string, so a
+   * checkout whose status could not be read reported CLEAN. The comment said
+   * "undetermined" and the code said "fine".
+   *
+   * Triggered for real by removing read permission on `.git/index`: `rev-parse
+   * HEAD` needs only the ref, so it still resolves, and `git status` then exits
+   * 128 with "index file open failed". The failure lands between the two checks,
+   * which is exactly where the swallowed catch was.
+   */
+  it('exits 3 when `git status` itself fails, rather than reporting clean', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 't3-verify-nostatus-'));
+    const upstream = makeRepo('up-nostatus');
+    const index = join(upstream.dir, '.git', 'index');
+    try {
+      chmodSync(index, 0o000);
+      // Running as root, or on a filesystem that ignores the mode, leaves the
+      // trigger absent — asserting on it then would test nothing.
+      const statusStillWorks = (() => {
+        try {
+          execFileSync('git', ['-C', upstream.dir, 'status', '--porcelain'], { encoding: 'utf8', stdio: 'pipe' });
+          return true;
+        } catch { return false; }
+      })();
+      expect(
+        statusStillWorks,
+        'could not make `git status` fail, so this run proves nothing about the swallowed catch',
+      ).toBe(false);
+
+      const result = runVerify({
+        pinFile: writePin(scratch, 'e'.repeat(40), upstream.head),
+        upstreamRoot: upstream.dir,
+        forkRoot: join(scratch, 'absent'),
+      });
+      expect(result.status).toBe(UNDETERMINED);
+      expect(result.stderr).toContain('NO_UPSTREAM_STATUS');
+      expect(result.stderr).not.toContain('verified upstream');
+    } finally {
+      try { chmodSync(index, 0o644); } catch { /* already gone */ }
+      rmSync(scratch, { recursive: true, force: true });
+      rmSync(upstream.dir, { recursive: true, force: true });
+    }
+  });
+
   it('spells the three outcomes three different ways', () => {
     // 0, 1 and 3 are asserted individually above; this pins the contract that
     // they are three, not two with an alias.
@@ -666,6 +710,97 @@ describe('spec 250: source-hash records both ends of the comparison', () => {
     } else {
       expect(hashes.forkDrift.measured).toBe(false);
       expect(hashes.forkDrift.reason).toBeTruthy();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- per-identity verbs
+
+describe('spec 250: an upstream-only caller does not depend on the fork', () => {
+  /**
+   * Review finding: `start` was upstream-only but `ready` re-imposed the fork
+   * requirement one call later, so the exemption bought nothing. `smoke.mjs` and
+   * `live/integration.mjs` ran the both-identity `verify` for the same reason.
+   *
+   * A fork move is not `CHECKOUT_MOVED_DURING_RUN`, and it says nothing about the
+   * upstream process answering on the port.
+   */
+  it('verify-upstream passes with no fork checkout at all', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 't3-verify-up-only-'));
+    const upstream = makeRepo('up-only');
+    try {
+      const result = spawnSync(process.execPath, [harness, 'verify-upstream'], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          T3_PIN_FILE: writePin(scratch, 'e'.repeat(40), upstream.head),
+          T3CODE_ROOT: upstream.dir,
+          T3CODE_FORK_ROOT: join(scratch, 'absent'),
+        },
+      });
+      expect(result.stderr).toContain('verified upstream');
+      expect(result.stderr).not.toContain('verified fork');
+      expect(result.status).toBe(OK);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+      rmSync(upstream.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('verify-fork checks only the fork', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 't3-verify-fork-only-'));
+    const upstream = makeRepo('up-ignored');
+    const forkDir = join(scratch, 'fork');
+    try {
+      execFileSync('git', ['clone', '-q', upstream.dir, forkDir]);
+      const forkHead = gitIn(forkDir, 'rev-parse', 'HEAD');
+      const result = spawnSync(process.execPath, [harness, 'verify-fork'], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          // The upstream root points at nothing; verify-fork must not care.
+          T3_PIN_FILE: writePin(scratch, forkHead, upstream.head),
+          T3CODE_ROOT: join(scratch, 'no-upstream-here'),
+          T3CODE_FORK_ROOT: forkDir,
+        },
+      });
+      expect(result.stderr).toContain('verified fork');
+      expect(result.stderr).not.toContain('verified upstream');
+      expect(result.status).toBe(OK);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+      rmSync(upstream.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ready, smoke and the live integration script all use the upstream-only verb', () => {
+    const server = readFileSync(join(repoRoot, 'tools', 't3-server', 't3-server.mjs'), 'utf8');
+    expect(server).toMatch(/verifyUpstream\('CHECKOUT_MOVED_DURING_RUN'\)/);
+
+    const smoke = readFileSync(join(repoRoot, 'tools', 't3-server', 'smoke.mjs'), 'utf8');
+    expect(smoke).toContain("harness('verify-upstream')");
+    expect(smoke).not.toMatch(/harness\('verify'\)/);
+
+    const live = readFileSync(join(repoRoot, 'packages', 't3-client', 'live', 'integration.mjs'), 'utf8');
+    expect(live).toContain("run('verify-upstream')");
+    expect(live).not.toMatch(/run\('verify'\)/);
+  });
+
+  it('bare verify still asserts both, which is the phase acceptance criterion', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 't3-verify-both-'));
+    const upstream = makeRepo('up-both');
+    try {
+      const result = runVerify({
+        pinFile: writePin(scratch, 'e'.repeat(40), upstream.head),
+        upstreamRoot: upstream.dir,
+        forkRoot: join(scratch, 'absent'),
+      });
+      // Upstream passes; the missing fork is what stops it, and it stops it at 3.
+      expect(result.stderr).toContain('verified upstream');
+      expect(result.status).toBe(UNDETERMINED);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+      rmSync(upstream.dir, { recursive: true, force: true });
     }
   });
 });

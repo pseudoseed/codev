@@ -67,8 +67,16 @@ It never reads `T3CODE_FORK_ROOT`, and a test asserts that.
 ## Verifying
 
 ```bash
-node tools/t3-server/t3-server.mjs verify
+node tools/t3-server/t3-server.mjs verify            # both identities
+node tools/t3-server/t3-server.mjs verify-upstream   # upstream only
+node tools/t3-server/t3-server.mjs verify-fork       # fork only
 ```
+
+The per-identity verbs exist so an upstream-only caller does not acquire a dependency on the
+fork. `smoke.mjs` and `packages/t3-client/live/integration.mjs` use `verify-upstream`, and so
+does `ready` — a fork that has moved ahead of `pin.commit` says nothing about the upstream
+process answering on the port, and gating an upstream server start on it would break every
+spec 146 run the moment we commit a customization.
 
 Exit `0` with both checkouts clean on their pins. Exit `1` names which identity failed. Exit
 `3` is "could not determine" — a missing checkout, an unreadable HEAD, an unresolvable

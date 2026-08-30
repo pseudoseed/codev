@@ -420,3 +420,30 @@ A `t3 serve` from the main checkout (`--base-dir /Users/chris/dev/codev-1455`, s
   carrying information.
 - `classify-churn --upstream-movement` reports 3 closure commits between `upstreamBase` and
   `origin/main`. Upstream has moved; that is a phase-5 decision, not a phase-1 one.
+
+### Phase 1, review round 1
+
+claude APPROVE; opencode/grok REQUEST_CHANGES with two real findings, both accepted.
+
+**`ready()` re-imposed the fork requirement one call after `start()` dropped it.** `start` was
+upstream-only on purpose, then `smoke.mjs` runs `acquire, verify, start, ready` and `ready` called
+the both-identity `verify`. On phase 2's first fork commit — `pin.commit` does not move until
+phase 5 — a correct upstream server would have failed `ready` with `CHECKOUT_MOVED_DURING_RUN`,
+a signal about a checkout the server never touches. Added `verify-upstream` / `verify-fork`;
+`ready`, `smoke.mjs` and `live/integration.mjs` use the upstream one. Bare `verify` still asserts
+both, which the acceptance criterion requires.
+
+**`verifyCheckout` swallowed a failed `git status` and reported clean.** Inherited from spec 146,
+including the comment that claimed it reported undetermined. Now exits 3 with `NO_<ID>_STATUS`.
+Test triggers it for real: `chmod 000` on `.git/index` leaves `rev-parse HEAD` working and makes
+`git status` exit 128, landing the failure exactly between the two checks.
+
+**Open question for the architect, not resolved here:** phases 2-4 commit to the fork while
+`pin.commit` stays at `upstreamBase`, so bare `verify` will report `FORK_CHECKOUT_MISMATCH` for
+that whole window. That is the plan's sequencing. The per-identity verbs mean it no longer blocks
+an upstream server start, but somebody has to decide whether `pin.commit` should advance with each
+fork commit or stay put until phase 5.
+
+**Consult lane note:** the opencode lane timed out at 360s on its first attempt and produced no
+verdict (exit 1, loudly). `consult` has no timeout flag — `OPENCODE_TIMEOUT_MS` is hard-coded to
+6 minutes at `packages/codev/src/commands/consult/index.ts:1561`. A plain retry completed.

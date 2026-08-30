@@ -163,7 +163,7 @@ for (let run = 1; run <= runs; run += 1) {
     // second look at a server run 1 left behind.
     try { harness('stop'); } catch { /* nothing running */ }
     harness('acquire');
-    harness('verify');
+    harness('verify-upstream'); // upstream identity: this run is spec 146 evidence
     harness('start');
     record.serverRuntime = JSON.parse(harness('status')).runtime;
     const readyOut = harness('ready');

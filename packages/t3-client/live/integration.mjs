@@ -199,7 +199,7 @@ try {
   run('stop');
 } catch { /* nothing running */ }
 run('acquire');
-run('verify');
+run('verify-upstream'); // upstream identity (spec 250): these tests never read the fork
 run('start');
 
 let project;

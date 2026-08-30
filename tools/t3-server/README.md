@@ -59,7 +59,9 @@ checkouts, not so anyone runs against a different pin by habit.
 are pinned to `pin.upstreamBase`, never to `pin.commit` — `pin.commit` names the fork head, and
 `acquire` is the one verb here that writes. `verify` asserts both: upstream at `upstreamBase`,
 fork at `commit`, and `merge-base(commit, upstreamBase) == upstreamBase`. Failures name which
-identity failed. See `tools/t3-fork/FORK.md`.
+identity failed. `verify-upstream` and `verify-fork` assert one identity each, so an
+upstream-only caller does not acquire a dependency on the fork — `ready`, `smoke.mjs` and
+`packages/t3-client/live/integration.mjs` all use `verify-upstream`. See `tools/t3-fork/FORK.md`.
 
 Binds loopback only. Spec 146's Security constraints make loopback the default and exposing an
 interface an explicit act; a test harness never exposes one.

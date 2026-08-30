@@ -102,6 +102,7 @@ It is not a false positive and it is not a formatting nit. Read the diff.
    git -C "$T3CODE_ROOT" checkout <upstreamBase>
    git -C "$T3CODE_FORK_ROOT" checkout <fork head>
    node ../t3-server/t3-server.mjs verify      # exits 0 only when both are clean on their pins
+   #                                          (verify-upstream / verify-fork check one each)
    pnpm --filter @cluesmith/t3-codegen generate
    ```
 

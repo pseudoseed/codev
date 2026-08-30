@@ -14,6 +14,7 @@
  * Commands:
  *   acquire   clone/fetch the pinned commit into a checkout
  *   verify    assert both checkouts, and any running server, match pin.json
+ *   verify-upstream / verify-fork   assert one identity only
  *   start     start a server from the pinned checkout on a private data dir
  *   restart   stop and start again, KEEPING the data dir
  *   stop      stop it
@@ -179,8 +180,16 @@ function verifyCheckout(identity, mismatchSignal) {
   let dirty = '';
   try {
     dirty = gitIn(identity.root, 'status', '--porcelain');
-  } catch {
-    /* reported below as undetermined */
+  } catch (error) {
+    // A `git status` that fails answered nothing. Falling through to the empty
+    // string here reported "clean" for a checkout nobody could read — the
+    // comment said undetermined and the code said fine, which is the exact
+    // spelling mistake the third exit code exists to prevent.
+    die(
+      UNDETERMINED,
+      `NO_${label.toUpperCase()}_STATUS: could not check: \`git status\` failed in ${identity.root}: ` +
+        `${error.message}. Whether the tree is clean is unknown, and unknown is not clean.`,
+    );
   }
   if (dirty) {
     die(
@@ -636,7 +645,13 @@ function pairingToken() {
 async function ready() {
   const up = await waitReady();
   if (!up) die(MISMATCH, `SERVER_START_FAILED: server did not answer on 127.0.0.1:${port} within the timeout.`);
-  verify('CHECKOUT_MOVED_DURING_RUN');
+  // UPSTREAM only, matching `start`. This asserts the checkout the running server
+  // was started from has not moved underneath it, and that checkout is the
+  // upstream clone. Verifying the fork here would make an upstream server start
+  // fail the moment our customization branch moves ahead of `pin.commit` — a fork
+  // move is not `CHECKOUT_MOVED_DURING_RUN`, and it says nothing about the process
+  // that is answering on this port.
+  verifyUpstream('CHECKOUT_MOVED_DURING_RUN');
   const token = pairingToken();
   if (!token) die(UNDETERMINED, 'Server is answering but printed no pairing token; cannot authenticate.');
   say(`ready on 127.0.0.1:${port}; pairing token present`);
@@ -832,6 +847,12 @@ const command = process.argv[2];
 switch (command) {
   case 'acquire': acquire(); break;
   case 'verify': verify(); break;
+  // Per-identity verbs, so a caller that only depends on one checkout does not
+  // acquire a dependency on the other. `smoke.mjs` and the live integration
+  // script are upstream-only by design and use `verify-upstream`; bare `verify`
+  // stays both, which is what the phase's acceptance criterion asserts.
+  case 'verify-upstream': verifyUpstream(); break;
+  case 'verify-fork': verifyFork(); break;
   case 'start': start(); break;
   case 'restart': restart(); break;
   case 'ready': await ready(); break;
@@ -839,6 +860,6 @@ switch (command) {
   case 'status': status(); break;
   case 'runtime': console.log(JSON.stringify(serverRuntime(), null, 2)); break;
   default:
-    console.error('usage: t3-server.mjs <acquire|verify|start|restart|ready|stop|status|runtime>');
+    console.error('usage: t3-server.mjs <acquire|verify|verify-upstream|verify-fork|start|restart|ready|stop|status|runtime>');
     process.exit(UNDETERMINED);
 }
