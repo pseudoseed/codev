@@ -8,6 +8,29 @@ gates:
   plan-approval:
     status: pending
     requested_at: '2026-08-30T15:24:07.966Z'
+    request:
+      question: >-
+        T3codeSessionCache already opens a production subscribeThread stream per thread, for display. Fold the new
+        control-plane subscription onto it now, or keep them separate this PR?
+      choices:
+        - label: Keep separate, follow-up issue
+          consequence: >-
+            New ResumingSubscription pool feeds the engine; the cache keeps its own stream. Two read-only streams per
+            watched thread. Smallest blast radius, no change to the cache's watching/stale semantics or its tests,
+            easiest rebase against builder-air-227.
+          recommended: true
+        - label: Fold onto one stream now
+          consequence: >-
+            One stream per thread, two consumers. Requires rewriting the cache's watching/stale vocabulary, which is
+            keyed on a stream that ends -- a ResumingSubscription never ends -- plus its tests. Larger PR on the
+            critical path to phase 14.
+      terminalExcerpt: |-
+        plan_exists check passed
+        GATE REQUIRED: plan-approval
+
+        Verified in tree: no production caller of DriverThread.observe / TurnTracker.observe.
+        engine.attach has one production caller (mailbox-wiring.ts:529), so nothing re-adopts
+        threads after a Tower restart -- plan adds an adoption sweeper on Tower's interval.
   dev-approval:
     status: pending
   pr:
@@ -16,4 +39,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-30T15:18:07.177Z'
-updated_at: '2026-08-30T15:24:07.971Z'
+updated_at: '2026-08-30T15:24:19.805Z'
