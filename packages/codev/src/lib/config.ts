@@ -317,22 +317,6 @@ export function resolveLocalConfigPath(workspaceRoot: string): string | null {
 }
 
 /**
- * Load the full merged config for a workspace.
- *
- * Layer order (lowest → highest priority):
- *   1. Hardcoded defaults
- *   2. <cache>/config.json (remote framework base config)
- *   3. ~/.codev/config.json (global, per-user, across all projects)
- *   4. .codev/config.json (project, committed, shared with the team)
- *   5. .codev/config.local.json (project, per-engineer, gitignored)
- *
- * Layer 5 is the place to put preferences that vary between engineers
- * working on the same repo (e.g. different `worktree.devCommand` for
- * web vs mobile roles) — Layer 3 spans every project so can't express
- * "in *this* repo I want X." Add the file to your project's
- * `.gitignore` so it's never accidentally committed.
- */
-/**
  * The files `loadConfig` merges, lowest priority first, existing ones only.
  *
  * ONE LIST, TWO READERS. `loadConfig` walks it to merge, and callers that only
@@ -363,6 +347,23 @@ export function configLayerPaths(workspaceRoot: string): string[] {
   return paths;
 }
 
+/**
+ * Load the full merged config for a workspace.
+ *
+ * Layer order (lowest → highest priority):
+ *   1. Hardcoded defaults
+ *   2. <cache>/config.json (remote framework base config)
+ *   3. ~/.codev/config.json (global, per-user, across all projects)
+ *   4. .codev/config.json (project, committed, shared with the team)
+ *   5. .codev/config.local.json (project, per-engineer, gitignored)
+ *
+ * Layers 2-5 come from `configLayerPaths` above, which is the one place that
+ * list lives. Layer 5 is the place to put preferences that vary between
+ * engineers working on the same repo (e.g. different `worktree.devCommand` for
+ * web vs mobile roles) — Layer 3 spans every project so can't express
+ * "in *this* repo I want X." Add the file to your project's
+ * `.gitignore` so it's never accidentally committed.
+ */
 export function loadConfig(workspaceRoot: string): CodevConfig {
   let merged: CodevConfig = structuredClone(DEFAULT_CONFIG);
 

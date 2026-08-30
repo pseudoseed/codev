@@ -1079,10 +1079,53 @@ function handleApprovalSubmit(
       machine: callerMachine,
     });
     if (!submission.accepted) {
+      /*
+       * THE SUBMITTER ASKING AGAIN IS A RECOVERY, NOT A CONFLICT.
+       *
+       * The case that produces the already-in-flight code is the retry after a
+       * lost 202
+       * — the human clicked, nothing came back, they clicked again. Answering
+       * that with a refusal tells them their approval was REFUSED about one that
+       * may be succeeding, on the single action this client exists to perform.
+       *
+       * Same human session AND same machine is the submitter itself, so it is
+       * handed back the operation it started, receipt included, and its poll
+       * loop picks up where the lost response left off. Anyone else still gets
+       * the 409 below: they did not start it and must not be given its receipt.
+       */
+      const running = submission.inFlight;
+      if (
+        running
+        && submission.code === APPROVAL_OPERATION_SIGNAL.APPROVAL_ALREADY_IN_FLIGHT
+        && running.sessionId === humanSessionId
+        && running.machine === callerMachine
+      ) {
+        writeJson(res, 202, {
+          signal: APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_RESUMED,
+          operationId: running.operationId,
+          receipt: running.receipt,
+          projectId: running.projectId,
+          gateName: running.gateName,
+          // THE OPERATION'S REAL STATE, not 'submitted'. It may have started
+          // running, or settled between the lost response and this retry, and
+          // saying 'submitted' about a finished run is a label contradicting the
+          // record the client is about to poll.
+          state: running.state,
+          message:
+            `this approval was already submitted as operation ${running.operationId}; `
+            + 'resuming it rather than starting a second run of the same checks.',
+        });
+        return;
+      }
       // 409, not 400: the request is well formed and would be valid at another
       // moment. A client told "bad request" retries with different input; one
-      // told "conflict" polls the operation it was just handed the id of.
-      writeJson(res, 409, { signal: submission.code, message: submission.message });
+      // told "conflict" polls the operation it was just handed the id of — which
+      // is why the id is in the body and not only in the prose.
+      writeJson(res, 409, {
+        signal: submission.code,
+        message: submission.message,
+        ...(running ? { operationId: running.operationId } : {}),
+      });
       return;
     }
 

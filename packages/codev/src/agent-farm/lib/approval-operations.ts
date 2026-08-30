@@ -33,7 +33,7 @@
  * and the pass touches only records this host owns whose process is gone.
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { readJsonOrThrow, withStoreLock, writeJsonAtomic } from './atomic-store.js';
@@ -78,6 +78,18 @@ export const APPROVAL_OPERATION_SIGNAL = {
   APPROVAL_OPERATION_SETTLED: 'APPROVAL_OPERATION_SETTLED',
   APPROVAL_OPERATION_INTERRUPTED: 'APPROVAL_OPERATION_INTERRUPTED',
   APPROVAL_ALREADY_IN_FLIGHT: 'APPROVAL_ALREADY_IN_FLIGHT',
+  /**
+   * The submitter asked again for an approval it already has running, and is
+   * being handed that one back instead of being refused.
+   *
+   * NOT A FAILURE, and that is the whole point. The case that produces it is the
+   * retry after a lost 202 — a human clicking again because nothing came back —
+   * and answering "already in flight" as a refusal tells them their approval was
+   * REFUSED about one that may be succeeding. Same session and same machine is
+   * the submitter, so it gets the operation id and the receipt back and resumes
+   * polling the run it started.
+   */
+  APPROVAL_OPERATION_RESUMED: 'APPROVAL_OPERATION_RESUMED',
   APPROVAL_CONCURRENCY_LIMIT: 'APPROVAL_CONCURRENCY_LIMIT',
 } as const;
 
@@ -244,6 +256,24 @@ export function isTerminal(state: ApprovalOperationState): boolean {
 }
 
 /**
+ * Constant-time comparison of two secrets.
+ *
+ * `===` short-circuits on the first differing byte, so its timing leaks a prefix.
+ * The exposure here is small — a caller needs a valid machine credential before
+ * the receipt is even looked at — but the sibling store next door compares its
+ * secrets with `timingSafeEqual`, and two secret comparisons in one directory
+ * disagreeing is how the weaker one gets copied into the next store.
+ */
+function secretsMatch(presented: string, stored: string): boolean {
+  const a = Buffer.from(presented, 'utf8');
+  const b = Buffer.from(stored, 'utf8');
+  // Lengths differ: not equal, and returning early leaks only the length, which
+  // is fixed for a UUID anyway.
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/**
  * May this caller read this operation?
  *
  * TWO WAYS IN, and the second exists because the first cannot survive a restart.
@@ -268,7 +298,7 @@ export function mayRead(
   if (caller.sessionId !== undefined && operation.sessionId === caller.sessionId) return true;
   return caller.receipt !== undefined
     && caller.receipt.length > 0
-    && operation.receipt === caller.receipt
+    && secretsMatch(caller.receipt, operation.receipt)
     && caller.machine !== undefined
     && operation.machine === caller.machine;
 }
@@ -394,7 +424,20 @@ export class ApprovalOperationStore {
     readonly sessionId: string;
     readonly machine: string;
   }): { readonly accepted: true; readonly operation: ApprovalOperation }
-    | { readonly accepted: false; readonly code: ApprovalOperationSignal; readonly message: string } {
+    | {
+      readonly accepted: false;
+      readonly code: ApprovalOperationSignal;
+      readonly message: string;
+      /**
+       * The operation already running, when that is why this was refused.
+       *
+       * STRUCTURED, NOT ONLY IN THE PROSE. The message named the operation id and
+       * told the caller to poll it, and the caller had no field to read it out of
+       * — a comment describing behaviour the code did not support. A client that
+       * lost its 202 could not recover from the answer that exists to tell it how.
+       */
+      readonly inFlight?: ApprovalOperation;
+    } {
     return withStoreLock(this.#path, APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_STORE_LOCKED, () => {
       const operations = this.#sweep(this.#read());
       const live = operations.filter((operation) => !isTerminal(operation.state));
@@ -409,6 +452,7 @@ export class ApprovalOperationStore {
             `an approval for project ${input.projectId} is already running as operation `
             + `${inFlight.operationId} (gate ${inFlight.gateName}). Poll that one rather than `
             + 'submitting a second run of the same checks.',
+          inFlight,
         };
       }
 

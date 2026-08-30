@@ -234,7 +234,8 @@ describe('failure matrix signals are distinct', () => {
       APPROVAL_OPERATIONS_NOT_AVAILABLE: '501 from a host that wires no operation store; a capability statement, not a failure',
       APPROVAL_OPERATION_SUBMITTED: 'the SUCCESS case of submitting an approval',
       APPROVAL_OPERATION_SETTLED: 'an operation reached a terminal state; `state` says which, and none of them is a service failure',
-      APPROVAL_ALREADY_IN_FLIGHT: 'a second submit for one project; a caller error, and it names the live one',
+      APPROVAL_ALREADY_IN_FLIGHT: 'a second submit for one project by ANOTHER session; the client reports it unconfirmed, never refused, because that run may approve the gate',
+      APPROVAL_OPERATION_RESUMED: 'the submitter asked again after losing its 202 and was handed its own operation back; a recovery, and the opposite of a failure',
       APPROVAL_CONCURRENCY_LIMIT: 'a bound deliberately refusing work; not a failure of anything',
       // Spec 236 phase 3: `afx pair`. Operator-facing command outcomes, all of
       // them answering "your argument was wrong" or naming a store fault the

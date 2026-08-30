@@ -72,6 +72,33 @@ function countingReads(root: string) {
   return { get reads() { return readsUnder.count; } };
 }
 
+describe('the never-throws contract', () => {
+  /*
+   * `requestThreadBackend` MUST NOT THROW. Tower's drain tick and the thread
+   * sweep both call it synchronously and neither can act on an exception: one
+   * catches and leaves the workspace at `connecting` forever, the other does not
+   * catch at all. That is "I could not tell" rendered as a state, with no error
+   * anywhere — the exact conflation this project exists to remove.
+   *
+   * The cache is what put a throw in reach: computing the signature walks
+   * `configLayerPaths`, which reaches `resolveProjectConfigPath`, which throws on
+   * a legacy `af-config.json`. A signature that cannot be computed is a reason to
+   * READ, never a reason to throw.
+   */
+  it('answers rather than throwing when the config layers cannot be resolved', () => {
+    const root = workspace();
+    // A legacy `af-config.json` at the workspace ROOT — `resolveProjectConfigPath`
+    // throws on it rather than migrating silently, which is correct there and
+    // fatal here.
+    writeFileSync(join(root, 'af-config.json'), JSON.stringify({ shell: {} }));
+
+    let verdict: { kind: string } | undefined;
+    expect(() => { verdict = requestThreadBackend(root); }, 'requestThreadBackend threw').not.toThrow();
+    // And the answer is a real verdict, not an invented `ready`.
+    expect(['not-configured', 'misconfigured', 'connecting']).toContain(verdict?.kind);
+  });
+});
+
 describe('an unconfigured workspace on the sweep', () => {
   it('reads its config once, not once per pass', () => {
     const root = workspace();

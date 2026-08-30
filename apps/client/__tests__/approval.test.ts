@@ -706,21 +706,85 @@ describe('approveGate, asynchronously', () => {
   }, 20_000);
 
   /*
-   * A CONFLICT IS NOT A REFUSAL OF THIS GATE. An approval for this project is
-   * already running and the server names it, so the human is told to wait rather
-   * than to try again.
+   * A CONFLICT IS NOT A REFUSAL OF THIS GATE, AND MUST NOT RENDER AS ONE.
+   *
+   * An approval for this project is RUNNING and may be about to succeed. This
+   * used to return a plain refusal, which the panel paints in the same red as a
+   * genuinely refused approval — telling the operator their gate was refused
+   * about one that was still deciding.
+   *
+   * A 409 now means someone ELSE's run: this client cannot poll it, so it cannot
+   * know the outcome, and `unconfirmed` is the band for exactly that.
    */
-  it('passes a 409 through with the server\'s words', async () => {
+  it('reports another session\'s in-flight approval as unconfirmed, not refused', async () => {
     const { fetchImpl } = router({
       ...credentials,
       '/gates/approvals': {
         status: 409,
-        body: { signal: 'APPROVAL_ALREADY_IN_FLIGHT', message: 'operation op-9 is already running' },
+        body: {
+          signal: 'APPROVAL_ALREADY_IN_FLIGHT',
+          message: 'operation op-9 is already running',
+          operationId: 'op-9',
+        },
       },
     });
     const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
-    expect(result).toMatchObject({ ok: false, signal: 'APPROVAL_ALREADY_IN_FLIGHT' });
+    expect(result).toMatchObject({ ok: false, unconfirmed: true, signal: 'APPROVAL_ALREADY_IN_FLIGHT' });
     expect((result as { message: string }).message).toContain('op-9');
+    // The words that would make it a refusal must not be there.
+    expect((result as { message: string }).message).not.toMatch(/refus/i);
+  }, 20_000);
+
+  /*
+   * THE LOST 202, WHICH IS THE CASE THAT PRODUCES ALL OF THIS.
+   *
+   * The submit is accepted and its response never arrives — a dropped
+   * connection, a closed lid, a proxy timeout. The human clicks again. The host
+   * recognises the submitter and hands back the operation it already started,
+   * and this client polls THAT one to its real terminal outcome.
+   *
+   * Asserting the resume alone would not be enough: what makes it a recovery
+   * rather than a claim of one is that the outcome the human is shown is the
+   * ORIGINAL operation's, so the id is checked all the way through.
+   */
+  it('resumes the operation it already submitted after a lost response', async () => {
+    const { fetchImpl, calls } = router({
+      ...credentials,
+      '/gates/approvals': [
+        // The retry. The first submit's 202 never reached this client, so from
+        // its point of view this is the first answer it has seen.
+        {
+          status: 202,
+          body: {
+            signal: 'APPROVAL_OPERATION_RESUMED',
+            operationId: 'op-original',
+            receipt: 'receipt-original',
+            state: 'running',
+            message: 'resuming it rather than starting a second run',
+          },
+        },
+        {
+          status: 200,
+          body: {
+            state: 'succeeded',
+            record: { outcome: 'approved', approvedAt: '2026-08-30T12:30:00Z', machine: 'laptop' },
+          },
+        },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+
+    // THE ORIGINAL OPERATION'S OUTCOME, not a second run's.
+    expect(result).toMatchObject({ ok: true });
+    const polls = calls.filter((call) => call.url.includes('/gates/approvals/'));
+    expect(polls.length).toBeGreaterThan(0);
+    for (const poll of polls) {
+      expect(poll.url).toContain('op-original');
+      expect(poll.headers['x-codev-approval-receipt']).toBe('receipt-original');
+    }
+    // And no second submit was made — recovering must not run the checks twice.
+    const submits = calls.filter((call) => call.url.endsWith('/gates/approvals'));
+    expect(submits).toHaveLength(1);
   }, 20_000);
 
   /*

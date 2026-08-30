@@ -579,9 +579,36 @@ export function requestThreadBackend(
   // case the answer is reused and the read is skipped. Only the NEGATIVE verdicts
   // are cached: `connecting` below has a side effect, and `ready` /
   // `cooling-down` never reach here.
-  const signature = configSignature(workspaceRoot);
-  const remembered = negativeConfig.get(key);
-  if (remembered && remembered.signature === signature) return remembered.verdict;
+  /*
+   * INSIDE THE TRY, AND THAT IS THE WHOLE POINT OF THIS FUNCTION.
+   *
+   * `requestThreadBackend` is documented and relied on as NEVER THROWING — it is
+   * the synchronous, always-answers contract Tower's drain tick is built on. The
+   * first version of this cache computed the signature above the try, and
+   * `configLayerPaths` reaches `resolveProjectConfigPath`, which throws on a
+   * legacy `af-config.json`. The caller that catches leaves the workspace at
+   * `connecting` forever and the caller that does not catch takes the throw: an
+   * "I could not tell" rendered as a state, with no error anywhere.
+   *
+   * A signature that cannot be computed is a reason to READ, never a reason to
+   * throw — so it degrades to an uncacheable answer and the read below decides.
+   */
+  let signature: string | null;
+  try {
+    signature = configSignature(workspaceRoot);
+  } catch {
+    signature = null;
+  }
+  if (signature !== null) {
+    const remembered = negativeConfig.get(key);
+    if (remembered && remembered.signature === signature) return remembered.verdict;
+  }
+
+  /** Cache only when the signature is known; otherwise nothing could invalidate it. */
+  const remember = (verdict: ThreadBackendAvailability): ThreadBackendAvailability => {
+    if (signature !== null) negativeConfig.set(key, { verdict, signature });
+    return verdict;
+  };
 
   let config;
   try {
@@ -589,17 +616,11 @@ export function requestThreadBackend(
   } catch (err) {
     // Half-configured is a mistake, not a decision to stay on PTY, and it is not a
     // connect failure either — no cooldown, because nothing was attempted.
-    const verdict: ThreadBackendAvailability = {
+    return remember({
       kind: 'misconfigured', message: err instanceof Error ? err.message : String(err),
-    };
-    negativeConfig.set(key, { verdict, signature });
-    return verdict;
+    });
   }
-  if (!config) {
-    const verdict: ThreadBackendAvailability = { kind: 'not-configured' };
-    negativeConfig.set(key, { verdict, signature });
-    return verdict;
-  }
+  if (!config) return remember({ kind: 'not-configured' });
   // Configured after all: drop any negative so a later failure is recomputed
   // rather than answered from a verdict this pass just disproved.
   negativeConfig.delete(key);

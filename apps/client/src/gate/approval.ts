@@ -387,10 +387,32 @@ async function pollApproval(
     };
   }
   if (submitted.status === 409) {
-    // A conflict is not a refusal of this gate: an approval for this project is
-    // already running, and the message names it. Reported as a refusal with the
-    // server's own words so the human is told to wait rather than to retry.
-    return refusal(submitted, 'an approval for this project is already running');
+    /*
+     * A CONFLICT IS NOT A REFUSAL OF THIS GATE, AND THIS USED TO SAY IT WAS.
+     *
+     * The already-in-flight code means an approval for this project is RUNNING.
+     * It may
+     * be about to succeed. Rendering it as a refusal — the same red the panel
+     * gives a genuinely refused approval — told the operator their gate was
+     * refused about one that was still deciding, on the single action this
+     * client exists to perform.
+     *
+     * The submitter's own retry no longer reaches here at all: the host answers
+     * 202 and resumes it. What is left is a conflict raised against SOMEONE
+     * ELSE's run, which this client cannot poll and must not claim to know the
+     * outcome of. That is `unconfirmed` — the band already built for exactly
+     * this, and the message names the operation so the human can look.
+     */
+    const running = text(submitted.body, 'operationId');
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'APPROVAL_ALREADY_IN_FLIGHT',
+      message:
+        `an approval for this project is already running${running ? ` as operation ${running}` : ''}`
+        + ', started by another session. This gate may be approved by that run, so nothing here '
+        + 'says it was not — wait for it, and check the gate before submitting again.',
+    };
   }
   const operationId = text(submitted.body, 'operationId');
   if (submitted.status !== 202 || !operationId) {

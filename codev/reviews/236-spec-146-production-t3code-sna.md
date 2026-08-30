@@ -221,6 +221,52 @@ passed with the channel wide open. Caught by reverting the fix and watching what
 machine, no session, and the receipt is the only thing that can authorise — now the status
 reports the channel. Third instance in this project of a fixture agreeing with the bug.
 
+## The fix that broke the contract it depended on
+
+Round 2's negative cache computed its config signature *above* `requestThreadBackend`'s try
+block. `configLayerPaths` reaches `resolveProjectConfigPath`, which throws on a legacy
+`af-config.json` — so the function whose entire value is that it **cannot throw**, the
+synchronous always-answers contract #221 spent three rounds establishing for Tower's drain tick,
+could now throw.
+
+The failure mode is this project's own subject: one caller catches and leaves the workspace at
+`connecting` forever, the other does not catch at all. An "I could not tell" rendered as a state,
+with no error anywhere.
+
+A signature that cannot be computed is a reason to **read**, never a reason to throw. It now
+degrades to an uncacheable answer inside the try.
+
+Two things worth keeping from this. First, the shape: *making something cheaper put a new failure
+into the one path that had none*, and nothing in the change looked like it touched error
+handling. Second, my test for it initially wrote `af-config.json` to `.codev/` instead of the
+workspace root, so it did not throw and the green meant nothing — caught by reading
+`resolveProjectConfigPath` rather than trusting the pass.
+
+## A conflict is not a refusal
+
+`APPROVAL_ALREADY_IN_FLIGHT` was rendered as a plain refusal, which the panel paints in the same
+red as a genuinely refused approval. The case that produces it is the **retry after a lost 202**:
+the human clicked, nothing came back, they clicked again. So the operator was told their gate was
+refused — about a run that might be succeeding, on the one action the client exists to perform.
+It was the last place in this project where "I could not tell" was still spelled the same as
+"no", and it was on the deliverable.
+
+Fixed as a recovery rather than as a better error message. The host recognises the submitter —
+same session *and* same machine — and hands back the operation it already started, id and receipt
+included, so the existing poll loop resumes the original run. Another session still gets a 409,
+because it did not start that run and must not receive its receipt; but the operation id is now a
+field instead of a sentence to parse, and the client reports it `unconfirmed`.
+
+The server's comment already said "poll that one rather than submitting a second run" while the
+structured rejection omitted the id — a comment describing behaviour the code did not support.
+That is the sixth instance of that shape in this program and the first that was mine.
+
+**The test needed a run that was still running.** With instant checks the first operation settles
+before the retry lands, so the retry legitimately starts a new one and the test measures nothing
+— exactly how the e2e "shows what it is running" case failed earlier here. What makes it a
+recovery rather than a claim of one: the outcome observed is the ORIGINAL operation's, and
+exactly one operation exists for the episode, so the checks did not run twice.
+
 ## A knob only tests could turn
 
 `submit(…, { maxConcurrent })` was a parameter with a hardcoded default of 2 and no production

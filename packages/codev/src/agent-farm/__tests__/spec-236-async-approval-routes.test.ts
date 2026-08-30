@@ -70,7 +70,7 @@ function tmp(): string {
  */
 function workspaceWithRequestedGate(
   projectId: string,
-  options: { checks: 'skipped' | 'passing' | 'real' },
+  options: { checks: 'skipped' | 'passing' | 'real' | 'slow' },
 ): string {
   const root = tmp();
   mkdirSync(join(root, '.codev'), { recursive: true });
@@ -96,6 +96,20 @@ function workspaceWithRequestedGate(
   } else if (options.checks === 'passing') {
     writeFileSync(join(root, '.codev', 'config.json'), JSON.stringify({
       porch: { checks: { build: { command: 'true' }, tests: { command: 'true' } } },
+    }));
+  } else if (options.checks === 'slow') {
+    /*
+     * `slow` KEEPS THE OPERATION IN FLIGHT LONG ENOUGH TO BE FOUND.
+     *
+     * The in-flight cases need a run that is still going when the second request
+     * arrives. With instant checks the first operation has already settled, so a
+     * retry legitimately starts a new one and the test measures nothing —
+     * exactly how the e2e "shows what it is running" case failed earlier in this
+     * project. Two seconds is longer than the requests around it and short
+     * enough not to slow the suite.
+     */
+    writeFileSync(join(root, '.codev', 'config.json'), JSON.stringify({
+      porch: { checks: { build: { command: 'sleep 2' }, tests: { command: 'true' } } },
     }));
   }
   const projectDir = join(root, 'codev', 'projects', `${projectId}-async-approval`);
@@ -585,6 +599,112 @@ describe('an already-approved gate reports the approval that exists', () => {
  * FOUND INDEPENDENTLY BY TWO REVIEW LANES at the same seam, which is why this
  * test exists rather than a note.
  */
+/*
+ * THE LOST 202 — the case ALREADY_IN_FLIGHT actually arises from.
+ *
+ * A submit is accepted and its response never reaches the client: a dropped
+ * connection, a closed lid, a proxy that gave up. The human clicks again, because
+ * from where they sit nothing happened.
+ *
+ * Answering that with a refusal tells them their approval was REFUSED about one
+ * that may be succeeding — the last place in this client where "I could not tell"
+ * was still spelled the same as "no", on the one action it exists to perform.
+ *
+ * What makes this a recovery rather than a claim of one is the last assertion:
+ * the outcome observed is the ORIGINAL operation's, and no second run of the
+ * checks was started.
+ */
+describe('a submitter that lost its response', () => {
+  it('is handed back the operation it already started, and sees that one settle', async () => {
+    const workspace = workspaceWithRequestedGate('917', { checks: 'slow' });
+    const host = await startHost(workspace);
+    const { authed, capability, nonce, session } = await credentialed(host, '917');
+    const submitUrl = `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`;
+
+    // THE FIRST SUBMIT LANDS. Its 202 is what the client never sees; the
+    // operation exists regardless, which is the whole reason this case is a
+    // recovery and not a retry.
+    const first = await post(submitUrl, authed, {
+      projectId: '917', gateName: 'pr', capability: capability.presentation, nonce: nonce.nonce,
+    });
+    expect(first.status).toBe(202);
+    const original = first.body.operationId as string;
+
+    // THE HUMAN CLICKS AGAIN. Same session, same machine, a fresh nonce because
+    // the first one is spent — this is a new request in every respect except
+    // that the work it asks for is already running.
+    const retryNonce = (await post(`${host.origin}/api/agent/v1/approval-nonces`, authed,
+      { projectId: '917', gateName: 'pr', capabilityId: capability.capabilityId })).body;
+    const retry = await post(submitUrl, authed, {
+      projectId: '917', gateName: 'pr', capability: capability.presentation, nonce: retryNonce.nonce,
+    });
+
+    // 202 AND RESUMED, not 409 and refused.
+    expect(retry.status, `the retry was refused: ${JSON.stringify(retry.body)}`).toBe(202);
+    expect(retry.body.signal).toBe('APPROVAL_OPERATION_RESUMED');
+    expect(retry.body.operationId, 'a second operation was created').toBe(original);
+    expect(typeof retry.body.receipt).toBe('string');
+    // The state is the RECORD's, not a fixed 'submitted': between the lost
+    // response and this retry the run may have started or even finished.
+    expect(['submitted', 'running', 'succeeded']).toContain(retry.body.state);
+
+    // AND THE CLIENT SEES THE ORIGINAL SETTLE. This is the assertion that
+    // distinguishes a recovery from a claim of one.
+    const done = await settled(host, authed, retry.body.operationId);
+    expect(done.body.state).toBe('succeeded');
+    expect(done.body.record.sessionId).toBe(session.sessionId);
+
+    // ONE operation for the whole episode: the checks did not run twice.
+    const all = host.operations.records()
+      .filter((operation) => operation.projectId === '917');
+    expect(all).toHaveLength(1);
+    expect(all[0].operationId).toBe(original);
+
+    const gate = gateOf(workspace, '917');
+    expect(gate.status).toBe('approved');
+  });
+
+  /*
+   * ANOTHER SESSION STILL GETS THE CONFLICT, AND NOW GETS THE ID WITH IT.
+   *
+   * It did not start that run, so it must not be handed the receipt — the
+   * receipt is what proves submission across a restart. But the id is not a
+   * secret and the server's own message already named it in prose, so a client
+   * had to parse English to recover what a field should have carried.
+   */
+  it('refuses another session, names the operation, and hands over no receipt', async () => {
+    const workspace = workspaceWithRequestedGate('918', { checks: 'slow' });
+    const host = await startHost(workspace);
+    const mine = await credentialed(host, '918');
+    const submitUrl = `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`;
+
+    const first = await post(submitUrl, mine.authed, {
+      projectId: '918',
+      gateName: 'pr',
+      capability: mine.capability.presentation,
+      nonce: mine.nonce.nonce,
+    });
+    expect(first.status).toBe(202);
+
+    // A SECOND, GENUINELY DIFFERENT CLIENT: its own credential, its own session,
+    // its own capability and nonce.
+    const theirs = await credentialed(host, '918');
+    const conflict = await post(submitUrl, theirs.authed, {
+      projectId: '918',
+      gateName: 'pr',
+      capability: theirs.capability.presentation,
+      nonce: theirs.nonce.nonce,
+    });
+
+    // It may be refused as a conflict OR as a stale in-flight check; what must
+    // never happen is it being handed the other session's receipt.
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.signal).toBe('APPROVAL_ALREADY_IN_FLIGHT');
+    expect(conflict.body.operationId, 'the id is still only in the prose').toBe(first.body.operationId);
+    expect(conflict.body.receipt, 'another session was handed the receipt').toBeUndefined();
+  });
+});
+
 describe('the workspace in the URL', () => {
   it('does not hand an operation to a client polling a different workspace', async () => {
     const workspace = workspaceWithRequestedGate('916', { checks: 'skipped' });

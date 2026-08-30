@@ -926,3 +926,64 @@ that belief is `packages/t3-client`'s 300s stream idle timeout. A silently dead 
 `available` here for up to five minutes, and raising `streamIdleTimeoutMs` in that package
 lengthens it with nothing in this file failing. Not fixed: a second timer racing the first is
 worse than the borrowed one, and the thing worth having is the note.
+
+## Round 4 — the last place "I could not tell" was spelled as "no", and a regression I caused
+
+Two blockers. One was mine from round 2's own fix.
+
+### I put a throw in the function whose value is that it cannot throw
+
+`requestThreadBackend` is the synchronous, never-throws contract #221 spent three rounds
+establishing so Tower's drain tick could call it. My negative cache computed the config signature
+*above* the try, and `configLayerPaths` reaches `resolveProjectConfigPath`, which throws on a
+legacy `af-config.json` at the workspace root.
+
+The failure mode is the thing this whole project is about: `t3code-session-cache.ts` catches and
+leaves the workspace at `connecting` **forever**, `mailbox-wiring.ts` does not catch at all. An
+"I could not tell" rendered as a state, silently, with no error anywhere.
+
+The signature is now computed inside the try and degrades to `null` — an uncacheable answer, not
+a throw, because a signature that cannot be computed is a reason to READ. Pinned by a test that
+writes a real `af-config.json` and asserts no throw. My first version of that test wrote it to
+`.codev/af-config.json`, the wrong path, so it did not throw and proved nothing; found by
+checking `resolveProjectConfigPath` rather than trusting the green.
+
+### A conflict was rendered as a refusal
+
+`APPROVAL_ALREADY_IN_FLIGHT` came back as a plain refusal, and the panel paints that the same red
+as a genuinely refused approval. The case that produces it is the **retry after a lost 202** —
+the human clicked, nothing came back, they clicked again — so the operator was told their gate
+was refused about a run that might be succeeding, on the one action the client exists to perform.
+
+Fixed as a recovery rather than as a better error message. The server recognises the submitter
+(same session **and** same machine) and answers 202 `APPROVAL_OPERATION_RESUMED` with the original
+operation's id and receipt; the client's existing poll loop picks up where the lost response left
+off. Another session still gets 409 — it did not start that run and must not be handed its
+receipt — but the id is now a field rather than a sentence to parse, and the client reports it
+`unconfirmed`, never refused.
+
+The server's own comment already said "poll that one rather than submitting a second run", while
+the structured rejection omitted the id. A comment describing behaviour the code did not support,
+and this instance was mine.
+
+**The test needed a run that was still running.** With `checks: 'skipped'` the first operation
+settles before the retry lands, so the retry legitimately starts a new one and the test measures
+nothing — the same way the e2e "shows what it is running" case failed earlier in this project.
+Added a `slow` fixture (`sleep 2`). The assertion that makes it a recovery rather than a claim of
+one: the outcome observed is the ORIGINAL operation's, and exactly one operation exists for the
+episode, so the checks did not run twice.
+
+### Two cheap ones
+
+The five-layer JSDoc had been orphaned above `configLayerPaths` when I inserted that function
+under it, leaving `loadConfig` undocumented and a docblock describing the wrong function.
+Re-attached, with a line saying the list now lives in one place.
+
+`mayRead` compared the receipt with `===` while the store next door uses `timingSafeEqual`. Low
+impact — a valid machine credential is needed before the receipt is looked at — but two secret
+comparisons in one directory disagreeing is how the weaker one gets copied.
+
+### The failure-matrix collector caught my comments twice
+
+It matches any quoted SCREAMING_SNAKE token, comments included. Writing a bare code name in
+backticks in a docblock reads as an unclassified signal. Both sites now name the code in prose.
