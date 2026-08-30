@@ -13,13 +13,6 @@ export interface MachineConfig {
   readonly workspacePath: string;
   /** `<credentialId>.<secret>` from pairing. Never logged. */
   readonly credential: string;
-  /**
-   * The server's shared local key. codev-agent's routes sit behind Tower's own
-   * choke point, which is a REACHABILITY check on top of the per-machine
-   * credential and not a substitute for it — one key for every client cannot
-   * express "revoke the iPad, keep the laptop".
-   */
-  readonly towerKey?: string;
 }
 
 /**
@@ -111,15 +104,30 @@ const DEFAULT_BACKOFF = [1000, 2000, 4000, 8000, 15_000] as const;
  */
 export const SILENCE_DEADLINE_MS = 32_000;
 export const MACHINE_CREDENTIAL_HEADER = 'x-codev-machine-credential';
-export const TOWER_KEY_HEADER = 'codev-tower-key';
 
+/**
+ * THE MACHINE CREDENTIAL, AND NOTHING ELSE.
+ *
+ * An earlier version also sent Tower's shared host secret, which inverted the
+ * point of the whole surface. That secret is all-or-nothing: it cannot be
+ * revoked for one machine without rotating it for all, so a page holding it
+ * would grant host-wide access to every workspace to anything that could read
+ * it — and revoking the machine credential, which is criterion 15, would not
+ * have taken that access away.
+ *
+ * It was never needed either. `isRequestAllowed` in `server-utils.ts` exempts
+ * this whole surface from the shared secret precisely so a paired device can
+ * reach it holding only what pairing gave it: something scoped and revocable.
+ *
+ * The guard in `no-dangerous-html.test.ts` greps this directory for the names of
+ * that secret, so it is described here rather than named. A guard taught to skip
+ * comments is a guard that has started going blind.
+ */
 export function machineHeaders(config: MachineConfig): Record<string, string> {
-  const headers: Record<string, string> = {
+  return {
     [MACHINE_CREDENTIAL_HEADER]: config.credential,
     Accept: 'text/event-stream',
   };
-  if (config.towerKey) headers[TOWER_KEY_HEADER] = config.towerKey;
-  return headers;
 }
 
 /** base64url of the absolute path, matching `decodeWorkspacePath` on the server. */

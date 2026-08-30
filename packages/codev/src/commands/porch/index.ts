@@ -892,6 +892,19 @@ export interface ApproveOptions {
    * Defaults to `'exit'`, so every existing caller behaves exactly as before.
    */
   readonly onRefusal?: 'exit' | 'throw';
+  /**
+   * Refuse BEFORE running the phase's checks, rather than running them.
+   *
+   * An HTTP request is the wrong place to run a repository's build and test
+   * suite: it is unbounded, it holds a connection open for minutes, and a caller
+   * that gives up does not stop porch — so a timeout would abandon a call that
+   * goes on to approve the gate anyway, reporting one outcome while another
+   * happened. Refusing up front is bounded by construction and says what is
+   * needed instead of guessing at it.
+   *
+   * Set only by codev-agent. The CLI runs the checks, as it always has.
+   */
+  readonly refuseIfChecksWouldRun?: boolean;
 }
 
 /**
@@ -1055,6 +1068,17 @@ export async function approve(
   const phaseConfig = getPhaseConfig(protocol, state.phase);
   const phaseCheckNames = phaseConfig?.checks ?? [];
   const checks = getPhaseChecks(protocol, state.phase, overrides ?? undefined, workspaceRoot);
+
+  if (phaseCheckNames.length > 0 && Object.keys(checks).length > 0 && options.refuseIfChecksWouldRun) {
+    // Asked with porch's OWN computation of what would run — after overrides —
+    // rather than a second reading of the protocol that could drift from it.
+    refuse(
+      'PHASE_CHECKS_REQUIRED',
+      `approving ${gateName} would run the ${state.phase} phase checks `
+      + `(${Object.keys(checks).join(', ')}), which this caller will not run. `
+      + 'Run them where they belong, then approve.',
+    );
+  }
 
   if (phaseCheckNames.length > 0) {
     const checkEnv: CheckEnv = { PROJECT_ID: state.id, PROJECT_TITLE: resolveArtifactBaseName(artifactRoot, state.id, state.title, scopedResolver) };

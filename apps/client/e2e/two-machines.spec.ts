@@ -35,8 +35,8 @@ let staticServer: any;
 let clientOrigin: string;
 let visible: Array<Record<string, unknown>> = [];
 
-async function stand(label: string, gate: unknown): Promise<Machine> {
-  const workspace = makeWorkspace(label, gate);
+async function stand(label: string, gate: unknown, options: { skipChecks?: boolean } = {}): Promise<Machine> {
+  const workspace = makeWorkspace(label, gate, options);
   const host = await startHost({ port: EPHEMERAL, workspace, machine: label });
   return {
     workspace,
@@ -134,6 +134,46 @@ test.describe('honest degradation', () => {
     await expect(page.locator('[data-machine="alpha"] .conn-live')).toBeVisible();
     await expect(page.locator('[data-machine="alpha"] .conn-down')).toHaveCount(0);
   });
+
+  /*
+   * THE PATH PRODUCTION ACTUALLY TAKES.
+   *
+   * Every other approval test here runs against a workspace whose phase checks
+   * are skipped, which is not what a real project has. With the checks left in,
+   * approving the `pr` gate would run the repository's build and test suite
+   * inside Tower, on an open HTTP request, unbounded — so the route refuses
+   * before starting and says which checks it will not run. This asserts that
+   * branch, because a suite that only ever tested the skipped one was testing a
+   * path production does not take.
+   */
+  test('refuses, rather than running a build inside the request, when the phase has checks', async ({ page }) => {
+    const gated = await stand('checks', GATE, { skipChecks: false });
+    try {
+      announce(gated.entry);
+      await openClient(page);
+      const row = page.locator('[data-machine="checks"] [data-id="builder-checks-gated"]');
+      await expect(row.locator('.gate-panel')).toBeVisible({ timeout: 30_000 });
+
+      await row.locator('.gate-token').fill(
+        await mintPairingTokenFor(gated.host.stateRoot as string),
+      );
+      await row.getByRole('button', { name: /open a human session/i }).click();
+      const approveButton = row.getByRole('button', { name: /approve pr/i });
+      await expect(approveButton).toBeVisible({ timeout: 20_000 });
+      await approveButton.click();
+
+      const result = row.locator('.gate-result.is-refused');
+      await expect(result).toBeVisible({ timeout: 30_000 });
+      await expect(result).toContainText('PHASE_CHECKS_REQUIRED');
+      await expect(result).toContainText('build');
+
+      // And the gate is still pending, because nothing ran.
+      const project = gated.workspace.builders.find((b: any) => b.projectId === 'checks-gated');
+      expect(readStatus(project.statusPath)).toContain('status: pending');
+    } finally {
+      await gated.host.stop().catch(() => {});
+    }
+  });
 });
 
 test.describe('approving a real gate', () => {
@@ -175,12 +215,56 @@ test.describe('approving a real gate', () => {
     await expect(revoked).toContainText('MACHINE_CREDENTIAL_REVOKED');
     await expect(page.locator('[data-machine="alpha"] .conn-down')).toHaveCount(0);
   });
+
+  /*
+   * THE PATH PRODUCTION ACTUALLY TAKES.
+   *
+   * Every other approval test here runs against a workspace whose phase checks
+   * are skipped, which is not what a real project has. With the checks left in,
+   * approving the `pr` gate would run the repository's build and test suite
+   * inside Tower, on an open HTTP request, unbounded — so the route refuses
+   * before starting and says which checks it will not run. This asserts that
+   * branch, because a suite that only ever tested the skipped one was testing a
+   * path production does not take.
+   */
+  test('refuses, rather than running a build inside the request, when the phase has checks', async ({ page }) => {
+    const gated = await stand('checks', GATE, { skipChecks: false });
+    try {
+      announce(gated.entry);
+      await openClient(page);
+      const row = page.locator('[data-machine="checks"] [data-id="builder-checks-gated"]');
+      await expect(row.locator('.gate-panel')).toBeVisible({ timeout: 30_000 });
+
+      await row.locator('.gate-token').fill(
+        await mintPairingTokenFor(gated.host.stateRoot as string),
+      );
+      await row.getByRole('button', { name: /open a human session/i }).click();
+      const approveButton = row.getByRole('button', { name: /approve pr/i });
+      await expect(approveButton).toBeVisible({ timeout: 20_000 });
+      await approveButton.click();
+
+      const result = row.locator('.gate-result.is-refused');
+      await expect(result).toBeVisible({ timeout: 30_000 });
+      await expect(result).toContainText('PHASE_CHECKS_REQUIRED');
+      await expect(result).toContainText('build');
+
+      // And the gate is still pending, because nothing ran.
+      const project = gated.workspace.builders.find((b: any) => b.projectId === 'checks-gated');
+      expect(readStatus(project.statusPath)).toContain('status: pending');
+    } finally {
+      await gated.host.stop().catch(() => {});
+    }
+  });
 });
 
 /** Mint a token the way an operator does: on the host, out of band. */
 async function mintPairingToken(): Promise<string> {
+  return mintPairingTokenFor(alpha.host.stateRoot as string);
+}
+
+async function mintPairingTokenFor(stateRoot: string): Promise<string> {
   const { PairingStore } = await import(
     '../../../packages/codev/src/agent-farm/lib/pairing.js'
   );
-  return new PairingStore({ root: `${alpha.host.stateRoot}/pairing` }).issue().token;
+  return new PairingStore({ root: `${stateRoot}/pairing` }).issue().token;
 }

@@ -188,6 +188,28 @@ export function recordThreadId(statusPath: string, threadId: string): void {
  * Spec 653 §B.3: every phase transition, gate request, gate approval,
  * and verify skip must commit and push status.yaml. Zero gaps.
  */
+/**
+ * The push failed, and the state is already written and committed.
+ *
+ * A DISTINCT TYPE BECAUSE THESE ARE DIFFERENT FACTS. `write`, `commit` and
+ * `push` used to share one catch and one message, so a network blip on the push
+ * was reported identically to a write that never happened — and a caller acting
+ * on that reports a completed gate approval as a failure. The human then
+ * approves again, chasing a state that already changed.
+ *
+ * A caller that does not distinguish it behaves exactly as before: this is still
+ * an Error and still thrown.
+ */
+export class StatePushFailed extends Error {
+  /** Always true. The state is on disk and in a commit; only the remote is behind. */
+  readonly committed = true;
+
+  constructor(readonly worktreeRoot: string, cause: string) {
+    super(`state was written and committed, but the push failed: ${cause}`);
+    this.name = 'StatePushFailed';
+  }
+}
+
 export async function writeStateAndCommit(
   statusPath: string,
   state: ProjectState,
@@ -207,12 +229,20 @@ export async function writeStateAndCommit(
   try {
     await execFileAsync('git', ['add', statusPath], { cwd: worktreeRoot });
     await execFileAsync('git', ['commit', '-m', message], { cwd: worktreeRoot });
-    await execFileAsync('git', ['push', '-u', 'origin', 'HEAD'], { cwd: worktreeRoot });
   } catch (err: unknown) {
     // If git commit fails because nothing changed, that's a logic bug — don't mask it.
-    // If git push fails (network, auth), surface the error clearly.
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`writeStateAndCommit failed: ${msg}`);
+  }
+
+  // THE PUSH IS DELIVERY, NOT DURABILITY. Everything above this line has already
+  // happened: the file is written and the commit exists. Reporting a push
+  // failure as though the state change did not happen is how a completed gate
+  // approval gets reported to a human as a refusal.
+  try {
+    await execFileAsync('git', ['push', '-u', 'origin', 'HEAD'], { cwd: worktreeRoot });
+  } catch (err: unknown) {
+    throw new StatePushFailed(worktreeRoot, err instanceof Error ? err.message : String(err));
   }
 }
 

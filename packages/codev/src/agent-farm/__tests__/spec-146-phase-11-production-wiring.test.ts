@@ -38,14 +38,39 @@ function tmp(): string {
  * The `initAgentRoutes({...})` call as Tower actually writes it, with comments
  * removed — the comment beside the call NAMES the missing option, and a check
  * that reads prose is a check that passes on a promise.
+ *
+ * The extent is found by BRACE DEPTH rather than by a literal `\n  });`. The
+ * indentation-sensitive version failed on a reformat of `tower-server.ts` and
+ * read as a wiring regression, sending the next person hunting a change that was
+ * whitespace. And when this really cannot find the call it says which of the two
+ * it is, because "no call" and "no end" have different remedies.
  */
 function towerInitCall(): string {
   const source = readFileSync(join(SERVERS, 'tower-server.ts'), 'utf8');
-  const start = source.indexOf('initAgentRoutes({');
-  expect(start, 'tower-server.ts no longer calls initAgentRoutes').toBeGreaterThan(-1);
-  const end = source.indexOf('\n  });', start);
-  expect(end).toBeGreaterThan(start);
-  return source.slice(start, end)
+  const open = source.indexOf('initAgentRoutes({');
+  expect(
+    open,
+    'tower-server.ts no longer contains a call to initAgentRoutes. This test is about '
+    + 'WHAT that call passes; if the call moved or was renamed, point this at its new form.',
+  ).toBeGreaterThan(-1);
+
+  const from = source.indexOf('{', open);
+  let depth = 0;
+  let close = -1;
+  for (let i = from; i < source.length; i += 1) {
+    if (source[i] === '{') depth += 1;
+    else if (source[i] === '}') {
+      depth -= 1;
+      if (depth === 0) { close = i; break; }
+    }
+  }
+  expect(
+    close,
+    'found initAgentRoutes( but its argument object has unbalanced braces, so this test '
+    + 'could not read what it passes. That is a parsing failure here, NOT a wiring change.',
+  ).toBeGreaterThan(from);
+
+  return source.slice(from, close + 1)
     .split('\n')
     .filter((line) => !line.trim().startsWith('//'))
     .join('\n');
@@ -65,7 +90,16 @@ describe('criterion 3 is NOT met by the production path, and this records why', 
    * which is the point. It is a tripwire on a stated gap, not a blessing of it.
    */
   it('Tower passes no t3codeSnapshot, so session state is never observable', () => {
-    expect(towerInitCall()).not.toContain('t3codeSnapshot');
+    const call = towerInitCall();
+    // A sanity anchor: if the extraction goes blind, this fails FIRST and says so,
+    // rather than the absence check passing on an empty string.
+    expect(call, 'the extracted call is missing options it certainly passes; the reader has gone blind')
+      .toContain('isKnownWorkspace');
+    expect(
+      call,
+      'tower-server.ts now passes t3codeSnapshot. Criterion 3 may finally be reachable — '
+      + 'update this test and the README rather than deleting it.',
+    ).not.toContain('t3codeSnapshot');
   });
 
   it('a snapshot built without a provider reports not-provided, never an empty session', () => {

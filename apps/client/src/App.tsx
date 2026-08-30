@@ -66,9 +66,14 @@ export function App() {
         if (!session) return { ok: false, message: 'no human session is open on this machine' };
         const result = await approveGate(fetchImpl, config, session, gate);
         if (result.ok) {
+          const approved = `approved on ${result.machine} at ${result.approvedAt}, session ${result.sessionId}`;
+          // The gate IS approved. Saying so first, and naming the push failure
+          // second, is the difference between a caveat and a retry.
           return {
             ok: true,
-            message: `approved on ${result.machine} at ${result.approvedAt}, session ${result.sessionId}`,
+            message: result.pushFailed
+              ? `${approved} — but not pushed: ${result.pushFailed}. Do not approve again; push from the worktree.`
+              : approved,
           };
         }
         /*

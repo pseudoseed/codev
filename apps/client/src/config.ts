@@ -1,13 +1,28 @@
 import type { MachineConfig } from './connection/machine.js';
 
+/**
+ * What an `id` may be, and why it is constrained rather than trusted.
+ *
+ * The id is not a label. It keys connection state, the human session for that
+ * machine, React's reconciliation, the approval lookup, and the `/m/<id>/` path
+ * every request travels. A `..`, a `/` or an empty string would each break a
+ * different one of those, and the proxy path is the one that breaks quietly.
+ */
+const ID = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
+
 function isMachine(value: unknown): value is MachineConfig {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
   return typeof record.id === 'string'
+    && ID.test(record.id)
     && typeof record.label === 'string'
+    && record.label.length > 0
     && typeof record.origin === 'string'
+    && record.origin.length > 0
     && typeof record.workspacePath === 'string'
-    && typeof record.credential === 'string';
+    && record.workspacePath.length > 0
+    && typeof record.credential === 'string'
+    && record.credential.length > 0;
 }
 
 export type MachineConfigLoad =
@@ -40,6 +55,24 @@ export async function loadMachines(
   if (!Array.isArray(parsed)) {
     return { ok: false, message: 'machine configuration is not a list of machines' };
   }
-  const machines = parsed.filter(isMachine);
+  /*
+   * DUPLICATE IDS ARE DROPPED, NOT DEDUPLICATED SILENTLY OR LAST-ONE-WINS.
+   *
+   * Everything about a machine is keyed by its id — its connection state, its
+   * human session, its React identity, the approval lookup — so two entries
+   * sharing one id do not merely collide, they impersonate each other: a
+   * session opened against the first machine would be presented to the second.
+   * Keeping the first and counting the rest as dropped is the conservative
+   * reading, and the count is what tells the human something was wrong with the
+   * configuration rather than with a server.
+   */
+  const seen = new Set<string>();
+  const machines: MachineConfig[] = [];
+  for (const candidate of parsed) {
+    if (!isMachine(candidate)) continue;
+    if (seen.has(candidate.id)) continue;
+    seen.add(candidate.id);
+    machines.push(candidate);
+  }
   return { ok: true, machines, dropped: parsed.length - machines.length };
 }

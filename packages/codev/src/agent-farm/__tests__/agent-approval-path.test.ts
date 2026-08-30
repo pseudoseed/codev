@@ -257,11 +257,20 @@ describe('a client can get from nothing to an approved gate', () => {
   });
 
   /*
-   * porch's CLI answers failing checks with `process.exit(1)`. Reached from a
-   * route, that would end Tower and answer the request with nothing at all —
-   * which is the worst available spelling of "refused".
+   * THE PATH A REAL PROJECT TAKES.
+   *
+   * Every other test here uses a workspace whose phase checks are skipped, which
+   * no real project is. With the checks left in, approving would run the
+   * repository's build and test suite inside Tower on an open HTTP request,
+   * unbounded — and a client that gave up would not stop porch, so a timeout
+   * would abandon a call that goes on to approve the gate anyway. The route
+   * refuses before starting and names what it will not run.
+   *
+   * It also proves the process survives: porch's CLI answers this class with
+   * `process.exit(1)`, which inside Tower would end it and answer the request
+   * with nothing at all — the worst available spelling of "refused".
    */
-  it('answers failing phase checks with a refusal instead of ending the process', async () => {
+  it('refuses when the phase has checks, instead of running them or ending the process', async () => {
     const workspace = workspaceWithRequestedGate('986', 'pr', { checksPass: false });
     const host = await startHost(workspace);
     const credential: string = (await post(`${host.origin}/api/agent/v1/pairing/redeem`,
@@ -285,7 +294,10 @@ describe('a client can get from nothing to an approved gate', () => {
       { projectId: '986', gateName: 'pr', capability: capability.presentation, nonce: nonce.nonce },
     );
     expect(refused.status).toBe(403);
-    expect(refused.body.signal).toBe('PHASE_CHECKS_FAILED');
+    expect(refused.body.signal).toBe('PHASE_CHECKS_REQUIRED');
+    // Names them, so the human knows what to run rather than only that something
+    // was refused.
+    expect(refused.body.message).toContain('build');
 
     // The process is still here, and so is the unapproved gate.
     const state = yaml.load(

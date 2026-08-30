@@ -48,8 +48,7 @@ world. An array:
     "label": "alpha",
     "origin": "http://127.0.0.1:4101",
     "workspacePath": "/Users/me/dev/codev",
-    "credential": "<credentialId>.<secret>",
-    "towerKey": "<64 hex chars, only when the host is Tower>"
+    "credential": "<credentialId>.<secret>"
   }
 ]
 ```
@@ -61,7 +60,16 @@ world. An array:
 | `origin` | Where that machine's codev-agent listens. Rewritten to `/m/<id>` before it reaches the page. |
 | `workspacePath` | Absolute workspace path **on that machine**. |
 | `credential` | The machine credential from pairing. Never logged. |
-| `towerKey` | Tower's shared local key. Needed only when the agent is Tower, whose own choke point sits in front of the agent routes. |
+
+**Tower's shared `local-key` is never in this file and never reaches the page.**
+It is Tower's all-or-nothing secret — it cannot be revoked for one machine
+without rotating it for all — so a page holding it would have Tower-wide access
+to every workspace on the host, which revoking the machine credential would not
+take away. It is not needed either: `isRequestAllowed` exempts
+`/api/agent/v1/*` from the shared key precisely so a paired device can reach the
+surface holding only what pairing gave it, which is scoped and revocable.
+`scripts/pair-dev.mjs` uses the key locally to redeem a token and does not write
+it down.
 
 A malformed entry is dropped and counted, and the page says how many — a machine
 row with no credential would otherwise render as permanently disconnected and

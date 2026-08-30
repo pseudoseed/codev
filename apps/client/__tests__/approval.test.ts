@@ -137,3 +137,44 @@ describe('a session that ended mid-ceremony', () => {
     expect(result).toMatchObject({ ok: false, signal: 'PHASE_CHECKS_FAILED', sessionEnded: false });
   });
 });
+
+describe('a push that fails after the gate is approved', () => {
+  const session = { sessionId: 's1', presentation: 's1.secret', expiresAt: 'later' };
+
+  /*
+   * The gate is approved and committed; only delivery to the remote failed.
+   * Reporting that as a refusal tells a human their approval did not happen when
+   * it did — and they approve again, chasing a state that already changed. This
+   * is the defect class of the whole program aimed at the one action the client
+   * exists to perform.
+   */
+  it('reports the approval as a success carrying a caveat', async () => {
+    const { fetchImpl } = router({
+      '/approval-capabilities': { status: 201, body: { capabilityId: 'c', presentation: 'c.s' } },
+      '/approval-nonces': { status: 201, body: { nonce: 'n' } },
+      '/gates/approve': {
+        status: 200,
+        body: {
+          signal: 'GATE_APPROVED',
+          machine: 'alpha',
+          sessionId: 's1',
+          approvedAt: '2026-08-30T02:00:00Z',
+          pushFailed: 'state was written and committed, but the push failed: no upstream',
+        },
+      },
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.pushFailed).toContain('push failed');
+  });
+
+  it('carries no caveat on an ordinary approval', async () => {
+    const { fetchImpl } = router({
+      '/approval-capabilities': { status: 201, body: { capabilityId: 'c', presentation: 'c.s' } },
+      '/approval-nonces': { status: 201, body: { nonce: 'n' } },
+      '/gates/approve': { status: 200, body: { signal: 'GATE_APPROVED', machine: 'alpha', sessionId: 's1' } },
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result.ok && result.pushFailed).toBeUndefined();
+  });
+});

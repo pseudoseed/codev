@@ -32,6 +32,21 @@ describe('the client never writes to the console', () => {
     expect(offenders).toEqual([]);
   });
 
+  /*
+   * TOWER'S SHARED KEY MUST NEVER REACH THIS APP. It is the all-or-nothing
+   * secret per-machine credentials exist to replace: it cannot be revoked for
+   * one machine without rotating it for all, so a page holding it keeps
+   * Tower-wide access to every workspace on the host even after criterion 15's
+   * revocation. `isRequestAllowed` exempts the agent surface from it for exactly
+   * this reason, so the app has no use for it either.
+   */
+  it('never handles Tower\'s shared key', () => {
+    const offenders = walk(SRC)
+      .filter((file) => /towerKey|codev-tower-key|local-key|TOWER_KEY/i.test(readFileSync(file, 'utf8')))
+      .map((file) => file.slice(SRC.length + 1));
+    expect(offenders).toEqual([]);
+  });
+
   it('never puts a credential into a message a human will read', () => {
     for (const file of walk(SRC)) {
       const source = readFileSync(file, 'utf8');

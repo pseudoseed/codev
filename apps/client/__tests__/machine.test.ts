@@ -7,7 +7,6 @@ const config: MachineConfig = {
   origin: 'http://127.0.0.1:4100',
   workspacePath: '/Users/x/dev/codev',
   credential: 'cred-id.secret',
-  towerKey: 'k'.repeat(64),
 };
 
 function sseBody(chunks: string[]): ReadableStream<Uint8Array> {
@@ -55,11 +54,22 @@ describe('encodeWorkspacePath', () => {
 });
 
 describe('connectMachine', () => {
-  it('presents the machine credential and the tower key', async () => {
+  /*
+   * THE MACHINE CREDENTIAL AND NOTHING ELSE.
+   *
+   * An earlier version also sent Tower's shared `local-key`, which inverted the
+   * point of the surface: that key cannot be revoked for one machine without
+   * rotating it for all, so revoking a machine credential — criterion 15 —
+   * would not have taken the access away, and an XSS would have held Tower-wide
+   * privileges on every workspace on the host.
+   */
+  it('presents the machine credential, and no shared key', async () => {
     const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const headers = init?.headers as Record<string, string>;
       expect(headers['x-codev-machine-credential']).toBe('cred-id.secret');
-      expect(headers['codev-tower-key']).toBe('k'.repeat(64));
+      for (const name of Object.keys(headers)) {
+        expect(name.toLowerCase()).not.toContain('tower');
+      }
       return new Response(sseBody([frame('protocol-state', { snapshot: SNAPSHOT })]), { status: 200 });
     }) as unknown as typeof globalThis.fetch;
     const seen = await drive(fetchImpl);

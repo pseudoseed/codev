@@ -20,7 +20,20 @@ export interface HumanSession {
 }
 
 export type ApprovalOutcome =
-  | { readonly ok: true; readonly approvedAt: string; readonly machine: string; readonly sessionId: string }
+  | {
+    readonly ok: true;
+    readonly approvedAt: string;
+    readonly machine: string;
+    readonly sessionId: string;
+    /**
+     * Present when the gate WAS approved and committed but the push failed.
+     *
+     * A success with a caveat, never a failure: telling a human their approval
+     * did not happen when it did sends them to approve again, chasing a state
+     * that already changed.
+     */
+    readonly pushFailed?: string;
+  }
   | {
     readonly ok: false;
     readonly signal: string;
@@ -167,11 +180,13 @@ export async function approveGate(
   if (approved.status !== 200) {
     return refusal(approved, 'the gate was not approved');
   }
+  const pushFailed = text(approved.body, 'pushFailed');
   return {
     ok: true,
     approvedAt: text(approved.body, 'approvedAt') ?? new Date().toISOString(),
     machine: text(approved.body, 'machine') ?? config.label,
     sessionId: text(approved.body, 'sessionId') ?? session.sessionId,
+    ...(pushFailed ? { pushFailed } : {}),
   };
 }
 

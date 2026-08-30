@@ -33,6 +33,20 @@ const workspacePath = resolve(flag('workspace', REPO_ROOT));
 const machineName = flag('machine', 'dev-local');
 const id = flag('id', 'local');
 
+/*
+ * THE TOWER KEY IS USED HERE AND NEVER WRITTEN DOWN.
+ *
+ * `~/.agent-farm/local-key` is Tower's all-or-nothing shared secret: it cannot be
+ * revoked for one machine without rotating it for all. It is needed for THIS
+ * script's redemption call, which is a local operator action, and it must never
+ * reach `.dev-machines.json` — that file is served to the browser, and a page
+ * holding this key would have Tower-wide access to every workspace on the host,
+ * which revoking the machine credential would not take away.
+ *
+ * The client does not need it. `isRequestAllowed` exempts `/api/agent/v1/*` from
+ * the shared key exactly so a paired device can reach the surface holding only
+ * what pairing gave it.
+ */
 const keyPath = join(homedir(), '.agent-farm', 'local-key');
 if (!existsSync(keyPath)) {
   console.error(`no Tower key at ${keyPath}; is Tower running on this machine?`);
@@ -67,7 +81,7 @@ if (response.status !== 201 || typeof body.credential !== 'string') {
 
 const target = join(CLIENT_ROOT, '.dev-machines.json');
 const existing = existsSync(target) ? JSON.parse(readFileSync(target, 'utf8')) : [];
-const entry = { id, label: machineName, origin, workspacePath, credential: body.credential, towerKey };
+const entry = { id, label: machineName, origin, workspacePath, credential: body.credential };
 const machines = [...existing.filter((machine) => machine.id !== id), entry];
 writeFileSync(target, `${JSON.stringify(machines, null, 2)}\n`, { mode: 0o600 });
 

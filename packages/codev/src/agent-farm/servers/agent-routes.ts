@@ -717,6 +717,8 @@ function handleGateApprove(
     // Imported here, not at module load. porch's entry point pulls in the whole
     // state layer, and this module is loaded by every Tower start.
     const { approve, ApprovalRefusedError } = await import('../../commands/porch/index.js');
+    const { StatePushFailed } = await import('../../commands/porch/state.js');
+    let pushFailed: string | null = null;
     try {
       await approve(workspacePath, projectId, gateName, true, undefined, {
         // A DELIBERATELY MINIMAL ENVIRONMENT. Inheriting process.env would carry
@@ -745,13 +747,28 @@ function handleGateApprove(
         capabilities: context.approvalCapabilities,
         nonces: context.approvalNonces,
         onRefusal: 'throw',
+        // An HTTP request will not run a repository's build and test suite. See
+        // the option's own comment for why a timeout is not the answer.
+        refuseIfChecksWouldRun: true,
       });
     } catch (error) {
       if (error instanceof ApprovalRefusedError) {
         writeJson(res, 403, { signal: error.code, message: error.message });
         return;
       }
-      throw error;
+      /*
+       * THE GATE IS APPROVED. Only the push to the remote failed.
+       *
+       * Reporting this as a failure is how a human is told their approval did
+       * not happen when it did — and they approve again, chasing a state that
+       * already changed. It is reported as a success carrying a caveat, because
+       * that is what it is.
+       */
+      if (error instanceof StatePushFailed) {
+        pushFailed = error.message;
+      } else {
+        throw error;
+      }
     }
     writeJson(res, 200, {
       signal: 'GATE_APPROVED',
@@ -760,6 +777,7 @@ function handleGateApprove(
       machine: stored.machine,
       sessionId: humanSessionId,
       approvedAt: new Date().toISOString(),
+      ...(pushFailed ? { pushFailed } : {}),
     });
   }).catch((error: unknown) => guardRouteFailure(res, context, 'gate-approve', error));
 }

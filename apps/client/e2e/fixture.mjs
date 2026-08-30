@@ -71,11 +71,20 @@ function statusYaml(projectId, title, gate) {
  * A workspace with an architect and two builders, one of them holding a
  * requested gate carrying #128's structured question.
  */
-export function makeWorkspace(label, gate) {
+/**
+ * @param {string} label
+ * @param {object|null} gate
+ * @param {{ skipChecks?: boolean }} [options] `skipChecks: false` leaves the
+ *   phase's real checks in place, which is what production has. The route then
+ *   refuses rather than running a build inside an HTTP request, and the e2e
+ *   exercises that branch instead of only the one where checks are skipped.
+ */
+export function makeWorkspace(label, gate, options = {}) {
   const root = scratch(`codev-e2e-${label}-`);
-  // The phase's own checks, skipped through the mechanism porch supports. This
-  // harness proves the approval path, not that a temp directory can run a build.
-  const config = JSON.stringify({ porch: { checks: { build: { skip: true }, tests: { skip: true } } } });
+  const skipChecks = options.skipChecks !== false;
+  const config = JSON.stringify(skipChecks
+    ? { porch: { checks: { build: { skip: true }, tests: { skip: true } } } }
+    : {});
   mkdirSync(join(root, '.codev'), { recursive: true });
   writeFileSync(join(root, '.codev', 'config.json'), config);
   // The REAL protocol definitions, because `porch approve` loads the protocol to
