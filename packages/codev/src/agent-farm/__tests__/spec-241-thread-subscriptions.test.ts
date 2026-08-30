@@ -361,6 +361,100 @@ describe('ThreadSubscriptionPool (issue #241)', () => {
     expect(pool.attached(THREAD)).toBe(false);
   });
 
+  /**
+   * FOUND BY TWO REVIEW LANES INDEPENDENTLY, and it is the race this module exists to
+   * close arriving through the failure path instead of the happy one.
+   *
+   * `ResumingSubscription` calls `onResume` with a `gap` from the `finally` of an
+   * attempt that ended BEFORE the server signalled catch-up was complete. That attempt
+   * never came up — `#everSubscribed` stays false and the cursor stays put, so the next
+   * attempt is another COLD subscribe whose snapshot carries no observable events. The
+   * pool used to mark that attached, so `ensure` resolved and a turn could dispatch
+   * into precisely the snapshot the guard exists to avoid.
+   */
+  it('a stream that dies before synchronizing does not count as attached', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'thread-sub-'));
+    let attempts = 0;
+    let live: { end: () => void } | null = null;
+    const diesBeforeSync: ThreadSubscriber = {
+      stream(_method, _payload, _onValue, _timeoutMs, onRequestId) {
+        attempts += 1;
+        onRequestId?.(attempts);
+        // Ends without ever emitting `synchronized`.
+        return new Promise<unknown>((resolveStream) => {
+          live = { end: () => resolveStream(undefined) };
+          queueMicrotask(() => resolveStream(undefined));
+        });
+      },
+      cancel: () => live?.end(),
+    };
+    const warnings: string[] = [];
+    const pool = createThreadSubscriptionPool({
+      subscriber: diesBeforeSync,
+      workspaceRoot: dir,
+      observe: () => {},
+      log: (level, message) => { if (level === 'WARN') warnings.push(message); },
+      attachTimeoutMs: 300,
+      retryDelayMs: 1,
+    });
+
+    await expect(pool.ensure(THREAD)).rejects.toThrow(SubscriptionNotAttachedError);
+    expect(pool.attached(THREAD)).toBe(false);
+    // And it said which of the two gaps this was, rather than reporting a hole in a
+    // subscription that never existed.
+    expect(warnings.join('\n')).toContain('ended before the server signalled');
+    pool.stopAll();
+  });
+
+  /**
+   * The other direction of the same distinction, and why `outcome.kind !== 'gap'` —
+   * the fix both lanes proposed — would have been wrong. A server that SYNCHRONIZES
+   * and declines to resume from the cursor reports a gap too. That subscription is up:
+   * the caller reconciles, it does not wait. Refusing to attach on it would turn a
+   * recoverable condition into a permanent refusal to dispatch turns.
+   */
+  it('a gap reported after synchronizing still counts as attached', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'thread-sub-'));
+    // A cursor on disk, so the subscription resumes and a gap is classifiable.
+    const script = scriptedSubscriber();
+    const seeded = makePool(dir, script, () => {});
+    mkdirSync(join(dir, '.codev', 'thread-cursors'), { recursive: true });
+    writeFileSync(seeded.cursorPath(THREAD), '10\n');
+
+    let live: { onValue: (v: unknown) => void } | null = null;
+    const gapAfterSync: ThreadSubscriber = {
+      stream(_method, _payload, onValue, _timeoutMs, onRequestId) {
+        onRequestId?.(1);
+        return new Promise<unknown>(() => {
+          live = { onValue };
+          queueMicrotask(() => {
+            // A snapshot instead of the requested replay — the server declining to
+            // resume — and then synchronization.
+            onValue({ kind: 'snapshot' });
+            onValue({ kind: 'synchronized' });
+          });
+        });
+      },
+      cancel: () => {},
+    };
+    const warnings: string[] = [];
+    const pool = createThreadSubscriptionPool({
+      subscriber: gapAfterSync,
+      workspaceRoot: dir,
+      observe: () => {},
+      log: (level, message) => { if (level === 'WARN') warnings.push(message); },
+      attachTimeoutMs: 2_000,
+      retryDelayMs: 1,
+    });
+
+    await expect(pool.ensure(THREAD)).resolves.toBeUndefined();
+    expect(pool.attached(THREAD)).toBe(true);
+    // Attached AND reported, because a gap is never absorbed silently.
+    expect(warnings.join('\n')).toContain('GAP');
+    expect(live).not.toBeNull();
+    pool.stopAll();
+  });
+
   it('ensure names the failure when a subscription never attaches', async () => {
     dir = mkdtempSync(join(tmpdir(), 'thread-sub-'));
     const neverAttaches: ThreadSubscriber = {
@@ -402,6 +496,45 @@ describe('ThreadSubscriptionPool (issue #241)', () => {
 
     engine.observe(sessionSet(7, null, 'thr-never-adopted'));
     expect(tracker.lastSequence('thr-never-adopted')).toBe(7);
+  });
+
+  /**
+   * A record and a subscription are two different things, and `attach` was only
+   * checking one. The pool drops an entry on a non-retryable failure, so every later
+   * sweeper pass hit `attach`'s early return, never reached `start`, and the thread
+   * stayed permanently unwatched — while the log said a later pass would adopt it.
+   */
+  it('re-adopting a thread whose subscription terminated opens a new one', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'thread-sub-'));
+    const worktreePath = join(dir, 'wt');
+    mkdirSync(worktreePath);
+    const script = scriptedSubscriber();
+    const pool = makePool(dir, script, () => {});
+    const engine = createPorchThreadEngine({
+      dispatcher: { async call() { return {}; } },
+      journal: new DispatchJournal(join(dir, 'commands.jsonl')),
+      tracker: new TurnTracker(),
+      projectId: 'p1',
+      workspaceRoot: dir,
+      defaultHarness: 'codex',
+      defaultModel: 'gpt-5.6-luna',
+      subscriptions: pool,
+    });
+
+    const input = { threadId: THREAD, worktreePath, branch: 'b', builderId: 'air-241' };
+    await engine.attach(input);
+    await vi.waitFor(() => expect(pool.attached(THREAD)).toBe(true));
+
+    // The subscription goes, the record stays — the state the early return could not
+    // recover from.
+    pool.stop(THREAD);
+    expect(pool.threadIds.has(THREAD)).toBe(false);
+    expect(engine.get(THREAD)).toBeDefined();
+
+    await engine.attach(input);
+    expect(pool.threadIds.has(THREAD)).toBe(true);
+    await vi.waitFor(() => expect(pool.attached(THREAD)).toBe(true));
+    pool.stopAll();
   });
 
   it('removeWorktree stops the thread subscription', async () => {

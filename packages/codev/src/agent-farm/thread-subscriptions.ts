@@ -308,6 +308,34 @@ export function createThreadSubscriptionPool(
           options.observe(value);
         },
         onResume: (outcome: ResumeOutcome, info) => {
+          /*
+           * ONLY A SYNCHRONIZED ATTEMPT COUNTS AS ATTACHED.
+           *
+           * `ResumingSubscription` also calls `onResume` from the `finally` of an
+           * attempt that ended BEFORE the server signalled catch-up was complete,
+           * reporting a `gap`. That attempt never came up: `#everSubscribed` stays
+           * false and the cursor stays where it was, so the next attempt is another
+           * COLD subscribe whose snapshot carries no observable events. Marking it
+           * attached let `ensure` resolve and a turn dispatch into exactly the
+           * snapshot race this module exists to close — reachable through the
+           * failure path rather than the happy one.
+           *
+           * Keyed on `info.synchronized` rather than on `outcome.kind !== 'gap'`,
+           * which both review lanes proposed and which is wrong in the other
+           * direction: `classifyResume` returns a legitimate `gap` when the server
+           * synchronized and DECLINED to resume from the cursor. That subscription
+           * is up and the caller must reconcile, not wait. Refusing to attach on it
+           * would turn a recoverable condition into a permanent refusal to dispatch.
+           */
+          if (!info.synchronized) {
+            options.log(
+              'WARN',
+              `t3code subscription for thread ${threadId} ended before the server signalled ` +
+                `catch-up was complete (attempt ${info.attempt}). This attempt never came up, so it ` +
+                `does NOT count as attached and the next one is a fresh subscribe.`,
+            );
+            return;
+          }
           entry.isAttached = true;
           markAttached();
           if (outcome.kind === 'gap') {
@@ -385,6 +413,12 @@ export function createThreadSubscriptionPool(
         // Never hold the process open for a subscription's attach budget.
         timer.unref?.();
       });
+      // Attached, because the race can be won by `entry.attached` in the same tick the
+      // timer fires. `Promise.race` has settled by then and nothing is left listening,
+      // so the rejection would surface as an unhandled one — in Tower, a process-level
+      // warning about a subscription that in fact came up. The awaiting caller below
+      // still sees the rejection; this only stops the losing branch from escaping.
+      expiry.catch(() => {});
       try {
         await Promise.race([entry.attached, expiry]);
       } finally {
@@ -549,16 +583,23 @@ export function createThreadAdoptionSweeper(
     sweep,
     start() {
       if (timer) return;
-      timer = setInterval(() => {
+      const run = () => {
         void sweep().catch((error: unknown) => {
           options.log(
             'ERROR',
             `Thread adoption sweep could not begin: ${error instanceof Error ? error.message : String(error)}`,
           );
         });
-      }, options.intervalMs ?? DEFAULT_SWEEP_MS);
+      };
+      timer = setInterval(run, options.intervalMs ?? DEFAULT_SWEEP_MS);
       // Never the reason a process stays alive.
       timer.unref?.();
+      // IMMEDIATELY, the way `T3codeSessionCache.start` does. Setting only the interval
+      // leaves every thread that nobody messages unsubscribed for a full sweep after
+      // Tower boots — which is precisely the window a Tower restart lands in, and
+      // resuming from a persisted cursor is the thing this sweeper exists to make
+      // possible after exactly that event.
+      run();
     },
     stop() {
       if (!timer) return;

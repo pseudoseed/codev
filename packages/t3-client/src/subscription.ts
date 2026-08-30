@@ -84,8 +84,29 @@ export interface ResumingSubscriptionOptions {
   /**
    * Called once per (re)subscription, with what the server actually returned.
    * A `gap` here is the caller's cue to reconcile; nothing reconciles silently.
+   *
+   * `synchronized` separates the two ways a `gap` is produced, and they are NOT the
+   * same fact (issue #241). A gap from the synchronized path means the server
+   * declined to resume from the requested cursor and said so — catch-up completed,
+   * the stream is live, and the caller reconciles. A gap from the `finally` below
+   * means the attempt DIED before the server signalled anything, so the stream never
+   * came up at all and the next attempt is a fresh subscribe.
+   *
+   * Both used to arrive as an indistinguishable `kind: 'gap'`. A caller waiting for
+   * "the subscription is up" therefore counted the second as attachment — and since
+   * a pre-synchronization death leaves `#everSubscribed` false and the cursor at 0,
+   * the next attempt is another COLD subscribe whose snapshot swallows history.
+   * "I never connected" was spelled exactly like "I connected and missed a range".
    */
-  onResume(outcome: ResumeOutcome, info: { readonly attempt: number; readonly resumed: boolean }): void;
+  onResume(
+    outcome: ResumeOutcome,
+    info: {
+      readonly attempt: number;
+      readonly resumed: boolean;
+      /** True when the server signalled that catch-up was complete on this attempt. */
+      readonly synchronized: boolean;
+    },
+  ): void;
   /** Where to start. 0 means "no cursor yet", so the first subscription sends none. */
   readonly startAfter?: number;
   /** Persist the cursor after each applied event. */
@@ -344,7 +365,7 @@ export class ResumingSubscription {
               // cursor has already moved past it. That is the same at-least-once
               // violation iteration 1 fixed, one layer up.
               const resumeOutcome = resuming ? classifyResume(requestedAfter, catchUp, snapshot) : null;
-              const meta = { attempt: this.#attempt, resumed: resuming };
+              const meta = { attempt: this.#attempt, resumed: resuming, synchronized: true };
               enqueue(
                 () =>
                   this.options.onResume(
@@ -425,7 +446,10 @@ export class ResumingSubscription {
                 'the stream ended before the server signalled that catch-up was complete, ' +
                 'so whether the requested range arrived in full is unknown',
             },
-            { attempt: this.#attempt, resumed: resuming },
+            // FALSE, and this is the flag's whole reason for existing. This attempt
+            // never came up; a caller that reads a gap as "attached, with a hole in
+            // it" would act on a subscription that does not exist.
+            { attempt: this.#attempt, resumed: resuming, synchronized: false },
           );
         }
 

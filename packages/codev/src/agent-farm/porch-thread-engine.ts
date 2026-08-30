@@ -180,7 +180,19 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
      */
     async attach(input: AttachThreadInput) {
       const existing = records.get(input.threadId);
-      if (existing) return existing;
+      if (existing) {
+        // BEFORE the early return, and `start` is idempotent so this costs nothing on
+        // the ordinary path.
+        //
+        // Without it, adoption could never recover a subscription that had terminated:
+        // the pool drops its entry on a non-retryable failure, but every later sweeper
+        // pass hit this early return and never reached `start`, so the thread stayed
+        // permanently unwatched while the log said a later pass would adopt it. A
+        // record and a subscription are two different things, and only one of them was
+        // being checked here.
+        options.subscriptions?.start(input.threadId);
+        return existing;
+      }
       const thread = DriverThread.attach(
         {
           dispatcher: options.dispatcher,
@@ -202,16 +214,20 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
         worktreePath: input.worktreePath,
         branch: input.branch,
         builderId: input.builderId,
-        // `null` means "this engine is not following a turn as of this instant",
-        // and no caller may read it as "the thread is idle".
+        // `null` means "this engine is not following a turn", and no caller may read
+        // it as "the thread is idle".
         //
-        // It used to mean less than that. Until issue #241 this process held NO
-        // subscription, so the field was not merely unknown at adoption — it could
-        // never become known, because nothing would ever observe the transition. The
-        // `ensure` below is what changes that: once the subscription has attached and
-        // replayed, `observe` writes the server's own `activeTurnId` onto this record
-        // through the tracker. The window where this is stale is now the replay, not
-        // the life of the process.
+        // ADOPTION DOES NOT MAKE IT KNOWABLE, and an earlier version of this comment
+        // claimed the subscription would. It does not: only `track` writes this field,
+        // and `track` runs from `create` and `startTurn` — the paths that register a
+        // waiter with the tracker. A turn started on this thread by a PREVIOUS process
+        // is observed by the tracker (it advances `lastSequence` and `activeThreads`)
+        // and still leaves this field null, because no waiter here is following it.
+        //
+        // What the subscription changes is the turns this process starts from now on:
+        // before it, those could never settle either. Reading the server's current
+        // turn onto an adopted record would be a further change, and it is not made
+        // here rather than being implied.
         activeTurnId: null,
         merged: false,
         launched: true,
@@ -290,17 +306,25 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
       const thread = threads.get(threadId);
       if (!thread) throw new Error(unknownThread(threadId));
       const record = records.get(threadId);
-      // Cheap when the subscription is already up, and the only guard against
-      // dispatching onto a thread whose stream dropped and has not come back. A turn
-      // started into an unwatched thread is a turn that never settles, which is the
-      // failure this whole change exists to remove — reintroducing it on the second
-      // turn would be a narrower version of the same bug.
+      // Cheap when the subscription is already up, and what it guards is the COLD
+      // case: a thread this process has adopted but never successfully subscribed to.
+      //
+      // It is deliberately NOT a guard against a stream that attached once and later
+      // dropped, and an earlier version of this comment claimed it was. `isAttached`
+      // is monotonic, so it could not be. The safety argument for a dropped stream is
+      // a different one and it does not need a wait: every resubscription after the
+      // first sends `afterSequence`, so events emitted during the drop are REPLAYED
+      // rather than compacted into a snapshot. Only the first subscription can lose
+      // history, which is exactly the case this waits for.
       //
       // This runs on Tower's mailbox drain, which awaits agents sequentially — so a
       // new await here is the thing `mailbox-wiring`'s "NOTHING HERE AWAITS A CONNECT"
-      // comment warns about. It is bounded by the same 30s the `beginTurn` on the next
-      // line is already bounded by (`T3Client.requestTimeoutMs`), on the same socket,
-      // so it does not lengthen that path's worst case. See the budget's own note.
+      // comment warns about. It DOES lengthen that path's worst case, and an earlier
+      // version of this comment claimed it did not: a thread whose subscription never
+      // attaches now costs 30s here plus 30s on the `beginTurn` below, where it used to
+      // cost 30s. Both bounds are `T3Client.requestTimeoutMs` on the same socket, and
+      // doubling a bound that is already reached only when the server has stopped
+      // answering is the price of not dispatching turns that cannot settle.
       await options.subscriptions?.ensure(threadId);
       const started = await thread.beginTurn(text, ref);
       if (record) track(record, started);

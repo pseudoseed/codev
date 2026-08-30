@@ -172,6 +172,29 @@ describe('createThreadAdoptionSweeper (issue #241)', () => {
     expect(maxConcurrent).toBe(1);
   });
 
+  /**
+   * The window this closes is the one the sweeper exists for. Setting only the
+   * interval leaves every unmessaged thread unsubscribed for a full sweep after Tower
+   * boots — and a Tower restart is exactly the event that makes resuming from a
+   * persisted cursor matter. `T3codeSessionCache.start` sweeps immediately for the
+   * same reason.
+   */
+  it('start sweeps immediately rather than waiting out the first interval', async () => {
+    const attached: string[] = [];
+    const sweeper = createThreadAdoptionSweeper({
+      workspaces: () => ['/w/a'],
+      threads: () => [thread('t1')],
+      isReady: () => true,
+      engineFor: () => ({ async attach(input) { attached.push(input.threadId); } }),
+      log: () => {},
+      intervalMs: 60_000,
+    });
+    sweeper.start();
+    // No timer has fired and none will for a minute.
+    await vi.waitFor(() => expect(attached).toEqual(['t1']));
+    sweeper.stop();
+  });
+
   it('start and stop own exactly one interval', async () => {
     vi.useFakeTimers();
     try {
@@ -185,14 +208,15 @@ describe('createThreadAdoptionSweeper (issue #241)', () => {
         intervalMs: 100,
       });
       sweeper.start();
-      // A second start must not add a second interval.
+      // A second start must not add a second interval, and must not sweep again.
       sweeper.start();
       await vi.advanceTimersByTimeAsync(100);
-      expect(attached).toEqual(['t1']);
+      // The immediate sweep plus the one the timer fired.
+      expect(attached).toEqual(['t1', 't1']);
 
       sweeper.stop();
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(attached).toEqual(['t1']);
+      expect(attached).toEqual(['t1', 't1']);
     } finally {
       vi.useRealTimers();
     }
