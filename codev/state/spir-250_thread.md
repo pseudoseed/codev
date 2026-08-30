@@ -319,3 +319,37 @@ writing into that clone by accident, so it is worth checking rather than intendi
 The word "fork" is kept elsewhere in the plan and in `pin.json`'s field names, describing the git
 relationship rather than GitHub's feature. Noted in the plan so it does not read as a
 contradiction.
+
+## plan-approval APPROVED — entering implement, phase 1
+
+Architect approved and recorded the gate on 2026-08-30.
+
+### Standing instruction for every phase, from the architect
+
+**After each phase, answer: "what can a human see or do now that they could not before?"**
+
+This is how spec 146 failed — thirteen phases of correct plumbing landed and nobody could see
+anything, which is the reason this spec exists at all. When the honest answer is "nothing yet,
+this is infrastructure", **say that in the phase report** rather than letting the phase count
+stand in for progress.
+
+**Phase 7 is the first phase that puts anything on a screen.** Phases 1-6 are all infrastructure:
+
+| Phase | Visible to a human? |
+|---|---|
+| 1 vendoring harness | No — tooling only |
+| 2 hierarchy columns | No — schema only |
+| 3 write-time integrity | No — refusals on an API nobody calls yet |
+| 4 gate block + scope | No — state nothing renders yet |
+| 5 regenerated contract | No — vendored types |
+| 6 porch-driver + codev-agent publish | Barely — data now exists in t3code's DB, still unrendered |
+| **7 sidebar** | **Yes — the tree appears in t3code's web app** |
+
+**If phases 1-6 start sprawling, tell the architect and reorder rather than discovering it at
+phase 7.** That is an explicit instruction, not a suggestion.
+
+### Where things stand entering phase 1
+
+Nothing has been built yet. No repo created, no code written. Phase 1's first act is
+`gh repo create pseudoseed/t3code --private` — never `gh repo fork`, see the plan's executive
+summary for why the two are not interchangeable.
