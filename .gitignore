@@ -86,3 +86,6 @@ opencode.json
 
 # Codev (added by codev update 2026-08-22)
 codev/.update-hashes.json
+
+# Consult review output, read by the human
+.consult-runs/
