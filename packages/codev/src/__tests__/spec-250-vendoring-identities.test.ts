@@ -18,7 +18,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1084,6 +1086,87 @@ describe('spec 250: an upstream-only caller does not depend on the fork', () => 
     } finally {
       rmSync(scratch, { recursive: true, force: true });
       rmSync(upstream.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------- criterion 8b
+
+/**
+ * Spec 250 criterion 8b, exercised rather than argued.
+ *
+ * Two review lanes refused an in-process simulation on an in-memory database as
+ * evidence for "the server is killed partway through applying the columns and the
+ * resulting database still opens against the PRE-FORK server binary" — correctly:
+ * no kill, no file, no pre-fork binary is not that criterion, it is a different
+ * and easier one wearing its name.
+ *
+ * `tools/t3-fork/criterion-8b.mjs` runs the real sequence against the pinned
+ * t3@0.0.36 server and records what happened. The assertions here are on that
+ * recording, and they refuse evidence older than the code it describes — the same
+ * shape spec 146 uses for its cold-start evidence, and for the same reason.
+ */
+describe('spec 250: criterion 8b, the kill test', () => {
+  const evidencePath = join(repoRoot, 'codev', 'research', '250-criterion-8b-evidence.json');
+  const evidence = readJson(evidencePath);
+
+  it('ran against the pinned pre-fork server, not a stand-in', () => {
+    expect(evidence.preForkCliVersion).toBe(pin.cliVersion);
+    expect(evidence.upstreamBase).toBe(pin.upstreamBase);
+  });
+
+  it('started from a database the pre-fork server itself created and migrated', () => {
+    expect(evidence.steps.preForkServerCreatedDatabase).toBe(true);
+    expect(
+      evidence.steps.columnsBeforeGuard,
+      'if the database already had Codev columns the run proves nothing',
+    ).toEqual([]);
+  });
+
+  it('killed a real process and really left the schema half applied', () => {
+    // SIGKILL specifically: no handler, no cleanup, no chance to finish. A clean
+    // exit would make the half-applied state something the script chose.
+    expect(evidence.steps.childKilledBySignal).toBe('SIGKILL');
+    expect(evidence.steps.halfApplied).toBe(true);
+    expect(evidence.steps.columnsAfterKill).toHaveLength(1);
+  });
+
+  it('THE CRITERION: the pre-fork binary opens the half-applied database', () => {
+    expect(evidence.steps.preForkServerOpensHalfApplied).toBe(true);
+  });
+
+  it('the guard then adds the missing column and only that one', () => {
+    expect(evidence.steps.guardResume.added).toEqual(['codev_parent_thread_id']);
+    expect(evidence.steps.guardResume.present).toEqual(['codev_role']);
+    expect(evidence.steps.guardAddedOnlyTheMissingColumn).toBe(true);
+    expect(evidence.steps.columnsAfterResume).toHaveLength(2);
+  });
+
+  it('and the pre-fork binary still opens it once fully applied', () => {
+    expect(evidence.steps.preForkServerOpensFullyApplied).toBe(true);
+    expect(evidence.passed).toBe(true);
+  });
+
+  /**
+   * Recorded evidence outlives the code it describes. Nothing stops the guard or
+   * the driver changing while this stays green, so this refuses evidence older
+   * than either.
+   */
+  it('is not older than the code it is evidence for', () => {
+    const evidenceAge = statSync(evidencePath).mtimeMs;
+    const sources = [
+      join(repoRoot, 'tools', 't3-fork', 'criterion-8b.mjs'),
+      join(repoRoot, 'tools', 't3-fork', 'crash-apply-child.mjs'),
+      join(repoRoot, 'tools', 't3-server', 't3-server.mjs'),
+    ];
+    for (const source of sources) {
+      expect(
+        evidenceAge,
+        `${source} changed after the criterion 8b evidence was recorded — regenerate it with\n` +
+          `  export T3_NODE=/absolute/path/to/node T3_HARNESS_PORT=<free port>\n` +
+          `  node tools/t3-fork/criterion-8b.mjs > codev/research/250-criterion-8b-evidence.json\n` +
+          `rather than trusting a stale result. The redirection is part of the command.`,
+      ).toBeGreaterThanOrEqual(statSync(source).mtimeMs - 1000);
     }
   });
 });

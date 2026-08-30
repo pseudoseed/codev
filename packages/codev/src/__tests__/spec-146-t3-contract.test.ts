@@ -76,12 +76,36 @@ const forkHead = (() => {
 })();
 const FORK_AT_CONTRACT =
   forkHead !== null && forkHead === readJson(join(t3Root, 'pin.json')).commit;
+/**
+ * WHICH way the fork differs, not merely that it does.
+ *
+ * "Ahead" is the expected state until phase 5; behind or unrelated is a real
+ * problem someone has to look at. Reporting all three as "ahead" would let a
+ * genuinely broken checkout hide inside the tolerated case for three phases.
+ */
+const forkRelation = (() => {
+  if (forkHead === null) return null;
+  const contract = readJson(join(t3Root, 'pin.json')).commit;
+  if (forkHead === contract) return 'at';
+  const ancestor = (a: string, b: string) =>
+    spawnSync('git', ['-C', T3_FORK_ROOT, 'merge-base', '--is-ancestor', a, b]).status === 0;
+  if (ancestor(contract, forkHead)) return 'ahead';
+  if (ancestor(forkHead, contract)) return 'behind';
+  return 'unrelated';
+})();
 const forkSkipReason = !HAS_FORK_CHECKOUT
   ? `no fork checkout at ${T3_FORK_ROOT || '$T3CODE_FORK_ROOT (unset)'}`
   : forkHead === null
     ? `could not read HEAD of ${T3_FORK_ROOT}`
-    : `fork is at ${forkHead.slice(0, 12)}, ahead of contract commit ` +
-      `${readJson(join(t3Root, 'pin.json')).commit.slice(0, 12)} (expected until phase 5 regenerates)`;
+    : forkRelation === 'ahead'
+      ? `fork is at ${forkHead.slice(0, 12)}, ahead of contract commit ` +
+        `${readJson(join(t3Root, 'pin.json')).commit.slice(0, 12)} (expected until phase 5 regenerates)`
+      : forkRelation === 'behind'
+        ? `fork is at ${forkHead.slice(0, 12)}, BEHIND contract commit ` +
+          `${readJson(join(t3Root, 'pin.json')).commit.slice(0, 12)} — this is not the expected ` +
+          `pre-phase-5 state and wants looking at`
+        : `fork is at ${forkHead.slice(0, 12)}, UNRELATED to contract commit ` +
+          `${readJson(join(t3Root, 'pin.json')).commit.slice(0, 12)} — no ancestry either way`;
 
 describe('spec 146: packages/types stays dependency-free', () => {
   it('declares no runtime dependencies', () => {

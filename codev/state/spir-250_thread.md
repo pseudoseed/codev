@@ -550,3 +550,29 @@ Not skipped and not modified — touching upstream's test would be gratuitous di
   failure above.
 - Codev repo: build green, **7276 passed, 55 skipped, 0 failed**, plus 180 in the v2 suite.
 - 66 tests in the spec 250 suite; 17 new fork tests across three new files.
+
+### Phase 2, review round 1
+
+claude REQUEST_CHANGES, opencode COMMENT. Both named the same two substitutions, independently.
+
+**"Upstream migration still runs after the guard" was a raw `ALTER TABLE`.** That proves SQLite
+accepts a column; it says nothing about whether the watermark let the *migrator* run one, which is
+the whole question migration 900 got wrong. Now goes through `runMigrations({toMigrationInclusive:
+41})` → guard → `runMigrations()`, upstream's own idiom.
+
+**Criterion 8b was simulated.** "Killed partway through, still opens against the pre-fork server
+binary" was tested in-process on an in-memory DB — no kill, no file, no pre-fork binary. Now real:
+`tools/t3-fork/criterion-8b.mjs` starts the pinned t3@0.0.36, SIGKILLs a child after the first
+ALTER, reopens the half-applied file with that same pre-fork binary, resumes with the fork's real
+guard, and reopens again. Evidence at `codev/research/250-criterion-8b-evidence.json`, asserted by
+7 tests including a not-older-than-source guard.
+
+**This needed a new harness verb.** `restart` refuses when nothing is running; `start` wipes the
+data dir. Neither could open a database the run did not just create, so criterion 8b was
+*unprovable with the tools that existed* and nothing said so. Added `start --keep-data`.
+
+Third finding, also fixed: `forkSkipReason` reported "ahead of contract commit" for any non-matching
+fork head. Behind and unrelated now say so — otherwise a genuinely broken checkout hides inside the
+tolerated case for three phases.
+
+Fork commit `992b781f4314`. Codev repo: build green, 7283 passed, 55 skipped, 0 failed.

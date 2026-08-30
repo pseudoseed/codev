@@ -146,6 +146,46 @@ A skip nobody can see the end of is how a suite quietly stops existing, so a tes
 is the contract commit rather than mere presence, and that it reopens by itself once phase 5 moves
 the pin.
 
+### Two acceptance criteria were tested by substitution, and review caught both
+
+Both lanes named the same two, independently, and both were right.
+
+**"A newly introduced upstream migration still runs after the guard"** was tested with a raw
+`ALTER TABLE pretend_upstream_column`. That proves SQLite accepts another column. It says nothing
+about whether the watermark let the *migrator* execute one — which is the entire question migration
+900 got wrong, and therefore the entire point of the test. The fix runs
+`runMigrations({ toMigrationInclusive: 41 })` → guard → `runMigrations()` and asserts 42 actually
+executed and its column exists, which is upstream's own idiom.
+
+The lesson is narrower than "test the real thing": the substitution was *adjacent* to the
+mechanism and produced identical observable state. A column appeared either way. Only the path it
+appeared by was in question, and that is exactly what the assertion had dropped.
+
+**Criterion 8b** — "the server is killed partway through applying the columns and the resulting
+database still opens against the pre-fork server binary" — was an in-process simulation on an
+in-memory database. No kill, no file, no pre-fork binary. Three of the criterion's four nouns were
+missing and the remaining one still passed.
+
+It is now exercised, in `tools/t3-fork/criterion-8b.mjs`, recorded to
+`codev/research/250-criterion-8b-evidence.json`:
+
+| Step | Result |
+|---|---|
+| Pinned `t3@0.0.36` creates and migrates a real database | opened and answered |
+| Codev columns present before the run | none |
+| Child SIGKILLed after the first `ALTER` | `SIGKILL`, `codev_role` alone on disk |
+| **Pinned pre-fork server opens the half-applied file** | **opened and answered** |
+| Fork's real guard resumes | added `codev_parent_thread_id`, found `codev_role` present |
+| Pre-fork server opens the fully applied file | opened and answered |
+
+This needed a new harness verb. `restart` is stop-then-start and refuses when nothing is running;
+`start` wipes the data dir. Neither can open a database the run did not just create, so a criterion
+about opening an existing file could not be expressed at all. `start --keep-data` closes that gap.
+
+That absence is itself worth recording: the criterion had been unprovable with the tools available
+for as long as it had existed, and nothing said so. A criterion nobody can run reads exactly like a
+criterion that passes.
+
 ## Flaky Tests
 
 `apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint` fails in the fork.

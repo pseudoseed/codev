@@ -16,6 +16,7 @@
  *   verify    assert both checkouts, and any running server, match pin.json
  *   verify-upstream / verify-fork   assert one identity only
  *   start     start a server from the pinned checkout on a private data dir
+ *             (--keep-data opens an existing one instead of wiping it)
  *   restart   stop and start again, KEEPING the data dir
  *   stop      stop it
  *   status    report what is running and whether it matches the pin
@@ -951,13 +952,19 @@ switch (command) {
   // stays both, which is what the phase's acceptance criterion asserts.
   case 'verify-upstream': verifyUpstream(); break;
   case 'verify-fork': verifyFork(); break;
-  case 'start': start(); break;
+  // `--keep-data` starts on an EXISTING data dir without wiping it. `restart`
+  // cannot serve this: it is stop-then-start and refuses when nothing is running,
+  // which is exactly the case spec 250's criterion 8b needs — open a database this
+  // process did not just create, with the pinned pre-fork binary. `start` alone
+  // wipes the data dir, and a criterion about opening an existing file cannot be
+  // tested by a verb that deletes it first.
+  case 'start': start({ keepData: process.argv.includes('--keep-data') }); break;
   case 'restart': restart(); break;
   case 'ready': await ready(); break;
   case 'stop': stop(); break;
   case 'status': status(); break;
   case 'runtime': console.log(JSON.stringify(serverRuntime(), null, 2)); break;
   default:
-    console.error('usage: t3-server.mjs <acquire|verify|verify-upstream|verify-fork|start|restart|ready|stop|status|runtime>');
+    console.error('usage: t3-server.mjs <acquire|verify|verify-upstream|verify-fork|start [--keep-data]|restart|ready|stop|status|runtime>');
     process.exit(UNDETERMINED);
 }
