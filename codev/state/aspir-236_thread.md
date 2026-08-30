@@ -1162,3 +1162,68 @@ that quietly rewrites itself is worth less than one that records when it was wro
 
 `apps/client/README.md` also still said an `afx pair` command "does not exist yet and is tracked
 separately" — shipped in this PR, in this project.
+
+## Round 8 — absent read as permitted, for the third and fourth time
+
+### The failure refreshed the freshness
+
+`settle()` stamped the entry's drop time on EVERY subscription end. The maintainer retries a
+failed subscription every sweep, so an entry observed once, whose subscription then failed
+permanently, had its drop time reset twelve times a minute forever. The content never aged past
+the freshness window, never became `stale`, never got discarded.
+
+That is the staleness guarantee this cache exists to provide, defeated by the retry path — and it
+also removed the bound a reviewer had noted in round 7 (t3-client's 300s idle timeout), because a
+loop that re-stamps never reaches any timeout at all.
+
+The age is measured from when watching **stopped**, and it stops once: only a true-to-false
+transition stamps now.
+
+### `mayRead` still authorised on an absent machine
+
+`caller.machine === undefined || operation.machine === caller.machine` — so no machine passed. The
+docblock I wrote in round 6 said this helper binds session and machine independently, and the
+reason I gave for putting the check there was that a rule holding only because its caller checks
+first breaks when a second caller appears. **The boundary I documented was not the boundary I
+implemented.**
+
+Both lanes found this independently, same line.
+
+### Third and fourth instances of one shape
+
+The architect named it: absent is being read as permitted.
+
+1. Round 7 — `identityMismatch` rejected only when the fields were present.
+2. Round 7 — a missing receipt was accepted.
+3. Round 8 — a missing machine authorised `mayRead`.
+
+Then the grep I was asked to do, on my own new code, found the fourth before a lane did:
+`recognize(presentation, machine?)` took the machine as **optional**, so a caller that omitted it
+got no binding and no error — the same defect one call further out from the one just fixed.
+
+Made it required. The compiler immediately produced three errors, which is the whole argument for
+the change: `AgentAuthOutcome.machine` and `verify().machine` are both typed `string | undefined`,
+so the optional parameter had been silently accepting exactly the values that cannot be bound. An
+authorised credential naming no machine is now refused rather than admitted, and the two dispatch
+sites pass a sentinel that can never match a stored name — refusing, where `undefined` used to
+skip the check.
+
+**A sentinel rather than a conditional, deliberately.** The conditional is the shape that keeps
+producing these.
+
+### `afx pair` was invisible to every agent
+
+CLAUDE.md tells every agent to check the skill rather than guess the command. `afx pair` was in
+`146-remote-access-runbook.md` and `apps/client/README.md` — both places a human looks, neither
+place an agent does. #228 named the missing operator pairing entry point as the reason criterion
+9b was unreachable; leaving it out of the skill means the next builder concludes it does not
+exist, exactly as I did when I filed the gap.
+
+The architect named the skill. Grepping for files that enumerate afx subcommands found **six**:
+`.claude` and `.codex` skills in both trees, plus `resources/commands/agent-farm.md` in both. All
+six now carry it.
+
+And I checked the entry against the CLI rather than my own memory, which corrected two flags:
+`--authority` is optional with a default, and `--ttl-minutes` is 10 by default with a max of 60.
+The skill states it is canonical for commands and flags, and the runbook for the procedure, so a
+future disagreement has a stated winner.

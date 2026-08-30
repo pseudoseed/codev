@@ -311,7 +311,7 @@ export interface HumanSessionRecognizer {
    *   the session must be the one opened from THAT machine — the two credentials
    *   are compared against each other rather than merely both being valid.
    */
-  recognize(presentation: string | undefined, machine?: string): {
+  recognize(presentation: string | undefined, machine: string): {
     readonly paired: boolean;
     readonly sessionId?: string;
     /** What the token that paired this session claimed. Recorded, not verified. */
@@ -464,6 +464,25 @@ export function authenticateAgentRequest(
    * HERE, at the single choke point, rather than in each handler: a route that
    * forgot would be a hole with no visible cause.
    */
+  /*
+   * AN AUTHORISED CREDENTIAL THAT NAMES NO MACHINE CANNOT BIND A SESSION.
+   *
+   * `verify` types `machine` as optional, and making the argument below required
+   * is what surfaced that: the previous signature accepted `undefined` and
+   * silently skipped the binding for exactly the record that could not be bound.
+   * Refused rather than admitted — a credential with no machine name is a broken
+   * record, and "I cannot tell which device this is" is not "it is the right
+   * one".
+   */
+  if (machine.machine === undefined) {
+    return {
+      allowed: false,
+      route,
+      status: 401,
+      signal: MACHINE_SIGNAL.MACHINE_CREDENTIAL_MALFORMED,
+      message: 'that credential names no machine, so no session can be bound to it',
+    };
+  }
   const recognition = context.humanSessions.recognize(
     header(req, HUMAN_SESSION_HEADER),
     machine.machine,

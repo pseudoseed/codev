@@ -195,6 +195,43 @@ with an explanation when identity cannot be determined — it never guesses and
 never defaults to `main` (issue #1094). Builders also get an `architect:`
 field naming their spawning architect when recorded. Works without Tower.
 
+## afx pair
+
+Pairing tokens and machine credentials for the codev client — the operator entry
+point to the human approval path (spec 236).
+
+```bash
+afx pair issue --purpose client-session --authority "chris at laptop"
+afx pair issue --purpose machine-credential --authority "ipad setup"
+afx pair issue --purpose client-session --ttl-minutes 30 --authority "…"
+afx pair list                   # Outstanding tokens and paired machines, revoked ones marked
+afx pair revoke <machine>       # Withdraw a machine's credential AND its approval capabilities
+```
+
+| Flag | Meaning |
+|------|---------|
+| `--purpose <p>` | `client-session` or `machine-credential`. **Required, no default** — a token is bound to one ceremony, so a wrong guess fails at redemption, in another process, against another route. |
+| `--authority <text>` | Recorded verbatim into the session and, through it, into `status.yaml`. **Optional** — defaults to naming this command and the invoking account. Never interpreted, and it does not assert a human was present, because nothing here can verify that. |
+| `--ttl-minutes <n>` | How long the token stays redeemable. **Default 10, max 60.** |
+
+**`--purpose` picks the ceremony, and they are not interchangeable.**
+`machine-credential` is redeemed at `POST /pairing/redeem` to enrol a device;
+`client-session` is spent at `POST /human-sessions` to open the session an
+approval costs.
+
+**`afx pair revoke` works holding nothing, with Tower stopped.** That is the
+point of the command. Over HTTP, revocation is `human-session` — which includes
+`machine-credential` — so the operator who wants to withdraw a device is the one
+who cannot. The CLI writes both stores directly: the machine credential and that
+device's approval capabilities, because revoking only the first leaves a
+withdrawn device still able to present a live capability to `porch approve`.
+
+**This skill is canonical for the commands and flags.**
+`codev/resources/146-remote-access-runbook.md` covers the same ground for a
+human, with the surrounding procedure (TLS posture, what to do when a device is
+lost) — read it for the *procedure*, read this for the *command*. If the two
+disagree about a flag, this file is the one checked against the CLI.
+
 ## afx tower
 
 ```bash

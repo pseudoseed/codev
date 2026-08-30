@@ -299,6 +299,69 @@ before the retry lands, so the retry legitimately starts a new one and the test 
 recovery rather than a claim of one: the outcome observed is the ORIGINAL operation's, and
 exactly one operation exists for the episode, so the checks did not run twice.
 
+## Absent read as permitted, four times
+
+The single most repeated defect in this project, and it took four instances before it was named as
+one shape rather than four bugs:
+
+1. `identityMismatch` rejected an operation's project and gate **only when they were present**, so
+   a body that omitted them settled the gate.
+2. A 202 **without a receipt** was accepted, and then polled on a footing that cannot survive the
+   restart the receipt exists for.
+3. `mayRead` authorised on `caller.machine === undefined || …`, so a caller that named no machine
+   passed the machine check.
+4. `recognize(presentation, machine?)` took the machine as **optional**, so a caller that omitted
+   it got no binding and no error — the same defect as (3), one call further out.
+
+Each was written as a considered check. Each was written by someone (me) who had just spent a
+round arguing that unknowns must not be reported as answers. The inversion is what makes it hard
+to see: everywhere else this project removed *"I could not tell" spelled as "no"*, and here
+a silence was read as a **yes**, which does not feel like the same mistake while you are making
+it.
+
+**The fourth was found by grep, not by a lane** — the architect asked for a sweep of my own new
+code for `=== undefined ||` and `if (x) check(x)` shapes on any authorisation or identity path,
+and it turned one up immediately. That is the transferable part: once a defect has appeared three
+times it is cheaper to search for the shape than to wait for the fourth report.
+
+**The fix that generalises is a type, not a condition.** Making `machine` required produced three
+compiler errors on the spot, because `AgentAuthOutcome.machine` and `verify().machine` are both
+`string | undefined` — the optional parameter had been silently accepting exactly the values that
+cannot be bound. Where a value genuinely may be missing, the two dispatch sites now pass a
+sentinel that can never match a stored name, so absence **refuses** instead of skipping the check.
+A conditional would have been the fifth instance.
+
+## A failing retry kept stale content fresh
+
+`settle()` stamped an entry's drop time on every subscription end, and the maintainer retries a
+failed subscription every sweep. So an entry observed once, whose subscription then failed
+permanently, had its drop time reset twelve times a minute — indefinitely. It never aged past the
+freshness window, never became `stale`, and was never discarded.
+
+The failure refreshed the freshness. It also removed the last bound: a reviewer had noted that
+`available` was ultimately limited by t3-client's 300s stream idle timeout, and a retry loop that
+re-stamps never reaches any timeout.
+
+Measured from when watching **stopped**, and it stops once — only a true-to-false transition
+stamps.
+
+## The command no agent could find
+
+`afx pair` is the operator entry point this project existed to build; #228 named its absence as
+the reason criterion 9b was unreachable in production. It was documented in the remote-access
+runbook and the client README — both places a human looks.
+
+`CLAUDE.md` instructs every agent to check the skill rather than guess a command. So the command
+existed and was, to every agent in the system, invisible. The next builder needing it would have
+concluded it does not exist — which is exactly what happened when this project's own gap was
+filed.
+
+Grepping for files that enumerate afx subcommands found **six**, not the one named: the `.claude`
+and `.codex` skills in both trees, and `resources/commands/agent-farm.md` in both. Documentation
+in this repo is mirrored in more places than it looks, and the number is not guessable.
+
+Checking the new entry against the CLI rather than against memory corrected two flags in it.
+
 ## Absent is not agreement
 
 The client-side gate check added in round 5 was written as *reject if present and different*. A
@@ -527,6 +590,10 @@ One pre-existing test timed out once on the round-5 full run —
 `src/terminal/__tests__/session-manager.test.ts > "no stderr tail logged for file-based stderr
 (Bugfix #324)"`. It passes running its file alone (91/91), it is `it.skipIf(!!process.env.CI)` so
 CI never runs it, and it touches the PTY session manager, which this project does not.
+
+It then recurred on the round-8 run — a different head, 40+ other files changed, an identical
+30211ms timeout at the same line, and 91/91 alone again immediately after. Two runs differing by
+most of a branch and producing the same signature points at total suite load, not at content.
 
 **Recorded on issue #200, not here.** That issue is exactly this failure — the test runs out a
 poll and then asserts, so a timeout and a product failure are spelled the same way — and it

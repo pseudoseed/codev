@@ -687,6 +687,70 @@ Removes entries for projects that no longer exist.
 
 ---
 
+### afx pair
+
+Issue, list and revoke the pairing tokens and machine credentials the codev
+client uses. This is the operator entry point to the human approval path
+(spec 236); without it, the approval gate is reachable only from a test.
+
+#### afx pair issue
+
+Mint a pairing token and print it once. It is never logged and never passed in
+argv.
+
+```bash
+afx pair issue --purpose <machine-credential|client-session> [options]
+```
+
+**Options**
+
+- `--purpose <purpose>` — **required, no default.** `machine-credential` enrols a
+  device (redeemed at `POST /pairing/redeem`); `client-session` opens the session
+  an approval costs (spent at `POST /human-sessions`). A token is refused at the
+  other ceremony, so a wrong guess fails later and elsewhere — which is why there
+  is no default to guess with.
+- `--authority <text>` — what authorized this mint, recorded verbatim and never
+  interpreted. Optional; defaults to naming this command and the invoking
+  account. It does **not** assert that a human was present: anything that can
+  write the pairing store can mint a token.
+- `--ttl-minutes <minutes>` — how long the token stays redeemable. Default 10,
+  max 60.
+
+Run it in a terminal you are looking at. Do not redirect it to a file and do not
+pass it as an argument to anything — argv is world-readable through `ps` and
+lands in shell history.
+
+#### afx pair list
+
+Show outstanding tokens and paired machines. No secrets are printed; revoked
+machines are shown as revoked rather than omitted, because "withdrawn" and "never
+paired" are different facts.
+
+```bash
+afx pair list
+```
+
+#### afx pair revoke
+
+Withdraw a machine's credential **and** its approval capabilities.
+
+```bash
+afx pair revoke <machine>
+```
+
+Both stores, in one command: revoking only the credential leaves a withdrawn
+device still able to present a live approval capability to `porch approve`.
+
+**It works holding nothing, with Tower stopped**, and that is the point. Over
+HTTP the equivalent route is `human-session`, which includes
+`machine-credential` — so the operator who wants to withdraw a device is the one
+who cannot. The trade this makes is recorded in
+`codev/resources/146-approval-threat-model.md` under *Who can revoke*.
+
+Revocation is a tombstone: that machine's every request then fails closed, no
+other machine is touched, and the old secret can never be revived. Re-pair with
+`afx pair issue` if it was a mistake.
+
 ### afx tower
 
 Manage the cross-project tower dashboard. Tower shows all agent-farm instances across projects and provides cloud connectivity via codevos.ai.

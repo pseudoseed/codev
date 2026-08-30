@@ -630,14 +630,29 @@ export class T3codeSessionCache {
       this.#subscribed.delete(subscriptionKey);
       const entry = this.#caches.get(key)?.threads.get(threadId);
       if (!entry) return;
-      // Stamped at the moment watching stopped, so the age below is measured from
-      // when the answer stopped being observed rather than from when it was last
-      // asked for.
+      /*
+       * STAMPED ON THE TRUE-TO-FALSE TRANSITION ONLY, and that word is the fix.
+       *
+       * This stamped on EVERY subscription end. The maintainer retries a failed
+       * subscription every five seconds, and each failed attempt ends — so an
+       * entry that was observed once and whose subscription then failed
+       * permanently had its drop time reset twelve times a minute, forever. The
+       * content never aged past the freshness window, never became `stale`, and
+       * was never discarded: THE FAILURE REFRESHED THE FRESHNESS.
+       *
+       * It also removed the only remaining bound on that content. A reviewer had
+       * noted that `available` was ultimately limited by the t3-client stream
+       * idle timeout; a retry loop that re-stamps makes even that unreachable.
+       *
+       * So: the age is measured from when watching STOPPED, and it stops once.
+       */
+      const wasWatching = entry.watching;
       entry.watching = false;
-      // Only if something WAS observed. A subscription that ended without ever
-      // delivering a frame leaves nothing to age, and stamping a time here would
-      // turn "never seen" into "seen just now, then lost".
-      if (entry.session !== undefined || entry.observedAt !== undefined) {
+      // Only on the transition, and only if something WAS observed. A
+      // subscription that ended without ever delivering a frame leaves nothing to
+      // age, and stamping here would turn "never seen" into "seen just now, then
+      // lost".
+      if (wasWatching && (entry.session !== undefined || entry.observedAt !== undefined)) {
         entry.observedAt = this.#now();
       }
       this.options.log('INFO', `t3code subscription for ${threadId} ended: ${reason}`);

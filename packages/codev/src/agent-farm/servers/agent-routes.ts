@@ -127,6 +127,20 @@ function verifier(credential: string): Buffer {
  * The host retains only a verifier, sessions die on codev-agent restart, expire
  * after at most eight hours, and also expire after thirty idle minutes.
  */
+/**
+ * The machine name used when an authenticated outcome carries none.
+ *
+ * `AgentAuthOutcome.machine` is typed optional, and a route reached with no
+ * machine name cannot bind a session to a device. This value can never equal a
+ * stored machine — sessions record the name from a verified credential, and a
+ * credential with no name is refused at authentication — so passing it REFUSES,
+ * where passing `undefined` used to skip the check entirely.
+ *
+ * A sentinel rather than a conditional, because the conditional is the shape
+ * that keeps producing fail-opens here: absent read as permitted.
+ */
+const UNNAMED_MACHINE = '\u0000unnamed-machine';
+
 export class HumanPairedSessionRegistry {
   readonly #sessions = new Map<string, StoredHumanSession>();
   /** sessionId → original expiresAt. Dropped once that time passes. */
@@ -166,14 +180,25 @@ export class HumanPairedSessionRegistry {
   }
 
   /**
-   * Recognise a presented session, and — when a machine is given — require that
-   * it is the machine the session was opened from.
+   * Recognise a presented session, and require that it is the machine the session
+   * was opened from.
    *
    * THE MACHINE ARGUMENT IS THE WHOLE POINT. Without it the caller has verified
    * two credentials that were never compared with each other, which is not the
    * same as having verified one device.
+   *
+   * REQUIRED, NOT OPTIONAL, AND THAT IS THE FOURTH TIME. It was `machine?`, so a
+   * caller that omitted it got no binding at all and no error — the same
+   * absent-reads-as-permitted shape as the identity field checked only when
+   * present, the receipt accepted when missing, and the machine that authorised
+   * `mayRead` by being undefined. Every production caller passes one; making it
+   * required is what stops the fifth caller from being the exception, and it
+   * fails at compile time rather than at a boundary nobody is watching.
+   *
+   * A caller that genuinely has no machine has not authenticated one, and cannot
+   * be answered honestly here — so there is no value to pass and no call to make.
    */
-  recognize(presentation: string | undefined, machine?: string): HumanSessionRecognition {
+  recognize(presentation: string | undefined, machine: string): HumanSessionRecognition {
     if (presentation === undefined || presentation.length === 0) return { paired: false, reason: 'MISSING' };
     const separator = presentation.indexOf('.');
     if (separator <= 0 || separator === presentation.length - 1) return { paired: false, reason: 'MALFORMED' };
@@ -208,9 +233,7 @@ export class HumanPairedSessionRegistry {
      * "it belongs to this one", and sessions are memory-only, so the entire
      * population of unbindable sessions dies with the next restart.
      */
-    if (machine !== undefined && stored.machine !== machine) {
-      return { paired: false, reason: 'FOREIGN_MACHINE' };
-    }
+    if (stored.machine !== machine) return { paired: false, reason: 'FOREIGN_MACHINE' };
     stored.lastSeenAt = now;
     return {
       paired: true,
@@ -1655,9 +1678,12 @@ export function handleAgentRoute(
        * one this answer had already denied.
        */
       const header = req.headers[HUMAN_SESSION_HEADER];
+      // `outcome.machine` is typed optional; on a machine-credential route it is
+      // set. Falling back to a name no session can carry refuses rather than
+      // skipping the binding — the absence must not become permission.
       const recognition = context.humanSessions.recognize(
         Array.isArray(header) ? header[0] : header,
-        outcome.machine,
+        outcome.machine ?? UNNAMED_MACHINE,
       );
       writeJson(res, recognition.paired ? 200 : recognition.reason === 'FOREIGN_MACHINE' ? 403 : 401, {
         signal: recognition.paired
@@ -1747,7 +1773,7 @@ export function handleAgentRoute(
       const presented = req.headers[HUMAN_SESSION_HEADER];
       const recognition = context.humanSessions.recognize(
         Array.isArray(presented) ? presented[0] : presented,
-        outcome.machine,
+        outcome.machine ?? UNNAMED_MACHINE,
       );
       const receiptHeader = req.headers[APPROVAL_RECEIPT_HEADER];
       handleApprovalOperation(res, url, context, {

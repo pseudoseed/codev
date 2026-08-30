@@ -313,7 +313,20 @@ export function mayRead(
   if (
     caller.sessionId !== undefined
     && operation.sessionId === caller.sessionId
-    && (caller.machine === undefined || operation.machine === caller.machine)
+    /*
+     * DEFINED AND EQUAL. This read `caller.machine === undefined || …`, so an
+     * absent machine AUTHORISED — which is the opposite of what the paragraph
+     * above claims this check does, and the reason the check exists at all was
+     * that a second caller would not necessarily supply one.
+     *
+     * Third time in three rounds that an absent value was read as permission
+     * here: an identity field checked only when present, a receipt accepted when
+     * missing, and now a machine. Absent is not agreement and it is not
+     * authority; a caller that cannot say which machine it is has not shown it is
+     * the right one.
+     */
+    && caller.machine !== undefined
+    && operation.machine === caller.machine
   ) return true;
   return caller.receipt !== undefined
     && caller.receipt.length > 0

@@ -770,6 +770,84 @@ describe('through buildAgentProtocolSnapshot, as the route builds it', () => {
   });
 });
 
+/*
+ * A FAILING RETRY MUST NOT KEEP OLD CONTENT FRESH.
+ *
+ * The maintainer resubscribes every sweep. The end of each attempt stamped the
+ * entry's drop time, so an entry that was observed once and whose subscription
+ * then failed permanently had that time reset twelve times a minute, forever:
+ * the content never aged past the freshness window, never became `stale`, and
+ * was never discarded. THE FAILURE REFRESHED THE FRESHNESS — which is the
+ * staleness guarantee this cache exists to provide, defeated by the retry path.
+ *
+ * The age is measured from when watching STOPPED, and it stops once.
+ */
+describe('a subscription that keeps failing', () => {
+  /** The drop is recorded in a `.then`, so each end needs a microtask to land. */
+  const settled = async () => { await Promise.resolve(); await Promise.resolve(); };
+
+  it('lets the content it once observed age to stale and be discarded', async () => {
+    const workspace = tmp();
+    const db = seededDb(workspace, ['th-1']);
+    const held = heldStream();
+    let clock = 1_000;
+    const cache = cacheFor({
+      db, workspace, stream: held.stream, now: () => clock, freshForMs: 60_000,
+    });
+
+    // OBSERVED ONCE, for real.
+    cache.sweep();
+    held.emit('th-1', snapshotFrame());
+    expect(cache.snapshot(workspace).status).toBe('available');
+
+    // Then the subscription drops and every retry drops too, without ever
+    // delivering a frame. Twelve attempts is one minute of the 5s sweep.
+    held.end('th-1');
+    await settled();
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      clock += 5_000;
+      cache.sweep();
+      held.end('th-1');
+      await settled();
+    }
+
+    // Now past the freshness window measured from the FIRST drop, not from the
+    // last failed attempt. Before this fix it was still `available` here, and
+    // would have stayed `available` for as long as the retries continued.
+    const after = cache.snapshot(workspace);
+    expect(after.status, 'a failing retry loop kept old content fresh').not.toBe('available');
+    expect(['stale', 'connecting']).toContain(after.status);
+
+    db.close();
+    dbs.splice(dbs.indexOf(db), 1);
+  });
+
+  /*
+   * AND AN ENTRY THAT WAS NEVER OBSERVED STAYS UNOBSERVED. A failed attempt on a
+   * thread that has delivered nothing must not stamp a drop time either, or
+   * "never seen" becomes "seen just now, then lost".
+   */
+  it('does not invent an observation for a thread that never delivered one', async () => {
+    const workspace = tmp();
+    const db = seededDb(workspace, ['th-1']);
+    const held = heldStream();
+    let clock = 1_000;
+    const cache = cacheFor({ db, workspace, stream: held.stream, now: () => clock, freshForMs: 60_000 });
+
+    cache.sweep();
+    held.end('th-1');
+    await settled();
+    clock += 120_000;
+
+    const after = cache.snapshot(workspace);
+    expect(after.status).not.toBe('available');
+    expect(after.status).not.toBe('stale');
+
+    db.close();
+    dbs.splice(dbs.indexOf(db), 1);
+  });
+});
+
 /**
  * WHICH STATUSES THIS PROVIDER CAN ACTUALLY EMIT (Spec 236, phase 2, revised).
  *
