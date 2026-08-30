@@ -763,6 +763,16 @@ This repository:
 
 - [ ] A spawned architect and its builders land on the fork with correct roles and parents,
       accepted by phase 3's invariants.
+- [ ] **A refusal's `reason` discriminant survives the ws/RPC boundary and is readable by the
+      dispatching client.** Raised by review at the end of phase 3, and it is the one layer above
+      the engine that nothing has yet tested. This spec has now been caught twice testing below the
+      layer production uses: phase 2's guard was wired to a layer nothing builds, and phase 3's six
+      discriminants were being rewritten by `OrchestrationEngine` into a message that was not merely
+      lossy but false — persisted onto the rejected receipt and replayed verbatim on redispatch.
+      Both were green in every test beneath the boundary that broke them. `porch-driver` is the
+      first real client, so this is the phase where the last hop gets exercised: dispatch an illegal
+      edge over the wire and assert the client can still tell "no such parent" from "wrong parent
+      role". If the discriminant does not survive serialization, it does not exist.
 - [ ] A gate reaching `pending` in `status.yaml` appears as a gate block within one publish
       cycle; approving it clears the block.
 - [ ] Killing and restarting `codev-agent` mid-gate leaves the rendered gate matching

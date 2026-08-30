@@ -265,6 +265,21 @@ Creating a builder under an *already archived* architect is accepted. The rule i
 shape, not the parent's lifecycle; refusing would mean archiving silently changes which commands
 are legal, which is a second rule nobody wrote down.
 
+### Two things left deliberately, both recorded rather than fixed
+
+**`parent-not-architect` covers two of the plan's listed cases** — a builder parented to another
+builder, and one parented to a `role: null` thread. They share a discriminant because they share a
+*reason*: the parent is not an architect. The `detail` distinguishes them for a human. If phase 7
+ever needs to word them differently in the UI it will need two discriminants, and that is a cheap
+change; splitting them now would have invented a distinction no caller acts on.
+
+**The ws/RPC hop is untested**, raised by review at the close of phase 3 and now a phase 6
+acceptance item rather than a note. The reasoning is this project's own history: it has been caught
+twice testing below the layer production uses, and the boundary above the engine is the last hop
+nothing has exercised. `porch-driver` is the first real client, so phase 6 is where a refusal
+dispatched over the wire must still let a caller tell "no such parent" from "wrong parent role". A
+discriminant that does not survive serialization does not exist.
+
 ### A crashed run destroying passing evidence
 
 `criterion-8b.mjs` was documented as `> evidence.json`. A shell redirect truncates the target the

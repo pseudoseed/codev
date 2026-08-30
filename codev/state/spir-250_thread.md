@@ -693,3 +693,32 @@ Both replaced with assertions on real output. `commandInvariants.test.ts` gained
 plan listed, including both ordering decisions as tests.
 
 Fork `40fb82ce92a8`. Fork typecheck green, server 2797 passed.
+
+### Phase 3, review round 2 — both lanes APPROVE
+
+opencode: none. claude: none blocking, two forward-looking notes.
+
+**Acted on:** "discriminant survival across the ws/RPC boundary is untested — worth a phase-6
+acceptance item given this spec has twice been caught testing below the layer production uses."
+That is exactly right and it is now a phase 6 acceptance item with the reasoning attached, not a
+note. `porch-driver` is the first real client; a discriminant that does not survive serialization
+does not exist.
+
+**Recorded, not changed:** `parent-not-architect` merges two of the plan's listed cases because
+they share a reason — the parent is not an architect — with `detail` distinguishing them for a
+human. Splitting now would invent a distinction no caller acts on; phase 7 can split it cheaply if
+the UI needs different wording.
+
+### Hot tier
+
+`A test that cannot fail is not a test — revert the fix and confirm the test fails before trusting
+it.` promoted, displacing the minimal-repro line, which was demoted to COLD rather than deleted.
+
+The instruction's slot number and its quoted description pointed at different lines; I went by the
+description, flagged the mismatch, and demoted rather than deleted so either reading was a one-line
+fix. The architect confirmed the number came from a stale read of a pre-merge file.
+
+Amendment applied: the *trigger* half ("when stuck after 2 failed hypotheses or ~30 min") is folded
+into the consultation lesson, because a threshold only works if it is always-on — a stuck agent does
+not go and read the cold file. Cap still 10, file still 30 lines. Skeleton got the addition only:
+displacement is cap-driven and 3 against 10 is not at the cap.
