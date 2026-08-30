@@ -306,6 +306,38 @@ Stated plainly, because a threat model that only lists wins is a marketing docum
 - **A builder that daemonizes or otherwise sheds its environment** defeats the attribution
   layer. It does not defeat the verifier property, which is the boundary that carries weight.
 
+## The approval receipt (spec 236)
+
+Asynchronous approval added a **fourth** bearer secret, and it is listed here because a
+credential absent from this document is one nobody reasons about.
+
+**What it is.** A random value returned once when an approval is submitted. It authorises
+reading *that one operation's* outcome, and nothing else — it approves nothing, and it is
+useless for any other operation, workspace or gate.
+
+**Why it exists.** Human sessions live in the host's memory, so the restart that resolves an
+operation to `interrupted` destroys the session that submitted it. Authorising the poll on
+session identity alone meant the durable record whose entire purpose is surviving a restart
+could never be read by the client that needed it.
+
+**What bounds it.** The receipt is checked *with* the machine credential, never instead of it:
+a receipt lifted from one device is not usable from another. Reading an operation reveals its
+state, gate, project and approving session — not the capability, and not the ability to approve
+anything.
+
+**Where it must not go.** Headers only. It travelled as a query parameter first, which put it
+in every URL Tower logs on an authentication failure — the exact request a client makes when
+polling across a restart — and in every reverse-proxy access log, which is outside our control
+entirely. `spec-236-receipt-not-in-url.test.ts` asserts the absence, and asserts the server
+*refuses* the query channel rather than merely not using it.
+
+**Stored in the clear, like every other record here.** The operations file has no integrity
+protection, for the same reason the capability store has none: no local mechanism could give it
+one against a same-uid writer. So a same-uid process can read a receipt out of the store — which
+is strictly weaker than what it could already do, since it can write the store's records
+outright. The receipt raises the cost of reading an approval's outcome from another *machine*,
+which is the boundary it was added for.
+
 ## For spec 146 phase 7, stated here so it is not inherited by accident
 
 Phase 7 is the transport and service security posture, and the natural assumption to carry

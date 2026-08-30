@@ -39,6 +39,7 @@ import {
 import { ApprovalCapabilityStore, ApprovalNonceStore } from '../lib/approval-capability.js';
 import { ApprovalOperationStore } from '../lib/approval-operations.js';
 import { MachineCredentialStore } from '../lib/machine-credentials.js';
+import { APPROVAL_RECEIPT_HEADER } from '../servers/agent-auth.js';
 import { PairingStore } from '../lib/pairing.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 
@@ -871,9 +872,14 @@ describe('an approval interrupted by a restart is readable by the client that su
 
     // THE CLIENT COMES BACK holding exactly what survived: its machine credential,
     // the operation id and the receipt. No session — there cannot be one.
+    //
+    // The receipt is in a HEADER. It was a query parameter here first, which put
+    // a bearer secret in every URL Tower logs on an authentication failure — the
+    // exact request this test makes. `spec-236-receipt-not-in-url.test.ts` holds
+    // that line; this one only has to keep presenting it the way a client does.
     const polled = await get(
-      `${origin}/api/agent/v1/workspaces/${encoded}/gates/approvals/${operationId}?receipt=${encodeURIComponent(receipt)}`,
-      { [MACHINE_CREDENTIAL_HEADER]: credential },
+      `${origin}/api/agent/v1/workspaces/${encoded}/gates/approvals/${operationId}`,
+      { [MACHINE_CREDENTIAL_HEADER]: credential, [APPROVAL_RECEIPT_HEADER]: receipt },
     );
     expect(polled.status, `the client could not read its own interrupted approval: ${JSON.stringify(polled.body)}`)
       .toBe(200);

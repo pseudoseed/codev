@@ -722,4 +722,45 @@ describe('approveGate, asynchronously', () => {
     expect(result).toMatchObject({ ok: false, signal: 'APPROVAL_ALREADY_IN_FLIGHT' });
     expect((result as { message: string }).message).toContain('op-9');
   }, 20_000);
+
+  /*
+   * THE RECEIPT IS A BEARER SECRET AND MUST NOT BE IN THE URL.
+   *
+   * Tower logs `req.url` on a boot-window 503 and on EVERY authentication
+   * failure — which is exactly when a client polling across a restart arrives —
+   * and reverse proxies log query strings regardless of what we do. So the
+   * assertion is the ABSENCE: no polled URL may contain it, however the request
+   * is built. Asserting only that the header is present would pass with the query
+   * parameter still there beside it.
+   */
+  it('carries the receipt in a header and never in the polled URL', async () => {
+    const receipt = 'receipt-secret-9f2c';
+    const { fetchImpl, calls } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-15', state: 'submitted', receipt } },
+        {
+          status: 200,
+          body: {
+            state: 'succeeded',
+            record: { outcome: 'approved', approvedAt: '2026-08-30T12:00:00Z', machine: 'laptop' },
+          },
+        },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: true });
+
+    const polls = calls.filter((call) => call.url.includes('/gates/approvals/'));
+    expect(polls.length).toBeGreaterThan(0);
+    for (const poll of polls) {
+      expect(poll.url, 'the receipt is in the URL').not.toContain(receipt);
+      expect(poll.url, 'a receipt query parameter is back').not.toContain('receipt=');
+      expect(poll.headers['x-codev-approval-receipt']).toBe(receipt);
+    }
+
+    // Nor in the URL of ANY call — the submit's own URL included, since a future
+    // convenience could put it there just as easily.
+    for (const call of calls) expect(call.url).not.toContain(receipt);
+  }, 20_000);
 });

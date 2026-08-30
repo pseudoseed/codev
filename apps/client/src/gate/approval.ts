@@ -17,6 +17,8 @@ import { machineHeaders, type MachineConfig } from '../connection/machine.js';
 
 export const HUMAN_SESSION_HEADER = 'x-codev-human-session';
 export const PAIRING_TOKEN_HEADER = 'x-codev-pairing-token';
+/** The approval receipt. A header, not a query parameter: URLs are logged. */
+export const APPROVAL_RECEIPT_HEADER = 'x-codev-approval-receipt';
 
 export interface HumanSession {
   readonly sessionId: string;
@@ -407,8 +409,16 @@ async function pollApproval(
    * instead of losing the answer it was waiting for.
    */
   const receipt = text(submitted.body, 'receipt');
-  const query = receipt ? `?receipt=${encodeURIComponent(receipt)}` : '';
-  const url = api(config, `/workspaces/${workspace}/gates/approvals/${encodeURIComponent(operationId)}${query}`);
+  /*
+   * IN A HEADER, NEVER IN THE URL. It is a bearer secret, and a URL is copied by
+   * things that were not asked: Tower logs `req.url` during the boot window and
+   * on every authentication failure — which is precisely when a client polling
+   * across a restart arrives — and reverse proxies log query strings as a matter
+   * of course. `agent-auth.ts` had already written this rule down for the pairing
+   * token; the first draft of this line crossed it.
+   */
+  const polling = receipt ? { ...authed, [APPROVAL_RECEIPT_HEADER]: receipt } : authed;
+  const url = api(config, `/workspaces/${workspace}/gates/approvals/${encodeURIComponent(operationId)}`);
   const deadline = Date.now() + POLL_LIMIT_MS;
   while (Date.now() < deadline) {
     /*
@@ -427,7 +437,7 @@ async function pollApproval(
      */
     let polled: Json;
     try {
-      const response = await fetchImpl(url, { headers: authed });
+      const response = await fetchImpl(url, { headers: polling });
       let parsed: unknown;
       try {
         parsed = await response.json();

@@ -17,6 +17,7 @@ import {
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 import {
   AGENT_ROUTE_PREFIX,
+  APPROVAL_RECEIPT_HEADER,
   HUMAN_SESSION_HEADER,
   MACHINE_CREDENTIAL_HEADER,
   PAIRING_TOKEN_HEADER,
@@ -1356,6 +1357,15 @@ function handleApprovalOperation(
     /** Present only when a live session was ALSO presented; absent after a restart. */
     readonly sessionId?: string;
     readonly machine?: string;
+    /*
+     * From the approval-receipt header. NEVER from the URL — see the header
+     * constant in agent-auth.ts for why.
+     *
+     * The constant is named in prose rather than in backticks deliberately: the
+     * failure-matrix collector matches any quoted SCREAMING_SNAKE token, comments
+     * included, and would classify the header name as an unrouted signal code.
+     */
+    readonly receipt?: string;
   },
   /** The workspace named in the URL, which the record must agree with. */
   workspacePath: string,
@@ -1426,7 +1436,7 @@ function handleApprovalOperation(
   if (!mayRead(operation, {
     ...(caller.sessionId ? { sessionId: caller.sessionId } : {}),
     machine: caller.machine,
-    receipt: url.searchParams.get('receipt') ?? undefined,
+    receipt: caller.receipt,
   })) {
     writeJson(res, 403, {
       signal: APPROVAL_SIGNAL.APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION,
@@ -1606,11 +1616,13 @@ export function handleAgentRoute(
       const recognition = context.humanSessions.recognize(
         Array.isArray(presented) ? presented[0] : presented,
       );
+      const receiptHeader = req.headers[APPROVAL_RECEIPT_HEADER];
       handleApprovalOperation(res, url, context, {
         ...(recognition.paired && recognition.sessionId
           ? { sessionId: recognition.sessionId }
           : {}),
         machine: outcome.machine,
+        receipt: Array.isArray(receiptHeader) ? receiptHeader[0] : receiptHeader,
       }, workspace);
       return true;
     }

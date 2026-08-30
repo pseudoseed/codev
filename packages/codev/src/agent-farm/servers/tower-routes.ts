@@ -257,7 +257,7 @@ export async function handleRequest(
   res.setHeader(
     'Access-Control-Allow-Headers',
     `Content-Type, ${TOWER_KEY_HEADER}, ${LEGACY_WEB_KEY_HEADER}, X-Codev-Human-Session, `
-      + 'X-Codev-Machine-Credential, X-Codev-Pairing-Token',
+      + 'X-Codev-Machine-Credential, X-Codev-Pairing-Token, X-Codev-Approval-Receipt',
   );
   res.setHeader('Cache-Control', 'no-store');
 

@@ -53,6 +53,22 @@ export const MACHINE_CREDENTIAL_HEADER = 'x-codev-machine-credential';
  * lands in `ps` output and shell history.
  */
 export const PAIRING_TOKEN_HEADER = 'x-codev-pairing-token';
+/**
+ * The approval receipt, handed back once at submit and presented to read that
+ * operation's outcome after a restart has destroyed the submitting session.
+ *
+ * A HEADER FOR THE SAME REASON AS EVERY OTHER CREDENTIAL HERE, and this one was
+ * a query parameter first — which crossed the rule written three lines above it.
+ * URLs are logged: Tower logs `req.url` during the boot window, and again on
+ * every authentication failure, which is exactly when a client polling across a
+ * restart arrives. Reverse proxies log query strings as a matter of course, so
+ * the exposure was never bounded by our own logging either.
+ *
+ * `spec-236-receipt-not-in-url.test.ts` asserts the absence: no poll URL and no
+ * log line may contain a receipt. Assert the absence, because the query string is
+ * the convenient place to put it and convenience is what put it there.
+ */
+export const APPROVAL_RECEIPT_HEADER = 'x-codev-approval-receipt';
 
 export const TRANSPORT_SIGNAL = {
   ORIGIN_NOT_ALLOWED: 'ORIGIN_NOT_ALLOWED',

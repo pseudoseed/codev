@@ -878,3 +878,51 @@ name their enforcing test — the `handleGateApprove` prefix slice
 
 Criterion 3 is verified against the vendored contract and a driven fake, not a running t3code
 server. The spec's own risk table called for exactly this handling; it goes in the PR body.
+
+## Round 3 — a secret in a query string, and a knob only tests could turn
+
+Both lanes, independently, on the same seam: the receipt travelled as `?receipt=`.
+
+That is not an obscure hazard. `agent-auth.ts` already carried the rule, three lines above where
+the receipt constant now sits — credentials are headers, "a URL lands in access logs and a
+command line lands in `ps` output". I crossed a documented line in the file next door.
+
+Worse than the boot-window log claude found: Tower also logs `req.url` on **every authentication
+failure** (`tower-routes.ts:283`), which is precisely when a client polling across a restart
+arrives. The leak fired in the exact scenario the receipt was invented for. And reverse proxies
+log query strings regardless, so it was never bounded by our own logging.
+
+Fixed as specified: `APPROVAL_RECEIPT_HEADER`, read from `req.headers`, added to the CORS
+allow-header list (a header a browser cannot send is a header whose obvious workaround is putting
+the value back in the URL). Both log sites carry `req.url` and nothing else on this path copies,
+echoes or persists it — checked `req.url` across every server file, including the tunnel.
+
+### The regression test, and the fixture that was measuring the wrong refusal
+
+Four assertions: no source file builds `?receipt=` or reads it from `searchParams`; the query
+channel is **refused** at the server while the header is accepted; both log sites still
+interpolate `req.url` (which is what makes "no URL contains it" equal "no log contains it"); and
+the header is advertised in preflight.
+
+The behavioural half was wrong on the first try and I only caught it by reverting the fix: I sent
+the query-string attempt from a *different* machine, so `mayRead` refused it on the machine
+mismatch and the test passed with the query channel wide open. Same machine, no session — now the
+receipt is the only thing that could authorise, so the status reports the channel and nothing
+else. That is the third time this project's fixtures have measured the wrong refusal.
+
+### maxConcurrent: dropped, not wired
+
+A per-call parameter with a hardcoded default of 2 that only tests ever passed. Wiring it means
+inventing a config key, and the store is one object serving every workspace while the limit is
+per-workspace — so the key would not have an obvious home. Dropped to a named constant. The two
+tests that tuned it now exercise the real limit, which they previously could not: they would have
+passed with the shipped number set to anything.
+
+### The freshness guarantee is borrowed
+
+Recorded at `DEFAULT_FRESH_FOR_MS`: `observedAt` tracks subscription liveness, not event cadence,
+so an entry cannot age into `stale` while the subscription is believed open — and what bounds
+that belief is `packages/t3-client`'s 300s stream idle timeout. A silently dead socket reads as
+`available` here for up to five minutes, and raising `streamIdleTimeoutMs` in that package
+lengthens it with nothing in this file failing. Not fixed: a second timer racing the first is
+worse than the borrowed one, and the thing worth having is the note.

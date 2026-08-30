@@ -193,6 +193,59 @@ misled. But writing the lesson down after the first did not prevent the second. 
 replaced the resolution: after any approval, run `porch status` and read which phase is open
 before running anything else.
 
+## The rule was written down three lines away
+
+The receipt — the bearer secret that makes an interrupted approval readable after a restart —
+travelled as `?receipt=`. Both review lanes found it independently.
+
+`agent-auth.ts` already carried the rule, immediately above where the receipt's constant now
+sits: credentials are headers, because "a URL lands in access logs and a command line lands in
+`ps` output". So this was not an unforeseen hazard; it crossed a documented line in the file next
+door, in a project whose recurring finding is the rule applied in one place and not the adjacent
+one.
+
+Tower logs `req.url` in two places, and the second one matters more than the first: the boot
+window 503, **and every authentication failure** — which is exactly when a client polling across
+a restart arrives. The leak fired in the scenario the receipt exists for. Reverse proxies log
+query strings as a matter of course, so the exposure was never bounded by our own logging.
+
+The fix is a header, read from the request, advertised in preflight. The part worth keeping is
+the guard: the query channel is asserted **closed at the server**, not merely unused by our
+client, and no source file may build `?receipt=` or read one from `searchParams`. Assert the
+absence, because the query string is the convenient place to put a value and convenience is what
+put it there.
+
+**And the first version of that guard measured the wrong refusal.** The query-string attempt used
+a different machine credential, so `mayRead` refused it on the machine mismatch and the test
+passed with the channel wide open. Caught by reverting the fix and watching what failed. Same
+machine, no session, and the receipt is the only thing that can authorise — now the status
+reports the channel. Third instance in this project of a fixture agreeing with the bug.
+
+## A knob only tests could turn
+
+`submit(…, { maxConcurrent })` was a parameter with a hardcoded default of 2 and no production
+caller — #222's pattern, and this one was mine rather than inherited. It reads as configurable,
+so the first person needing a different limit changes a call site nothing in production reaches
+and believes they have configured the host.
+
+Dropped to a named constant rather than wired: the store is one object serving every workspace
+while the limit is per-workspace, so a config key has no obvious home yet. It gets one when a
+host actually needs a different number, together with the caller that reads it. The two tests
+that tuned the parameter now exercise the real limit — they would previously have passed with the
+shipped number set to anything at all.
+
+## A freshness guarantee borrowed from another package
+
+`observedAt` records subscription liveness rather than event cadence, deliberately: a quiet
+thread is not a stale one. The consequence is that an entry cannot age into `stale` while the
+subscription is believed open, and what bounds that belief is `packages/t3-client`'s 300s stream
+idle timeout — not anything in this module. A silently dead socket reads as `available` for up to
+five minutes.
+
+Recorded at the constant rather than fixed. A second timer racing the first is worse than the
+borrowed one; what was missing was anyone knowing the guarantee was borrowed, so raising
+`streamIdleTimeoutMs` in that package now has a comment saying what it silently lengthens here.
+
 ## What the sweep cost while nothing was wrong
 
 `requestThreadBackend` answers `ready`, `connecting` and `cooling-down` from memory. The two

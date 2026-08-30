@@ -307,6 +307,23 @@ function defaultIsAlive(pid: number): boolean {
  * Tower processes against one root is the case the owner field exists for and a
  * read-modify-write without a lock loses one of their writes.
  */
+/**
+ * How many approvals may run at once for ONE workspace in this host.
+ *
+ * A CONSTANT, NOT A PARAMETER. It was a per-call option with a default, and the
+ * only callers that ever passed it were tests — the production route passed
+ * nothing, so the number was 2 everywhere that mattered and the knob existed
+ * solely to be turned by the code verifying it. That shape is worse than a
+ * constant: it reads as configurable, so the first person who needs a different
+ * limit changes a call site nothing in production reaches and believes they have
+ * configured the host.
+ *
+ * If a host ever needs a different limit it gets a config key and a caller that
+ * reads it, in the same change. Until then this is the number, in one place, and
+ * the tests exercise the real one.
+ */
+const MAX_CONCURRENT_PER_WORKSPACE = 2;
+
 export class ApprovalOperationStore {
   readonly #path: string;
   readonly #now: () => number;
@@ -376,10 +393,8 @@ export class ApprovalOperationStore {
     readonly gateName: string;
     readonly sessionId: string;
     readonly machine: string;
-    readonly maxConcurrent?: number;
   }): { readonly accepted: true; readonly operation: ApprovalOperation }
     | { readonly accepted: false; readonly code: ApprovalOperationSignal; readonly message: string } {
-    const maxConcurrent = input.maxConcurrent ?? 2;
     return withStoreLock(this.#path, APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_STORE_LOCKED, () => {
       const operations = this.#sweep(this.#read());
       const live = operations.filter((operation) => !isTerminal(operation.state));
@@ -398,7 +413,7 @@ export class ApprovalOperationStore {
       }
 
       const here = live.filter((operation) => operation.workspacePath === input.workspacePath);
-      if (here.length >= maxConcurrent) {
+      if (here.length >= MAX_CONCURRENT_PER_WORKSPACE) {
         return {
           accepted: false as const,
           code: APPROVAL_OPERATION_SIGNAL.APPROVAL_CONCURRENCY_LIMIT,

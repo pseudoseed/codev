@@ -56,7 +56,7 @@ function storeAt(root: string, over: {
 }
 
 function submit(store: ApprovalOperationStore, over: Partial<{
-  workspacePath: string; projectId: string; gateName: string; sessionId: string; maxConcurrent: number;
+  workspacePath: string; projectId: string; gateName: string; sessionId: string;
 }> = {}) {
   const result = store.submit({
     workspacePath: '/w',
@@ -187,12 +187,16 @@ describe('the concurrency bound refuses at submit time', () => {
     }).accepted).toBe(true);
   });
 
+  // AGAINST THE REAL LIMIT. These used to pass `maxConcurrent` per call — a
+  // parameter no production caller set, so the test tuned a number the running
+  // system never saw and could have passed with the shipped limit set to
+  // anything at all.
   it('bounds concurrent approvals per workspace', () => {
     const store = storeAt(scratch());
-    submit(store, { projectId: 'a', maxConcurrent: 2 });
-    submit(store, { projectId: 'b', maxConcurrent: 2 });
+    submit(store, { projectId: 'a' });
+    submit(store, { projectId: 'b' });
     const third = store.submit({
-      workspacePath: '/w', projectId: 'c', gateName: 'pr', sessionId: 's', maxConcurrent: 2,
+      workspacePath: '/w', projectId: 'c', gateName: 'pr', sessionId: 's', machine: 'm',
     });
     expect(third.accepted).toBe(false);
     if (third.accepted) return;
@@ -201,10 +205,12 @@ describe('the concurrency bound refuses at submit time', () => {
 
   it('bounds each workspace separately', () => {
     const store = storeAt(scratch());
-    submit(store, { workspacePath: '/w', projectId: 'a', maxConcurrent: 1 });
-    // A different workspace's build is not this workspace's contention.
+    submit(store, { workspacePath: '/w', projectId: 'a' });
+    submit(store, { workspacePath: '/w', projectId: 'b' });
+    // '/w' is now AT the limit, so this is the assertion it was meant to be: a
+    // different workspace's build is not this workspace's contention.
     expect(store.submit({
-      workspacePath: '/other', projectId: 'a', gateName: 'pr', sessionId: 's', maxConcurrent: 1,
+      workspacePath: '/other', projectId: 'a', gateName: 'pr', sessionId: 's', machine: 'm',
     }).accepted).toBe(true);
   });
 });

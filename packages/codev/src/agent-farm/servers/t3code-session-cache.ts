@@ -76,6 +76,26 @@ const SUBSCRIBE_THREAD = 'orchestration.subscribeThread';
  */
 const DEFAULT_FRESH_FOR_MS = 60_000;
 
+/*
+ * WHAT BOUNDS `available` WHILE A SUBSCRIPTION IS NOMINALLY OPEN, and it is not
+ * this file.
+ *
+ * `observedAt` records subscription LIVENESS, not event cadence — that is
+ * deliberate, because a quiet thread is not a stale one. The consequence is that
+ * an entry cannot age into `stale` for as long as the subscription is believed
+ * open, and what decides that belief is `packages/t3-client`'s stream idle
+ * timeout: 300s of silence before a stream is abandoned (`streamIdleTimeoutMs`,
+ * `client.ts`). So a socket that has silently died is called `available` here for
+ * up to five minutes, and the freshness guarantee this module appears to make is
+ * BORROWED from another package's timer.
+ *
+ * Recorded rather than fixed. Shortening it here would mean a second timer racing
+ * the first, and lengthening it changes nothing. The thing worth knowing is that
+ * raising `streamIdleTimeoutMs` in the t3-client package silently lengthens how
+ * long this module will call dead content current, with nothing in this file
+ * failing.
+ */
+
 /**
  * How long last-known content is kept at all.
  *
