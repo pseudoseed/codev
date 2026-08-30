@@ -124,17 +124,78 @@ it. That is "I have not been told", not "nothing happened", and it is stated on 
 than left for a caller to discover. `activeTurnId` is `null` for the same reason and no caller
 may read it as "the thread is idle".
 
+## Review round 2 — three more defects, all of the same shape
+
+The first version of this work made an architect a thread and left it unreachable. Review
+caught it; all three are fixed and the live test now covers the first.
+
+### A thread-backed architect could not receive mail at all
+
+`ensureThreadBackendReady` runs in the `afx` CLI process, which exits. Tower is a different,
+long-lived process and registers no engine, so `deliverThreadTurn` threw there for every
+thread-backed row — and `writeMessage` wrapped it in a bare `catch { return false }`, which the
+delivery path holds as `no-live-pty`. Configuring threads therefore traded a working Tower
+architect for one that could never receive mail, silently. Starvation through a different door.
+
+Fixed at the delivery seam: the session now carries a `ThreadDeliveryContext` (workspace root,
+worktree, branch, agent — none of which is derivable from a thread id), and `writeMessage`
+registers an engine in **this** process and adopts the thread before starting the turn.
+
+The bare catch is gone. Four failures, four sentences: no context on the session (a wiring
+fault here), a thread-backed row in a workspace naming no server (a contradiction in the state),
+a server that could not be used, and a server that refused the turn. They still all hold the row
+the same way — `MailboxReason` is `busy | no-profile | no-live-pty` and a CHECK constraint on
+the mailbox table pins it — but each names itself at ERROR instead of leaving through the same
+silence. **A fourth held reason is the complete fix and is not made here**: it is a migration on
+the user-global database and a user-visible vocabulary change, which is the architect's call.
+
+### `project.create` is not idempotent, and the second process paid for it
+
+Found by the fix above, on its first run. t3code refuses a second active project for a workspace
+root (`requireActiveProjectWorkspaceRootAbsent`), and `ensureThreadBackendReady` created one
+unconditionally. So it worked in the **first** process to run against a workspace and failed in
+every one after it — and every `afx` invocation is a fresh process. Observed:
+
+```
+Orchestration command invariant failed (project.create):
+  Active project '8d48788a…' already exists for workspace root '/…/air-219-ws-prW7MK'.
+```
+
+It reached the caller as "the server was named and could not be used", which sends a reader to
+check a server that is fine.
+
+Now the existing project is looked up first, over `GET /api/orchestration/shell` rather than
+through `orchestration.subscribeShell` — the subscription never exits, so taking one snapshot
+from it would leave a live subscription behind for the life of the process. Three answers, not
+two: `found`, `none`, and `unknown`. `unknown` is not `none`, because the caller's next move on
+`none` is to create a project, which is exactly what fails when the truth was "I could not tell".
+Paths are compared normalised: `/var` and `/private/var` are the same directory on macOS, and a
+string compare answers `none` for a project that exists.
+
+### The thread path violated the collision contract
+
+`workspace-add-architect` consulted the existing set only when auto-numbering. With an explicit
+`--name` that was already registered it created a **second** thread and `setArchitectByName`
+overwrote the row, leaving the first thread alive on the server with nothing pointing at it. The
+Tower path refuses that. Now both do, with the same sentence, so a user cannot tell which engine
+refused. Auto-numbering now uses `autoNumberArchitectName` rather than a second copy of the rule.
+
+### `restart` could report a restart that did not happen
+
+The first guard checked only that the data dir existed — and `stop` **preserves** the data dir,
+so `stop` then `restart` succeeded having replaced no process at all. It now requires a running
+server this harness owns, and waits (bounded, 30 s) for the port to be released before starting,
+because `stop` signals and does not wait. Three named refusals: `NOT_RUNNING`, `NO_DATA_TO_KEEP`,
+`PORT_NOT_RELEASED`, all exit 3.
+
 ## What is still NOT met, stated rather than left to be discovered
 
-**`afx send architect` in a fresh process still cannot resume a thread.** `deliverThreadTurn`
-takes only a thread id and calls `startTurn`, which throws for a thread this process did not
-create. `attach` is the capability that makes resumption possible; nothing yet calls it from the
-mailbox path, because the worktree and branch it needs live on the row and `deliverThreadTurn`
-is not handed one. Item 4's criterion is about the thread, and the thread resumes. The CLI
-round trip on top of it is not proven here and is not claimed.
+**`afx interrupt` and `afx cleanup` are unchanged.** Both still reach `getThreadEngine()` in a
+process where none is registered. The delivery path is fixed; these two are not, and the same
+init-plus-attach shape would fix them.
 
-`afx interrupt` and `afx cleanup` are unchanged and still reach `getThreadEngine()` in a process
-where none is registered.
+**The held-reason vocabulary is still three values.** "Tower cannot reach the thread" and "the
+PTY is gone" are held identically. The log now separates them; the row does not.
 
 ## Explicitly not attempted
 
@@ -146,9 +207,11 @@ made about either.
 
 | File | Tests |
 |---|---|
-| `spec-146-phase-9-live-architect-thread.test.ts` | 2 — the live run above, and the companion that names the exact reason it could not check |
+| `spec-146-phase-9-live-architect-thread.test.ts` | 2 — the live run above, and the companion that names the exact reason it could not check. Its post-restart turn is delivered by a **real child process** through `makeDeliveryPorts().writeMessage`, against the built `dist` |
+| `spec-146-phase-9-thread-delivery-states.test.ts` | 7 — delivery from a process holding no engine, the four failure sentences, and a fifth test comparing them against each other |
+| `spec-146-phase-9-thread-backend.test.ts` | +6 — the project lookup's three answers, driven against a real HTTP server, and the symlink-normalised match |
 | `spec-146-phase-9-architect-thread-resume.test.ts` | 9 — the branch normalisation, `attach` vs `create`, idempotence, the unattached-thread message, and `DriverThread.attach` |
-| `spec-146-phase-9-add-architect-thread-path.test.ts` | 3 — the backend is registered before the engine is read; unconfigured still uses Tower; unreachable propagates |
+| `spec-146-phase-9-add-architect-thread-path.test.ts` | 6 — the backend is registered before the engine is read; the collision refusal; auto-numbering; unconfigured still uses Tower; unreachable propagates |
 | `spec-146-t3-contract.test.ts` | +1 — `restart` is distinct from a cold start and refuses to fake one; the live opt-in check now covers both live files rather than one |
 
 Mutation-checked: reverting the branch normalisation fails the item-3 payload test; removing the

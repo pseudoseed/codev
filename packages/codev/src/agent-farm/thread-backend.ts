@@ -11,6 +11,7 @@
  * silently, the second throws. A server that was named and could not be reached must
  * never be spelled the same way as a server that was never named.
  */
+import { realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DispatchJournal } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
@@ -183,11 +184,17 @@ export function classifyConnectFailure(err: unknown): ConnectFailure {
   return 'unreachable';
 }
 
-/** Open an authenticated t3code WebSocket and wrap it as a porch-driver dispatcher. */
+/**
+ * Open an authenticated t3code WebSocket and wrap it as a porch-driver dispatcher.
+ *
+ * The access token comes back with it because the project lookup below needs one:
+ * exchanging the bootstrap token a second time would fail, and does not merely cost
+ * a round trip — a pairing grant is one-time.
+ */
 async function connectDispatcher(
   config: ThreadBackendConfig,
   upgradeTimeoutMs: number,
-): Promise<{ call: (m: string, p: unknown) => Promise<unknown> }> {
+): Promise<{ dispatcher: { call: (m: string, p: unknown) => Promise<unknown> }; accessToken: string }> {
   const { T3Client } = await import('@cluesmith/t3-client/client');
   const auth = await import('@cluesmith/t3-client/auth');
   const access = await auth.exchangeBootstrapToken(config.serverUrl, config.bootstrapToken, {
@@ -225,7 +232,77 @@ async function connectDispatcher(
       return socket.readyState;
     },
   });
-  return { call: (method: string, payload: unknown) => client.call(method, payload) };
+  return {
+    dispatcher: { call: (method: string, payload: unknown) => client.call(method, payload) },
+    accessToken: access.access_token,
+  };
+}
+
+/**
+ * Which project t3code already holds for this workspace root, if any.
+ *
+ * `project.create` is NOT idempotent: t3code refuses a second active project for a
+ * workspace root (`requireActiveProjectWorkspaceRootAbsent`). `ensureThreadBackendReady`
+ * created one unconditionally, so it worked in the first process to run against a
+ * workspace and failed in every one after it — and every `afx` invocation is a fresh
+ * process. The failure arrived as "the server was named and could not be used", which
+ * sends a reader to check the server.
+ *
+ * Read over HTTP rather than through `orchestration.subscribeShell`: the subscription
+ * never exits, so taking one snapshot from it would leave a live subscription behind
+ * for the life of the process.
+ *
+ * THREE ANSWERS, NOT TWO. `unknown` is not `none`: a lookup that could not be performed
+ * must not be spelled like a workspace with no project, because the caller's next move
+ * on `none` is to create one — which is exactly what fails.
+ */
+export type ProjectLookup =
+  | { readonly kind: 'found'; readonly projectId: string }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'unknown'; readonly detail: string };
+
+export async function activeProjectForWorkspace(
+  serverUrl: string,
+  accessToken: string,
+  workspaceRoot: string,
+): Promise<ProjectLookup> {
+  let body: unknown;
+  try {
+    const response = await fetch(`${serverUrl.replace(/\/+$/, '')}/api/orchestration/shell`, {
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) {
+      return { kind: 'unknown', detail: `GET /api/orchestration/shell answered ${response.status}` };
+    }
+    body = await response.json();
+  } catch (err) {
+    return { kind: 'unknown', detail: err instanceof Error ? err.message : String(err) };
+  }
+  const projects = (body as { projects?: ReadonlyArray<{ id?: unknown; workspaceRoot?: unknown }> }).projects;
+  if (!Array.isArray(projects)) {
+    return { kind: 'unknown', detail: 'the shell snapshot carried no projects array' };
+  }
+  // t3code compares normalised paths, and so does this. `/var` and `/private/var`
+  // are the same directory on macOS and a string compare calls them different, which
+  // would report `none` for a project that exists — the answer that leads straight
+  // back into the invariant this lookup exists to avoid.
+  const target = normalisePath(workspaceRoot);
+  const match = projects.find(
+    (project) => typeof project.workspaceRoot === 'string' && normalisePath(project.workspaceRoot) === target,
+  );
+  if (!match || typeof match.id !== 'string') return { kind: 'none' };
+  return { kind: 'found', projectId: match.id };
+}
+
+function normalisePath(value: string): string {
+  const absolute = resolve(value).replace(/\/+$/, '');
+  try {
+    return realpathSync(absolute);
+  } catch {
+    // The path may not exist on this machine at all (a server serving another
+    // host's root). The resolved form is still comparable.
+    return absolute;
+  }
 }
 
 /**
@@ -249,9 +326,9 @@ export async function ensureThreadBackendReady(
   const config = readThreadBackendConfig(resolve(workspaceRoot));
   if (!config) return 'not-configured';
 
-  let dispatcher;
+  let connection;
   try {
-    dispatcher = await connectDispatcher(config, upgradeTimeoutMs);
+    connection = await connectDispatcher(config, upgradeTimeoutMs);
   } catch (err) {
     // Four ways this fails, four sentences. They were previously two, and one of those two was
     // wrong for half the cases it covered. A caller who cannot tell "the network is down" from
@@ -286,10 +363,38 @@ export async function ensureThreadBackendReady(
 
   const { createProject } = await import('@cluesmith/porch-driver/thread');
   const journal = new DispatchJournal(join(config.workspaceRoot, '.codev', 'commands.jsonl'));
-  const projectId = await createProject(dispatcher, journal, {
-    title: `codev:${config.workspaceRoot}`,
-    workspaceRoot: config.workspaceRoot,
-  });
+  const { dispatcher, accessToken } = connection;
+  const lookup = await activeProjectForWorkspace(config.serverUrl, accessToken, config.workspaceRoot);
+  let projectId: string;
+  if (lookup.kind === 'found') {
+    projectId = lookup.projectId;
+  } else {
+    try {
+      projectId = await createProject(dispatcher, journal, {
+        title: `codev:${config.workspaceRoot}`,
+        workspaceRoot: config.workspaceRoot,
+      });
+    } catch (err) {
+      // Either this process lost a race with another one, or the lookup could not
+      // be performed and there was a project all along. Re-read once before giving
+      // up, and if that still cannot answer, say which of the two happened rather
+      // than reporting a server fault.
+      const retry = await activeProjectForWorkspace(config.serverUrl, accessToken, config.workspaceRoot);
+      if (retry.kind === 'found') {
+        projectId = retry.projectId;
+      } else {
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Could not resolve a t3code project for ${config.workspaceRoot}. Creating one failed (${detail}), `
+          + (lookup.kind === 'unknown'
+            ? `and the existing-project lookup could not be performed (${lookup.detail}), so whether one already `
+              + `exists is unknown.`
+            : `and no existing project for that workspace root was found, so this is not a duplicate.`),
+          { cause: err },
+        );
+      }
+    }
+  }
   setThreadEngine(createPorchThreadEngine({
     dispatcher,
     journal,

@@ -65,3 +65,35 @@ mutation-checked by swapping `restart` back to `stop` + `start`, which fails it 
 "item 4: the thread did not survive the server restart". Verification record at
 `codev/projects/146-codev-client-on-the-t3code-ser/146-phase_9-items-3-4-live-verification.md`.
 Items 6 and 7 untouched: still held by the architect, still unrun, not ticked.
+
+## Review round 2 (architect REQUEST_CHANGES on PR #221)
+
+Three blocking issues, all fixed, and fixing the first exposed a fourth defect.
+
+1. **A thread-backed architect could not receive mail.** `ensureThreadBackendReady` runs in
+   the `afx` process, which exits; Tower is a different process with no engine, so
+   `deliverThreadTurn` threw there and a bare `catch { return false }` held the message
+   silently. The delivery session now carries a `ThreadDeliveryContext` and `writeMessage`
+   registers an engine and attaches in Tower's own process. The bare catch is four named
+   ERROR sentences. A fourth `MailboxReason` is the complete fix and is NOT made here —
+   it is a migration on the user-global DB and a vocabulary change, so it is the
+   architect's call. Raised, not decided.
+
+2. **Found by fixing 1, on its first run: `project.create` is not idempotent.** t3code
+   refuses a second active project for a workspace root, and `ensureThreadBackendReady`
+   created one unconditionally — so it worked in the first `afx` process against a
+   workspace and failed in every one after. Now it looks up the existing project over
+   `GET /api/orchestration/shell` first, with three answers (found / none / unknown) and
+   symlink-normalised path comparison.
+
+3. **Collision contract.** The thread path consulted `existing` only when auto-numbering,
+   so an explicit `--name` collision made a second thread and overwrote the row. Now
+   refused with Tower's own sentence.
+
+4. **`restart` could report a restart that did not happen** — `stop` preserves the data
+   dir, so the data-dir guard proved nothing. Now requires a running owned server and
+   waits for the port to release.
+
+The live test's post-restart turn now goes through a real child process calling
+`makeDeliveryPorts().writeMessage` against the built dist. That is what catches issue 1;
+driving the engine from the test process cannot see it.

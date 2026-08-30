@@ -360,19 +360,28 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
     expect(src).toContain('function start({ keepData = false } = {})');
     expect(src).toContain('start({ keepData: true })');
 
-    // And a restart with nothing to preserve exits "could not determine" rather
-    // than quietly cold-starting — which would report the wipe as the thread's fate.
+    // And a restart exits "could not determine" rather than quietly cold-starting,
+    // which would report the wipe as the thread's fate. Two ways it refuses, and
+    // the first is the one a data dir cannot rule out: `stop` LEAVES the data dir,
+    // so its presence is not evidence that anything is running. Checking only for
+    // it meant `stop` then `restart` succeeded having replaced no process at all —
+    // a restart reported, not performed.
     const emptyDir = mkdtempSync(join(tmpdir(), 't3-restart-'));
     try {
       const refused = spawnSync(process.execPath, [harness, 'restart'], {
         encoding: 'utf8',
-        env: { ...process.env, T3_HARNESS_DIR: emptyDir },
+        // A port nothing is listening on, so "no server is running" is the true state.
+        env: { ...process.env, T3_HARNESS_DIR: emptyDir, T3_HARNESS_PORT: '3897' },
       });
       expect(refused.status).toBe(3);
-      expect(refused.stderr).toContain('NO_DATA_TO_KEEP: could not check:');
+      expect(refused.stderr).toContain('NOT_RUNNING: could not check:');
     } finally {
       rmSync(emptyDir, { recursive: true, force: true });
     }
+    // Both refusals are distinct signals, and neither is spelled like a success.
+    expect(src).toContain('NOT_RUNNING: could not check:');
+    expect(src).toContain('NO_DATA_TO_KEEP: could not check:');
+    expect(src).toContain('PORT_NOT_RELEASED: could not check:');
   });
 
   it('requires a second opt-in before the unit suite can dispatch a live provider turn', () => {

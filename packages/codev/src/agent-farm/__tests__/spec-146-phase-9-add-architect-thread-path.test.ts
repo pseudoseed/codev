@@ -30,8 +30,10 @@ vi.mock('../thread-runtime.js', () => ({
   tryGetThreadEngine: () => tryGetThreadEngine(),
 }));
 
+let architects: Array<{ name: string }> = [];
+
 vi.mock('../state.js', () => ({
-  getArchitects: () => [],
+  getArchitects: () => architects,
   setArchitectByName: (...args: unknown[]) => setArchitectByName(...args),
 }));
 
@@ -55,8 +57,19 @@ const { workspaceAddArchitect } = await import('../commands/workspace-add-archit
 describe('workspace add-architect — the thread path is reachable in a fresh process', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    architects = [];
     addArchitect.mockResolvedValue({ ok: true, name: 'main', terminalId: 't1' });
   });
+
+  function threadEngineInstalled() {
+    let installed = false;
+    ensureThreadBackendReady.mockImplementation(async () => {
+      installed = true;
+      return 'installed';
+    });
+    tryGetThreadEngine.mockImplementation(() => (installed ? {} : undefined));
+    createArchitectThread.mockResolvedValue('thr-architect-1');
+  }
 
   it('registers the backend BEFORE reading the engine, so a configured workspace gets a thread', async () => {
     // The engine only exists because `ensureThreadBackendReady` ran. This is the
@@ -81,6 +94,46 @@ describe('workspace add-architect — the thread path is reachable in a fresh pr
     // Not both. A thread-backed architect that also took a Tower terminal would
     // be the dual-identity state `assertExclusiveIdentity` exists to forbid.
     expect(addArchitect).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The Tower path refuses a name already registered. This one consulted the
+   * existing set only when auto-numbering, so an explicit collision created a
+   * SECOND thread and `setArchitectByName` overwrote the row — leaving the first
+   * thread alive on the server with nothing pointing at it. Two paths, one
+   * contract, and only one of them destroyed state.
+   */
+  it('refuses an explicit name that is already registered, exactly as Tower does', async () => {
+    threadEngineInstalled();
+    architects = [{ name: 'uiv2' }];
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit');
+    }) as never);
+
+    await expect(workspaceAddArchitect({ name: 'uiv2' })).rejects.toThrow('process.exit');
+
+    expect(exit).toHaveBeenCalledWith(1);
+    // The two failures that matter: no second thread, and no row overwritten.
+    expect(createArchitectThread).not.toHaveBeenCalled();
+    expect(setArchitectByName).not.toHaveBeenCalled();
+    exit.mockRestore();
+  });
+
+  it('auto-numbers past the reserved default instead of colliding with it', async () => {
+    threadEngineInstalled();
+    architects = [{ name: 'main' }];
+
+    await workspaceAddArchitect({});
+
+    expect(createArchitectThread).toHaveBeenCalledWith({ name: 'architect-2', workspaceRoot: '/ws' });
+  });
+
+  it('the first architect on the thread path is the reserved default', async () => {
+    threadEngineInstalled();
+
+    await workspaceAddArchitect({});
+
+    expect(createArchitectThread).toHaveBeenCalledWith({ name: 'main', workspaceRoot: '/ws' });
   });
 
   it('an unconfigured workspace is byte-for-byte unchanged — Tower, no thread', async () => {

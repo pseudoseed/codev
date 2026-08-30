@@ -25,6 +25,12 @@
  * else (not met), and the turn never ran (COULD_NOT_TELL — the criterion was not
  * evaluated).
  *
+ * The post-restart turn is delivered by a REAL CHILD PROCESS through
+ * `makeDeliveryPorts().writeMessage`, the port Tower's mailbox drainer calls, and
+ * against the built `dist`. Driving the engine from this process would prove less
+ * than it looks like: this process has already connected, and Tower never has. The
+ * child has to register an engine and adopt the thread on its own.
+ *
  * THE RESTART IS A RESTART
  *
  * `stop` then `start` would wipe the data dir and delete the thread, reporting the
@@ -191,7 +197,6 @@ describe('Spec 146 Phase 9 — #179 items 3 and 4 against the pinned server', ()
       const ack = join(workspaceRoot, 'ack.txt');
       const recall = join(workspaceRoot, 'recall.txt');
       let first: Connection | undefined;
-      let second: Connection | undefined;
 
       try {
         // A cold start, so the thread observed below is one this run created.
@@ -257,36 +262,55 @@ describe('Spec 146 Phase 9 — #179 items 3 and 4 against the pinned server', ()
         // result would read as item 4 failing.
         harness('restart', 120_000);
         const after = await readyDetails();
-        second = await connect(after.port, after.token);
-
-        const afterThreads = await second.shellThreads();
-        const afterRecord = afterThreads.find((t) => t.id === threadId);
-        expect(afterRecord, 'item 4: the thread did not survive the server restart').toBeDefined();
-        expect(afterRecord!.worktreePath, 'item 4: the surviving thread lost its worktree').toBe(workspaceRoot);
+        // No connection is made here. The harness surfaces ONE pairing token per
+        // server lifetime and a pairing grant is one-time, so a snapshot read from
+        // this process would spend the credential the child needs — and the child's
+        // run is the stronger evidence anyway: a turn that lands on this thread id
+        // after the restart is survival, observed by using it.
 
         // ── Item 4, second half: does it still know? ──────────────────────────
-        const resumedEngine = createPorchThreadEngine({
-          dispatcher: second.dispatcher,
-          journal: new DispatchJournal(join(workspaceRoot, 'commands-after.jsonl')),
-          tracker: new TurnTracker(),
-          projectId: String(afterRecord!.projectId ?? projectId),
-          workspaceRoot,
-          defaultHarness: 'codex',
-          defaultModel: 'gpt-5.6-luna',
-        });
-        // A fresh process's engine has never heard of this thread. `attach`, not
-        // `create`: creating would mint a second thread and prove nothing.
-        await resumedEngine.attach({
-          threadId,
-          worktreePath: workspaceRoot,
-          branch: '',
-          builderId: 'architect-air219',
-        });
-        await resumedEngine.startTurn(
-          threadId,
-          `Write the codeword I asked you to remember earlier to ${recall} — only the codeword, `
-          + `nothing else. Use the shell.`,
+        //
+        // Through a REAL CHILD PROCESS, and through `makeDeliveryPorts().writeMessage`
+        // — the port Tower's mailbox drainer calls — rather than by driving the engine
+        // from here.
+        //
+        // Driving it from here would prove less than it appears to. This process has
+        // already connected and holds a live engine; Tower never has. Delivery from a
+        // process that did not create the thread has to register an engine and adopt
+        // the thread on its own, and when it could not, the failure left through a bare
+        // `catch` as a held message with no explanation.
+        const child = execFileSync(
+          process.execPath,
+          [join(import.meta.dirname, 'helpers', 'air-219-deliver-from-fresh-process.mjs')],
+          {
+            encoding: 'utf8',
+            timeout: 300_000,
+            env: {
+              ...process.env,
+              CODEV_T3_URL: `http://127.0.0.1:${after.port}`,
+              CODEV_T3_TOKEN: after.token,
+              CODEV_T3_HARNESS: 'codex',
+              CODEV_T3_MODEL: 'gpt-5.6-luna',
+              AIR219_THREAD_ID: threadId,
+              AIR219_WORKSPACE: workspaceRoot,
+              AIR219_AGENT: 'architect-air219',
+              AIR219_MESSAGE:
+                `Write the codeword I asked you to remember earlier to ${recall} — only the codeword, `
+                + `nothing else. Use the shell.`,
+            },
+          },
         );
+        const delivery = JSON.parse(child.slice(child.indexOf('{'))) as {
+          written: boolean;
+          logs: string[];
+        };
+        expect(
+          delivery.written,
+          `item 4: a process that did not create the thread could not deliver to it — ${delivery.logs.join(' | ')}`,
+        ).toBe(true);
+        // Silence is the thing that was wrong before, so assert it: a delivery that
+        // succeeded must not also have logged one of the four failure sentences.
+        expect(delivery.logs, 'item 4: delivery reported success and logged a failure').toEqual([]);
         if (!(await waitForFile(recall, 300_000))) {
           throw new Error(
             'COULD_NOT_TELL: SECOND_TURN_TIMEOUT — the post-restart turn never produced a file, so '
@@ -301,7 +325,6 @@ describe('Spec 146 Phase 9 — #179 items 3 and 4 against the pinned server', ()
         ).toContain(codeword);
       } finally {
         first?.close();
-        second?.close();
         rmSync(workspaceRoot, { recursive: true, force: true });
         try {
           harness('stop', 30_000);

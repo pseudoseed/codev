@@ -15,7 +15,11 @@
 import { getConfig } from '../utils/index.js';
 import { logger } from '../utils/logger.js';
 import { getTowerClient } from '../lib/tower-client.js';
-import { validateArchitectName } from '../utils/architect-name.js';
+import {
+  autoNumberArchitectName,
+  DEFAULT_ARCHITECT_NAME,
+  validateArchitectName,
+} from '../utils/architect-name.js';
 import { getArchitects, setArchitectByName } from '../state.js';
 import { createArchitectThread, tryGetThreadEngine } from '../thread-runtime.js';
 import { ensureThreadBackendReady } from '../thread-backend.js';
@@ -68,13 +72,25 @@ export async function workspaceAddArchitect(
   if (tryGetThreadEngine()) {
     const existing = new Set(getArchitects(workspacePath).map((a) => a.name));
     let name = options.name;
-    if (!name) {
-      if (!existing.has('main')) name = 'main';
-      else {
-        let n = 2;
-        while (existing.has(`architect-${n}`)) n += 1;
-        name = `architect-${n}`;
+    if (name) {
+      // The Tower path refuses a name already registered. This one consulted
+      // `existing` only when auto-numbering, so an explicit collision created a
+      // SECOND thread and `setArchitectByName` overwrote the row — leaving the
+      // first thread alive on the server with nothing pointing at it. Two paths,
+      // one contract, and only one of them destroyed state.
+      //
+      // Same sentence as `addArchitect` in tower-instances.ts, deliberately: a
+      // user hitting this should not be able to tell which engine refused.
+      if (existing.has(name)) {
+        logger.error(`Architect '${name}' is already registered in this workspace.`);
+        process.exit(1);
       }
+    } else {
+      // `autoNumberArchitectName` starts at 2 and never returns the reserved
+      // default, so 'main' stays this path's first-architect case.
+      name = existing.has(DEFAULT_ARCHITECT_NAME)
+        ? autoNumberArchitectName(existing)
+        : DEFAULT_ARCHITECT_NAME;
     }
     const threadId = await createArchitectThread({ name, workspaceRoot: workspacePath });
     setArchitectByName(workspacePath, name, {

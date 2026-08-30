@@ -83,22 +83,52 @@ export interface DeliverySession {
    * The delivery path skips the render gate and writes via `thread.turn.start`.
    */
   readonly threadId?: string;
+  /**
+   * What the delivering process needs to reach that thread (issue #219).
+   *
+   * A thread id alone is not enough. The engine keeps threads in process-local
+   * maps, and Tower — which is where mailbox delivery runs — is not the process
+   * that created them. It must register an engine and ADOPT the thread before a
+   * turn can be started on it, and neither is derivable from the id: the
+   * worktree and branch come from the row that recorded them at spawn.
+   *
+   * Carried on the session because that is where `getSessionForAgent` already
+   * holds the workspace and the row; `writeMessage` receives only the session.
+   */
+  readonly threadContext?: ThreadDeliveryContext;
+}
+
+/** What a delivering process needs to adopt a thread it did not create. */
+export interface ThreadDeliveryContext {
+  readonly workspaceRoot: string;
+  /** An architect's is the workspace root; a builder's is its worktree. */
+  readonly worktreePath: string;
+  /** An architect has none, and says so with `''`. */
+  readonly branch: string;
+  /** The agent the row addresses — the engine's `builderId`. */
+  readonly agent: string;
+  readonly harness?: string;
+  readonly model?: string;
 }
 
 export function isThreadDeliverySession(session: DeliverySession): boolean {
   return typeof session.threadId === 'string' && session.threadId.length > 0;
 }
 
-export function threadDeliverySession(threadId: string): DeliverySession {
+export function threadDeliverySession(
+  threadId: string,
+  context?: ThreadDeliveryContext,
+): DeliverySession {
   return {
     bytesWritten: 0,
     info: { cols: 0, rows: 0 },
     command: '',
     launchArgs: [],
-    cwd: '',
+    cwd: context?.workspaceRoot ?? '',
     writable: true,
     write: () => true,
     threadId,
+    threadContext: context,
   };
 }
 

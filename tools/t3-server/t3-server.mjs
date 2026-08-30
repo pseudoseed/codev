@@ -501,11 +501,50 @@ function stop() {
  * criterion is about.
  */
 function restart() {
+  // A running server, first. `stop` leaves the data dir in place, so a data dir is
+  // NOT evidence that anything is running — `stop` then `restart` would have
+  // succeeded with no server having been replaced, and reported a restart that did
+  // not happen. What item 4 asks about is a process being replaced, and that has to
+  // be true before this exits 0.
+  const pid = readPid();
+  const holders = ownedPortHolders();
+  if (!pid && holders.ours.length === 0) {
+    die(
+      UNDETERMINED,
+      `NOT_RUNNING: could not check: no harness server is running on port ${port}` +
+        (holders.foreign.length > 0
+          ? `; pid(s) ${holders.foreign.join(', ')} hold it and are not ours.`
+          : '.') +
+        `\n  A restart of nothing is not a restart. Use \`start\` for a cold one.`,
+    );
+  }
+
   const dataDir = join(runtimeDir, 'data');
   if (!existsSync(dataDir)) {
-    die(UNDETERMINED, `NO_DATA_TO_KEEP: could not check: ${dataDir} does not exist. Nothing has run here, so there is no restart to perform.`);
+    die(UNDETERMINED, `NO_DATA_TO_KEEP: could not check: ${dataDir} does not exist, so there is no server state to preserve.`);
   }
+
   stop();
+
+  // `stop` signals; it does not wait. Starting before the old listener lets go
+  // gives `start` a port already bound, and that failure has nothing to do with
+  // the restart.
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const { ours } = ownedPortHolders();
+    if (ours.length === 0) break;
+    execFileSync('sleep', ['0.25']);
+  }
+  const stillHeld = ownedPortHolders().ours;
+  if (stillHeld.length > 0) {
+    die(
+      UNDETERMINED,
+      `PORT_NOT_RELEASED: could not check: pid(s) ${stillHeld.join(', ')} still hold port ${port} ` +
+        `30s after stop. The old server was not replaced, and starting on top of it would test the ` +
+        `wrong process.`,
+    );
+  }
+
   start({ keepData: true });
 }
 

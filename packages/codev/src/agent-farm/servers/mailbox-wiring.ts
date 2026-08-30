@@ -37,7 +37,8 @@ import {
 } from '../commands/reset/context.js';
 import { getGlobalDb } from '../db/index.js';
 import { getArchitectByName, getBuilder } from '../state.js';
-import { deliverThreadTurn } from '../thread-runtime.js';
+import { deliverThreadTurn, getThreadEngine } from '../thread-runtime.js';
+import { ensureThreadBackendReady } from '../thread-backend.js';
 import { formatBuilderMessage } from '../utils/message-format.js';
 import { supersede as supersedeMailbox, dismissHeldWithKey, NOTICE_SUPERSEDE_PREFIX } from '../db/mailbox.js';
 import path from 'node:path';
@@ -47,6 +48,7 @@ import {
   threadDeliverySession,
   type DeliveryPorts,
   type DeliverySession,
+  type ThreadDeliveryContext,
   type HeldRecoveryResult,
   type DeliveredBroadcast,
   type EscalationInfo,
@@ -115,9 +117,27 @@ const NODE_FS_PORT: ContextFsPort = buildContextFsPort();
 export function resolveLiveSessionForAgent(workspacePath: string, toAgent: string): DeliverySession | null {
   try {
     const builder = getBuilder(toAgent, workspacePath);
-    if (builder?.threadId) return threadDeliverySession(builder.threadId);
+    if (builder?.threadId) {
+      return threadDeliverySession(builder.threadId, {
+        workspaceRoot: workspacePath,
+        worktreePath: builder.worktree,
+        branch: builder.branch,
+        agent: toAgent,
+        harness: builder.harness,
+        model: builder.model,
+      });
+    }
     const architect = getArchitectByName(workspacePath, toAgent);
-    if (architect?.threadId) return threadDeliverySession(architect.threadId);
+    if (architect?.threadId) {
+      // An architect's worktree IS the workspace root, and it has no branch —
+      // the shape `createArchitectThread` writes.
+      return threadDeliverySession(architect.threadId, {
+        workspaceRoot: workspacePath,
+        worktreePath: workspacePath,
+        branch: '',
+        agent: toAgent,
+      });
+    }
   } catch {
     // Registry unreadable: fall through to the PTY map.
   }
@@ -380,6 +400,83 @@ function broadcastDelivered(frame: DeliveredBroadcast): void {
  * drainer one at boot; the shared state that matters (the per-agent write
  * serializer) lives in `mailbox-delivery.ts`, not here.
  */
+/**
+ * Deliver one message as a turn on a t3code thread, from Tower's process.
+ *
+ * WHY THIS IS MORE THAN `deliverThreadTurn` (issue #219)
+ *
+ * `ensureThreadBackendReady` runs in the `afx` CLI process, which exits. Tower is a
+ * different, long-lived process and registers no engine of its own, so
+ * `deliverThreadTurn` threw here for every thread-backed row — and the bare `catch`
+ * that used to wrap it turned that into `return false`, which the delivery path holds
+ * as `no-live-pty`. A workspace that configured threads therefore traded a working
+ * Tower architect for one that could never receive mail, and nothing said so.
+ *
+ * So: register the engine in THIS process, adopt the thread (it was created in
+ * another one), then start the turn.
+ *
+ * FOUR WAYS THIS FAILS, FOUR SENTENCES
+ *
+ * The port contract is a boolean, and the held-reason vocabulary is fixed at three
+ * values by a CHECK constraint on the mailbox table, so all four still hold the row
+ * the same way. What they no longer do is leave through the same silence: each logs
+ * at ERROR naming which of the four happened, because "Tower has no engine" is a bug
+ * in this repo and "the server refused the turn" is not, and an operator could not
+ * tell them apart from an empty catch.
+ */
+async function deliverToThread(
+  threadId: string,
+  context: ThreadDeliveryContext | undefined,
+  msg: string,
+  log: LogFn,
+): Promise<boolean> {
+  const where = `thread ${threadId}`;
+  if (!context) {
+    log('ERROR', `[mailbox] ${where}: the session carries no thread context, so this process cannot `
+      + `reach it. The row is thread-backed and delivery has nothing to attach to — a wiring fault here, `
+      + `not a statement about the thread or the server.`);
+    return false;
+  }
+  try {
+    const state = await ensureThreadBackendReady(context.workspaceRoot);
+    if (state === 'not-configured') {
+      log('ERROR', `[mailbox] ${where}: the row for ${context.agent} is thread-backed, but `
+        + `${context.workspaceRoot} names no t3code server. A thread-backed row in a workspace with no `
+        + `server configured is a contradiction — the row, or the config, is wrong.`);
+      return false;
+    }
+  } catch (err) {
+    log('ERROR', `[mailbox] ${where}: could not register a thread engine in this process — `
+      + `${err instanceof Error ? err.message : String(err)}. The server was named and could not be `
+      + `used; nothing was delivered and the row stays held.`);
+    return false;
+  }
+  try {
+    await getThreadEngine().attach({
+      threadId,
+      worktreePath: context.worktreePath,
+      branch: context.branch,
+      builderId: context.agent,
+      harnessName: context.harness,
+      model: context.model,
+    });
+  } catch (err) {
+    log('ERROR', `[mailbox] ${where}: could not adopt the thread in this process — `
+      + `${err instanceof Error ? err.message : String(err)}. This is not evidence that the thread is `
+      + `gone; it is evidence that this process cannot address it.`);
+    return false;
+  }
+  try {
+    await deliverThreadTurn(threadId, msg);
+    return true;
+  } catch (err) {
+    log('ERROR', `[mailbox] ${where}: the server refused the turn — `
+      + `${err instanceof Error ? err.message : String(err)}. The thread was reached and the message `
+      + `was not accepted.`);
+    return false;
+  }
+}
+
 export function makeDeliveryPorts(log: LogFn): DeliveryPorts {
   return {
     getSessionForAgent: (ws, agent) => resolveLiveSessionForAgent(ws, agent),
@@ -387,12 +484,7 @@ export function makeDeliveryPorts(log: LogFn): DeliveryPorts {
     classify: (session, profile) => classifyAgentScreen(session, profile, (m) => log('INFO', m)),
     writeMessage: async (session, msg, noEnter) => {
       if (isThreadDeliverySession(session) && session.threadId) {
-        try {
-          await deliverThreadTurn(session.threadId, msg);
-          return true;
-        } catch {
-          return false;
-        }
+        return await deliverToThread(session.threadId, session.threadContext, msg, log);
       }
       return writeMessagePaced(session, msg, noEnter);
     },
