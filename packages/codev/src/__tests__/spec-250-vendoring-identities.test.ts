@@ -1143,7 +1143,7 @@ describe('spec 250: criterion 8b, the kill test', () => {
       'the criterion 8b evidence names a different fork commit than the one checked out — ' +
         'regenerate it with\n' +
         '  export T3_NODE=/absolute/path/to/node T3_HARNESS_PORT=<free port>\n' +
-        '  node tools/t3-fork/criterion-8b.mjs > codev/research/250-criterion-8b-evidence.json\n' +
+        '  node tools/t3-fork/criterion-8b.mjs --out codev/research/250-criterion-8b-evidence.json\n' +
         'rather than trusting a result recorded against an older guard.',
     ).toBe(head.stdout.trim());
   });
@@ -1199,7 +1199,7 @@ describe('spec 250: criterion 8b, the kill test', () => {
         evidenceAge,
         `${source} changed after the criterion 8b evidence was recorded — regenerate it with\n` +
           `  export T3_NODE=/absolute/path/to/node T3_HARNESS_PORT=<free port>\n` +
-          `  node tools/t3-fork/criterion-8b.mjs > codev/research/250-criterion-8b-evidence.json\n` +
+          `  node tools/t3-fork/criterion-8b.mjs --out codev/research/250-criterion-8b-evidence.json\n` +
           `rather than trusting a stale result. The redirection is part of the command.`,
       ).toBeGreaterThanOrEqual(statSync(source).mtimeMs - 1000);
     }

@@ -604,3 +604,66 @@ Per the architect's displacement ruling the classify-churn lesson stays COLD. Th
 from this project are filed on #199 as evidence instead — comment 5471612980 — with the argument
 that criterion 8b is a rung below the current slot-4 wording: there was no check to answer wrongly,
 because the harness had no verb that could host one, and an absence has no output to inspect.
+
+---
+
+## Phase 3 — Hierarchy integrity refused at write time
+
+### What a human can see or do now that they could not before
+
+**Nothing.** These are refusals on an API nobody calls yet, exactly as the phase table predicts.
+Phase 7 is still the first phase that renders.
+
+### The rule, and where it is enforced
+
+One sentence: **the only legal edge is architect → builder.** Enforced in the decider, at write
+time. Criterion 11 says "verified against the decider, not against the UI", and that is the point —
+a rule enforced only where the tree is drawn is a rule the API does not have.
+
+No fallback rendering. A reader that reparents an orphan, or draws a parentless builder at the
+root, produces a second correct-looking answer, and then two places disagree about the tree with
+nothing to say which is right.
+
+### Six discriminants, not one error
+
+`parent-not-found`, `parent-in-other-project`, `parent-is-self`, `parent-not-architect`,
+`builder-without-parent`, `parent-on-non-builder`. A caller acts differently on each: "no such
+parent" is a retry once the parent lands, "wrong parent role" is a caller bug, "builder without a
+parent" is a missing field. One error for all of them says something is wrong and nothing about
+what to do — and then gets matched on the message string, which is worse than no discriminant.
+
+**Check order is load-bearing.** `parent-is-self` before `parent-not-found`, because a
+self-reference is a caller bug whether or not the thread exists yet and "no such parent" would send
+someone hunting a thread that is right in front of them. `parent-in-other-project` separate from
+`parent-not-found` for the same reason: the parent *does* exist.
+
+### The deliberate non-refusal
+
+A parent archived or deleted afterwards is **not** retro-refused. Retro-refusal would make an
+archive fail because of a thread it does not know about, and make archiving order-dependent. Those
+children become orphans: still readable, still carrying the edge, pointing at an archived parent.
+Two persistence tests assert an orphan stays distinguishable from a thread that never had a parent —
+phase 7 needs that difference to put one in the unattributed group and leave the other alone.
+
+Also accepted: creating a builder under an *already archived* architect. The rule is about the
+edge's shape, not the parent's lifecycle; refusing would mean archiving silently changes which
+commands are legal, which is a second rule nobody wrote down.
+
+### A flaw in my own tooling, found the hard way
+
+`criterion-8b.mjs` was documented as `> evidence.json`. A shell redirect **truncates the target the
+instant the process starts**, so when the run crashed transiently it left an empty evidence file
+where a passing one had been — and the suite then failed on a file that said nothing rather than on
+the run that broke. I destroyed a good record that way.
+
+Now `--out <path>`: the evidence is written once, at the end, and **only when the run passed**. A
+failed run leaves the previous record untouched and reports the failure through its exit code and
+stdout. Same shape as everything else this project keeps finding — a failure mode that reads
+identically to a different, more alarming failure.
+
+### Receipts
+
+- Fork commit `e1b7f7b04af5`, pushed to `origin/codev`.
+- Fork typecheck green; contracts **291 passed**; server **2788 passed, 8 skipped**, 1 pre-existing.
+- Codev repo: build green, **7285 passed, 55 skipped, 0 failed**, plus 180 in the v2 suite.
+- 15 decider tests, one per case, asserting the discriminant rather than the failure.

@@ -138,6 +138,7 @@ against that file rather than against a layer it assembles.
 | 2 | `1a414cee8409a407977ff6c6505fad1ab82f2ec8` | `role` and `parentThreadId` on the thread record, through the contract, the projector and both persistence paths. Columns applied by `apps/server/src/codev/schemaGuard.ts`, outside upstream's migration registry. |
 | 2 | `992b781f4314ec1df1abb752c7c9c5378ec13c26` | Review fixes: the "upstream migration still runs" test goes through the migrator instead of a raw `ALTER TABLE`, and `apps/server/scripts/apply-codev-guard.ts` runs the real guard against a file-backed database for criterion 8b. |
 | 2 | `e1a858434a8096d7a82e05347f8159d94f42c0b1` | The two `CODEV_SCHEMA_GUARD_*` log signals are pinned by a test — they are the whole mitigation for staying out of the migration registry and nothing enforced they stay two. |
+| 3 | `e1b7f7b04af5aa869a552baa622fc9e526a00bb3` | Illegal hierarchy edges refused at write time in the decider, with six reason discriminants. `role`/`parentThreadId` added to `thread.create`, optional so upstream clients dispatch it unchanged. |
 
 ### Migration 900 is abandoned, and must stay abandoned
 

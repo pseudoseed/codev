@@ -28,16 +28,23 @@
  *
  * Usage:
  *   export T3_NODE=/absolute/path/to/node
- *   node tools/t3-fork/criterion-8b.mjs > codev/research/250-criterion-8b-evidence.json
+ *   node tools/t3-fork/criterion-8b.mjs --out codev/research/250-criterion-8b-evidence.json
+ *
+ * Prefer `--out` over a shell redirect. A redirect truncates the target the
+ * instant the process starts, so a run that dies partway leaves an EMPTY evidence
+ * file where a good one used to be — the previous, passing result is gone and the
+ * suite fails on a file that says nothing rather than on the run that broke. With
+ * `--out` the evidence is written once, at the end, and only when the run passed.
+ * A redirect still works and still prints the JSON; it just cannot protect you.
  */
 
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { resolveIdentities } from './identities.mjs';
+import { MISMATCH, OK, resolveIdentities } from './identities.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
@@ -195,5 +202,25 @@ try {
   try { runHarness('stop'); } catch { /* already stopped */ }
 }
 
-console.log(JSON.stringify(evidence, null, 2));
-process.exit(evidence.passed ? 0 : 1);
+const serialized = `${JSON.stringify(evidence, null, 2)}\n`;
+console.log(serialized.trimEnd());
+
+const outIdx = process.argv.indexOf('--out');
+if (outIdx >= 0) {
+  const out = process.argv[outIdx + 1];
+  if (!out) {
+    say('--out was given without a path; refusing to guess one.');
+    process.exit(MISMATCH);
+  }
+  if (evidence.passed) {
+    writeFileSync(out, serialized);
+    say(`evidence written to ${out}`);
+  } else {
+    // Deliberately NOT written. Overwriting a passing record with a failure is
+    // how a transient crash silently destroys the only evidence that the
+    // criterion ever held; the run's own exit code and stdout report the failure.
+    say(`run did not pass; ${out} left untouched. Read the JSON above for what failed.`);
+  }
+}
+
+process.exit(evidence.passed ? OK : MISMATCH);
