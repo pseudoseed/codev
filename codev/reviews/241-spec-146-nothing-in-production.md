@@ -123,7 +123,7 @@ the refusal fired into nothing and stayed invisible. That handler now **logs** t
 the server's own sentence, which is as far as `track` can honestly go.
 
 Failing the spawn would mean some caller awaiting `running`, and none does today. So the chain
-is: raised (this PR), visible (this PR), *acted on* — not yet. The plan's manual step 4 said the
+is: raised (this PR), visible (this PR), *acted on* — **#260**. The plan's manual step 4 said the
 spawn would "report `SessionStartFailedError` in seconds"; what it actually does is log it in
 seconds while the spawn succeeds. Corrected here rather than left standing.
 
@@ -208,11 +208,8 @@ fixed in `a1ab36084`; the suite was green afterwards.
 `src/terminal/__tests__/session-manager.test.ts > SessionManager > auto-restart logic >
 respects maxRestarts limit` failed once under full-suite load with `timeout waiting for max
 restarts`, and passed on its own (91/91, 27.8s) immediately after. It is a timing-sensitive PTY
-restart test and this PR touches nothing under `src/terminal/`.
-
-Recorded rather than skipped. Annotating someone else's test as flaky on one observation would
-be a scope decision I do not get to make here, and CI on #258 ran all nine jobs green including
-Unit Tests. Noted so the next person who sees it has a second data point rather than a first.
+restart test and this PR touches nothing under `src/terminal/`. Already tracked as **#200**;
+left untouched. CI on #258 ran all nine jobs green including Unit Tests.
 
 ## Follow-ups
 
@@ -223,6 +220,11 @@ Unit Tests. Noted so the next person who sees it has a second data point rather 
   `T3codeSessionCache` reconciles both directions; `ThreadAdoptionSweeper` reconciles one.
   Raised by the claude lane, grounded by reading the call sites, and filed rather than folded in
   so this PR does not grow on the critical path.
+- **#260** — a session refusal is raised and logged but nothing acts on it, so `afx spawn` onto
+  a harness the server refuses still succeeds. `track()` follows `started.running` rather than
+  awaiting it, by design, so the operator sees a builder that spawned fine and then does nothing
+  — while the server answered in ~12ms with a sentence naming the misconfiguration. Raised and
+  visible are not handled; filed so the distinction has a number rather than only a paragraph.
 - **#251** — fold `T3codeSessionCache`'s display subscription onto this one. Its `watching` /
   `stale` vocabulary is built on a stream that ends, and a `ResumingSubscription` never does, so
   it is a rewrite of that vocabulary plus its tests rather than a wiring change.
