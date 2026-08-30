@@ -323,3 +323,42 @@ Both sites now go through one `subscriptionKeyFor()`. I also scanned all 29 file
 this branch for NUL bytes — none remain.
 
 Suite: 6979 passing, 0 failing.
+
+## Phase 3 — `afx pair issue/list/revoke`
+
+Landed. Three subcommands, all direct store operations, so **revoking costs exactly what
+minting costs** and works with no credential and with Tower down — which is when an operator
+most wants it. The HTTP routes are unchanged for clients that do hold a session.
+
+`--purpose` is required with no default. A default would fail at redemption — a different
+process, a different route, a message about a token rather than about the choice made silently
+for the operator. `--authority` is the mirror: the flag is optional, the recorded value is never
+empty, and an explicitly empty one is refused because an operator who tried to say something and
+said nothing is not the same as one who did not try. The default names the command and the OS
+account and says outright that no human presence was verified.
+
+### Verified by running it, not only by tests
+
+Drove the real CLI (`runAgentFarm(['pair', ...])`) against a scratch `CODEV_AGENT_FARM_DIR`:
+issue for both purposes, list showing outstanding/redeemed/expired and paired machines, revoke
+on a name with nothing live, and exit code 1 for both a missing and an unknown `--purpose`.
+
+That is how I found the one real bug in this phase: **`cli.ts` uses `parseAsync`, which awaits
+what an action returns.** I had written the actions as `.action(() => { void (async () => {...})(); })`,
+which hands it nothing to wait for — so the process exited before the dynamic import resolved and
+`afx pair issue` printed **nothing, silently, with exit code 0**. Every other action in the file
+is `async` and awaited; mine now are too. No unit test would have caught it: the tests call the
+functions directly, and the defect lives entirely in the wiring between commander and the module.
+This is the "code that passes its tests and production never reaches" shape, caught by driving
+the actual command.
+
+### Test notes
+
+`revoke` against a corrupt store needed the corrupt file to be **that machine's own record** —
+the store keeps one file per machine keyed by a hash of the name, so junk under another name is
+correctly "not this machine" rather than "unreadable". The narrower claim is the true one.
+
+The token-leak assertion walks every file under the scratch root rather than checking a known
+variable, because the leak this guards against is the one nobody remembered to redact.
+
+Suite: 7003 passing, 0 failing.
