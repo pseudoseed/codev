@@ -562,3 +562,55 @@ report-vs-reality gap and phase 6 is about to consume this record shape.
    approval proceeds at all.
 
 Suite: 7053 passing, 0 failing.
+
+## Phase 6 — the client submits and polls
+
+### The protocol mistake, repeated
+
+I pipelined `porch next` into `porch done` again after phase 5's approval, so porch marked phase
+6's build complete before phase 6 existed — the same error I recorded in the phase 4 rebuttal and
+said I would not repeat. Caught it at the same point (the consultation would have reviewed
+nothing) and implemented the phase before running any review, so again no reviewer was misled.
+**`porch next` and `porch done` must never be in one command.** Writing it down twice has not
+worked; the rule is now: after an approval, run `porch status` and read which phase is open
+before anything else.
+
+### The client
+
+`approveGate` submits to `/gates/approvals`, polls until terminal, and reports. A host that
+answers **501** falls back to the synchronous route — `tools/codev-agent-host` was such a host,
+and the fallback keeps every older path approving everything it ever could.
+
+Every terminal state maps to something a human can act on, and the two that matter are the ones
+that are *not* refusals: `interrupted` is `unconfirmed` carrying the server's reading of
+`status.yaml`, and a `succeeded` record this build cannot parse is `unconfirmed` too. Both would
+otherwise send someone to approve what may already be approved. **Giving up waiting is also
+`unconfirmed`, never a refusal** — this client stopping does not stop porch, so reporting "not
+approved" would reintroduce the exact failure the async path exists to prevent, in the client.
+
+The panel shows the server's own phase and check names while it runs. Three distinct sentences —
+accepted-not-started, running-with-no-detail, running-these-checks — because one "Approving…" for
+all three is the spinner this phase exists to remove.
+
+### Test harness bug worth recording
+
+`approval.test.ts`'s router matched routes by `url.includes(path)`, and **`/gates/approve` is a
+prefix of `/gates/approvals`** — so the synchronous stub answered the asynchronous submit and
+every test passed against a route it was not exercising. Longest-match now, plus GET support and
+scripted multi-answer routes for polling. A helper that silently answers the wrong route is the
+same defect as production code that does.
+
+### The e2e split
+
+`two-machines.spec.ts:235` was criterion 11's only end-to-end assertion and the UI no longer
+reaches that branch. **Not deleted**: it drives the synchronous route directly now, and a new
+test drives the UI's async path on a `passingChecks` stand — checks declared (so the sync route
+still refuses the same project) with commands overridden to `true` (so they pass). `agent-host`
+now wires an operation store, or the e2e stand would have fallen back to sync and the new path
+would have gone untested while the suite looked complete.
+
+**Not run: Playwright e2e.** It is excluded from porch's `tests` check (`--exclude='**/e2e/**'`)
+and no browser run happened here. The spec file changes are unverified by execution and are
+recorded as such.
+
+Suites: client 218 passing, server 7053 passing, 0 failing.

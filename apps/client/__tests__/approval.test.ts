@@ -12,20 +12,46 @@ const config: MachineConfig = {
 
 type Call = { url: string; headers: Record<string, string>; body: any };
 
-function router(routes: Record<string, { status: number; body: unknown }>) {
+/**
+ * LONGEST MATCH WINS, and that is not a nicety.
+ *
+ * `/gates/approve` is a PREFIX of `/gates/approvals`, so a first-match router
+ * served the synchronous stub to the asynchronous submit — and every test in this
+ * file passed against a route it was not exercising. A helper that silently
+ * answers the wrong route is the same defect as production code that does.
+ *
+ * It also serves GETs, which the poll uses and which carry no body.
+ */
+function router(
+  routes: Record<string, { status: number; body: unknown } | Array<{ status: number; body: unknown }>>,
+) {
   const calls: Call[] = [];
-  const fetchImpl = (async (url: string, init: RequestInit) => {
+  const served: Record<string, number> = {};
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
     calls.push({
       url,
-      headers: init.headers as Record<string, string>,
-      body: JSON.parse(init.body as string),
+      headers: (init?.headers ?? {}) as Record<string, string>,
+      body: init?.body ? JSON.parse(init.body as string) : undefined,
     });
-    const key = Object.keys(routes).find((path) => url.includes(path));
-    const route = key ? routes[key] : { status: 404, body: { signal: 'NOT_FOUND' } };
+    const key = Object.keys(routes)
+      .filter((path) => url.includes(path))
+      .sort((a, b) => b.length - a.length)[0];
+    if (!key) return new Response(JSON.stringify({ signal: 'NOT_FOUND' }), { status: 404 });
+    const entry = routes[key];
+    // An array is a SCRIPT: each call takes the next answer, and the last one
+    // repeats. That is how a poll that must change its answer is driven without
+    // the test controlling a clock.
+    const route = Array.isArray(entry)
+      ? entry[Math.min(served[key] ?? 0, entry.length - 1)]
+      : entry;
+    served[key] = (served[key] ?? 0) + 1;
     return new Response(JSON.stringify(route.body), { status: route.status });
   }) as unknown as typeof globalThis.fetch;
   return { fetchImpl, calls };
 }
+
+/** The 501 an older host answers, so the synchronous route is used instead. */
+const NO_ASYNC = { '/gates/approvals': { status: 501, body: { signal: 'APPROVAL_OPERATIONS_NOT_AVAILABLE' } } };
 
 describe('openHumanSession', () => {
   it('presents the pairing token alongside the machine credential', async () => {
@@ -52,6 +78,7 @@ describe('approveGate', () => {
 
   it('issues, mints and spends, in that order, against the named gate', async () => {
     const { fetchImpl, calls } = router({
+      ...NO_ASYNC,
       '/approval-capabilities': { status: 201, body: { capabilityId: 'cap-1', presentation: 'cap-1.s' } },
       '/approval-nonces': { status: 201, body: { nonce: 'n-1' } },
       '/gates/approve': {
@@ -61,13 +88,18 @@ describe('approveGate', () => {
     });
     const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'plan-approval' });
     expect(result).toMatchObject({ ok: true, machine: 'alpha', sessionId: 's1' });
+    // FOUR CALLS, NOT THREE: the asynchronous route is tried first and this host
+    // answers 501, so the synchronous one is used. That fallback is the documented
+    // behaviour for a host with no operation store, and it is asserted here rather
+    // than left as an implementation detail.
     expect(calls.map((call) => call.url.replace('/m/alpha/api/agent/v1', ''))).toEqual([
       '/approval-capabilities',
       '/approval-nonces',
+      '/workspaces/L1VzZXJzL3gvZGV2L2NvZGV2/gates/approvals',
       '/workspaces/L1VzZXJzL3gvZGV2L2NvZGV2/gates/approve',
     ]);
     expect(calls[1].body).toMatchObject({ projectId: '146', gateName: 'plan-approval', capabilityId: 'cap-1' });
-    expect(calls[2].body).toMatchObject({ capability: 'cap-1.s', nonce: 'n-1' });
+    expect(calls[3].body).toMatchObject({ capability: 'cap-1.s', nonce: 'n-1' });
     for (const call of calls) expect(call.headers['x-codev-human-session']).toBe('s1.secret');
   });
 
@@ -75,6 +107,7 @@ describe('approveGate', () => {
      names a machine. A route that refuses one must surface its reason. */
   it('stops at the first refusal and names which step refused', async () => {
     const { fetchImpl, calls } = router({
+      ...NO_ASYNC,
       '/approval-capabilities': {
         status: 400,
         body: { signal: 'APPROVAL_CAPABILITY_FOREIGN_MACHINE', message: 'not this host' },
@@ -87,6 +120,7 @@ describe('approveGate', () => {
 
   it('never reports a refused approval as approved', async () => {
     const { fetchImpl } = router({
+      ...NO_ASYNC,
       '/approval-capabilities': { status: 201, body: { capabilityId: 'cap-1', presentation: 'cap-1.s' } },
       '/approval-nonces': { status: 201, body: { nonce: 'n-1' } },
       '/gates/approve': { status: 403, body: { signal: 'PHASE_CHECKS_FAILED', message: 'checks failed' } },
@@ -121,6 +155,7 @@ describe('a session that ended mid-ceremony', () => {
     ['APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION', 403],
   ])('reports %s as a session that ended', async (signal, status) => {
     const { fetchImpl } = router({
+      ...NO_ASYNC,
       '/approval-capabilities': { status, body: { signal, message: 'gone' } },
     });
     const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
@@ -129,6 +164,7 @@ describe('a session that ended mid-ceremony', () => {
 
   it('does not call an ordinary refusal a dead session', async () => {
     const { fetchImpl } = router({
+      ...NO_ASYNC,
       '/approval-capabilities': { status: 201, body: { capabilityId: 'c', presentation: 'c.s' } },
       '/approval-nonces': { status: 201, body: { nonce: 'n' } },
       '/gates/approve': { status: 403, body: { signal: 'PHASE_CHECKS_FAILED', message: 'checks failed' } },
@@ -160,6 +196,7 @@ describe('an approval that is recorded but does not travel', () => {
     ['unknown', 'the approval is recorded in status.yaml, but this request then failed'],
   ])('reports %s as a success carrying a caveat', async (delivery, deliveryMessage) => {
     const { fetchImpl } = router({
+      ...NO_ASYNC,
       '/approval-capabilities': { status: 201, body: { capabilityId: 'c', presentation: 'c.s' } },
       '/approval-nonces': { status: 201, body: { nonce: 'n' } },
       '/gates/approve': {
@@ -182,6 +219,7 @@ describe('an approval that is recorded but does not travel', () => {
 
   it('ignores a delivery stage it does not recognise rather than passing it through', async () => {
     const { fetchImpl } = router({
+      ...NO_ASYNC,
       '/approval-capabilities': { status: 201, body: { capabilityId: 'c', presentation: 'c.s' } },
       '/approval-nonces': { status: 201, body: { nonce: 'n' } },
       '/gates/approve': {
@@ -202,6 +240,7 @@ describe('an approval that is recorded but does not travel', () => {
 
   it('carries no caveat on an ordinary approval', async () => {
     const { fetchImpl } = router({
+      ...NO_ASYNC,
       '/approval-capabilities': { status: 201, body: { capabilityId: 'c', presentation: 'c.s' } },
       '/approval-nonces': { status: 201, body: { nonce: 'n' } },
       '/gates/approve': {
@@ -238,6 +277,7 @@ describe('an approval the client cannot confirm', () => {
   function upTo(approve: { status: number; body: unknown }) {
     return router({
       '/approval-capabilities': { status: 201, body: { capabilityId: 'c', presentation: 'c.s' } },
+      ...NO_ASYNC,
       '/approval-nonces': { status: 201, body: { nonce: 'n' } },
       '/gates/approve': approve,
     });
@@ -321,4 +361,206 @@ describe('an approval the client cannot confirm', () => {
     expect(result.ok === false && result.unconfirmed).toBeFalsy();
     expect(result.ok === false && result.signal).toBe('PHASE_CHECKS_REQUIRED');
   });
+});
+
+/**
+ * THE PATH AN ORDINARY PROJECT MUST TAKE.
+ *
+ * The synchronous route refuses any project whose phase declares checks, so
+ * before this existed a human reaching a gate in this client was sent to the CLI.
+ * These drive submit → poll → report against the routes that replace it.
+ */
+describe('approveGate, asynchronously', () => {
+  const session = { sessionId: 's1', presentation: 's1.secret', expiresAt: 'later' };
+  const credentials = {
+    '/approval-capabilities': { status: 201, body: { capabilityId: 'cap-1', presentation: 'cap-1.s' } },
+    '/approval-nonces': { status: 201, body: { nonce: 'n-1' } },
+  };
+
+  it('submits, polls until it settles, and reports the persisted record', async () => {
+    const { fetchImpl, calls } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-1', state: 'submitted' } },
+        { status: 200, body: { state: 'running', phase: 'review', checks: ['build', 'tests'] } },
+        {
+          status: 200,
+          body: {
+            state: 'succeeded',
+            record: {
+              machine: 'alpha',
+              sessionId: 's1',
+              approvedAt: '2026-08-30T01:00:00Z',
+              outcome: 'approved',
+            },
+          },
+        },
+      ],
+    });
+    const progress: unknown[] = [];
+    const result = await approveGate(
+      fetchImpl,
+      config,
+      session,
+      { projectId: '146', gateName: 'pr' },
+      (update) => progress.push(update),
+    );
+
+    expect(result).toMatchObject({
+      ok: true, machine: 'alpha', sessionId: 's1', approvedAt: '2026-08-30T01:00:00Z',
+    });
+    // The submit is a POST with the four fields; the polls are GETs with none.
+    expect(calls[2].body).toMatchObject({ projectId: '146', gateName: 'pr', capability: 'cap-1.s', nonce: 'n-1' });
+    expect(calls[3].body).toBeUndefined();
+    // What was reported while it ran is the SERVER's phase and checks.
+    expect(progress).toEqual([
+      { state: 'running', operationId: 'op-1', phase: 'review', checks: ['build', 'tests'] },
+    ]);
+  }, 20_000);
+
+  it('reports a refusal with porch\'s own code, not a generic failure', async () => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-2', state: 'submitted' } },
+        { status: 200, body: { state: 'refused', code: 'PHASE_CHECKS_FAILED', message: 'the checks did not pass' } },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({
+      ok: false, signal: 'PHASE_CHECKS_FAILED', message: 'the checks did not pass',
+    });
+    expect((result as { unconfirmed?: boolean }).unconfirmed).toBeUndefined();
+  }, 20_000);
+
+  /*
+   * AN INTERRUPTION IS NOT A REFUSAL. The host stopped while the work ran and the
+   * gate may well be approved — the server has read `status.yaml` and its message
+   * says which it found. Rendering this as "not approved" would send a human to
+   * approve something already approved.
+   */
+  it('reports an interrupted approval as unconfirmed, carrying the server\'s reading', async () => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-3', state: 'submitted' } },
+        {
+          status: 200,
+          body: {
+            state: 'interrupted',
+            gateAfterInterruption: 'approved',
+            message: 'this host stopped while op-3 was running, and status.yaml now shows pr APPROVED.',
+          },
+        },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, unconfirmed: true });
+    expect((result as { message: string }).message).toContain('APPROVED');
+  }, 20_000);
+
+  it('reports a failure as a failure, with the reason the server gave', async () => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-4', state: 'submitted' } },
+        { status: 200, body: { state: 'failed', message: 'ENOSPC writing status.yaml' } },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, signal: 'GATE_APPROVAL_FAILED' });
+    expect((result as { unconfirmed?: boolean }).unconfirmed).toBeUndefined();
+  }, 20_000);
+
+  it('carries the delivery caveat through, as a success', async () => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-5', state: 'submitted' } },
+        {
+          status: 200,
+          body: {
+            state: 'succeeded',
+            record: {
+              machine: 'alpha',
+              sessionId: 's1',
+              approvedAt: '2026-08-30T01:00:00Z',
+              delivery: 'committed-not-pushed',
+              deliveryMessage: 'the push was refused',
+            },
+          },
+        },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    // A SUCCESS WITH A CAVEAT. The gate is approved; something did not travel.
+    expect(result).toMatchObject({ ok: true, delivery: 'committed-not-pushed' });
+  }, 20_000);
+
+  it('reports an already-approved gate as somebody else\'s act', async () => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-6', state: 'submitted' } },
+        {
+          status: 200,
+          body: {
+            state: 'succeeded',
+            record: {
+              machine: 'beta',
+              sessionId: 'somebody-else',
+              approvedAt: '2026-08-29T09:00:00Z',
+              outcome: 'already-approved',
+            },
+          },
+        },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: true, alreadyApproved: true, sessionId: 'somebody-else' });
+  }, 20_000);
+
+  it('reports a succeeded operation it cannot read as unconfirmed, never as approved', async () => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-7', state: 'submitted' } },
+        { status: 200, body: { state: 'succeeded', record: {} } },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, unconfirmed: true, signal: 'GATE_APPROVAL_UNCONFIRMED' });
+  }, 20_000);
+
+  it('does not claim an outcome for a state it does not recognise', async () => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-8', state: 'submitted' } },
+        { status: 200, body: { state: 'hibernating' } },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, unconfirmed: true });
+    expect((result as { message: string }).message).toContain('hibernating');
+    expect((result as { message: string }).message).toContain('op-8');
+  }, 20_000);
+
+  /*
+   * A CONFLICT IS NOT A REFUSAL OF THIS GATE. An approval for this project is
+   * already running and the server names it, so the human is told to wait rather
+   * than to try again.
+   */
+  it('passes a 409 through with the server\'s words', async () => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': {
+        status: 409,
+        body: { signal: 'APPROVAL_ALREADY_IN_FLIGHT', message: 'operation op-9 is already running' },
+      },
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, signal: 'APPROVAL_ALREADY_IN_FLIGHT' });
+    expect((result as { message: string }).message).toContain('op-9');
+  }, 20_000);
 });

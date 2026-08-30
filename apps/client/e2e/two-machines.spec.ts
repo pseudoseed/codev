@@ -38,7 +38,7 @@ let visible: Array<Record<string, unknown>> = [];
 async function stand(
   label: string,
   gate: unknown,
-  options: { skipChecks?: boolean; breakCommit?: boolean } = {},
+  options: { skipChecks?: boolean; passingChecks?: boolean; breakCommit?: boolean } = {},
 ): Promise<Machine> {
   const workspace = makeWorkspace(label, gate, options);
   const host = await startHost({ port: EPHEMERAL, workspace, machine: label });
@@ -222,22 +222,65 @@ test.describe('approving a real gate', () => {
   });
 
   /*
-   * THE PATH PRODUCTION ACTUALLY TAKES.
+   * THE SYNCHRONOUS ROUTE STILL REFUSES — SPEC 146 CRITERION 11.
    *
-   * Every other approval test here runs against a workspace whose phase checks
-   * are skipped, which is not what a real project has. With the checks left in,
-   * approving the `pr` gate would run the repository's build and test suite
-   * inside Tower, on an open HTTP request, unbounded — so the route refuses
-   * before starting and says which checks it will not run. This asserts that
-   * branch, because a suite that only ever tested the skipped one was testing a
-   * path production does not take.
+   * This test used to drive the refusal through the UI. Spec 236 gave the panel
+   * an asynchronous path, so the UI no longer reaches this branch — and DELETING
+   * the assertion would have removed the only end-to-end proof that an HTTP
+   * request never runs a repository's build. So it drives the synchronous route
+   * DIRECTLY instead, and the UI's new behaviour is asserted in the test below.
+   *
+   * The refusal is not a limitation being worked around: an unbounded build on an
+   * open connection is the thing it exists to prevent, and a request timeout was
+   * never the alternative, because a client that gives up does not stop porch.
    */
-  test('refuses, rather than running a build inside the request, when the phase has checks', async ({ page }) => {
+  test('the synchronous route refuses, rather than running a build inside the request', async () => {
     const gated = await stand('checks', GATE, { skipChecks: false });
+    try {
+      const origin = `http://127.0.0.1:${gated.host.port}`;
+      const authed = await sessionHeadersFor(gated, origin);
+      const capability = await postJson(`${origin}/api/agent/v1/approval-capabilities`, authed,
+        { principalKind: 'human-client' });
+      const nonce = await postJson(`${origin}/api/agent/v1/approval-nonces`, authed, {
+        projectId: 'checks-gated', gateName: 'pr', capabilityId: capability.body.capabilityId,
+      });
+      const workspace = Buffer.from(gated.host.workspacePath as string, 'utf8').toString('base64url');
+
+      const refused = await postJson(
+        `${origin}/api/agent/v1/workspaces/${workspace}/gates/approve`, authed,
+        {
+          projectId: 'checks-gated',
+          gateName: 'pr',
+          capability: capability.body.presentation,
+          nonce: nonce.body.nonce,
+        },
+      );
+      expect(refused.status).toBe(403);
+      expect(refused.body.signal).toBe('PHASE_CHECKS_REQUIRED');
+      expect(String(refused.body.message)).toContain('build');
+
+      // And the gate is still pending, because nothing ran.
+      const project = gated.workspace.builders.find((b: any) => b.projectId === 'checks-gated');
+      expect(readStatus(project.statusPath)).toContain('status: pending');
+    } finally {
+      await gated.host.stop().catch(() => {});
+    }
+  });
+
+  /*
+   * AND THE ASYNCHRONOUS PATH APPROVES IT — SPEC 146 CRITERION 7, FROM THE UI.
+   *
+   * The phase declares checks, so the route above refuses the very same project.
+   * Here the panel submits, shows what is running, and reports the approval when
+   * the checks pass. A success proven on a workspace with the checks REMOVED
+   * would be the path that already worked before any of this.
+   */
+  test('approves a checks-enabled project from the client, showing what it is running', async ({ page }) => {
+    const gated = await stand('async', GATE, { passingChecks: true });
     try {
       announce(gated.entry);
       await openClient(page);
-      const row = page.locator('[data-machine="checks"] [data-id="builder-checks-gated"]');
+      const row = page.locator('[data-machine="async"] [data-id="builder-async-gated"]');
       await expect(row.locator('.gate-panel')).toBeVisible({ timeout: 30_000 });
 
       await row.locator('.gate-token').fill(
@@ -248,19 +291,44 @@ test.describe('approving a real gate', () => {
       await expect(approveButton).toBeVisible({ timeout: 20_000 });
       await approveButton.click();
 
-      const result = row.locator('.gate-result.is-refused');
-      await expect(result).toBeVisible({ timeout: 30_000 });
-      await expect(result).toContainText('PHASE_CHECKS_REQUIRED');
-      await expect(result).toContainText('build');
+      // WHAT IT IS RUNNING, not a bare spinner. The names come from the server.
+      await expect(row.locator('.gate-progress')).toContainText(/build|tests|Not started|Running/, {
+        timeout: 30_000,
+      });
 
-      // And the gate is still pending, because nothing ran.
-      const project = gated.workspace.builders.find((b: any) => b.projectId === 'checks-gated');
-      expect(readStatus(project.statusPath)).toContain('status: pending');
+      const result = row.locator('.gate-result');
+      await expect(result).toBeVisible({ timeout: 120_000 });
+      await expect(result).not.toHaveClass(/is-refused/);
+
+      const project = gated.workspace.builders.find((b: any) => b.projectId === 'async-gated');
+      expect(readStatus(project.statusPath)).toContain('status: approved');
     } finally {
       await gated.host.stop().catch(() => {});
     }
   });
 });
+
+/** POST JSON and read the answer, for the tests that drive a route directly. */
+async function postJson(url: string, headers: Record<string, string>, body: unknown) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
+  return { status: response.status, body: await response.json().catch(() => ({})) as any };
+}
+
+/** Pair and open a session on one stand, returning the headers both need. */
+async function sessionHeadersFor(machine: Machine, origin: string): Promise<Record<string, string>> {
+  const session = await postJson(`${origin}/api/agent/v1/human-sessions`, {
+    'x-codev-machine-credential': machine.host.credential as string,
+    'x-codev-pairing-token': await mintPairingTokenFor(machine.host.stateRoot as string),
+  }, {});
+  return {
+    'x-codev-machine-credential': machine.host.credential as string,
+    'x-codev-human-session': session.body.presentation as string,
+  };
+}
 
 /** Mint a token the way an operator does: on the host, out of band. */
 async function mintPairingToken(): Promise<string> {

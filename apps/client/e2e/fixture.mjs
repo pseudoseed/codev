@@ -74,23 +74,36 @@ function statusYaml(projectId, title, gate) {
 /**
  * @param {string} label
  * @param {object|null} gate
- * @param {{ skipChecks?: boolean }} [options] `skipChecks: false` leaves the
- *   phase's real checks in place, which is what production has. The route then
- *   refuses rather than running a build inside an HTTP request, and the e2e
- *   exercises that branch instead of only the one where checks are skipped.
+ * @param {{ skipChecks?: boolean, passingChecks?: boolean }} [options]
+ *   THREE SETTINGS, and the middle one is what spec 236 added.
+ *
+ *   `skipChecks: false` leaves the phase's real checks in place, which a
+ *   throwaway workspace cannot pass — the refusal branch.
+ *
+ *   `passingChecks: true` keeps the checks DECLARED and overrides their commands
+ *   with `true`. The phase still declares checks, so the synchronous route still
+ *   refuses; the asynchronous route runs them, they pass, and the gate is
+ *   approved. Without this setting the only success path an e2e could drive was
+ *   one with the checks removed — which is the case that already worked before
+ *   any of this, so a green suite would have proved nothing about the new path.
  */
 export function makeWorkspace(label, gate, options = {}) {
   const root = scratch(`codev-e2e-${label}-`);
-  const skipChecks = options.skipChecks !== false;
+  const passingChecks = options.passingChecks === true;
+  const skipChecks = !passingChecks && options.skipChecks !== false;
   // `breakCommit` installs a pre-commit hook that always fails, so `git commit`
   // fails for real while `writeState` has already put the approved gate on disk.
   // `writeStateAndCommit` skips git entirely under VITEST, so this is the only
   // place in the repo where that failure can actually be produced — the host
   // runs as a child process with no VITEST set.
   const breakCommit = options.breakCommit === true;
-  const config = JSON.stringify(skipChecks
-    ? { porch: { checks: { build: { skip: true }, tests: { skip: true } } } }
-    : {});
+  const config = JSON.stringify(
+    passingChecks
+      ? { porch: { checks: { build: { command: 'true' }, tests: { command: 'true' } } } }
+      : skipChecks
+        ? { porch: { checks: { build: { skip: true }, tests: { skip: true } } } }
+        : {},
+  );
   mkdirSync(join(root, '.codev'), { recursive: true });
   writeFileSync(join(root, '.codev', 'config.json'), config);
   // The REAL protocol definitions, because `porch approve` loads the protocol to

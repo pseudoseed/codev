@@ -179,6 +179,15 @@ export async function approveGate(
   config: MachineConfig,
   session: HumanSession,
   gate: { readonly projectId: string; readonly gateName: string },
+  /**
+   * Called with what the server says while the work runs.
+   *
+   * OPTIONAL BUT NOT DECORATIVE. Phase checks take minutes, and a button that
+   * says "Approving…" for four minutes with nothing behind it is indistinguishable
+   * from one that is stuck. What is reported is the server's own phase and check
+   * names, never a guess made here.
+   */
+  onProgress?: (progress: ApprovalProgress) => void,
 ): Promise<ApprovalOutcome> {
   const authed = { ...machineHeaders(config), [HUMAN_SESSION_HEADER]: session.presentation };
 
@@ -202,6 +211,31 @@ export async function approveGate(
   }
 
   const workspace = encodeURIComponent(encodeWorkspace(config.workspacePath));
+
+  /*
+   * THE ASYNCHRONOUS ROUTE FIRST, because it is the only one that works on an
+   * ordinary project.
+   *
+   * The synchronous route refuses any project whose phase declares checks — an
+   * HTTP request will not hold a connection open for a repository's test suite —
+   * so before this existed a human reaching a gate in this client was sent to the
+   * CLI. The submit returns at once and the work is polled.
+   *
+   * A HOST THAT DOES NOT OFFER IT ANSWERS 501, and then the synchronous route is
+   * used. That is a real configuration (`tools/codev-agent-host` wires no
+   * operation store), and falling back is right: the older path still approves
+   * everything it ever could.
+   */
+  const submitted = await send(fetchImpl, api(config, `/workspaces/${workspace}/gates/approvals`), authed, {
+    projectId: gate.projectId,
+    gateName: gate.gateName,
+    capability,
+    nonce,
+  });
+  if (submitted.status !== 501) {
+    return await pollApproval(fetchImpl, config, authed, workspace, submitted, gate, onProgress);
+  }
+
   const approved = await send(fetchImpl, api(config, `/workspaces/${workspace}/gates/approve`), authed, {
     projectId: gate.projectId,
     gateName: gate.gateName,
@@ -263,6 +297,187 @@ export async function approveGate(
     ...(alreadyApproved ? { alreadyApproved: true } : {}),
     ...(authority ? { authority } : {}),
     ...(delivery ? { delivery, ...(deliveryMessage ? { deliveryMessage } : {}) } : {}),
+  };
+}
+
+/** What the server says while an approval runs. Never invented by this client. */
+export interface ApprovalProgress {
+  readonly state: 'submitted' | 'running';
+  readonly operationId: string;
+  /** The phase the server says it is running in, when it has said. */
+  readonly phase?: string;
+  /** The check names the server says it will run. */
+  readonly checks?: readonly string[];
+}
+
+/** How long between polls, and how long before this client stops waiting. */
+const POLL_INTERVAL_MS = 1_000;
+const POLL_LIMIT_MS = 30 * 60_000;
+
+const TERMINAL_STATES = new Set(['succeeded', 'refused', 'failed', 'interrupted']);
+
+/**
+ * Follow one submitted approval to its end.
+ *
+ * ## Why giving up is reported as UNCONFIRMED, never as a refusal
+ *
+ * This client stopping does not stop porch. If it gives up waiting, the approval
+ * is still running and may well succeed — so reporting "not approved" would be
+ * the very failure the asynchronous path exists to prevent, reintroduced in the
+ * client. The bound exists so a tab does not poll forever; what it produces is
+ * "I could not tell", with the operation id to look up.
+ */
+async function pollApproval(
+  fetchImpl: typeof globalThis.fetch,
+  config: MachineConfig,
+  authed: Record<string, string>,
+  workspace: string,
+  submitted: Json,
+  gate: { readonly projectId: string; readonly gateName: string },
+  onProgress?: (progress: ApprovalProgress) => void,
+): Promise<ApprovalOutcome> {
+  if (submitted.status === 409) {
+    // A conflict is not a refusal of this gate: an approval for this project is
+    // already running, and the message names it. Reported as a refusal with the
+    // server's own words so the human is told to wait rather than to retry.
+    return refusal(submitted, 'an approval for this project is already running');
+  }
+  const operationId = text(submitted.body, 'operationId');
+  if (submitted.status !== 202 || !operationId) {
+    return refusal(submitted, 'the server did not accept the approval');
+  }
+
+  const url = api(config, `/workspaces/${workspace}/gates/approvals/${encodeURIComponent(operationId)}`);
+  const deadline = Date.now() + POLL_LIMIT_MS;
+  let last: Json | null = null;
+  while (Date.now() < deadline) {
+    const response = await fetchImpl(url, { headers: authed });
+    let parsed: unknown;
+    try {
+      parsed = await response.json();
+    } catch {
+      parsed = {};
+    }
+    const polled: Json = {
+      status: response.status,
+      body: (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>,
+    };
+    last = polled;
+    if (polled.status !== 200) return refusal(polled, 'the approval could not be read');
+
+    const state = text(polled.body, 'state');
+    if (state && TERMINAL_STATES.has(state)) return terminalOutcome(polled, state, gate);
+    if (state === 'submitted' || state === 'running') {
+      onProgress?.({
+        state,
+        operationId,
+        ...(text(polled.body, 'phase') ? { phase: text(polled.body, 'phase') } : {}),
+        ...(Array.isArray(polled.body.checks)
+          ? { checks: (polled.body.checks as unknown[]).filter((c): c is string => typeof c === 'string') }
+          : {}),
+      });
+    } else {
+      // A state this build does not know is not a reason to claim an outcome.
+      return {
+        ok: false,
+        unconfirmed: true,
+        signal: 'GATE_APPROVAL_UNCONFIRMED',
+        message:
+          `the server reported approval state "${String(state)}", which this client does not `
+          + `recognise. Look up operation ${operationId} before approving again.`,
+      };
+    }
+    await new Promise((wait) => setTimeout(wait, POLL_INTERVAL_MS));
+  }
+
+  void last;
+  return {
+    ok: false,
+    unconfirmed: true,
+    signal: 'GATE_APPROVAL_UNCONFIRMED',
+    message:
+      `this client stopped waiting after ${Math.round(POLL_LIMIT_MS / 60_000)} minutes, but that `
+      + `does not stop the approval — operation ${operationId} may still be running or may have `
+      + 'succeeded. Look it up before approving again.',
+  };
+}
+
+/** Turn a settled operation into the outcome a human reads. */
+function terminalOutcome(
+  polled: Json,
+  state: string,
+  gate: { readonly projectId: string; readonly gateName: string },
+): ApprovalOutcome {
+  if (state === 'refused') {
+    return {
+      ok: false,
+      signal: text(polled.body, 'code') ?? 'GATE_APPROVAL_REFUSED',
+      message: text(polled.body, 'message') ?? `${gate.gateName} was not approved`,
+      sessionEnded: false,
+    };
+  }
+  if (state === 'failed') {
+    return {
+      ok: false,
+      signal: 'GATE_APPROVAL_FAILED',
+      message: text(polled.body, 'message') ?? 'the approval failed and the server gave no reason',
+      sessionEnded: false,
+    };
+  }
+  if (state === 'interrupted') {
+    /*
+     * NOT A FAILURE. The host stopped while the work ran, and the gate may well
+     * be approved — the server has read `status.yaml` and its message says which
+     * it found. Reporting this as "not approved" would send a human to approve
+     * something already approved, which is the whole reason this state exists.
+     */
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'APPROVAL_OPERATION_INTERRUPTED',
+      message: text(polled.body, 'message')
+        ?? 'the host stopped while this approval was running; check status.yaml before retrying',
+    };
+  }
+
+  const record = polled.body.record;
+  const fields = (record && typeof record === 'object' ? record : {}) as Record<string, unknown>;
+  const approvedAt = typeof fields.approvedAt === 'string' ? fields.approvedAt : undefined;
+  const machine = typeof fields.machine === 'string' ? fields.machine : undefined;
+  if (!approvedAt || !machine) {
+    // The same rule as the synchronous path: a success this client cannot read
+    // is UNCONFIRMED, never a refusal, because the gate may be approved.
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'GATE_APPROVAL_UNCONFIRMED',
+      message:
+        'the server reported the approval succeeded but not with a result this client can read, '
+        + 'so whether the gate was approved is unknown. Check status.yaml before approving again.',
+    };
+  }
+
+  const rawDelivery = typeof fields.delivery === 'string' ? fields.delivery : undefined;
+  const delivery = rawDelivery === 'written-not-committed'
+    || rawDelivery === 'committed-not-pushed'
+    || rawDelivery === 'unknown'
+    ? rawDelivery
+    : undefined;
+  return {
+    ok: true,
+    approvedAt,
+    machine,
+    sessionId: typeof fields.sessionId === 'string' ? fields.sessionId : null,
+    ...(fields.outcome === 'already-approved' ? { alreadyApproved: true } : {}),
+    ...(typeof fields.authority === 'string' ? { authority: fields.authority } : {}),
+    ...(delivery
+      ? {
+        delivery,
+        ...(typeof fields.deliveryMessage === 'string'
+          ? { deliveryMessage: fields.deliveryMessage }
+          : {}),
+      }
+      : {}),
   };
 }
 

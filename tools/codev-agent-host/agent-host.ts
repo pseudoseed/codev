@@ -30,6 +30,7 @@ import {
 } from '../../packages/codev/src/agent-farm/lib/approval-capability.js';
 import { MachineCredentialStore } from '../../packages/codev/src/agent-farm/lib/machine-credentials.js';
 import { PairingStore } from '../../packages/codev/src/agent-farm/lib/pairing.js';
+import { ApprovalOperationStore } from '../../packages/codev/src/agent-farm/lib/approval-operations.js';
 import {
   HumanPairedSessionRegistry,
   handleAgentRoute,
@@ -110,6 +111,16 @@ initAgentRoutes({
   approvalNonces: new ApprovalNonceStore({ root: `${stateRoot}/approval` }),
   machineCredentials,
   pairings: new PairingStore({ root: `${stateRoot}/pairing` }),
+  /*
+   * Spec 236: this host accepts asynchronous approvals too.
+   *
+   * Without it the route answers 501 and a client falls back to the synchronous
+   * one — which refuses any project whose phase declares checks, i.e. every real
+   * one. An end-to-end harness standing up "a second machine" would then be
+   * unable to exercise the path this initiative added, and the coverage would
+   * look complete while testing the case that already worked.
+   */
+  approvalOperations: new ApprovalOperationStore({ root: `${stateRoot}/approval` }),
 });
 
 const server = createServer((req, res) => {
