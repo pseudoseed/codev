@@ -110,6 +110,12 @@ T3_NODE=/absolute/path/to/node T3_HARNESS_PORT=3801 T3_LIVE=1 \
   src/agent-farm/__tests__/spec-146-phase-9-live-architect-thread.test.ts
 ```
 
+Its turns run under `codex` / `gpt-5.6-luna` by default. `T3_LIVE_HARNESS` and `T3_LIVE_MODEL`
+override that — useful when one provider account is rate-limited, because the criteria this test
+establishes are claims about **threads** rather than about a provider. The driver in use is named
+in every `COULD_NOT_TELL` message, so a run cannot report an outcome without saying which driver
+produced it.
+
 ## CI
 
 CI does not have this checkout. The rule is:

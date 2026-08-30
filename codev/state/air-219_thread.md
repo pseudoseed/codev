@@ -279,3 +279,10 @@ lane out this evening (reset stated 21:53; run was 21:26); the server log is cle
 inference, not confirmation. Ruled out as a cause: the round-8 changes — `ref` rides
 DispatchOptions so the wire payload is unchanged, and stage A calls engine.startTurn directly,
 never deliverThreadTurn.
+
+**Item 4 RE-OBSERVED under the claude driver** at 21:35, on the current head. Cold start pid
+46899 → turn 1 → restart with data preserved → pid 52501 → turn 2 returned the codeword → stop.
+2 passed, 21.9s. The live test now takes `T3_LIVE_HARNESS` / `T3_LIVE_MODEL`, defaulting to
+codex/gpt-5.6-luna so the earlier recorded runs still describe a plain invocation, and every
+COULD_NOT_TELL message names the driver in use. This also removes the round-2..7 changes from
+suspicion for the codex timeout: same head, same server, same criterion, different provider.

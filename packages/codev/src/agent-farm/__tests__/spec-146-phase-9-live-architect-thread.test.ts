@@ -63,6 +63,20 @@ import { createProject } from '@cluesmith/porch-driver/thread';
 import { createPorchThreadEngine } from './helpers/porch-thread-engine.js';
 
 const repoRoot = resolve(import.meta.dirname, '../../../../..');
+
+/**
+ * Which driver runs the live turns.
+ *
+ * The recorded runs used `codex` / `gpt-5.6-luna` and that stays the default, so nothing
+ * about the evidence in `146-phase_9-items-3-4-live-verification.md` changes by reading
+ * this file. It is overridable because item 4 is a claim about THREADS — that one survives
+ * a server restart carrying its context — and nothing in it is specific to a provider. When
+ * one provider's account is out of quota, re-observing the criterion under another is a
+ * better answer than not observing it, PROVIDED the run says which driver it used. It does:
+ * the harness and model are asserted into the failure messages and reported below.
+ */
+const LIVE_HARNESS = process.env.T3_LIVE_HARNESS?.trim() || 'codex';
+const LIVE_MODEL = process.env.T3_LIVE_MODEL?.trim() || 'gpt-5.6-luna';
 const harnessPath = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
 
 function harnessStatus(): { ok: boolean; reason: string } {
@@ -222,8 +236,8 @@ describe('Spec 146 Phase 9 — #179 items 3 and 4 against the pinned server', ()
           tracker: new TurnTracker(),
           projectId,
           workspaceRoot,
-          defaultHarness: 'codex',
-          defaultModel: 'gpt-5.6-luna',
+          defaultHarness: LIVE_HARNESS,
+          defaultModel: LIVE_MODEL,
         });
         // The shape `createArchitectThread` produces: the workspace root as the
         // worktree, and no branch.
@@ -251,8 +265,9 @@ describe('Spec 146 Phase 9 — #179 items 3 and 4 against the pinned server', ()
         );
         if (!(await waitForFile(ack, 300_000))) {
           throw new Error(
-            'COULD_NOT_TELL: FIRST_TURN_TIMEOUT — the pre-restart turn never ran, so nothing was '
-            + 'established for the restart to preserve. Item 4 was NOT evaluated.',
+            `COULD_NOT_TELL: FIRST_TURN_TIMEOUT — the pre-restart turn never ran under `
+            + `${LIVE_HARNESS}/${LIVE_MODEL}, so nothing was established for the restart to `
+            + `preserve. Item 4 was NOT evaluated.`,
           );
         }
         first.close();
@@ -290,8 +305,8 @@ describe('Spec 146 Phase 9 — #179 items 3 and 4 against the pinned server', ()
               ...process.env,
               CODEV_T3_URL: `http://127.0.0.1:${after.port}`,
               CODEV_T3_TOKEN: after.token,
-              CODEV_T3_HARNESS: 'codex',
-              CODEV_T3_MODEL: 'gpt-5.6-luna',
+              CODEV_T3_HARNESS: LIVE_HARNESS,
+              CODEV_T3_MODEL: LIVE_MODEL,
               AIR219_THREAD_ID: threadId,
               AIR219_WORKSPACE: workspaceRoot,
               AIR219_AGENT: 'architect-air219',
@@ -317,8 +332,9 @@ describe('Spec 146 Phase 9 — #179 items 3 and 4 against the pinned server', ()
         ).toEqual([]);
         if (!(await waitForFile(recall, 300_000))) {
           throw new Error(
-            'COULD_NOT_TELL: SECOND_TURN_TIMEOUT — the post-restart turn never produced a file, so '
-            + 'whether context survived is unknown. This is NOT "context was lost".',
+            `COULD_NOT_TELL: SECOND_TURN_TIMEOUT — the post-restart turn never produced a file `
+            + `under ${LIVE_HARNESS}/${LIVE_MODEL}, so whether context survived is unknown. This `
+            + `is NOT "context was lost".`,
           );
         }
         // A reconnect that lost context writes something here too. The value is

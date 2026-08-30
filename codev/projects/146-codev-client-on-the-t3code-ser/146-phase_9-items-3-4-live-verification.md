@@ -558,7 +558,33 @@ state. It logs the **transition** now, and forgets the last complaint when the w
 ready — so a fault after a recovery is reported rather than suppressed as a repeat of something
 that had resolved.
 
-## The round-8 live re-run did NOT evaluate item 4, and that is not a failure
+## Item 4 RE-OBSERVED after all eight rounds, under a second driver
+
+The criterion had last been observed before eight rounds of change to delivery, recovery and the
+engine registry, and the codex-driver re-run could not evaluate it (below). Item 4 is a claim
+about **threads** — that one survives a server restart carrying its context — and nothing in it is
+specific to a provider, so it was re-run under the `claude` driver instead of waiting ~18 hours
+for a quota reset.
+
+| | |
+|---|---|
+| Head | `89cfc8918` plus the driver override |
+| Driver | `claude` / `claude-haiku-4-5` (`T3_LIVE_HARNESS` / `T3_LIVE_MODEL`) |
+| Checkout | `082e6ea521861fff37b90fcd789b5eaa5ef5d6a6`, clean, `verify` exit 0 on both starts |
+| Sequence | cold start pid 46899 → turn 1 → **restart, data dir preserved** → pid 52501 → turn 2 → stop |
+| Result | 2 passed, 21.9 s |
+
+Both criteria observed, on the current code: the server's own snapshot showed the architect thread
+rooted at the workspace root, and after the restart a fresh child process delivered a turn through
+`makeDeliveryPorts().writeMessage` that produced the randomised codeword established **before** the
+restart.
+
+**The default is unchanged.** `codex` / `gpt-5.6-luna` remains what the test runs without the
+override, so the earlier recorded runs still describe what a plain invocation does. The driver in
+use is named in every `COULD_NOT_TELL` message, so a future run cannot report an outcome without
+saying which driver produced it.
+
+## The round-8 codex-driver re-run did NOT evaluate item 4, and that is not a failure
 
 Recorded because it is exactly the distinction this whole document is about.
 
@@ -574,8 +600,10 @@ so the architect thread was created and the server's own record showed it rooted
 root. **Item 4 was not evaluated**: no pre-restart turn ran, so there was nothing for a restart to
 preserve. That is neither "it passed" nor "it failed", and the test spells it as neither.
 
-**Most likely cause, stated as likely rather than known:** the live test drives the `codex`
-harness, and the same account's codex quota was exhausted this evening — the codex review lane
+**Cause, now better than an inference:** the same test, same head, same server, same criterion
+passed under the `claude` driver minutes later. That does not prove the codex quota was the
+mechanism, but it removes the code from suspicion — whatever stopped the turn was on the codex
+side. The account's codex quota was exhausted this evening — the codex review lane
 printed "You've hit your usage limit" and produced no review, with a stated reset at 21:53. The
 run was at 21:26. The pinned server's log shows a clean start and no error, so this is
 inference from the account state, not something confirmed at the server.
