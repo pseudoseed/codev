@@ -28,6 +28,16 @@ here are elapsed for real.
 The one-hour gates clear the threshold once with margin. The 24-hour gate crosses it 48
 times, which is the case Phase 13 depends on and the one nothing in this program has run.
 
+## WHICH START TO READ
+
+**`2026-08-30T08:28:53Z`.** That is the run still going, the only one whose evidence will ever
+land, and the one the phase that consumes this should read. Four earlier starts appear below,
+with their reasons; none of them produced evidence and none of them should be quoted.
+
+The restarts were free for Phase 10, whose deliverable is a *recorded start*. They are not free
+for the phase that needs the elapsed result, which is why this one is left alone: **it is not
+restarted again, including for tidiness after the PR merges.**
+
 ## The 24-hour gate: started
 
 | | |
