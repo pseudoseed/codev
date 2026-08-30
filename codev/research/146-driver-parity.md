@@ -200,6 +200,13 @@ Worth stating, because each was suspected and tested rather than assumed:
 
 ## What this does not tell you
 
+- **Whether porch's own orchestration works over a thread.** The runner reenacts the BUGFIX
+  protocol's phases, checks and gate rather than driving porch through them; it performs no porch
+  phase transition and requests no gate approval. The test derives the phase ids, the fix phase's
+  checks and the pr phase's gate from `protocol.json` and asserts the runner enacts each, so the
+  protocol's definition cannot move underneath this evidence silently — but that is a guard
+  against drift, not a demonstration that porch drove anything.
+
 - Nothing about **Codex** beyond the spike. The full protocol has still never run end to end on
   it, and this phase could not change that.
 - Nothing about `cursor` or `grok`, the two t3code driver kinds with no Codev harness.
