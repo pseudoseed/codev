@@ -248,3 +248,55 @@ describe('honest degradation', () => {
     expect(row.querySelector('.row-why')!.textContent).toContain('not reporting session state');
   });
 });
+
+/*
+ * "Where porch and t3code disagree, porch wins and the client shows porch's
+ * value." Titles, pins and activity entries are display projections, never a
+ * source of truth — so the row's identity comes from `status.yaml`, and a
+ * disagreement between the two stores is surfaced rather than resolved.
+ */
+describe('porch wins', () => {
+  it('shows porch\'s protocol and phase, not a session-derived label', () => {
+    renderMachine();
+    const row = document.querySelector('[data-id="air-220"]')!;
+    expect(row.querySelector('.porch-phase')!.textContent).toBe('AIR · implement');
+  });
+
+  it('keeps the gate a blocked row is on even when the session says settled', () => {
+    const base = snapshot();
+    renderMachine({
+      snapshot: {
+        ...base,
+        protocol: {
+          ...base.protocol,
+          identities: base.protocol.identities.map((identity) =>
+            identity.roleId === 'spir-146' ? { ...identity, sessionState: 'settled' } : identity),
+        },
+      },
+    });
+    const blocked = document.querySelector('[data-id="spir-146"]')!;
+    expect(blocked.getAttribute('data-status')).toBe('blocked');
+    expect(blocked.querySelector('.status-stamp')!.textContent).toBe('GATE PLAN-APPROVAL');
+  });
+
+  it('surfaces a two-store disagreement instead of resolving it', () => {
+    const base = snapshot();
+    renderMachine({
+      snapshot: {
+        ...base,
+        protocol: {
+          ...base.protocol,
+          signals: [{
+            code: 'THREAD_ID_DISAGREEMENT',
+            message: 'status.yaml names th-old, while global.db names th-220; porch remains authoritative',
+            role: 'builder',
+            roleId: 'air-220',
+          }],
+        },
+      },
+    });
+    const signals = document.querySelector('.signals')!;
+    expect(signals.textContent).toContain('THREAD_ID_DISAGREEMENT');
+    expect(signals.textContent).toContain('porch remains authoritative');
+  });
+});
