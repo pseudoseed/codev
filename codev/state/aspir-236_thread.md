@@ -467,3 +467,44 @@ so a late callback from an abandoned run could rewrite an outcome an operator ha
 shown. Now refused.
 
 Suite: 7036 passing, 0 failing.
+
+## Phase 5 — asynchronous gate approval routes
+
+Landed. `POST .../gates/approvals` submits and answers **202** with an operation id; `GET
+.../gates/approvals/<id>` reports it. The synchronous `gate-approve` route is untouched and
+still refuses with `PHASE_CHECKS_REQUIRED` — criterion 11 — and the first test in the new file
+asserts that against a checks-enabled project rather than assuming it.
+
+Everything is checked **before** an operation exists: malformed body, unknown workspace, and a
+capability belonging to another session all refuse with no record written. An operation is a
+durable artifact an operator can see; creating one and then refusing it would put a failed
+approval in their history for a request that never had the right to make one. Three tests assert
+`operations.records()` is empty after each refusal.
+
+`runApprovalOperation` runs porch **without** `refuseIfChecksWouldRun` — that is the whole point —
+with the same deliberately minimal env as the synchronous route and `onRefusal: 'throw'`, since
+porch's CLI answers a refusal with `process.exit(1)` and that inside Tower would end the process.
+The failure path reads `status.yaml` before concluding anything: something thrown *after* porch
+wrote the gate must not be recorded as `failed`, or an operator is told to approve what is
+already approved.
+
+`initAgentRoutes` resolves interrupted operations synchronously, before the surface can answer a
+poll — so "running forever" is unreachable rather than unlikely.
+
+### Two guards caught me mid-phase, which is what they are for
+
+1. **The dispatcher-literal check in `agent-auth.test.ts`.** My submit response echoed a `poll`
+   URL built by interpolating `AGENT_ROUTE_PREFIX`, which put the path literal
+   `/api/agent/v1/workspaces/` in the dispatcher naming no route. That guard exists to find a
+   path the router *serves* without a table entry, and a URL the server merely quotes is the
+   noise that would train someone to loosen it. Dropped the field: the client already holds the
+   encoded workspace (it just called submit on it) and the id.
+2. **The failure-matrix collector**, twice — once for `APPROVAL_OPERATION_STORE_LOCKED` in
+   phase 4 and once for `APPROVAL_OPERATIONS_NOT_AVAILABLE` here. Both were caught by the file
+   list phase 4 extended, one commit after extending it.
+
+Handler names are `handleApprovalSubmit` / `handleApprovalOperation`, sharing no prefix with
+`handleGateApprove`, because `spec-146-phase-11-approval-writes.test.ts` slices the file from
+`indexOf('function handleGateApprove')`.
+
+Suite: 7047 passing, 0 failing. Route enumeration 63 passing over both new routes.

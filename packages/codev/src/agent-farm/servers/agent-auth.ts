@@ -138,6 +138,31 @@ export const AGENT_ROUTES: readonly AgentRoute[] = [
       + 'is why the capability phase 6 issued had no way to be used until this route.',
   },
   {
+    id: 'approval-submit',
+    method: 'POST',
+    pattern: /^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approvals$/,
+    probe: `${AGENT_ROUTE_PREFIX}/workspaces/probe/gates/approvals`,
+    authentication: 'human-session',
+    rationale:
+      'Spec 236: the ASYNCHRONOUS half of gate approval. `gate-approve` refuses any project '
+      + 'whose phase declares checks, because an HTTP request will not hold a connection open '
+      + 'for a repository\'s test suite — and a timeout is not the fix, since a client that '
+      + 'gives up does not stop porch. This submits and returns an operation id. Same '
+      + 'authentication as the synchronous route: it spends the same capability and nonce.',
+  },
+  {
+    id: 'approval-operation',
+    method: 'GET',
+    pattern: /^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approvals\/([^/]+)$/,
+    probe: `${AGENT_ROUTE_PREFIX}/workspaces/probe/gates/approvals/probe`,
+    authentication: 'human-session',
+    rationale:
+      'reports one submitted approval. `human-session` rather than `machine-credential`: the '
+      + 'record carries the gate, the approving machine and the authority a gate was approved '
+      + 'under, which is the same content the issuing routes protect. A poll is not a weaker '
+      + 'read than the submit it follows.',
+  },
+  {
     id: 'session-probe',
     method: 'GET',
     pathname: `${AGENT_ROUTE_PREFIX}/session`,

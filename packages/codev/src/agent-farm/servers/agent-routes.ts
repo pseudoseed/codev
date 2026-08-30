@@ -25,6 +25,10 @@ import {
   type AgentAuthOutcome,
 } from './agent-auth.js';
 import { MACHINE_SIGNAL, type MachineCredentialStore } from '../lib/machine-credentials.js';
+import {
+  APPROVAL_OPERATION_SIGNAL,
+  type ApprovalOperationStore,
+} from '../lib/approval-operations.js';
 import { PAIRING_SIGNAL, type PairingStore } from '../lib/pairing.js';
 import { openAgentStateSse, type AgentStreamSnapshot } from './agent-state-stream.js';
 import { readWorkspaceStatuses } from './status-reader.js';
@@ -204,12 +208,46 @@ export interface AgentRouteContext {
   readonly pairings: PairingStore;
   /** Optional only because the browser normally joins t3code itself. */
   readonly t3codeSnapshot?: (workspacePath: string) => T3codeThreadSnapshot;
+  /**
+   * Spec 236: where an approval lives between its submit and its report.
+   *
+   * Optional because a host may serve the read surface without accepting work it
+   * has nowhere to record — `tools/codev-agent-host` is one. The routes answer
+   * 501 rather than accepting and losing it.
+   */
+  readonly approvalOperations?: ApprovalOperationStore;
 }
 
 let routeContext: AgentRouteContext | null = null;
 
 export function initAgentRoutes(context: AgentRouteContext): void {
   routeContext = context;
+  /*
+   * RESOLVE INTERRUPTED APPROVALS BEFORE THE SURFACE CAN ANSWER A POLL.
+   *
+   * A record left `running` by a killed Tower would otherwise be reported as in
+   * progress for the rest of the store's life — "running forever" as a reachable
+   * state rather than an impossible one. Done here, synchronously, because
+   * `routeContext` is set on the line above and a request can arrive immediately
+   * after this function returns.
+   */
+  if (context.approvalOperations) {
+    try {
+      const resolved = context.approvalOperations.resolveInterrupted((operation) => {
+        const gate = readScopedGate(operation.workspacePath, operation.projectId, operation.gateName);
+        if (gate === null) return 'unreadable';
+        return gate.status === 'approved' ? 'approved' : 'pending';
+      });
+      for (const operation of resolved) {
+        context.log('WARN', `approval ${operation.operationId}: ${operation.message ?? 'interrupted'}`);
+      }
+    } catch (error) {
+      // A store that will not open must not stop Tower from starting. The
+      // records stay unresolved and the next start tries again; saying nothing
+      // would make that silent.
+      context.log('ERROR', `could not resolve interrupted approvals: ${(error as Error).message}`);
+    }
+  }
   // Startup reconciliation is read-only.  Phase 8 can begin writing thread_id
   // without changing this code; any two-store disagreement is logged, not fixed.
   for (const workspacePath of knownWorkspaceCandidates(context.db())) {
@@ -927,6 +965,332 @@ function handleGateApprove(
 }
 
 /**
+ * Submit an approval that outlives its request (Spec 236, phase 5).
+ *
+ * ## Why this exists beside `handleGateApprove` rather than replacing it
+ *
+ * The synchronous route sets `refuseIfChecksWouldRun: true` and keeps doing so.
+ * That refusal is correct for a caller that must answer inside its request, and
+ * it is what a client gets if it does not opt into this path. **Nothing that
+ * works today changes behaviour.**
+ *
+ * What this adds is the case the refusal could not serve: an ordinary project
+ * whose phase declares checks. Porch runs them here in the background, and the
+ * client polls. A request timeout was never the alternative — a client that gives
+ * up does not stop porch, so it would abandon a call that goes on to approve the
+ * gate anyway.
+ *
+ * ## Everything is checked BEFORE an operation exists
+ *
+ * A capability belonging to another session must not create a record. An
+ * operation is a durable artifact an operator can see; creating one and then
+ * refusing it would put a failed approval in their history for a request that
+ * never had the right to make one.
+ *
+ * ## Named to share no prefix with `handleGateApprove`
+ *
+ * `spec-146-phase-11-approval-writes.test.ts` slices this file from
+ * `indexOf('function handleGateApprove')`. Any name beginning with that string —
+ * `handleGateApproveAsync`, `handleGateApprovalStatus` — placed earlier would
+ * capture the match and fail that test against the wrong function, reading as a
+ * regression in code that is fine.
+ */
+function handleApprovalSubmit(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  workspacePath: string,
+  context: AgentRouteContext,
+  humanSessionId: string,
+): void {
+  void readJsonBody(req).then((body) => {
+    const projectId = body && typeof body.projectId === 'string' ? body.projectId : '';
+    const gateName = body && typeof body.gateName === 'string' ? body.gateName : '';
+    const capability = body && typeof body.capability === 'string' ? body.capability : '';
+    const nonce = body && typeof body.nonce === 'string' ? body.nonce : '';
+    if (!projectId || !gateName || !capability || !nonce) {
+      writeJson(res, 400, {
+        signal: 'APPROVAL_REQUEST_MALFORMED',
+        message: 'projectId, gateName, capability and nonce are all required',
+      });
+      return;
+    }
+
+    const operations = context.approvalOperations;
+    if (!operations) {
+      // A host that wired no operation store cannot accept work it has nowhere to
+      // record. Saying so beats accepting and losing it.
+      writeJson(res, 501, {
+        signal: 'APPROVAL_OPERATIONS_NOT_AVAILABLE',
+        message: 'this host does not accept asynchronous approvals; use the synchronous route',
+      });
+      return;
+    }
+
+    // The same session check the synchronous route makes, and for the same
+    // reason — one session must not spend another's capability — but made BEFORE
+    // an operation record exists.
+    const capabilityId = capability.split('.')[0] ?? '';
+    const stored = context.approvalCapabilities.describe(capabilityId);
+    if (!stored || stored.revokedAt || Date.parse(stored.expiresAt) <= Date.now()) {
+      writeJson(res, 404, {
+        signal: APPROVAL_SIGNAL.APPROVAL_CAPABILITY_UNKNOWN,
+        message: 'no live capability with that id on this host',
+      });
+      return;
+    }
+    if (stored.sessionId !== humanSessionId) {
+      writeJson(res, 403, {
+        signal: APPROVAL_SIGNAL.APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION,
+        message: 'that capability was issued to a different human session',
+      });
+      return;
+    }
+
+    const submission = operations.submit({ workspacePath, projectId, gateName, sessionId: humanSessionId });
+    if (!submission.accepted) {
+      // 409, not 400: the request is well formed and would be valid at another
+      // moment. A client told "bad request" retries with different input; one
+      // told "conflict" polls the operation it was just handed the id of.
+      writeJson(res, 409, { signal: submission.code, message: submission.message });
+      return;
+    }
+
+    const { operationId } = submission.operation;
+    // ACCEPTED, not approved. 202 is the whole point of this route: the gate is
+    // NOT approved at this moment, and a client that read 200 as done would
+    // report an outcome that has not happened.
+    writeJson(res, 202, {
+      signal: APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_SUBMITTED,
+      operationId,
+      projectId,
+      gateName,
+      state: 'submitted',
+      // NO `poll` URL. The first draft echoed one back, built by interpolating
+      // AGENT_ROUTE_PREFIX — which put a path literal in this file that names no
+      // route, and the dispatcher-literal guard in `agent-auth.test.ts` caught it.
+      // That guard exists to find a path the router serves without a table entry,
+      // and a URL the server merely *quotes* is exactly the noise that would
+      // train someone to loosen it. The client already holds both halves: it just
+      // called this route on this workspace, and it now has the id.
+    });
+
+    // The response is already sent. From here nothing may write to `res`, and
+    // every outcome goes into the store instead — which is what the client polls.
+    void runApprovalOperation({
+      context,
+      operations,
+      operationId,
+      workspacePath,
+      projectId,
+      gateName,
+      capability,
+      nonce,
+      fallbackMachine: stored.machine,
+    });
+  }).catch((error: unknown) => guardRouteFailure(res, context, 'approval-submit', error));
+}
+
+/**
+ * Run one approval to completion, recording every outcome in the store.
+ *
+ * THE RESPONSE HAS ALREADY GONE. So this function's only job is to leave the
+ * store holding something true, and its failure mode is not "the client sees an
+ * error" but "the client sees nothing, or sees the wrong thing, forever".
+ *
+ * `refuseIfChecksWouldRun` is deliberately NOT set: running the checks is the
+ * entire reason this path exists. `onRefusal: 'throw'` is not optional — porch's
+ * CLI answers a refusal with `process.exit(1)`, and that inside Tower would end
+ * the process.
+ */
+async function runApprovalOperation(input: {
+  readonly context: AgentRouteContext;
+  readonly operations: ApprovalOperationStore;
+  readonly operationId: string;
+  readonly workspacePath: string;
+  readonly projectId: string;
+  readonly gateName: string;
+  readonly capability: string;
+  readonly nonce: string;
+  readonly fallbackMachine: string;
+}): Promise<void> {
+  const { context, operations, operationId } = input;
+  try {
+    operations.markRunning(operationId);
+    const { approve, ApprovalRefusedError } = await import('../../commands/porch/index.js');
+    const result = await approve(input.workspacePath, input.projectId, input.gateName, true, undefined, {
+      // The SAME deliberately minimal environment the synchronous route uses.
+      // Inheriting process.env would carry Tower's own CODEV_ARCHITECT_NAME /
+      // CODEV_WORKTREE_ROOT into the caller attribution and record this approval
+      // as an architect session, which it is not.
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        ...(process.env.CODEV_AGENT_FARM_DIR
+          ? { CODEV_AGENT_FARM_DIR: process.env.CODEV_AGENT_FARM_DIR }
+          : {}),
+        [CAPABILITY_ENV_VAR]: input.capability,
+        [NONCE_ENV_VAR]: input.nonce,
+      },
+      cwd: input.workspacePath,
+      capabilities: context.approvalCapabilities,
+      nonces: context.approvalNonces,
+      onRefusal: 'throw',
+      // NOT SET, and that is this route's whole reason for existing.
+    });
+
+    const record = result.record;
+    operations.settle(operationId, {
+      state: 'succeeded',
+      record: {
+        // EVERY FIELD FROM WHAT PORCH PERSISTED. `approve` returns normally when
+        // the gate was ALREADY approved, so reporting the requesting session and
+        // a fresh timestamp would claim this session approved a gate somebody
+        // else had — the defect the synchronous route was fixed for.
+        machine: record?.machine ?? input.fallbackMachine,
+        sessionId: record?.session_id ?? null,
+        approvedAt: result.approvedAt ?? null,
+        ...(record?.authority ? { authority: record.authority } : {}),
+        outcome: result.outcome,
+      },
+    });
+  } catch (error) {
+    await settleApprovalFailure(input, error);
+  }
+}
+
+/**
+ * Record why an approval did not succeed — refusal, or failure, or neither.
+ *
+ * THE THIRD CASE IS THE ONE THAT MATTERS. Anything thrown AFTER porch wrote the
+ * gate — a notification, a phase advance, a bug — would otherwise be recorded as
+ * `failed`, telling an operator to approve a gate that is already approved. So
+ * `status.yaml` is read before that conclusion is drawn, exactly as the
+ * synchronous route's backstop does.
+ */
+async function settleApprovalFailure(
+  input: {
+    readonly context: AgentRouteContext;
+    readonly operations: ApprovalOperationStore;
+    readonly operationId: string;
+    readonly workspacePath: string;
+    readonly projectId: string;
+    readonly gateName: string;
+    readonly fallbackMachine: string;
+  },
+  error: unknown,
+): Promise<void> {
+  const { context, operations, operationId } = input;
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    const { ApprovalRefusedError } = await import('../../commands/porch/index.js');
+    if (error instanceof ApprovalRefusedError) {
+      // A REFUSAL IS NOT A FAILURE. Porch declining because a precondition is
+      // unmet is porch working; recording it as `failed` would send an operator
+      // to debug a host when their checks did not pass.
+      operations.settle(operationId, { state: 'refused', code: error.code, message: error.message });
+      return;
+    }
+
+    const persisted = readScopedGate(input.workspacePath, input.projectId, input.gateName);
+    if (persisted?.status === 'approved') {
+      operations.settle(operationId, {
+        state: 'succeeded',
+        record: {
+          machine: persisted.approval?.machine ?? input.fallbackMachine,
+          sessionId: persisted.approval?.session_id ?? null,
+          approvedAt: persisted.approved_at ?? null,
+          ...(persisted.approval?.authority ? { authority: persisted.approval.authority } : {}),
+          outcome: 'approved',
+        },
+      });
+      context.log('WARN', `approval ${operationId} wrote the gate and then failed: ${message}`);
+      return;
+    }
+    operations.settle(operationId, { state: 'failed', message });
+  } catch (settleError) {
+    // The store itself would not take the outcome. Nothing can be recorded, so
+    // say so where an operator will find it — the record stays `running` until
+    // the next startup pass resolves it, which is exactly what that pass is for.
+    context.log(
+      'ERROR',
+      `approval ${operationId} could not be settled (${(settleError as Error).message}); `
+      + `the outcome it could not record was: ${message}`,
+    );
+  }
+}
+
+/** Report one submitted approval. Every field is what the store holds. */
+function handleApprovalOperation(
+  res: http.ServerResponse,
+  url: URL,
+  context: AgentRouteContext,
+  humanSessionId: string,
+): void {
+  const match = url.pathname.match(/^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approvals\/([^/]+)$/);
+  const operationId = match ? decodeURIComponent(match[2]) : '';
+  const operations = context.approvalOperations;
+  if (!operations) {
+    writeJson(res, 501, {
+      signal: 'APPROVAL_OPERATIONS_NOT_AVAILABLE',
+      message: 'this host does not accept asynchronous approvals',
+    });
+    return;
+  }
+
+  let operation;
+  try {
+    operation = operations.describe(operationId);
+  } catch (error) {
+    // UNREADABLE IS NOT UNKNOWN. Answering "no such operation" here would tell a
+    // client its approval never existed because a file on this host is corrupt.
+    context.log('ERROR', `approval operation store unreadable: ${(error as Error).message}`);
+    writeJson(res, 503, {
+      signal: APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_STORE_UNREADABLE,
+      message: 'the approval operation store could not be read',
+    });
+    return;
+  }
+
+  if (!operation) {
+    writeJson(res, 404, {
+      signal: APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_UNKNOWN,
+      message: 'no approval operation with that id on this host',
+    });
+    return;
+  }
+  // One session must not read another's approval, for the same reason it cannot
+  // spend another's capability.
+  if (operation.sessionId !== humanSessionId) {
+    writeJson(res, 403, {
+      signal: APPROVAL_SIGNAL.APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION,
+      message: 'that approval was submitted by a different human session',
+    });
+    return;
+  }
+
+  writeJson(res, 200, {
+    signal: operation.state === 'interrupted'
+      ? APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_INTERRUPTED
+      : APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_SUBMITTED,
+    operationId: operation.operationId,
+    projectId: operation.projectId,
+    gateName: operation.gateName,
+    state: operation.state,
+    submittedAt: operation.submittedAt,
+    ...(operation.startedAt ? { startedAt: operation.startedAt } : {}),
+    ...(operation.settledAt ? { settledAt: operation.settledAt } : {}),
+    ...(operation.phase ? { phase: operation.phase } : {}),
+    ...(operation.checks ? { checks: operation.checks } : {}),
+    ...(operation.code ? { code: operation.code } : {}),
+    ...(operation.message ? { message: operation.message } : {}),
+    ...(operation.record ? { record: operation.record } : {}),
+    ...(operation.gateAfterInterruption
+      ? { gateAfterInterruption: operation.gateAfterInterruption }
+      : {}),
+  });
+}
+
+/**
  * Return true when the request belongs to codev-agent.
  *
  * THE ROUTE TABLE IS THE ROUTER. Every request resolves through
@@ -1026,6 +1390,36 @@ export function handleAgentRoute(
         return true;
       }
       handleGateApprove(req, res, workspace, context, outcome.humanSessionId as string);
+      return true;
+    }
+
+    case 'approval-submit': {
+      const match = url.pathname.match(/^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approvals$/);
+      const workspace = match ? decodeWorkspace(match[1]) : null;
+      if (!workspace) {
+        writeJson(res, 400, { signal: 'WORKSPACE_PATH_INVALID' });
+        return true;
+      }
+      if (!context.isKnownWorkspace(workspace)) {
+        writeJson(res, 404, { signal: 'WORKSPACE_NOT_REGISTERED' });
+        return true;
+      }
+      handleApprovalSubmit(req, res, workspace, context, outcome.humanSessionId as string);
+      return true;
+    }
+
+    case 'approval-operation': {
+      const match = url.pathname.match(/^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approvals\/([^/]+)$/);
+      const workspace = match ? decodeWorkspace(match[1]) : null;
+      if (!workspace) {
+        writeJson(res, 400, { signal: 'WORKSPACE_PATH_INVALID' });
+        return true;
+      }
+      if (!context.isKnownWorkspace(workspace)) {
+        writeJson(res, 404, { signal: 'WORKSPACE_NOT_REGISTERED' });
+        return true;
+      }
+      handleApprovalOperation(res, url, context, outcome.humanSessionId as string);
       return true;
     }
 

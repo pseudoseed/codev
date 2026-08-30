@@ -75,6 +75,7 @@ import { ApprovalCapabilityStore, ApprovalNonceStore } from '../lib/approval-cap
 import { MachineCredentialStore } from '../lib/machine-credentials.js';
 import { PairingStore } from '../lib/pairing.js';
 import { T3codeSessionCache } from './t3code-session-cache.js';
+import { ApprovalOperationStore } from '../lib/approval-operations.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 
 /**
@@ -758,6 +759,9 @@ async function bootSequence(): Promise<void> {
     humanSessions,
     approvalCapabilities: new ApprovalCapabilityStore(),
     approvalNonces: new ApprovalNonceStore(),
+    // Spec 236: where an approval lives between its submit and its report, so a
+    // project whose phase declares checks can be approved from the client at all.
+    approvalOperations: new ApprovalOperationStore(),
     // Spec 146 Phase 7: per-machine credentials, one file per machine, so
     // revoking one machine cannot disturb another's bytes.
     machineCredentials: new MachineCredentialStore(),

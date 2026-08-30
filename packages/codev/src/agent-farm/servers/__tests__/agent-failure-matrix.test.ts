@@ -231,6 +231,7 @@ describe('failure matrix signals are distinct', () => {
       // was wrong, or it worked" rather than "a service or file failed".
       APPROVAL_OPERATION_STORE_LOCKED: 'the store lock could not be taken; a retry succeeds, like APPROVAL_STORE_LOCKED',
       APPROVAL_OPERATION_ALREADY_SETTLED: 'a caller tried to change a settled record; a caller bug, distinct from UNKNOWN',
+      APPROVAL_OPERATIONS_NOT_AVAILABLE: '501 from a host that wires no operation store; a capability statement, not a failure',
       APPROVAL_OPERATION_SUBMITTED: 'the SUCCESS case of submitting an approval',
       APPROVAL_ALREADY_IN_FLIGHT: 'a second submit for one project; a caller error, and it names the live one',
       APPROVAL_CONCURRENCY_LIMIT: 'a bound deliberately refusing work; not a failure of anything',
