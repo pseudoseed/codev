@@ -234,6 +234,13 @@ describe('Spec 146 Phase 10 — the recorded full-protocol runs', () => {
      * did, and after an edit it is not that code.
      */
     const { describes } = loadEvidence();
+    // Named before it is used, so evidence written by an older collector fails
+    // with a sentence instead of `Cannot convert undefined or null to object`.
+    expect(
+      describes,
+      'this evidence has no `describes` block, so it does not say what code produced it. Regenerate it with '
+        + 'tools/t3-server/collect-phase10-evidence.mjs.',
+    ).toBeDefined();
     expect(Object.keys(describes).length, 'the evidence names no source at all').toBeGreaterThanOrEqual(3);
     for (const [relative, recorded] of Object.entries(describes)) {
       const absolute = join(repoRoot, relative);
