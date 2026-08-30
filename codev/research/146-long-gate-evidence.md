@@ -32,8 +32,8 @@ times, which is the case Phase 13 depends on and the one nothing in this program
 
 | | |
 |---|---|
-| Started | **2026-08-30T08:22:32Z** |
-| Expected completion | ~2026-08-31T08:30Z (24h gate plus the turns and checks either side) |
+| Started | **2026-08-30T08:28:53Z** |
+| Expected completion | ~2026-08-31T08:36Z (24h gate plus the turns and checks either side) |
 | Driver | `claude` / `claude-haiku-4-5` → driver kind `claudeAgent` |
 | Port | 3805, data dir `tools/t3-server/.runtime-gate-24h` |
 | Server | pinned checkout `082e6ea52186`, pinned CLI `t3@0.0.36`, Node 26.4.0 |
@@ -48,7 +48,7 @@ it. The run says which driver produced it, as every run in this program does.
 
 ## Why the start time is later than the first attempt
 
-The 24-hour clock was started four times. All three are recorded, because a start timestamp
+The 24-hour clock was started five times. All three are recorded, because a start timestamp
 with no history behind it leaves a later reader wondering which run it belongs to — and because
 every restart here was for the same reason: **the code underneath had changed, and a day-long
 run describing code that no longer exists is not evidence.**
@@ -79,13 +79,22 @@ could not fail, two of which are on this path: the gate was measured with `setTi
 up 36 ms short of the hour it claimed, and the "porch restart" rebuilt its subscription in the
 same process rather than recovering in a new one. Both fixed, clock restarted.
 
-**Fourth start, 08:22:32Z. This is the one running.** Reviewing the corrected runner found that
+**Fourth start, 08:22:32Z. Abandoned at 08:28.** Reviewing the corrected runner found that
 `fixTurnWatch` — the state that scored the restart criterion before a child process took the job
 — was still being written on every event and read by nobody, under a forty-line comment
-explaining a design the code no longer used. Deleting dead code changes the runner's bytes, and
-the evidence records the runner by hash, so the clock was restarted rather than leaving a
-day-long run described by a hash that no longer matches anything. Its hash is in
+explaining a design the code no longer used.
+
+**Fifth start, 08:28:53Z. This is the one running.** Reviewing the child found a false negative
+waiting to happen: it required a non-null `activeTurnId` in the catch-up before counting a null
+one, but the cursor is mid-turn by construction, so the `running` event is at or below it and
+`afterSequence` excludes it. It held on every run measured, which is what made it dangerous. The
+latch is now the parent's own observation, handed over. Its hash is in
 `codev/research/146-phase10-live-evidence.json` under `describes`.
+
+**Why five and not one.** Every restart followed a real defect found in the code the run was
+about to describe, and four of the five were found by review rather than by the runs failing.
+Restarting is the cheap half of this phase's deliverable — a recorded start, not an elapsed gate
+— so the alternative was a day-long run standing as evidence for code nobody would ship.
 
 ## Harvesting it
 
@@ -106,7 +115,7 @@ apart deliberately:
 
 **Started, not complete — and that is the deliverable met, not a gap.** The plan asks this
 phase for a started run and a recorded start; the completed evidence belongs to the later
-phase that consumes it. Started 2026-08-30T08:22:32Z, still elapsing when this branch was
+phase that consumes it. Started 2026-08-30T08:28:53Z, still elapsing when this branch was
 opened.
 
 | Criterion | Outcome | Detail |
