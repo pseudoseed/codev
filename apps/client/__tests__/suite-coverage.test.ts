@@ -71,6 +71,31 @@ function tableSuites(): string[] {
     .sort();
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** A step that runs exactly `pnpm <script>` and nothing else on that line. */
+function exactStep(script: string): RegExp {
+  return new RegExp(`^\\s*run: pnpm ${escapeRegExp(script)}\\s*$`, 'm');
+}
+
+/** Split the workflow into steps so a match can be tied to one, with its directory. */
+function stepsOf(workflow: string): Array<{ dir: string; block: string }> {
+  return workflow.split(/\n(?=\s*- name: )/).map((block) => ({
+    dir: /working-directory:\s*(\S+)/.exec(block)?.[1] ?? '',
+    block,
+  }));
+}
+
+function runsIn(
+  dir: string,
+  matches: (block: string) => boolean,
+  workflow = readFileSync(WORKFLOW, 'utf8'),
+): boolean {
+  return stepsOf(workflow).some((step) => step.dir === dir && matches(step.block));
+}
+
 function derivedSuites(): string[] {
   return [
     ...codevSuites().map((config) => `packages/codev:${config}`),
@@ -97,20 +122,55 @@ describe('the README suite-coverage table', () => {
   });
 
   it('names only suites CI actually runs', () => {
-    const workflow = readFileSync(WORKFLOW, 'utf8');
+    /*
+     * MATCHED AGAINST WHOLE STEPS, IN THE RIGHT DIRECTORY.
+     *
+     * Two versions of this check were vacuous in the same way, one level in from
+     * the emptiness guard above. `run: pnpm ${script}\b` was satisfied for the
+     * `test` suite by the `test:e2e` STEP, because `\b` matches between `test`
+     * and a colon. And the default codev config was accepted by a bare
+     * `pnpm test` anywhere in the file — which `apps/web`, `apps/v2` and
+     * `test:browser` all supply. Either unit step could have been deleted from
+     * CI with this guard still green, in the test whose entire job is proving
+     * every suite is actually run.
+     *
+     * So: the workflow is split into steps, and a suite is satisfied only by a
+     * step that runs IT, in the directory it belongs to. A substring hunt over a
+     * whole YAML file cannot express either of those.
+     */
     for (const config of codevSuites()) {
-      // The default config is used implicitly by a bare `vitest run`; the others
-      // must appear by name in a CI command.
-      if (config === 'vitest.config.ts') {
-        expect(workflow, 'no CI step runs the default packages/codev suite')
-          .toMatch(/vitest run --coverage|pnpm test/);
-        continue;
-      }
-      expect(workflow, `no CI step runs --config ${config}`).toContain(`--config ${config}`);
+      // The default config is implicit in a bare `vitest run`; CI runs it with
+      // coverage, which is specific enough to name and belongs to no other step.
+      const ok = config === 'vitest.config.ts'
+        ? runsIn('packages/codev', (block) => /vitest run --coverage/.test(block))
+        : runsIn('packages/codev', (block) => block.includes(`--config ${config}`));
+      expect(ok, `no CI step in packages/codev runs ${config}`).toBe(true);
     }
+
     for (const script of clientSuites()) {
-      expect(workflow, `no CI step runs apps/client's "${script}"`)
-        .toMatch(new RegExp(`run: pnpm ${script.replace(/[:]/g, ':')}\\b`));
+      expect(
+        runsIn('apps/client', (block) => exactStep(script).test(block)),
+        `no CI step in apps/client runs exactly "pnpm ${script}"`,
+      ).toBe(true);
     }
+  });
+
+  it('would notice a suite losing its CI step', () => {
+    /*
+     * GUARDS THE GUARD ABOVE. It is only worth having if it can fail, and both
+     * of its previous versions could not — so this drives the matcher against a
+     * workflow with the step removed rather than trusting the shape.
+     */
+    const workflow = readFileSync(WORKFLOW, 'utf8');
+    const withoutClientUnit = workflow.replace(
+      /\n\s*- name: Run client unit tests\n[\s\S]*?(?=\n\s*- name: )/,
+      '',
+    );
+    expect(withoutClientUnit, 'the client unit step could not be removed; update this guard')
+      .not.toBe(workflow);
+    // `pnpm test:e2e` survives that removal and must NOT satisfy `pnpm test`.
+    expect(withoutClientUnit).toContain('run: pnpm test:e2e');
+    expect(runsIn('apps/client', (block) => exactStep('test').test(block), withoutClientUnit))
+      .toBe(false);
   });
 });
