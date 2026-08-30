@@ -17,21 +17,21 @@ plan_phases:
     status: complete
   - id: phase_5
     title: Asynchronous gate approval routes
-    status: in_progress
+    status: complete
   - id: phase_6
     title: Client submits and polls an approval
-    status: pending
+    status: in_progress
   - id: phase_7
     title: Threat model, failure matrix, and the dev-check revocation
     status: pending
-current_plan_phase: phase_5
+current_plan_phase: phase_6
 gates:
   pr:
     status: pending
   verify-approval:
     status: pending
-iteration: 2
-build_complete: true
+iteration: 1
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -90,7 +90,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_5-iter1-opencode.txt
         stated: true
 started_at: '2026-08-30T04:48:34.619Z'
-updated_at: '2026-08-30T08:57:57.463Z'
+updated_at: '2026-08-30T09:11:55.604Z'
 context_refreshes:
   - boundary: plan-phase:phase_2
     at: '2026-08-30T06:10:51.039Z'
@@ -104,3 +104,5 @@ context_refreshes:
   - boundary: plan-phase:phase_5
     at: '2026-08-30T08:17:01.259Z'
     acknowledged_at: '2026-08-30T08:38:04.982Z'
+  - boundary: plan-phase:phase_6
+    at: '2026-08-30T09:11:55.604Z'
