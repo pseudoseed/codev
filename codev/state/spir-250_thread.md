@@ -42,3 +42,29 @@ porch handed me the plan phase directly.
 Phase 1 runs `gh repo fork pingdotgg/t3code` — creating a **public** fork under `pseudoseed`.
 Outward-facing and not quietly undoable. The spec bakes the destination, so it is decided, but
 the act itself is worth a look before it happens.
+
+### Claims verified while the plan consultations ran
+
+- `afx pair` exists with `--purpose machine-credential | client-session`
+  (`packages/codev/src/agent-farm/commands/pair.ts:55`), and `--purpose` has no default. Phase
+  10's ceremony is real, not assumed.
+- `afx pair revoke <machine>` exists and revokes the credential plus its live approval
+  capabilities (`pair.ts:319-324`). The plan's revocation acceptance criterion is checkable.
+- The spec's "one variable feeds six consumers" is exactly right: `T3CODE_ROOT` is read by
+  `t3-server.mjs`, `smoke.mjs`, `classify-churn.mjs`, `transform-blindness-probe.mjs`,
+  `generate.mjs`, and `spec-146-t3-contract.test.ts`. Six.
+- `verify()` in `t3-server.mjs:100-140` compares HEAD to `pin.commit` and refuses a dirty tree,
+  with `UNDETERMINED` as its own exit. Phase 1's two-identity change extends this rather than
+  replacing it, and exit 3 stays distinct.
+
+### opencode lane failed silently on the first attempt
+
+Run 1 of `consult -m opencode` **exited 0 and wrote no review file**. Its stdout shows
+`permission requested: external_directory (/Users/chris/dev/t3code/*); auto-rejecting`, then a
+failed glob, then two successful reads, then exit. An exit 0 with no verdict is the exact shape
+lessons-critical.md warns about — "I could not tell" spelled the same way as "no". Not counted as
+a review. Re-run in progress; if it fails the same way the lane gets reported rather than
+silently dropped from the round.
+
+Both producers confirmed alive before waiting: `consult -m claude` (pid 34003) and
+`consult -m opencode` → `opencode run -m xai/grok-4.6` (pids 38846/38936).
