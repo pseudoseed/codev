@@ -119,11 +119,16 @@ how a change to `PairingStore.issue()` broke `phase7-pairing.e2e.test.ts` while
 | `packages/codev` → `pnpm exec vitest run --config vitest.e2e.config.ts` | `src/**/*.e2e.test.ts` and `src/commands/porch/__tests__/e2e/**` — server-spawning Tower tests | the unit suite |
 | `apps/client` → `pnpm test` | this app's unit and component tests | anything server-side |
 | `apps/client` → `pnpm test:e2e` | Playwright against two live `codev-agent` hosts | the unit suites |
+| `packages/codev` → `vitest run --config vitest.cli.config.ts` | `src/__tests__/cli/*.e2e.test.ts` — the installed-CLI surface | everything above |
 
-CI runs all four, in the `unit`, `integration`, `client-playwright` and
+CI runs all five, in the `unit`, `integration`, `cli`, `client-playwright` and
 `v2-playwright` jobs. **Locally, a change to `packages/codev/src` needs at least
 the first two**; the unit run alone is a measurement taken where the thing being
 measured may not be present.
+
+The list was enumerated from the vitest configs and `.github/workflows/test.yml`
+rather than remembered — a hand-kept list of what covers what is the same claim
+the table exists to replace.
 
 ## What the tests deliberately cannot catch
 
