@@ -23,6 +23,33 @@ consumes the regenerated one. The two-identity harness is built **first** (phase
 HEAD still equals `upstreamBase`, so its own correctness is provable against a no-op diff before
 any customization exists to confuse it.
 
+### The added columns do not go through upstream's migrator
+
+Plan review round 1 found this and I verified it in
+`node_modules/.pnpm/effect@4.0.0-beta.103/.../unstable/sql/Migrator.js`. Upstream's migrator is a
+**watermark**, not a set difference:
+
+```js
+const latestMigration = sql`SELECT migration_id, name, created_at FROM ${sql(table)} ORDER BY migration_id DESC`  // :78
+if (currentId <= latestMigrationId) { continue; }                                                                 // :121
+```
+
+So any id we register becomes `MAX(migration_id)`. A high number — the first draft of this plan
+said 900, reasoning that a big gap avoids collision — sets the watermark to 901, and **every
+upstream migration that arrives later (043, 044, …) is silently skipped** while the migrator logs
+that the schema is current. The mitigation inverted its own goal: it converted a loud collision
+into silent schema divergence, at exactly the moment the plan calls routine. Tail numbering
+(043, 044) is no better; it collides on the next upstream bump and needs a per-rebase rewrite of
+recorded rows in `effect_sql_migrations`, on a database whose only backup is the owner's.
+
+**So Codev's columns never enter `migrationEntries`.** They are applied at server start by a
+guarded, idempotent `PRAGMA table_info` + `ALTER TABLE … ADD COLUMN`, which never reads or writes
+`effect_sql_migrations` and leaves the watermark exactly where upstream put it.
+
+This **contradicts a spec assumption** — "t3code's server owns its own migrations; the added
+columns follow that mechanism". It is an Assumption, not a Constraint or a Baked Decision, and it
+is the assumption that produces the bug. Raised at the plan gate rather than changed quietly.
+
 ### Two repositories, one PR
 
 The fork's commits live on `pseudoseed/t3code@codev` and **cannot appear in this repository's
@@ -99,8 +126,17 @@ This repository:
   keeps its meaning and becomes the **fork** head once phase 5 runs.
 - `tools/t3-server/t3-server.mjs` — `verify` asserts both identities.
 - `tools/t3-codegen/classify-churn.mjs` — two named ranges, two checkouts.
-- `tools/t3-codegen/generate.mjs` — `source-hash.json` records the upstream closure hash at
-  `upstreamBase` alongside the fork's.
+- `tools/t3-codegen/generate.mjs` — **the root switch is the load-bearing edit**: `:51` reads
+  `T3CODE_ROOT` and `:78` refuses when `git rev-parse HEAD` there does not equal `pin.commit`.
+  Since `pin.commit` becomes the fork head, generation must read the **fork** root. Plus
+  `source-hash.json` records the upstream closure hash at `upstreamBase` alongside the fork's.
+- `tools/t3-server/smoke.mjs` (`:177`), `tools/t3-codegen/transform-blindness-probe.mjs` (`:29`),
+  `packages/t3-client/live/integration.mjs` (`:77-79`, `:213`, `:219`) — the other
+  `T3CODE_ROOT` readers, each assigned to an identity deliberately.
+- `packages/codev/src/__tests__/spec-146-t3-contract.test.ts` (`:43`, `:143`, `:322-338`) — the
+  seventh reader, and the suite phase 1 breaks (see deliverables).
+- `codev/research/146-harness-coldstart-evidence.json` — re-collected, because editing
+  `t3-server.mjs` invalidates it.
 - `tools/t3-codegen/REFRESH.md` — the two-identity refresh procedure.
 - `tools/t3-fork/FORK.md` — new. Remote, branch, checkout path, phase-to-commit log.
 - `packages/codev/src/__tests__/spec-250-vendoring-identities.test.ts` — new.
@@ -116,6 +152,30 @@ This repository:
 - [ ] Checkout roots resolve per identity — `T3CODE_ROOT` for upstream (unchanged meaning) and
       `T3CODE_FORK_ROOT` for the fork, each defaulting to its spec'd path. One variable is not
       stretched over two meanings.
+- [ ] **All seven `T3CODE_ROOT` readers are assigned, not three.** Verified by grep, not assumed:
+
+      | Reader | Identity | Why |
+      |---|---|---|
+      | `tools/t3-server/t3-server.mjs:38` | both | it is the verifier |
+      | `tools/t3-codegen/generate.mjs:51,78` | **fork** | generation is fork-sourced from phase 5 |
+      | `tools/t3-codegen/classify-churn.mjs:38` | both | one per range |
+      | `tools/t3-codegen/transform-blindness-probe.mjs:29` | fork | it probes what we emit |
+      | `tools/t3-server/smoke.mjs:177` | upstream | keeps the spec-146 evidence reproducible |
+      | `packages/t3-client/live/integration.mjs:77,213,219` | upstream | spec 146 / #241 live tests, meaning unchanged |
+      | `packages/codev/src/__tests__/spec-146-t3-contract.test.ts:43` | upstream | asserts the upstream harness |
+
+- [ ] **The cold-start evidence is re-collected.** `spec-146-t3-contract.test.ts:254` fails if
+      `codev/research/146-harness-coldstart-evidence.json` is older than `t3-server.mjs` or
+      `smoke.mjs`, and this phase edits `t3-server.mjs`. That test is doing its job — it exists
+      so a harness change cannot ride on stale evidence — so the evidence is regenerated against
+      a live pinned server, not the assertion loosened:
+
+      ```
+      export T3_NODE=/absolute/path/to/node
+      "$T3_NODE" tools/t3-server/smoke.mjs --runs 2 > codev/research/146-harness-coldstart-evidence.json
+      ```
+
+      Needs a live server at the pinned commit. Planned as a step, not discovered as a failure.
 - [ ] Exit `3` (**could not determine**) survives untouched and is still spelled differently from
       exit `1`: a missing fork checkout, an unreadable HEAD, or an unresolvable merge-base is `3`,
       never `1`.
@@ -139,12 +199,17 @@ This repository:
 - [ ] `classify-churn --fork-drift` reports zero at this phase (fork equals upstreamBase) and
       `--upstream-movement` reports whatever upstream actually did — the two answers are visibly
       different questions.
-- [ ] `pnpm -w test` green; build and typecheck pass.
+- [ ] `pnpm -w test` green — **including `spec-146-t3-contract.test.ts`**, which needs the
+      re-collected evidence above. A green run that skipped that suite for want of a checkout is
+      not a pass and is reported as a skip.
+- [ ] Build and typecheck pass.
 
 #### Test Plan
 
 - Unit: pin parsing with and without `upstreamBase`; the three exit codes as three distinct
   outcomes; range construction for both churn modes.
+- Regression: `spec-146-t3-contract.test.ts` run with `T3CODE_ROOT` set, so the live suite
+  actually executes rather than skipping.
 - Integration: throwaway git repositories standing in for both checkouts — pinned, moved, dirty,
   absent, and a fork whose merge-base is *not* `upstreamBase` (a rebase that dropped the base),
   which must fail rather than pass quietly.
@@ -165,23 +230,36 @@ All in `/Users/chris/dev/t3code-codev`:
 - `packages/contracts/src/orchestration.ts` — `CodevThreadRole` (`architect` | `builder`),
   `role` and `parentThreadId` on `OrchestrationThreadShell`, `OrchestrationThread`, and
   `ThreadCreatedPayload`, each with a decoding default of `null`.
-- `apps/server/src/persistence/Migrations/900_CodevThreadHierarchy.ts` — new.
-- `apps/server/src/persistence/Migrations.ts` — register `[900, "CodevThreadHierarchy", …]`.
+- `apps/server/src/codev/schemaGuard.ts` — new. The guarded, idempotent column applier. **Not**
+  a file under `Migrations/`, and **not** registered in `Migrations.ts`.
+- `apps/server/src/persistence/Layers/…` — call the guard at server start, after upstream's
+  migrator has run and before the projection opens.
 - `apps/server/src/orchestration/projector.ts` — read and write the columns.
 - `apps/server/src/orchestration/Schemas.ts` — re-export as the file already does.
 - `packages/contracts/src/orchestration.test.ts` — decode cases.
 - `apps/server/src/orchestration/projector.codevHierarchy.test.ts` — new.
-- `apps/server/src/persistence/Migrations/900_CodevThreadHierarchy.test.ts` — new.
+- `apps/server/src/codev/schemaGuard.test.ts` — new.
+
+This repository:
+- `tools/t3-fork/FORK.md` — the phase's fork commit logged. This is the phase's only artifact in
+  this repository, and it is what makes a fork-only phase committable here.
 
 #### Deliverables
 
 - [ ] `role` is `"architect" | "builder" | null`; `null` means a thread Codev did not create.
 - [ ] `parentThreadId` is a nullable `ThreadId`.
-- [ ] Migration **900**, numbered far above upstream's live range (upstream's highest is 42 at
-      the pin), so a rebase that lands upstream migrations 43…n cannot collide. The gap is
-      asserted by a test that reads `migrationEntries` and fails if upstream reaches 900.
-- [ ] The migration is `ALTER TABLE … ADD COLUMN` only. Nothing is rewritten, no table is
-      recreated, no data is backfilled.
+- [ ] **The columns are applied outside upstream's migrator.** `schemaGuard.ts` reads
+      `PRAGMA table_info(<table>)` and issues `ALTER TABLE … ADD COLUMN` only for columns that
+      are absent. It never reads or writes `effect_sql_migrations`, so upstream's watermark
+      (`Migrator.js:78`, `:121`) is left exactly where upstream put it and every future upstream
+      migration still runs.
+- [ ] The guard is idempotent and safe to run on every start: present columns are left alone,
+      absent ones are added, and running it twice changes nothing the second time.
+- [ ] `ALTER TABLE … ADD COLUMN` only. Nothing is rewritten, no table is recreated, no data is
+      backfilled.
+- [ ] The **first draft's migration 900 is explicitly abandoned**, and `FORK.md` records why, so
+      nobody reintroduces a high id later reasoning that a big gap is safe. It is the opposite of
+      safe under a watermark migrator.
 - [ ] `ThreadCreatedPayload` events already in the log decode with both fields defaulting to
       `null` — decoding **defaults**, never fails.
 - [ ] Tests for this phase.
@@ -191,10 +269,24 @@ All in `/Users/chris/dev/t3code-codev`:
 - [ ] **Criterion 8**: a populated pre-fork database opens against the customized server; the
       added columns read as `null` ("not recorded"), not as a guessed role; and a projection
       rebuilt from a pre-fork event log decodes every historical `ThreadCreatedPayload`.
-- [ ] **Criterion 8b**: the server is killed partway through migration 900 and the resulting
-      database still opens against the **pre-fork** server binary. Tested by killing the process,
-      not by arguing that additive columns are safe.
-- [ ] Fork `pnpm typecheck` and `pnpm test` green.
+- [ ] **A newly introduced upstream migration still runs after Codev's columns exist.** This is
+      the test the first draft was missing, and it is the one that would have caught migration
+      900: apply the guard, then add a fake upstream migration at the next free id, and assert it
+      actually executes rather than being skipped.
+- [ ] **Criterion 8b**: the server is killed partway through applying the columns and the
+      resulting database still opens against the **pre-fork** server binary.
+
+      Worth stating why this test now proves something. Under the abandoned migrator route it
+      would have passed **by construction** — `Migrator.js:142` wraps the whole run in
+      `sql.withTransaction` and SQLite DDL is transactional, so a kill rolls everything back and
+      the criterion is met without the code being careful. Outside the migrator there is no such
+      wrapper: two `ALTER` statements are two atomic steps, a kill between them leaves exactly one
+      column added, and it is the `PRAGMA table_info` guard that makes the next start finish the
+      job. The kill test now discriminates.
+- [ ] Fork typecheck green, and fork tests green **for the packages this phase touches**
+      (`@t3tools/contracts`, the server's orchestration and persistence suites). A full-monorepo
+      `pnpm test` is run once, at phase 11 — making it an acceptance criterion on six separate
+      phases buys nothing and costs a long run each time.
 
 #### Test Plan
 
@@ -202,8 +294,10 @@ All in `/Users/chris/dev/t3code-codev`:
   shell decode with the fields present and absent.
 - Integration: build a pre-fork database fixture (populated by the pinned server), migrate it,
   read it; then rebuild the projection from its event log and compare thread counts and ids.
-- Fault injection: `SIGKILL` the migrating process, then open the file with the pinned server.
-- Regression: the migration-number gap assertion.
+- Fault injection: `SIGKILL` between the two `ALTER` statements, then open the file with the
+  pinned server, then restart the customized server and confirm the guard completes the job.
+- Regression: a fake upstream migration at the next free id runs after the guard has applied.
+- Regression: `effect_sql_migrations` is byte-identical before and after the guard runs.
 
 ### Phase 3: Hierarchy integrity refused at write time
 
@@ -223,6 +317,8 @@ In `/Users/chris/dev/t3code-codev`:
 - `apps/server/src/orchestration/Errors.ts` — `CodevHierarchyInvalid` with a reason discriminant.
 - `apps/server/src/orchestration/decider.codevHierarchy.test.ts` — new.
 - `apps/server/src/orchestration/commandInvariants.test.ts` — extend.
+This repository:
+- `tools/t3-fork/FORK.md` — the phase's fork commit logged; this phase's only artifact here.
 
 #### Deliverables
 
@@ -245,7 +341,7 @@ In `/Users/chris/dev/t3code-codev`:
       not against the UI.
 - [ ] Archiving an architect leaves its builders readable and marked orphaned, not dropped and
       not deleted.
-- [ ] Fork `pnpm typecheck` and `pnpm test` green.
+- [ ] Fork typecheck green; fork tests green for the orchestration suites this phase touches.
 
 #### Test Plan
 
@@ -271,13 +367,15 @@ In `/Users/chris/dev/t3code-codev`:
   **non-nullable** `gateRevision` defaulting to `0`. A `codev.gate.set` / `codev.gate.clear`
   command pair.
 - `packages/contracts/src/auth.ts` — `AuthCodevGateWriteScope = "codev:gate-write"`.
-- `apps/server/src/persistence/Migrations/901_CodevThreadGate.ts` — new.
-- `apps/server/src/persistence/Migrations.ts` — register `[901, "CodevThreadGate", …]`.
+- `apps/server/src/codev/schemaGuard.ts` — extended with the gate columns. Same mechanism as
+  phase 2: guarded, idempotent, outside `migrationEntries`, watermark untouched.
 - `apps/server/src/orchestration/decider.ts` + `projector.ts` — allocate and enforce the revision.
 - `apps/server/src/auth/…` — grant `codev:gate-write` to exactly one credential provisioned out
   of band at server start; never issue it to a thread.
 - `apps/server/src/orchestration/decider.codevGate.test.ts` — new.
 - `apps/server/src/auth/CodevGateScope.test.ts` — new.
+This repository:
+- `tools/t3-fork/FORK.md` — the phase's fork commit logged; this phase's only artifact here.
 
 #### Deliverables
 
@@ -293,7 +391,8 @@ In `/Users/chris/dev/t3code-codev`:
 - [ ] A write whose revision does not **exceed** the mark is rejected. Equal is rejected, not
       treated as idempotent. A retry of the same logical write becomes a new revision, which is
       safe because the content is identical.
-- [ ] Historical rows default to `0`.
+- [ ] Historical rows default to `0`, applied by the same guard rather than by a registered
+      migration — a `DEFAULT 0` on the added column, so no backfill pass is needed.
 - [ ] Gate writes require `codev:gate-write`. A caller holding only `orchestration:operate` is
       refused with a **named** signal (`CODEV_GATE_SCOPE_REQUIRED`), not a generic 403 — every
       thread-driving client already holds `orchestration:operate`, so reusing it would grant
@@ -311,7 +410,8 @@ In `/Users/chris/dev/t3code-codev`:
 - [ ] Two concurrent connections writing gates receive two different revisions.
 - [ ] `codev:gate-write` refusal is distinguishable from an unauthenticated 401 and from an
       ordinary scope failure.
-- [ ] Fork `pnpm typecheck` and `pnpm test` green.
+- [ ] Fork typecheck green; fork tests green for the orchestration and auth suites this phase
+      touches.
 
 #### Test Plan
 
@@ -340,6 +440,8 @@ This repository:
 - `tools/t3-fork/patches/*.patch` — `git format-patch upstreamBase..forkHEAD`, review aid only.
 - `tools/t3-fork/FORK.md` — phase-to-commit log filled in.
 - `packages/codev/src/__tests__/spec-250-generated-contract.test.ts` — new.
+- `packages/codev/src/__tests__/spec-146-t3-contract.test.ts` — `:231`'s assertion re-scoped
+  (see deliverables).
 
 #### Deliverables
 
@@ -354,6 +456,16 @@ This repository:
       validity it does not make.
 - [ ] Patch export committed, with `FORK.md` stating plainly that it is for review and that
       patch-application is not how the fork is built or rebased.
+- [ ] **`spec-146-t3-contract.test.ts:231` is re-scoped to `upstreamBase`, deliberately.** It
+      asserts `evidence.pinnedCommit === pin.commit`, and this phase moves `pin.commit` to the
+      fork head, so it fails here. The cold-start evidence describes the **upstream** harness
+      starting the **upstream** server; the commit it should be checked against is therefore
+      `pin.upstreamBase`, not `pin.commit`. Re-collecting it against the fork would be the wrong
+      fix — it would silently change what the evidence is evidence *of*, and spec 146's criteria
+      about the pinned harness would stop meaning what they said.
+- [ ] `FORK.md` gains the **abandonment procedure**, because the spec keeps `apps/client` as the
+      fallback and never says how to fall back to it: set `pin.commit` to `upstreamBase`,
+      regenerate, re-run `verify`. Three lines, written while the mechanism is fresh.
 - [ ] Tests for this phase.
 
 #### Acceptance Criteria
@@ -363,14 +475,16 @@ This repository:
 - [ ] `role`, `parentThreadId`, `codevGate` and `gateRevision` are present in `schema.json` and
       typed (not `unknown`) in `types.d.ts`.
 - [ ] `verify` passes both identities with the new `pin.commit`.
-- [ ] `pnpm -w test` green.
+- [ ] `pnpm -w test` green, `spec-146-t3-contract.test.ts` included and **not** skipped.
 
 #### Test Plan
 
 - Unit: assert the four new fields resolve to real types in the generated artifacts, and that a
   round-trip payload with them passes `shapeCheck`.
 - Unit: assert `source-hash.json` has both sections and that they differ.
-- Regression: the existing `spec-146-t3-contract.test.ts` suite still passes unchanged.
+- Regression: `spec-146-t3-contract.test.ts` passes with `:231` re-scoped and every other
+  assertion untouched. The first draft claimed this suite passes *unchanged*; verified against
+  the file, it cannot, and saying so was wrong.
 
 ### Phase 6: Hierarchy and gate state published by porch-driver and codev-agent
 
@@ -452,6 +566,8 @@ In `/Users/chris/dev/t3code-codev`:
 - `apps/web/src/sidebarProjectGrouping.ts` — extend rather than replace.
 - `apps/web/src/codev/hierarchy.test.ts` — new.
 - `apps/web/src/components/Sidebar.logic.test.ts` — extend.
+This repository:
+- `tools/t3-fork/FORK.md` — the phase's fork commit logged; this phase's only artifact here.
 
 #### Deliverables
 
@@ -471,7 +587,7 @@ In `/Users/chris/dev/t3code-codev`:
 - [ ] **Criterion 2**: two architects, each with its own builders, render as two subtrees.
 - [ ] **Criterion 7**: a thread created by t3code's own UI appears where it always did.
 - [ ] **Criterion 11's rendering half**: orphans appear in the unattributed group.
-- [ ] Fork `pnpm typecheck` and `pnpm test` green.
+- [ ] Fork typecheck green; fork tests green for `apps/web`'s sidebar suites.
 
 #### Test Plan
 
@@ -498,6 +614,8 @@ In `/Users/chris/dev/t3code-codev`:
 - `apps/web/src/codev/gateState.ts` — new. Derivation from the shell, as a pure function.
 - `apps/web/src/components/Sidebar.tsx` — the row badge.
 - `apps/web/src/codev/gateState.test.ts`, `apps/web/src/codev/GatePanel.test.tsx` — new.
+This repository:
+- `tools/t3-fork/FORK.md` — the phase's fork commit logged; this phase's only artifact here.
 
 #### Deliverables
 
@@ -517,7 +635,8 @@ In `/Users/chris/dev/t3code-codev`:
 - [ ] **Criterion 3**: a builder stopped at `plan-approval` shows the gate name and #128's
       structured question with its choices, sourced from the gate block.
 - [ ] The thread title contains no gate name anywhere in the flow.
-- [ ] Fork `pnpm typecheck` and `pnpm test` green; Playwright confirms the rendered panel.
+- [ ] Fork typecheck green; fork tests green for `apps/web`'s codev suites. Playwright confirms
+      the rendered panel.
 
 #### Test Plan
 
@@ -541,6 +660,8 @@ In `/Users/chris/dev/t3code-codev`:
 - `apps/web/src/codev/BuilderGrid.tsx`, `apps/web/src/codev/BuilderPane.tsx` — new.
 - `apps/web/src/routes/…` — a route that hosts the grid.
 - `apps/web/src/codev/layout.test.ts` — new.
+This repository:
+- `tools/t3-fork/FORK.md` — the phase's fork commit logged; this phase's only artifact here.
 
 #### Deliverables
 
@@ -566,7 +687,7 @@ In `/Users/chris/dev/t3code-codev`:
       distinguishes the two rules — both give 3 columns at 1440x900, so criterion 5 alone cannot
       tell them apart.
 - [ ] The same grid at 390px has no horizontal scroll.
-- [ ] Fork `pnpm typecheck` and `pnpm test` green.
+- [ ] Fork typecheck green; fork tests green for `apps/web`'s codev suites.
 
 #### Test Plan
 
@@ -618,11 +739,35 @@ This repository:
       revocable by design (`afx pair revoke <machine>`), and it is **never Tower's shared key**,
       which cannot be revoked for one machine without rotating it for all.
 - [ ] The page makes no cross-origin request. `connect-src 'self'` stays closed and is asserted.
-- [ ] The proxy strips hop-by-hop headers and refuses to forward an unexpected credential header,
-      the way `client-static.ts` already does.
-- [ ] Approval outcomes keep three states, not two: approved, refused, and **unconfirmed** — a
-      server answer the client could not read. Rendering unconfirmed as a refusal sends a human to
-      approve twice at the one point where a duplicate costs something.
+- [ ] **Hop-by-hop stripping is dynamic, not a fixed list.**
+      `client-static.ts:329-337` builds the strip set from `HOP_BY_HOP` *plus the tokens named by
+      the request's own `Connection` header*, because that header names headers that are
+      themselves hop-by-hop. A port that hardcodes `HOP_BY_HOP` satisfies the sentence "strips
+      hop-by-hop headers" and is wrong. It also refuses to forward Tower's key headers, and this
+      port refuses the same ones.
+- [ ] **Proxy failure splits into two signals**, as `client-static.ts` already does: the machine
+      refused the connection, versus it accepted and sent no response headers inside the bound.
+      One signal for both makes an unreachable host and a hung host look identical.
+- [ ] **The approval record comes from the server, never from the browser.**
+      `approval.ts:300-316` refuses to fill `approvedAt`, `machine` and `sessionId` from local
+      state, calling that "the client telling a human their approval landed at the one moment it
+      has no business guessing". Criterion 4 asks porch to record exactly those three, so a port
+      that manufactures them locally passes a naive assertion while recording fiction. `sessionId`
+      stays nullable: an approval recorded before session ids existed is a real approval with an
+      unknown approver.
+- [ ] Approval outcomes keep **four** states, not three and certainly not two: approved,
+      refused, **unconfirmed**, and **`sessionEnded`**. The first draft named three; the source
+      carries four (`approval.ts:79`, `:126`, `:135`).
+      - `unconfirmed` is a server answer the client could not read. The gate may well be
+        approved, so rendering it as a refusal sends a human to approve twice at the one point
+        where a duplicate costs something.
+      - `sessionEnded` is ordinary, not exceptional — sessions idle out after 30 minutes. Folding
+        it into refusal tells someone their approval failed when what they need is to re-open a
+        session. Same class of error as the one `unconfirmed` exists to prevent, one layer up.
+- [ ] The ceremony is named in full, not glossed as "four requests": a pairing exchange
+      (`pairing/redeem`, spending a `machine-credential` token), then `openHumanSession`
+      (`approval.ts:152`) — a distinct single-use token exchange presenting through
+      `x-codev-human-session` — then capability issue and nonce mint, then the gate approval.
 - [ ] Tests for this phase.
 
 #### Acceptance Criteria
@@ -632,12 +777,18 @@ This repository:
 - [ ] A caller without a machine credential, and one without a human session, are refused
       differently — neither refusal is spelled like the other.
 - [ ] `afx pair revoke <machine>` stops that browser approving, and stops nothing else.
-- [ ] `pnpm -w test` green; fork `pnpm typecheck` and `pnpm test` green.
+      Verified against `packages/codev/src/agent-farm/commands/pair.ts:319-324`, which revokes
+      the credential and its live approval capabilities.
+- [ ] `pnpm -w test` green; fork typecheck green and fork tests green for the server and web
+      suites this phase touches.
 
 #### Test Plan
 
-- Unit: proxy header handling, path allowlist, and the refusal for a path the table does not name.
-- Unit: the four-request approval walk, including the unconfirmed branch.
+- Unit: proxy header handling **including a request whose `Connection` header names an extra
+  header**, which a fixed-list port forwards and a correct one strips; path allowlist; the refusal
+  for a path the table does not name; both proxy failure signals.
+- Unit: the full approval walk, with a branch each for approved, refused, unconfirmed and
+  `sessionEnded`, and one asserting the record is server-sourced when the body is empty.
 - Integration: approve a real gate end to end against a live `codev-agent` and assert
   `status.yaml`.
 - Adversarial: session without machine credential; machine credential from another machine;
@@ -675,7 +826,12 @@ This repository:
       and `classify-churn` counts only closure-touching commits, so a legitimate zero exists. The
       tool failing, or reading the wrong ref, does not pass. Criterion 9 is satisfied by the
       procedure running and reporting one of those three outcomes, never by an unexplained zero.
-- [ ] Migration numbers re-checked after the rebase: upstream must not have reached 900.
+- [ ] **The watermark is re-checked after the rebase**, which is the check that replaces the
+      first draft's "upstream must not have reached 900". Assert that every upstream migration
+      arriving with the rebase actually ran, by reading `effect_sql_migrations` and comparing it
+      to `migrationEntries`. "Upstream never reached our number" was the wrong invariant: under a
+      watermark migrator it is precisely the condition in which upstream's migrations get
+      skipped.
 - [ ] Evidence file records the iPad run: device, network path, what was driven, what was seen.
 - [ ] `apps/client` is confirmed **frozen and still green** — its tests pass, and this spec added
       no front-end features to it. Spec 146's criteria 3, 4, 4b, 5, 7 and 8 are already-met facts
@@ -705,7 +861,8 @@ This repository:
 |------|-------------|--------|------------|
 | **Churn detection goes blind** — a single range compares our tree to itself and reports no churn forever | High | High | Phase 1 splits it into two named ranges over two checkouts; phase 11 asserts the upstream range against a known-moved upstream |
 | **`T3CODE_ROOT` stretched over two meanings** — one variable, six consumers, and `verify` against the upstream clone fails once `pin.commit` names the fork | High | High | Explicit per identity: `T3CODE_ROOT` stays upstream, `T3CODE_FORK_ROOT` is the fork, each with its own assertions |
-| **Rebase-time migration collision** — upstream adds a migration in our number range | Medium | High | Ours start at 900, far above upstream's 42; a test reads `migrationEntries` and fails if upstream approaches |
+| **Upstream migrations silently skipped** — `Migrator.js:121` skips any id `<= MAX(migration_id)`, so registering a high id shadows everything upstream adds later, while logging that the schema is current | Was High | Severe | Codev's columns never enter `migrationEntries`; a guarded idempotent `PRAGMA table_info` + `ALTER` runs at start and leaves the watermark alone. Phase 2 tests that a newly added upstream migration still runs; phase 11 re-checks after the rebase |
+| **The guard's own partial application** — no migrator transaction wraps it, so a kill can land between two `ALTER`s | Medium | Low | Idempotent by construction: absent columns are added, present ones skipped, so the next start finishes the job. This is what makes criterion 8b discriminate rather than pass by construction |
 | **Stale gate write recreates an approved gate** | Medium | High | Server-allocated high-water mark that survives the clear; criterion 10 delivers a stale revision after approval |
 | **`codev-agent` restart resets a client-side counter** and silently renders every later gate as "none pending" | Medium | High | The counter is the server's, never the publisher's. Phase 4 makes this the mechanism, phase 6 asserts it across a restart |
 | The generator's source-hash becomes a tautology once generation is fork-sourced | High | Medium | Phase 1 hashes the upstream closure at `upstreamBase` alongside the fork's |
@@ -713,15 +870,21 @@ This repository:
 | The fork's commits cannot appear in this repository's PR, leaving a reviewer with no diff | High | Medium | `pin.commit` names it, `FORK.md` logs it, phase 5 exports patches as a review aid |
 | The fork becomes unmergeable | Medium | High | Keep the diff narrow: two record fields, one gate block, one scope, sidebar, tiling, proxy. No refactors of upstream code |
 | Upstream security fix reaches us late — we now fork a server that executes shell commands | Medium | High | Criterion 9's cadence gets an owner and a maximum interval after the first rebase is measured |
-| Building and testing the fork is a large `pnpm` install on Node ^24.13.1 | Medium | Medium | Fork install is done once in phase 1, before any phase depends on it; the Node advisory already recorded in the harness stands |
+| Building and testing the fork is a large `pnpm` install on Node ^24.13.1, and the upstream clone currently has **no `node_modules` at all** — verified, not assumed | High | Medium | Fork install is done once in phase 1, before any phase depends on it; the Node advisory already recorded in the harness stands. Per-phase fork test runs are scoped to affected packages, with one full run at phase 11 |
+| **Phase 1 breaks a passing test by design** — editing `t3-server.mjs` invalidates the cold-start evidence `spec-146-t3-contract.test.ts:254` guards | Certain | Low | Re-collecting the evidence against a live pinned server is a planned phase-1 step, not a surprise. The assertion is not loosened |
+| **Phase 5 breaks another** — `:231` asserts `evidence.pinnedCommit === pin.commit`, and `pin.commit` becomes the fork head | Certain | Medium | Re-scoped to `upstreamBase`, because the evidence describes the upstream harness. Re-collecting against the fork would quietly change what it is evidence of |
 | `apps/client` and t3code drift into two half-maintained clients | High | Low | `apps/client` is frozen — it keeps passing its tests and receives fixes; new front-end features land only in t3code |
 
 ## Documentation Updates
 
 - `tools/t3-codegen/REFRESH.md` — the two-identity refresh and the rebase procedure (phases 1
   and 11).
-- `tools/t3-fork/FORK.md` — new: remote, branch, checkout path, phase-to-commit log, and the
-  statement that the exported patches are a review aid, not the build mechanism.
+- `tools/t3-fork/FORK.md` — new: remote, branch, checkout path, a **per-phase commit log**
+  (phases 2, 3, 4, 7, 8, 9 change only the fork, so this entry is their sole artifact in this
+  repository and what makes them committable here), the statement that the exported patches are a
+  review aid rather than the build mechanism, the **abandonment procedure** (revert `pin.commit`
+  to `upstreamBase`, regenerate, re-verify), and why migration ids in `migrationEntries` were
+  abandoned — so nobody reintroduces a high id later reasoning that a big gap is safe.
 - `codev/resources/250-acceptance-evidence.md` — new: the criterion 6 and 9 runs.
 - `codev/reviews/250-t3code-front-end-customization.md` — the review, at the end.
 - `CLAUDE.md` and `AGENTS.md` — **only if** the fork becomes a requirement for working in this
@@ -730,3 +893,28 @@ This repository:
   `lessons-critical.md` — routed by tier at review time, not pre-committed here. Candidate facts:
   the two-identity vendoring rule, and that porch gate state is a projection of `status.yaml`
   with `status.yaml` authoritative.
+
+## Plan review rounds
+
+**Round 1, `claude` lane.** `REQUEST_CHANGES`, `HIGH` confidence. Every finding was verified
+against source before being acted on, rather than taken as ground truth:
+
+| Finding | Verified against | Outcome |
+|---|---|---|
+| Migration 900 shadows all later upstream migrations | `effect@4.0.0-beta.103` `unstable/sql/Migrator.js:78`, `:121` — `ORDER BY migration_id DESC` then `if (currentId <= latestMigrationId) continue` | Confirmed. Mechanism changed to a guarded start-up applier outside `migrationEntries` |
+| Phase 1 breaks `spec-146-t3-contract.test.ts:254` | Read the test — it compares evidence mtime against `t3-server.mjs` and `smoke.mjs` | Confirmed. Evidence re-collection is now a phase-1 deliverable |
+| Phase 5 breaks `:231` | Read the test — `expect(evidence.pinnedCommit).toBe(pin.commit)` | Confirmed. Re-scoped to `upstreamBase` |
+| Seven `T3CODE_ROOT` readers, not three | Grepped all of them, including `packages/t3-client/live/integration.mjs:77` which the first draft missed | Confirmed. All seven now assigned to an identity |
+| `generate.mjs:78` root switch is load-bearing | Read `:70-85` — it refuses when checkout HEAD ≠ `pin.commit` | Confirmed and stated |
+| Criterion 8b passed by construction | `Migrator.js:142` wraps the run in `sql.withTransaction` | Confirmed, and now moot: outside the migrator there is no wrapper, so the kill test discriminates |
+| Phase 10 understates both ported modules | Read `client-static.ts:329-337` (dynamic `Connection` tokens) and `approval.ts:79/126/135` (`sessionEnded`) and `:300-316` (server-sourced record) | Confirmed. Four outcomes, dynamic stripping, two proxy signals, server-sourced record |
+| Fork-only phases have no artifact here | — | Accepted. Per-phase `FORK.md` entry added to phases 2, 3, 4, 7, 8, 9 |
+| No abandonment path | — | Accepted. Added to `FORK.md` in phase 5 |
+| Fork suite scope unbounded | — | Accepted. Scoped per phase, one full run at phase 11 |
+
+**Lane note.** The `opencode` lane ran under a **non-default permission**. It auto-rejects
+`external_directory` requests, and this plan cites `/Users/chris/dev/t3code` throughout, so two
+runs died on their first outside read and exited `0` with no review file — a silent lane loss that
+reads exactly like a review with nothing to say. It was re-run with
+`OPENCODE_CONFIG_CONTENT='{"permission":{"external_directory":"allow"}}'` scoped to the single
+invocation, with no global config edited. Filed as issue #261.

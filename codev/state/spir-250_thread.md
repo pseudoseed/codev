@@ -88,3 +88,50 @@ grant and is not described as one. No global config was edited.
 
 Worth raising with the architect separately: the consult opencode lane exiting 0 with no verdict
 after a permission rejection is a lane bug, not a spec-250 problem. Two runs, same shape.
+
+## Plan review round 1 — claude lane, REQUEST_CHANGES
+
+The central finding was one I had got wrong, and I verified it before acting rather than taking
+the review at its word.
+
+**Migration 900 would have silently disabled every future upstream migration.** Effect's migrator
+is a watermark, not a set difference — `unstable/sql/Migrator.js:78` selects
+`ORDER BY migration_id DESC` and `:121` does `if (currentId <= latestMigrationId) continue`. Read
+in `node_modules/.pnpm/effect@4.0.0-beta.103/`, the exact version `pin.json` names. Registering
+900/901 makes the watermark 901, so upstream's 043+ arrive below it and are skipped while the
+migrator logs that the schema is current. My "number far above upstream's range" mitigation
+converted a loud collision into silent schema divergence, and my proposed guard test ("fail if
+upstream reaches 900") asserted the inverse of the right invariant.
+
+Fix: Codev's columns never enter `migrationEntries`. A guarded idempotent
+`PRAGMA table_info` + `ALTER TABLE ADD COLUMN` runs at server start and never touches
+`effect_sql_migrations`.
+
+**This contradicts a spec assumption** — "the added columns follow [t3code's migration]
+mechanism". It is an Assumption, not a Constraint and not a Baked Decision, and it is the
+assumption that produces the bug. Flagged at the plan gate rather than changed quietly.
+
+A side effect worth recording: criterion 8b would have passed **by construction** under the
+migrator route, because `Migrator.js:142` wraps the run in `sql.withTransaction` and SQLite DDL is
+transactional. Outside the migrator there is no wrapper, so the kill test now discriminates.
+
+### Other verified findings
+
+- `spec-146-t3-contract.test.ts:254` fails if the cold-start evidence is older than
+  `t3-server.mjs` — which phase 1 edits. Re-collection is now a phase-1 deliverable, and the
+  assertion is not loosened.
+- `:231` asserts `evidence.pinnedCommit === pin.commit`, which phase 5 breaks. Re-scoped to
+  `upstreamBase`: the evidence describes the upstream harness, so re-collecting it against the
+  fork would change what it is evidence of.
+- Seven files read `T3CODE_ROOT`, not the three I listed. I missed
+  `packages/t3-client/live/integration.mjs:77` because my first grep was truncated at 20 lines.
+  All seven are now assigned to an identity in a table.
+- `generate.mjs:78` refuses when checkout HEAD ≠ `pin.commit`; switching its root to the fork is
+  the load-bearing edit, which I had left implicit.
+- Phase 10 understated both modules it ports: `client-static.ts:329-337` expands hop-by-hop
+  tokens from the request's own `Connection` header (a fixed list is insufficient), and
+  `approval.ts` has four outcomes — `sessionEnded` is distinct from `unconfirmed` and is ordinary,
+  since sessions idle out at 30 minutes. `approval.ts:300-316` also forbids manufacturing the
+  machine/session/timestamp client-side, which criterion 4 depends on.
+- Phases 2, 3, 4, 7, 8, 9 touch only the fork, so each now logs its fork commit in `FORK.md` —
+  their only artifact in this repository.
