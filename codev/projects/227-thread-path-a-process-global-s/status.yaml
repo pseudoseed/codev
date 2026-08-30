@@ -1,7 +1,7 @@
 id: '227'
 title: thread-path-a-process-global-s
 protocol: air
-phase: implement
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,7 +11,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-30T15:18:37.610Z'
-updated_at: '2026-08-30T15:44:28.021Z'
+updated_at: '2026-08-30T15:52:49.253Z'
 pr_history:
   - phase: implement
     pr_number: 253
