@@ -2,11 +2,25 @@ import { useState } from 'react';
 import type { GateRequest } from '../connection/types.js';
 import type { RowStatus } from '../status/derive.js';
 
+/**
+ * An outcome a human reads.
+ *
+ * THREE STATES, NOT TWO. `unconfirmed` is a server answer this client could not
+ * read: the gate may be approved. Rendering it as a refusal would send someone
+ * to approve again at the one point in the product where a duplicate costs
+ * something, so it gets its own appearance and its own words.
+ */
+export interface GateActionResult {
+  readonly ok: boolean;
+  readonly unconfirmed?: boolean;
+  readonly message: string;
+}
+
 export interface GateApprovalHandle {
-  /** Null until a human session is open on this machine. */
+  /** Null until a session is open on this machine. */
   readonly session: { readonly sessionId: string } | null;
-  readonly openSession: (pairingToken: string) => Promise<{ ok: boolean; message: string }>;
-  readonly approve: (gate: { projectId: string; gateName: string }) => Promise<{ ok: boolean; message: string }>;
+  readonly openSession: (pairingToken: string) => Promise<GateActionResult>;
+  readonly approve: (gate: { projectId: string; gateName: string }) => Promise<GateActionResult>;
 }
 
 /**
@@ -42,7 +56,7 @@ export function GatePanel({
    * approval from a click that did nothing. The row outlives the gate, so the
    * row owns the answer.
    */
-  onResult: (result: { ok: boolean; message: string }) => void;
+  onResult: (result: GateActionResult) => void;
 }) {
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
@@ -50,7 +64,7 @@ export function GatePanel({
   if (status.kind !== 'blocked' || !status.gate) return null;
   const request: GateRequest | undefined = status.gateRequest;
 
-  const run = async (action: () => Promise<{ ok: boolean; message: string }>): Promise<void> => {
+  const run = async (action: () => Promise<GateActionResult>): Promise<void> => {
     setBusy(true);
     onResult({ ok: true, message: '' });
     try {

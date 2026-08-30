@@ -416,3 +416,10 @@ html, body, #root {
   line-height: 1.45;
   color: var(--graphite);
 }
+
+/*
+ * An answer this client could not read. Ochre, like CANNOT VERIFY, because both
+ * say "the answer is incomplete" rather than "the answer is no" — and here the
+ * difference is a duplicate gate approval.
+ */
+.gate-result.is-unknown { border-left-color: var(--ochre); }

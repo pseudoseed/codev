@@ -93,7 +93,11 @@ export function App() {
             message: `${result.signal}: ${result.message} — that session has ended; pair again to approve.`,
           };
         }
-        return { ok: false, message: `${result.signal}: ${result.message}` };
+        return {
+          ok: false,
+          ...(result.unconfirmed ? { unconfirmed: true } : {}),
+          message: `${result.signal}: ${result.message}`,
+        };
       },
     };
   }, [configs, sessions]);

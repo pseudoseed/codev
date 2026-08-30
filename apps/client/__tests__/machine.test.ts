@@ -374,11 +374,22 @@ describe('reconnect backoff', () => {
    * before returning — so the delay only ever grew, and a machine that blipped a
    * few times over an afternoon waited the maximum before every reconnect.
    */
-  it('resets after an attempt that received a snapshot, and grows after ones that did not', async () => {
+  /*
+   * THE FIRST VERSION OF THIS TEST AGREED WITH THE BUG. It asserted
+   * `[1, 2, 4, 1, 2]` while its comment said the progressing attempt resets —
+   * and 4 is exactly the penalty earned by the two failures BEFORE it, served
+   * out after the reset. The expectation encoded the defect and the prose
+   * described the fix, which is worse than no test, because it makes the next
+   * reader confident.
+   *
+   * A connection that worked and dropped waits the FIRST step. The ladder grows
+   * only across consecutive failures.
+   */
+  it('waits the first step after an attempt that received a snapshot', async () => {
     const delays: number[] = [];
     let attemptNo = 0;
     // Attempts 1 and 2 fail outright; 3 delivers a snapshot then ends; 4 and 5
-    // fail again. The delay after 3 must be the first step, not the third.
+    // fail again.
     const fetchImpl = (async () => {
       attemptNo += 1;
       if (attemptNo === 3) {
@@ -399,12 +410,12 @@ describe('reconnect backoff', () => {
     await vi.waitFor(() => expect(delays.length).toBeGreaterThanOrEqual(5));
     link.stop();
 
-    // attempts 1,2 fail → 1, 2; attempt 3 progressed → 4 then RESET;
-    // attempts 4,5 fail → 1, 2.
-    expect(delays.slice(0, 5)).toEqual([1, 2, 4, 1, 2]);
+    // fail, fail → steps 1 and 2. Progress → back to the first step, 1, NOT the
+    // 4 the earlier failures had earned. Then fail, fail → 1, 2 again.
+    expect(delays.slice(0, 5)).toEqual([1, 2, 1, 1, 2]);
   });
 
-  it('does not reset on an attempt that never got a snapshot', async () => {
+  it('climbs the ladder across consecutive failures and stops at the cap', async () => {
     const delays: number[] = [];
     const fetchImpl = (async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof globalThis.fetch;
     const link = connectMachine(config, {
@@ -413,11 +424,11 @@ describe('reconnect backoff', () => {
       backoffMs: [1, 2, 4, 8],
       sleep: async (ms) => {
         delays.push(ms);
-        if (delays.length >= 4) await new Promise(() => {});
+        if (delays.length >= 5) await new Promise(() => {});
       },
     });
-    await vi.waitFor(() => expect(delays.length).toBeGreaterThanOrEqual(4));
+    await vi.waitFor(() => expect(delays.length).toBeGreaterThanOrEqual(5));
     link.stop();
-    expect(delays.slice(0, 4)).toEqual([1, 2, 4, 8]);
+    expect(delays.slice(0, 5)).toEqual([1, 2, 4, 8, 8]);
   });
 });

@@ -39,6 +39,16 @@ export type ApprovalOutcome =
     readonly signal: string;
     readonly message: string;
     /**
+     * The server answered, and this client could not tell what happened.
+     *
+     * NOT the same as a refusal. An unreadable 200 may well mean the gate WAS
+     * approved, so telling a human it failed would send them to approve again —
+     * the same defect as reporting a push failure as a refusal, at the same
+     * point in the product. The caller must render this as "check", never as
+     * "no".
+     */
+    readonly unconfirmed?: boolean;
+    /**
      * True when the session this was attempted with is gone — expired, idled
      * out, or revoked. The caller drops it, so the panel offers a pairing token
      * again instead of a dead Approve button the human can only escape by
@@ -180,12 +190,44 @@ export async function approveGate(
   if (approved.status !== 200) {
     return refusal(approved, 'the gate was not approved');
   }
+
+  /*
+   * EVERY PIECE OF EVIDENCE COMES FROM THE SERVER OR THE ANSWER IS NOT A YES.
+   *
+   * This used to treat any 200 as confirmation and fill the gaps from local
+   * state: the timestamp from this browser's clock, the machine from the
+   * configured label, the session from the one already in hand. So an empty
+   * body — or a proxy's own 200 — rendered as "approved on alpha at <now>,
+   * session s1", every word of it manufactured here. That is the client telling
+   * a human their approval landed at the one moment it has no business
+   * guessing, and it is the honest-degradation principle broken at the most
+   * consequential point in the product.
+   *
+   * An unreadable success is reported as UNCONFIRMED rather than as a failure,
+   * because the gate may well be approved. "I could not tell" is not "no", and
+   * this is precisely where confusing them costs a duplicate approval.
+   */
+  const signal = text(approved.body, 'signal');
+  const approvedAt = text(approved.body, 'approvedAt');
+  const machine = text(approved.body, 'machine');
+  const sessionId = text(approved.body, 'sessionId');
+  if (signal !== 'GATE_APPROVED' || !approvedAt || !machine || !sessionId) {
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'GATE_APPROVAL_UNCONFIRMED',
+      message:
+        'the server answered 200 but not with a result this client can read, so whether the '
+        + 'gate was approved is unknown. Check status.yaml before approving again.',
+    };
+  }
+
   const pushFailed = text(approved.body, 'pushFailed');
   return {
     ok: true,
-    approvedAt: text(approved.body, 'approvedAt') ?? new Date().toISOString(),
-    machine: text(approved.body, 'machine') ?? config.label,
-    sessionId: text(approved.body, 'sessionId') ?? session.sessionId,
+    approvedAt,
+    machine,
+    sessionId,
     ...(pushFailed ? { pushFailed } : {}),
   };
 }

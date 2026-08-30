@@ -172,9 +172,80 @@ describe('a push that fails after the gate is approved', () => {
     const { fetchImpl } = router({
       '/approval-capabilities': { status: 201, body: { capabilityId: 'c', presentation: 'c.s' } },
       '/approval-nonces': { status: 201, body: { nonce: 'n' } },
-      '/gates/approve': { status: 200, body: { signal: 'GATE_APPROVED', machine: 'alpha', sessionId: 's1' } },
+      '/gates/approve': {
+        status: 200,
+        body: {
+          signal: 'GATE_APPROVED',
+          machine: 'alpha',
+          sessionId: 's1',
+          approvedAt: '2026-08-30T02:00:00Z',
+        },
+      },
     });
     const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result.ok).toBe(true);
     expect(result.ok && result.pushFailed).toBeUndefined();
+  });
+});
+
+/**
+ * THE CLIENT MUST NOT MANUFACTURE THE EVIDENCE IT SHOWS A HUMAN.
+ *
+ * This used to treat any 200 as confirmation and fill the gaps from local state:
+ * the timestamp from this browser's clock, the machine from the configured
+ * label, the session from the one already in hand. An empty body rendered as
+ * "approved on alpha at <now>, session s1" — every word of it invented here, at
+ * the one moment the client has no business guessing.
+ *
+ * And an unreadable success is NOT a refusal: the gate may be approved, so
+ * saying "no" would send a human to approve again. Three states, not two.
+ */
+describe('an approval the client cannot confirm', () => {
+  const session = { sessionId: 's1', presentation: 's1.secret', expiresAt: 'later' };
+
+  function upTo(approve: { status: number; body: unknown }) {
+    return router({
+      '/approval-capabilities': { status: 201, body: { capabilityId: 'c', presentation: 'c.s' } },
+      '/approval-nonces': { status: 201, body: { nonce: 'n' } },
+      '/gates/approve': approve,
+    });
+  }
+
+  it.each([
+    ['an empty body', {}],
+    ['no signal', { machine: 'alpha', sessionId: 's1', approvedAt: '2026-08-30T02:00:00Z' }],
+    ['the wrong signal', { signal: 'SOMETHING_ELSE', machine: 'alpha', sessionId: 's1', approvedAt: 'x' }],
+    ['no approvedAt', { signal: 'GATE_APPROVED', machine: 'alpha', sessionId: 's1' }],
+    ['no machine', { signal: 'GATE_APPROVED', sessionId: 's1', approvedAt: 'x' }],
+    ['no sessionId', { signal: 'GATE_APPROVED', machine: 'alpha', approvedAt: 'x' }],
+  ])('reports a 200 with %s as unconfirmed, not as approved', async (_name, body) => {
+    const { fetchImpl } = upTo({ status: 200, body });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.unconfirmed).toBe(true);
+    expect(result.ok === false && result.signal).toBe('GATE_APPROVAL_UNCONFIRMED');
+    // It must not tell a human the approval failed, because it does not know that.
+    expect(result.ok === false && result.message).toContain('unknown');
+    expect(result.ok === false && result.message).toContain('before approving again');
+  });
+
+  it('does not invent a timestamp, a machine or a session from local state', async () => {
+    const { fetchImpl } = upTo({ status: 200, body: {} });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    const rendered = JSON.stringify(result);
+    expect(rendered).not.toContain('alpha');
+    expect(rendered).not.toContain('s1');
+  });
+
+  /* An actual refusal is still a refusal, and is NOT marked unconfirmed. */
+  it('keeps a real refusal distinct from an unreadable success', async () => {
+    const { fetchImpl } = upTo({
+      status: 403,
+      body: { signal: 'PHASE_CHECKS_REQUIRED', message: 'the checks would run' },
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.unconfirmed).toBeFalsy();
+    expect(result.ok === false && result.signal).toBe('PHASE_CHECKS_REQUIRED');
   });
 });

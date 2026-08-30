@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { ThreadRow } from './build.js';
-import { GatePanel, type GateApprovalHandle } from '../gate/GatePanel.js';
+import { GatePanel, type GateActionResult, type GateApprovalHandle } from '../gate/GatePanel.js';
 import { StatusStamp } from './StatusStamp.js';
 
 const PREFIX: Record<ThreadRow['role'], string> = {
@@ -29,7 +29,7 @@ function displayName(row: ThreadRow): string {
 export function ThreadRowView({ row, approval }: { row: ThreadRow; approval?: GateApprovalHandle | null }) {
   // Owned by the ROW, not by the gate panel: an approval removes the gate, so a
   // result held inside the panel would disappear with it.
-  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [result, setResult] = useState<GateActionResult | null>(null);
   const porch = row.porch;
   const classes = [
     'thread-row',
@@ -77,7 +77,11 @@ export function ThreadRowView({ row, approval }: { row: ThreadRow; approval?: Ga
       />
 
       {result ? (
-        <p className={result.ok ? 'gate-result is-ok' : 'gate-result is-refused'}>{result.message}</p>
+        <p className={`gate-result ${
+          result.unconfirmed ? 'is-unknown' : result.ok ? 'is-ok' : 'is-refused'
+        }`}>
+          {result.message}
+        </p>
       ) : null}
     </div>
   );

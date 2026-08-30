@@ -379,26 +379,35 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
   }
 
   async function run(): Promise<void> {
-    let attempt = 0;
+    /** Consecutive attempts that received nothing. Reset by any that did. */
+    let failures = 0;
     while (!stopped) {
       /*
-       * THE RESET KEYS OFF WHAT THE ATTEMPT ACHIEVED, NOT OFF THE STATUS.
+       * THE RESET KEYS OFF WHAT THE ATTEMPT ACHIEVED, AND IS APPLIED BEFORE THE
+       * WAIT, NOT AFTER IT.
        *
-       * It used to test `state.status === 'live'` after `openOnce` returned —
-       * and `openOnce` always sets the status to `disconnected` before it
-       * returns, so the test was never true and the delay only ever grew. A
-       * machine that blipped a few times over an afternoon ended up waiting the
-       * maximum before every reconnect, for no reason connected to its health.
+       * Two bugs lived here in turn. The first tested `state.status === 'live'`
+       * after `openOnce` returned — and `openOnce` always sets the status to
+       * `disconnected` before returning, so the test was never true and the
+       * delay only grew.
        *
-       * "Did this attempt receive a valid snapshot" is the fact worth keying on:
-       * a connection that worked and then dropped is a different thing from one
-       * that never worked.
+       * The second was subtler and my own test agreed with it: the delay was
+       * read from the OLD failure count and only then reset, so a connection
+       * that worked and dropped still served out the penalty earned by the
+       * failures before it. The reset was real and arrived one wait too late.
+       * That is worth naming — a test whose prose describes the fix while its
+       * expectation encodes the bug is worse than no test, because it makes the
+       * next reader confident.
+       *
+       * So: update the count, then choose the delay from it. A connection that
+       * worked and dropped retries at the first step; the ladder grows only
+       * across consecutive failures.
        */
       const outcome = await openOnce();
       if (outcome === 'failed-closed' || stopped) return;
-      const delay = backoff[Math.min(attempt, backoff.length - 1)];
-      attempt = outcome === 'retry-after-progress' ? 0 : attempt + 1;
-      await sleep(delay, controller.signal);
+      failures = outcome === 'retry-after-progress' ? 0 : failures + 1;
+      const step = failures === 0 ? 0 : Math.min(failures - 1, backoff.length - 1);
+      await sleep(backoff[step], controller.signal);
     }
   }
 
