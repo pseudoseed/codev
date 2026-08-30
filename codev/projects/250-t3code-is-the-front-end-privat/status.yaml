@@ -1,9 +1,42 @@
 id: '250'
 title: t3code-is-the-front-end-privat
 protocol: spir
-phase: plan
-plan_phases: []
-current_plan_phase: null
+phase: implement
+plan_phases:
+  - id: phase_1
+    title: Two-identity vendoring harness
+    status: in_progress
+  - id: phase_2
+    title: Thread hierarchy in the fork's contract and projection
+    status: pending
+  - id: phase_3
+    title: Hierarchy integrity refused at write time
+    status: pending
+  - id: phase_4
+    title: Porch gate block with a server-allocated revision
+    status: pending
+  - id: phase_5
+    title: Vendored contract regenerated from the fork
+    status: pending
+  - id: phase_6
+    title: Hierarchy and gate state published by porch-driver and codev-agent
+    status: pending
+  - id: phase_7
+    title: Workspace to architect to builder sidebar
+    status: pending
+  - id: phase_8
+    title: Gate rendering in t3code
+    status: pending
+  - id: phase_9
+    title: Builder tiling
+    status: pending
+  - id: phase_10
+    title: Approval from t3code over the same-origin proxy
+    status: pending
+  - id: phase_11
+    title: 'Acceptance run: tailnet iPad and the rebase drill'
+    status: pending
+current_plan_phase: phase_1
 gates:
   spec-approval:
     status: approved
@@ -68,7 +101,10 @@ gates:
   verify-approval:
     status: pending
 iteration: 1
-build_complete: true
+build_complete: false
 history: []
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-30T20:09:05.193Z'
+updated_at: '2026-08-30T20:09:29.527Z'
+context_refreshes:
+  - boundary: enter:implement
+    at: '2026-08-30T20:09:29.526Z'
