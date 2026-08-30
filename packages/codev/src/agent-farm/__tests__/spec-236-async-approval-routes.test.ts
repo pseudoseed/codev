@@ -67,12 +67,34 @@ function tmp(): string {
  * cannot pass, which is exactly the point: the run has to reach them and report
  * what they did.
  */
-function workspaceWithRequestedGate(projectId: string, options: { skipChecks: boolean }): string {
+function workspaceWithRequestedGate(
+  projectId: string,
+  options: { checks: 'skipped' | 'passing' | 'real' },
+): string {
   const root = tmp();
   mkdirSync(join(root, '.codev'), { recursive: true });
-  if (options.skipChecks) {
+  /*
+   * THREE SETTINGS, AND THE MIDDLE ONE IS THE POINT OF THIS PHASE.
+   *
+   * `skipped` removes the checks entirely — `getPhaseChecks` returns `{}`, so
+   * `refuseIfChecksWouldRun` never fires and the SYNCHRONOUS route would have
+   * served it. A success proven that way proves nothing about this phase.
+   *
+   * `passing` keeps the checks DECLARED and overrides their commands with `true`.
+   * The phase still declares checks, so the synchronous route still refuses — and
+   * the asynchronous path runs them, they pass, and the gate is approved. That is
+   * criterion 7, driven rather than assumed.
+   *
+   * `real` leaves the repository's own commands in, which a throwaway directory
+   * cannot pass, and is how the refusal path is exercised.
+   */
+  if (options.checks === 'skipped') {
     writeFileSync(join(root, '.codev', 'config.json'), JSON.stringify({
       porch: { checks: { build: { skip: true }, tests: { skip: true } } },
+    }));
+  } else if (options.checks === 'passing') {
+    writeFileSync(join(root, '.codev', 'config.json'), JSON.stringify({
+      porch: { checks: { build: { command: 'true' }, tests: { command: 'true' } } },
     }));
   }
   const projectDir = join(root, 'codev', 'projects', `${projectId}-async-approval`);
@@ -205,7 +227,7 @@ describe('the synchronous route still refuses, which is criterion 11', () => {
    * test suite is what the refusal exists to prevent.
    */
   it('refuses a checks-enabled project with PHASE_CHECKS_REQUIRED', async () => {
-    const workspace = workspaceWithRequestedGate('900', { skipChecks: false });
+    const workspace = workspaceWithRequestedGate('900', { checks: 'real' });
     const host = await startHost(workspace);
     const { authed, capability, nonce } = await credentialed(host, '900');
 
@@ -221,8 +243,51 @@ describe('the synchronous route still refuses, which is criterion 11', () => {
 });
 
 describe('submit, poll, report', () => {
+  /*
+   * CRITERION 7, AND THE ONLY TEST HERE THAT PROVES IT.
+   *
+   * The phase declares checks — so the synchronous route refuses, which the test
+   * below asserts against the very same workspace — and this path runs them,
+   * they pass, and the gate is approved. A success proven with the checks
+   * SKIPPED would be the path the synchronous route already served.
+   */
+  it('succeeds on a project whose phase declares checks, which the sync route refuses', async () => {
+    const workspace = workspaceWithRequestedGate('900b', { checks: 'passing' });
+    const host = await startHost(workspace);
+    const { authed, capability, nonce } = await credentialed(host, '900b');
+
+    // The same workspace, the same gate: the synchronous route refuses it.
+    const refused = await post(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approve`,
+      authed,
+      { projectId: '900b', gateName: 'pr', capability: capability.presentation, nonce: nonce.nonce },
+    );
+    expect(refused.status).toBe(403);
+    expect(refused.body.signal).toBe('PHASE_CHECKS_REQUIRED');
+    expect(gateOf(workspace, '900b').status).toBe('pending');
+
+    // A fresh nonce: the refusal above did not spend one, but a second approval
+    // needs its own regardless, and reusing it would test replay rather than this.
+    const second = await credentialed(host, '900b');
+    const submitted = await post(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`,
+      second.authed,
+      {
+        projectId: '900b',
+        gateName: 'pr',
+        capability: second.capability.presentation,
+        nonce: second.nonce.nonce,
+      },
+    );
+    expect(submitted.status).toBe(202);
+
+    const done = await settled(host, second.authed, submitted.body.operationId);
+    expect(done.body.state).toBe('succeeded');
+    expect(gateOf(workspace, '900b').status).toBe('approved');
+  });
+
   it('accepts without approving, then reports what porch persisted', async () => {
-    const workspace = workspaceWithRequestedGate('901', { skipChecks: true });
+    const workspace = workspaceWithRequestedGate('901', { checks: 'skipped' });
     const host = await startHost(workspace);
     const { authed, session, capability, nonce } = await credentialed(host, '901');
 
@@ -254,7 +319,7 @@ describe('submit, poll, report', () => {
    * gate must be untouched at the end of it.
    */
   it('records a refusal with porch\'s own code, and approves nothing', async () => {
-    const workspace = workspaceWithRequestedGate('902', { skipChecks: false });
+    const workspace = workspaceWithRequestedGate('902', { checks: 'real' });
     const host = await startHost(workspace);
     const { authed, capability, nonce } = await credentialed(host, '902');
 
@@ -272,7 +337,7 @@ describe('submit, poll, report', () => {
   });
 
   it('reports the phase and the checks while it runs, or has already finished', async () => {
-    const workspace = workspaceWithRequestedGate('903', { skipChecks: false });
+    const workspace = workspaceWithRequestedGate('903', { checks: 'real' });
     const host = await startHost(workspace);
     const { authed, capability, nonce } = await credentialed(host, '903');
     const submitted = await post(
@@ -297,6 +362,81 @@ describe('submit, poll, report', () => {
   });
 });
 
+describe('what a running operation tells an operator', () => {
+  /*
+   * "Running" with nothing beside it is a spinner. `markRunning` accepted a phase
+   * and a check set from the first commit and the production call passed neither,
+   * so those fields could never reach a poll response — the store took them, the
+   * response spread them, and nothing filled them.
+   */
+  it('records the phase and the checks that will run', async () => {
+    const workspace = workspaceWithRequestedGate('911', { checks: 'passing' });
+    const host = await startHost(workspace);
+    const { authed, capability, nonce } = await credentialed(host, '911');
+    const submitted = await post(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`,
+      authed,
+      { projectId: '911', gateName: 'pr', capability: capability.presentation, nonce: nonce.nonce },
+    );
+    await settled(host, authed, submitted.body.operationId);
+
+    // Read from the STORE rather than from a poll, because a poll may land after
+    // the run settles and this is about what the running record carried. The
+    // names are porch's own resolved check set, not a list typed here.
+    const operation = host.operations.describe(submitted.body.operationId)!;
+    // The phase the fixture actually declares, read from the file rather than
+    // named here — asserting a phase the fixture does not have would test the
+    // test's memory of itself.
+    expect(operation.phase).toBe('implement');
+    expect(operation.checks).toContain('build');
+    expect(operation.checks).toContain('tests');
+  });
+});
+
+describe('an already-approved gate reports the approval that exists', () => {
+  /*
+   * CRITERION 9, and the defect this reporting layer was built to stop. `approve`
+   * returns NORMALLY when the gate was already approved, so a second submit that
+   * answered with its own session and a fresh timestamp would claim it approved a
+   * gate somebody else had.
+   */
+  it('reports the first session\'s machine, session and timestamp to the second', async () => {
+    const workspace = workspaceWithRequestedGate('912', { checks: 'skipped' });
+    const host = await startHost(workspace);
+
+    const first = await credentialed(host, '912');
+    const firstSubmit = await post(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`,
+      first.authed,
+      { projectId: '912', gateName: 'pr', capability: first.capability.presentation, nonce: first.nonce.nonce },
+    );
+    const firstDone = await settled(host, first.authed, firstSubmit.body.operationId);
+    expect(firstDone.body.state).toBe('succeeded');
+    expect(firstDone.body.record.outcome).toBe('approved');
+
+    // A SECOND, DIFFERENT session approves the same, already-approved gate.
+    const second = await credentialed(host, '912');
+    expect(second.session.sessionId).not.toBe(first.session.sessionId);
+    const secondSubmit = await post(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`,
+      second.authed,
+      { projectId: '912', gateName: 'pr', capability: second.capability.presentation, nonce: second.nonce.nonce },
+    );
+    const secondDone = await settled(host, second.authed, secondSubmit.body.operationId);
+
+    expect(secondDone.body.state).toBe('succeeded');
+    // ALREADY-APPROVED, and it says so rather than claiming this session did it.
+    expect(secondDone.body.record.outcome).toBe('already-approved');
+    // The session reported is the FIRST one's, which is what status.yaml holds.
+    const gate = gateOf(workspace, '912');
+    expect(secondDone.body.record.sessionId).toBe(first.session.sessionId);
+    expect(secondDone.body.record.sessionId).toBe(gate.approval.session_id);
+    expect(secondDone.body.record.sessionId).not.toBe(second.session.sessionId);
+    expect(secondDone.body.record.approvedAt).toBe(gate.approved_at);
+    expect(secondDone.body.record.machine).toBe(gate.approval.machine);
+  });
+});
+
 describe('what is checked before an operation exists', () => {
   /*
    * An operation is a durable artifact an operator can see. Creating one and
@@ -304,7 +444,7 @@ describe('what is checked before an operation exists', () => {
    * that never had the right to make one.
    */
   it('refuses a capability from another session and records nothing', async () => {
-    const host = await startHost(workspaceWithRequestedGate('904', { skipChecks: true }));
+    const host = await startHost(workspaceWithRequestedGate('904', { checks: 'skipped' }));
     const first = await credentialed(host, '904');
     const second = await credentialed(host, '904');
 
@@ -324,7 +464,7 @@ describe('what is checked before an operation exists', () => {
   });
 
   it('refuses a request missing any of its four fields', async () => {
-    const host = await startHost(workspaceWithRequestedGate('905', { skipChecks: true }));
+    const host = await startHost(workspaceWithRequestedGate('905', { checks: 'skipped' }));
     const { authed, capability } = await credentialed(host, '905');
     const refused = await post(
       `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`,
@@ -336,7 +476,7 @@ describe('what is checked before an operation exists', () => {
   });
 
   it('refuses an unknown workspace before touching the store', async () => {
-    const host = await startHost(workspaceWithRequestedGate('906', { skipChecks: true }));
+    const host = await startHost(workspaceWithRequestedGate('906', { checks: 'skipped' }));
     const { authed, capability, nonce } = await credentialed(host, '906');
     const elsewhere = Buffer.from('/not/this/workspace', 'utf8').toString('base64url');
     const refused = await post(
@@ -354,7 +494,7 @@ describe('what is checked before an operation exists', () => {
    * "conflict" polls the operation whose id it was just handed.
    */
   it('refuses a second approval for one project with the live operation\'s id', async () => {
-    const host = await startHost(workspaceWithRequestedGate('907', { skipChecks: false }));
+    const host = await startHost(workspaceWithRequestedGate('907', { checks: 'real' }));
     const first = await credentialed(host, '907');
     const submitted = await post(
       `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`,
@@ -388,7 +528,7 @@ describe('what is checked before an operation exists', () => {
 
 describe('polling one operation', () => {
   it('answers 404 for an id this host has never held', async () => {
-    const host = await startHost(workspaceWithRequestedGate('908', { skipChecks: true }));
+    const host = await startHost(workspaceWithRequestedGate('908', { checks: 'skipped' }));
     const { authed } = await credentialed(host, '908');
     const missing = await get(
       `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals/no-such-operation`,
@@ -399,7 +539,7 @@ describe('polling one operation', () => {
   });
 
   it('refuses to show one session another session\'s approval', async () => {
-    const host = await startHost(workspaceWithRequestedGate('909', { skipChecks: true }));
+    const host = await startHost(workspaceWithRequestedGate('909', { checks: 'skipped' }));
     const first = await credentialed(host, '909');
     const submitted = await post(
       `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approvals`,
@@ -425,7 +565,7 @@ describe('a host with nowhere to record an approval says so', () => {
    */
   it('answers 501 rather than accepting work it would lose', async () => {
     const host = await startHost(
-      workspaceWithRequestedGate('910', { skipChecks: true }),
+      workspaceWithRequestedGate('910', { checks: 'skipped' }),
       { withOperations: false },
     );
     const { authed, capability, nonce } = await credentialed(host, '910');

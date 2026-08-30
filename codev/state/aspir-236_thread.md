@@ -508,3 +508,32 @@ Handler names are `handleApprovalSubmit` / `handleApprovalOperation`, sharing no
 `indexOf('function handleGateApprove')`.
 
 Suite: 7047 passing, 0 failing. Route enumeration 63 passing over both new routes.
+
+### Phase 5 iteration 1 — both lanes REQUEST_CHANGES, three findings, all mine
+
+1. **`markRunning` was never passed a phase or a check set.** The store accepted them from the
+   first commit, the poll response spread them, and the one production call passed neither — so
+   those fields could never reach a client. Complete plumbing with nothing connected at the end,
+   which is worse than an absent feature because it reads as present. Added `describeWork()`,
+   which asks **porch's own `getPhaseChecks` after overrides** rather than re-reading the
+   protocol, so the names an operator waits on are the commands that actually run. Best-effort:
+   a protocol that will not load reports nothing rather than a guessed phase.
+
+2. **Criterion 7 was not driven.** opencode caught it precisely: my success test skipped every
+   check, so `getPhaseChecks` returned `{}` and `refuseIfChecksWouldRun` would never have fired —
+   that is the path the *synchronous* route already served. A green test proving the phase's
+   headline criterion by removing the condition that makes the criterion mean anything.
+
+   The fixture now has three settings, and the middle one is the phase: `passing` keeps the
+   checks **declared** and overrides their commands with `true`. The same workspace is asserted
+   to be refused by the synchronous route and approved through the asynchronous one, in one test.
+
+3. **No route-level already-approved test.** Criterion 9, covered only at the store level. Added:
+   two different sessions, the second reporting `outcome: 'already-approved'` and the **first**
+   session's machine, session id and timestamp — all cross-checked against `status.yaml` rather
+   than against what the route said.
+
+One assertion of mine was wrong and the code was right: I asserted the running record's phase was
+`review` when the fixture declares `implement`. `describeWork` reported what the file says.
+
+Suite: 7050 passing, 0 failing.

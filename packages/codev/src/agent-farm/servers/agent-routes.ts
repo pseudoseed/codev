@@ -1115,8 +1115,15 @@ async function runApprovalOperation(input: {
 }): Promise<void> {
   const { context, operations, operationId } = input;
   try {
-    operations.markRunning(operationId);
-    const { approve, ApprovalRefusedError } = await import('../../commands/porch/index.js');
+    // WHAT IS BEING RUN, read before it starts.
+    //
+    // `markRunning` took these from the first commit and nothing ever passed
+    // them, so `phase` and `checks` could never appear in a poll response — the
+    // store accepted them, the response spread them, and the one call that would
+    // populate them passed neither. An operator polling `running` got the word
+    // and nothing to wait on, which is a spinner.
+    operations.markRunning(operationId, await describeWork(input.workspacePath, input.projectId));
+    const { approve } = await import('../../commands/porch/index.js');
     const result = await approve(input.workspacePath, input.projectId, input.gateName, true, undefined, {
       // The SAME deliberately minimal environment the synchronous route uses.
       // Inheriting process.env would carry Tower's own CODEV_ARCHITECT_NAME /
@@ -1155,6 +1162,42 @@ async function runApprovalOperation(input: {
     });
   } catch (error) {
     await settleApprovalFailure(input, error);
+  }
+}
+
+/**
+ * The phase this approval will run, and the checks it will run there.
+ *
+ * Asked with PORCH'S OWN COMPUTATION — `getPhaseChecks` after overrides — rather
+ * than a second reading of the protocol that could drift from it. The names an
+ * operator is shown while waiting are then the names of the commands that
+ * actually run.
+ *
+ * Best effort by design: this is display content for a `running` record, and a
+ * project whose protocol cannot be loaded still has an approval worth running.
+ * It reports what it could read and nothing it could not.
+ */
+async function describeWork(
+  workspacePath: string,
+  projectId: string,
+): Promise<{ phase?: string; checks?: readonly string[] }> {
+  try {
+    const status = readWorkspaceStatuses(workspacePath, buildersOf(workspacePath))
+      .find((result) => result.ok && result.status.projectId === projectId);
+    if (!status?.ok) return {};
+    const { loadProtocol, getPhaseChecks } = await import('../../commands/porch/protocol.js');
+    const { loadCheckOverrides } = await import('../../commands/porch/config.js');
+    const protocol = loadProtocol(workspacePath, status.status.protocol);
+    const overrides = loadCheckOverrides(workspacePath, status.status.protocol);
+    const checks = Object.keys(
+      getPhaseChecks(protocol, status.status.phase, overrides ?? undefined, workspacePath),
+    );
+    return { phase: status.status.phase, ...(checks.length > 0 ? { checks } : {}) };
+  } catch {
+    // A protocol that will not load is not a reason to refuse the approval —
+    // porch will reach the same problem and report it properly. Saying nothing
+    // here is honest; guessing a phase name would not be.
+    return {};
   }
 }
 
