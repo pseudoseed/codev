@@ -1,0 +1,16 @@
+id: '236'
+title: spec-146-production-t3code-sna
+protocol: aspir
+phase: specify
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: pending
+  verify-approval:
+    status: pending
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-30T04:48:34.619Z'
+updated_at: '2026-08-30T04:48:34.620Z'
