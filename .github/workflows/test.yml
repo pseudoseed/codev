@@ -386,9 +386,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build types package
-        working-directory: packages/types
-        run: pnpm build
+      # THE DEPENDENCY CLOSURE, NOT A LIST OF PACKAGES.
+      #
+      # `tools/codev-agent-host` runs `packages/codev` FROM SOURCE through tsx,
+      # so anything that source imports from a sibling workspace package must
+      # have a built `dist`. A fresh checkout has none, and the first version of
+      # this job built only `packages/types` — which passed locally six times,
+      # because a developer's worktree already carries the outputs of an earlier
+      # full build. It failed here on the first CI run.
+      #
+      # The missing packages were `codev-sdk` and `codev-core`, reached through
+      # `agent-farm/lib/tower-client.ts`. Naming those three would work today and
+      # would drift silently the moment `packages/codev` imports a fourth — the
+      # same hand-kept-list failure this PR keeps finding. `^...` is derived from
+      # the workspace graph instead, and costs 6s measured.
+      - name: Build the packages codev imports
+        run: pnpm --filter "@cluesmith/codev^..." build
 
       # porch commits every state write, so the fixture's workspaces are real git
       # repositories. Without an identity the commit fails and the approval
