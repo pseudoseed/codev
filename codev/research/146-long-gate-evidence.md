@@ -32,8 +32,8 @@ times, which is the case Phase 13 depends on and the one nothing in this program
 
 | | |
 |---|---|
-| Started | **2026-08-30T06:38:59Z** |
-| Expected completion | ~2026-08-31T06:50Z (24h gate plus the turns and checks either side) |
+| Started | **2026-08-30T08:07:39Z** |
+| Expected completion | ~2026-08-31T08:15Z (24h gate plus the turns and checks either side) |
 | Driver | `claude` / `claude-haiku-4-5` → driver kind `claudeAgent` |
 | Port | 3805, data dir `tools/t3-server/.runtime-gate-24h` |
 | Server | pinned checkout `082e6ea52186`, pinned CLI `t3@0.0.36`, Node 26.4.0 |
@@ -48,10 +48,15 @@ it. The run says which driver produced it, as every run in this program does.
 
 ## Why the start time is later than the first attempt
 
-The 24-hour clock was restarted twice before it was left to run. Both restarts are recorded
-because both are about evidence rather than about servers.
+The 24-hour clock was started three times. All three are recorded, because a start timestamp
+with no history behind it leaves a later reader wondering which run it belongs to — and because
+every restart here was for the same reason: **the code underneath had changed, and a day-long
+run describing code that no longer exists is not evidence.**
 
-**First restart, 05:19:46Z → 05:48:09Z.**
+Restarting costs nothing against this phase. The deliverable is a started run and a recorded
+start, not an elapsed one, so re-recording a start is the whole of the work.
+
+**First start, 05:19:46Z. Abandoned at 05:48.**
 
 - The runner was still being changed. `spec-146-phase-10-full-protocol.test.ts` refuses
   evidence older than the runner that produced it, so every edit after a run starts makes
@@ -64,12 +69,17 @@ because both are about evidence rather than about servers.
   `observations.subscriptionError` rather than swallowed. `full-protocol-run.sh` now refuses
   a port it does not own, which is the condition that produced it.
 
-**Second restart, 05:48:09Z → 06:38:59Z.** Chasing the opencode failure produced a real fix to
-`packages/porch-driver/src/turn.ts` — a session refusal now fails fast with the server's own
-sentence instead of timing out — and a change to the launcher so it opts the driver in. Both
-are on the path this run exercises, so the clock was restarted rather than leaving a day-long
-run describing code that no longer exists. `codev/research/146-driver-parity.md` carries the
-finding.
+**Second start, 05:48:09Z. Abandoned at 06:38.** Chasing the opencode failure produced a real
+fix to `packages/porch-driver/src/turn.ts` — a session refusal now fails fast with the server's
+own sentence instead of timing out — and a change to the launcher so it opts the driver in. Both
+are on the path this run exercises. `codev/research/146-driver-parity.md` carries the finding.
+
+**Third start, 08:07:39Z. This is the one running.** The first CMAP round found four assertions
+that could not fail, two of which are on this path: the gate was measured with `setTimeout` and
+came up 36 ms short of the hour it claimed, and the "porch restart" rebuilt its subscription in
+the same process rather than recovering in a new one. Both are fixed, so the clock was restarted
+against the corrected runner. Its hash is recorded in
+`codev/research/146-phase10-live-evidence.json` under `describes`.
 
 ## Harvesting it
 
@@ -90,7 +100,7 @@ apart deliberately:
 
 **Started, not complete — and that is the deliverable met, not a gap.** The plan asks this
 phase for a started run and a recorded start; the completed evidence belongs to the later
-phase that consumes it. Started 2026-08-30T06:38:59Z, still elapsing when this branch was
+phase that consumes it. Started 2026-08-30T08:07:39Z, still elapsing when this branch was
 opened.
 
 | Criterion | Outcome | Detail |
