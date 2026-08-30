@@ -386,14 +386,20 @@ describe('a lock timeout is not a corrupt file', () => {
     submit(store);
     const lockPath = join(root, 'approval-operations.json.lock');
     writeFileSync(lockPath, '');
+    // ONE timeout, not two. Each blocked attempt waits out the full lock timeout,
+    // so asserting twice spent 2 x 2000ms against vitest's 5000ms default and left
+    // almost no headroom on a loaded machine — a test that fails for being slow
+    // says nothing about the code.
+    let thrown: unknown;
     try {
-      expect(() => submit(store, { projectId: 'b' }))
-        .toThrow(/APPROVAL_OPERATION_STORE_LOCKED/);
-      expect(() => submit(store, { projectId: 'b' }))
-        .not.toThrow(/UNREADABLE/);
+      submit(store, { projectId: 'b' });
+    } catch (error) {
+      thrown = error;
     } finally {
       rmSync(lockPath, { force: true });
     }
+    expect((thrown as Error | undefined)?.message).toMatch(/APPROVAL_OPERATION_STORE_LOCKED/);
+    expect((thrown as Error | undefined)?.message).not.toMatch(/UNREADABLE/);
     // Released, and the blocked submit left nothing behind.
     expect(submit(store, { projectId: 'b' }).state).toBe('submitted');
   });
@@ -415,7 +421,7 @@ describe('a terminal record is final', () => {
     const operation = submit(store);
     store.settle(operation.operationId, outcome);
     expect(() => store.settle(operation.operationId, { state: 'failed', message: 'later' }))
-      .toThrow(/already settled/);
+      .toThrow(/APPROVAL_OPERATION_ALREADY_SETTLED/);
     expect(() => store.markRunning(operation.operationId)).toThrow(/already settled/);
     expect(store.describe(operation.operationId)!.state).toBe(outcome.state);
   });

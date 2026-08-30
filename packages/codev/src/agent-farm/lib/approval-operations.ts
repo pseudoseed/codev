@@ -64,6 +64,16 @@ export const APPROVAL_OPERATION_SIGNAL = {
    * the code as a parameter precisely so these stay different.
    */
   APPROVAL_OPERATION_STORE_LOCKED: 'APPROVAL_OPERATION_STORE_LOCKED',
+  /**
+   * A caller tried to change a record that has already settled.
+   *
+   * SEPARATE FROM `UNKNOWN`, which it shared until review pointed at it. "There
+   * is no such operation" sends a caller to check the id it was given; "that one
+   * finished already" tells it the outcome it is about to overwrite is the real
+   * one. Phase 5 maps these onto route responses, where one code for both would
+   * become one HTTP answer for two different client bugs.
+   */
+  APPROVAL_OPERATION_ALREADY_SETTLED: 'APPROVAL_OPERATION_ALREADY_SETTLED',
   APPROVAL_OPERATION_INTERRUPTED: 'APPROVAL_OPERATION_INTERRUPTED',
   APPROVAL_ALREADY_IN_FLIGHT: 'APPROVAL_ALREADY_IN_FLIGHT',
   APPROVAL_CONCURRENCY_LIMIT: 'APPROVAL_CONCURRENCY_LIMIT',
@@ -389,7 +399,7 @@ export class ApprovalOperationStore {
       // shown — reporting a second answer for a question already answered.
       if (isTerminal(operation.state)) {
         throw new Error(
-          `${APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_UNKNOWN}: operation ${operationId} `
+          `${APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_ALREADY_SETTLED}: operation ${operationId} `
           + `already settled as ${operation.state}; it cannot be changed`,
         );
       }
