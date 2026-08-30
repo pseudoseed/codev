@@ -504,3 +504,85 @@ export function pruneTerminal(
     .run(cutoff);
   return info.changes;
 }
+
+/**
+ * The last N messages addressed to each agent in a workspace (Spec 146, Phase 12).
+ *
+ * Criterion 4 asks every builder pane to show "the last three agent messages" and
+ * criterion 4b the architect's last one. Nothing on the agent wire carried
+ * messages, and this table is the only durable record of them: `pruneTerminal`
+ * keeps resolved rows for a retention window, so a delivered message is still
+ * here after it reached its recipient.
+ *
+ * ONE QUERY, NOT ONE PER AGENT. The snapshot is rebuilt on every SSE tick, so a
+ * per-identity query would multiply by the number of agents on every tick.
+ *
+ * BODIES ARE TRUNCATED AND THE CUT IS REPORTED. A body silently cut at the limit
+ * reads as a complete short message, which misreports what was said. `truncated`
+ * travels with the row so the surface rendering it can say so.
+ *
+ * This is the AGENT surface only. The v2/overview surface stays count-only —
+ * `heldCount` and nothing else — because it is reached with Tower's shared key
+ * rather than a per-machine credential.
+ */
+export interface RecentAgentMessage {
+  readonly id: string;
+  /** Sender identity when one was recorded: an architect name or a builder id. */
+  readonly from: string;
+  /** ISO-8601, from `created_at`. */
+  readonly at: string;
+  readonly body: string;
+  /** Present and true only when `body` was cut. Never written as false. */
+  readonly truncated?: true;
+  /** Present and true only while the row is still held (never delivered). */
+  readonly held?: true;
+}
+
+export const RECENT_MESSAGE_BODY_LIMIT = 240;
+
+interface RecentRow {
+  readonly to_agent: string;
+  readonly id: string;
+  readonly from_agent: string | null;
+  readonly from_agent_name: string | null;
+  readonly body: string;
+  readonly status: string;
+  readonly created_at: number;
+}
+
+/**
+ * @throws whatever better-sqlite3 throws. The caller distinguishes "no messages"
+ *   from "could not read the messages"; swallowing the error here would collapse
+ *   those two into the same empty map.
+ */
+export function recentByAgent(
+  db: Database.Database,
+  workspacePath: string,
+  perAgent = 3,
+  bodyLimit: number = RECENT_MESSAGE_BODY_LIMIT,
+): Map<string, RecentAgentMessage[]> {
+  const rows = db.prepare(`
+    SELECT to_agent, id, from_agent, from_agent_name, body, status, created_at FROM (
+      SELECT to_agent, id, from_agent, from_agent_name, body, status, created_at,
+             ROW_NUMBER() OVER (PARTITION BY to_agent ORDER BY created_at DESC, id DESC) AS rn
+      FROM mailbox WHERE workspace_path = ?
+    ) WHERE rn <= ?
+    ORDER BY to_agent, created_at DESC, id DESC
+  `).all(workspacePath, perAgent) as RecentRow[];
+
+  const out = new Map<string, RecentAgentMessage[]>();
+  for (const row of rows) {
+    const cut = row.body.length > bodyLimit;
+    const list = out.get(row.to_agent) ?? [];
+    list.push({
+      id: row.id,
+      from: row.from_agent_name ?? row.from_agent ?? 'unknown',
+      at: new Date(row.created_at).toISOString(),
+      body: cut ? row.body.slice(0, bodyLimit) : row.body,
+      ...(cut ? { truncated: true as const } : {}),
+      ...(row.status === 'held' ? { held: true as const } : {}),
+    });
+    out.set(row.to_agent, list);
+  }
+  return out;
+}

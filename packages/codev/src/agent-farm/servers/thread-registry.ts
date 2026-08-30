@@ -6,6 +6,7 @@
  */
 
 import type Database from 'better-sqlite3';
+import { recentByAgent, type RecentAgentMessage } from '../db/mailbox.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 import type { AgentStateSignal, PorchStatusProjection, StatusReadResult } from './status-reader.js';
 
@@ -50,6 +51,17 @@ export interface ThreadIdentity {
    * this is.
    */
   readonly sessionState?: string;
+  /**
+   * The last few messages addressed to this agent, newest first (Spec 146,
+   * Phase 12). Absent when this agent has none.
+   *
+   * "Absent" is not "unknown": whether the log could be read AT ALL is
+   * {@link ThreadRegistrySnapshot.messageLog}, exactly as `sessionState`'s
+   * absence is disambiguated by `t3code`. A pane that renders an agent with no
+   * messages the same way it renders an agent whose messages would not load is
+   * reporting a fact it does not have.
+   */
+  readonly messages?: readonly RecentAgentMessage[];
 }
 
 export interface ThreadRegistrySnapshot {
@@ -65,6 +77,15 @@ export interface ThreadRegistrySnapshot {
   readonly identities: readonly ThreadIdentity[];
   readonly statuses: readonly PorchStatusProjection[];
   readonly signals: readonly AgentStateSignal[];
+  /**
+   * Whether the mailbox — the durable record of `afx send` traffic, and the only
+   * source of per-agent messages — could be read when this snapshot was built.
+   *
+   * Same shape and same reason as {@link t3code}: a consumer that cannot see
+   * this cannot tell "this agent has no messages" from "the message log would
+   * not open", and would render the second as the first.
+   */
+  readonly messageLog: 'available' | 'unreadable';
 }
 
 interface ArchitectRow {
@@ -288,7 +309,7 @@ export function readThreadRegistry(
     `).all(workspace) as BuilderRow[];
   } catch (error) {
     signals.push(dbSignal(error));
-    return { t3code: t3code.status, architects: {}, builders: {}, identities: [], statuses, signals };
+    return { t3code: t3code.status, architects: {}, builders: {}, identities: [], statuses, signals, messageLog: 'unreadable' };
   }
 
   const architectMap: Record<string, string> = {};
@@ -496,5 +517,41 @@ export function readThreadRegistry(
     }
   }
 
-  return { t3code: t3code.status, architects: architectMap, builders: builderMap, identities, statuses, signals };
+  /*
+   * Messages are attached in ONE PASS over the finished identities rather than at
+   * each of the six `identities.push` sites, so a new identity kind cannot be
+   * added later that silently carries none.
+   *
+   * A mailbox that will not read is a SIGNAL AND A FLAG, not an empty list. The
+   * signal tells an operator what broke; the flag stops every pane rendering
+   * "no messages" for an agent that may have several.
+   */
+  let messageLog: 'available' | 'unreadable' = 'available';
+  let recent: Map<string, RecentAgentMessage[]>;
+  try {
+    recent = recentByAgent(db, workspace);
+  } catch (error) {
+    recent = new Map();
+    messageLog = 'unreadable';
+    signals.push({
+      code: 'MESSAGE_LOG_UNREADABLE',
+      message: `The mailbox could not be read, so no row can show its messages: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
+  }
+  const withMessages = identities.map((identity) => {
+    const forAgent = identity.roleId !== undefined ? recent.get(identity.roleId) : undefined;
+    return forAgent && forAgent.length > 0 ? { ...identity, messages: forAgent } : identity;
+  });
+
+  return {
+    t3code: t3code.status,
+    architects: architectMap,
+    builders: builderMap,
+    identities: withMessages,
+    statuses,
+    signals,
+    messageLog,
+  };
 }

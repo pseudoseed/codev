@@ -71,3 +71,63 @@ describe('machine ids', () => {
     }
   });
 });
+
+/*
+ * TOWER'S ERROR ENVELOPE, WHICH THIS CLIENT USED TO THROW AWAY.
+ *
+ * The mount answers `{ signal, message, machines: [] }` for an absent, wrong-mode
+ * or unparseable machine list, precisely so four situations are four sentences.
+ * `loadMachines` accepted only a bare array, so all four arrived as "machine
+ * configuration is not a list of machines" — and the first of them, no file at
+ * all, is the NORMAL state of a fresh install. The generic sentence was the one
+ * most operators would ever see from the mount.
+ */
+describe("Tower's machine-list envelope", () => {
+  function serving(body: unknown): typeof globalThis.fetch {
+    return (async () => new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })) as unknown as typeof globalThis.fetch;
+  }
+
+  it.each([
+    ['CLIENT_MACHINES_ABSENT', 'No machine list at /root/.agent-farm/client-machines.json.'],
+    ['CLIENT_MACHINES_MODE', 'client-machines.json is mode 644 and holds machine credentials.'],
+    ['CLIENT_MACHINES_UNREADABLE', 'client-machines.json could not be read as JSON.'],
+  ])('keeps the server sentence for %s', async (signal, message) => {
+    const load = await loadMachines(serving({ signal, message, machines: [] }));
+    expect(load.ok).toBe(false);
+    if (!load.ok) {
+      expect(load.message).toBe(message);
+      // The generic fallback must NOT be what a configured signal produces.
+      expect(load.message).not.toContain('is not a list of machines');
+    }
+  });
+
+  it('reads the machines out of an envelope that carries no message', async () => {
+    const entry = {
+      id: 'alpha',
+      label: 'alpha',
+      origin: '/m/alpha',
+      workspacePath: '/w',
+      credential: 'id.secret',
+    };
+    const load = await loadMachines(serving({ machines: [entry] }));
+    expect(load.ok).toBe(true);
+    if (load.ok) expect(load.machines.map((machine) => machine.id)).toEqual(['alpha']);
+  });
+
+  it('still accepts the bare array the dev server and scripts/serve.mjs send', async () => {
+    const load = await loadMachines(serving([{
+      id: 'beta', label: 'beta', origin: '/m/beta', workspacePath: '/w', credential: 'id.secret',
+    }]));
+    expect(load.ok).toBe(true);
+    if (load.ok) expect(load.machines.map((machine) => machine.id)).toEqual(['beta']);
+  });
+
+  it('still refuses a shape that is neither', async () => {
+    const load = await loadMachines(serving({ nonsense: true }));
+    expect(load.ok).toBe(false);
+    if (!load.ok) expect(load.message).toContain('is not a list of machines');
+  });
+});

@@ -134,13 +134,54 @@ export function keysMatch(presented: string, expected: string): boolean {
  * Routes intentionally reachable without the key. Kept deliberately narrow:
  * pre-auth liveness/version probes, the Tower launcher shell, and the React
  * dashboard's static assets (the page loads keyless, then authenticates its
- * own API/WebSocket calls with the key). Everything else requires the key.
+ * own API/WebSocket calls with the key).
  *
  * The privileged workspace `file` reader and every `api/` or `ws/` subpath are
  * explicitly excluded so a static-asset carve-out never exposes a data route.
+ *
+ * THE LIST IS NO LONGER GET-ONLY, and this sentence is here because the version
+ * of it that said "everything else requires the key" survived the change that
+ * made it false. Spec 146 Phase 12's `/m/<id>/*` proxy is public for every
+ * method — an approval is a POST — and it carries a per-machine credential
+ * instead of the shared key. The branch below states why in full. A reader
+ * trusting this paragraph over that branch would conclude the surface is
+ * narrower than it is.
  */
 export function isPublicRoute(method: string, pathname: string): boolean {
+  /*
+   * Spec 146 Phase 12 — the codev-client mount, and why it is on this list.
+   *
+   * `/client/` and its assets carry no secret and are public for the same reason
+   * `/v2/` is: they are a shell and its bundle, fetched by tags that cannot
+   * carry a header.
+   *
+   * `/client/machines.json` and `/m/<id>/...` are the part that needs the
+   * reasoning stated, because they are NOT GET-only and the machine list carries
+   * per-machine credentials.
+   *
+   * They do not take Tower's shared key, and the client deliberately never
+   * receives it — `apps/client/README.md` says why: the shared key cannot be
+   * revoked for one machine without rotating it for all, so a page holding it
+   * would have Tower-wide access to every workspace on the host that revoking a
+   * machine credential would not take away. What the page holds instead is a
+   * per-machine, revocable credential, which is the same trade
+   * `isCodevAgentRoute` already makes one prefix over.
+   *
+   * The residual: anyone who can reach Tower's port reads that machine list.
+   * That is not a privilege this mount introduces — the same reachability
+   * already serves the dashboard shell with the shared key injected into it,
+   * which reaches strictly more. The port's own exposure is the control, and it
+   * is the reason the runbook puts `tailscale serve` in front rather than a
+   * bind on 0.0.0.0.
+   */
+  if (pathname === '/m' || pathname.startsWith('/m/')) return true;
+  if (pathname === '/client/machines.json') return method === 'GET';
+
   if (method !== 'GET') return false;
+
+  if (pathname === '/client') return true;
+  if (pathname === '/client/') return true;
+  if (pathname.startsWith('/client/assets/')) return true;
 
   if (pathname === '/health') return true;
   if (pathname === '/api/version') return true;

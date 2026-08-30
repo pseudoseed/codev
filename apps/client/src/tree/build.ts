@@ -1,7 +1,9 @@
 import type { MachineState } from '../connection/machine.js';
 import { deriveRowStatus, type RowStatus } from '../status/derive.js';
 import type {
+  AgentMessage,
   AgentStateSignal,
+  MessageLogReachability,
   PorchStatusProjection,
   ThreadIdentity,
 } from '../connection/types.js';
@@ -18,6 +20,10 @@ export interface ThreadRow {
   readonly worktree?: string;
   readonly porch?: PorchStatusProjection;
   readonly status: RowStatus;
+  /** Newest first. Absent means none; `WorkspaceNode.messageLog` says whether any could be read. */
+  readonly messages?: readonly AgentMessage[];
+  /** Which machine this row came from. Shown on a pane once more than one is configured. */
+  readonly machine: string;
 }
 
 export interface ArchitectGroup {
@@ -36,6 +42,11 @@ export interface WorkspaceNode {
    * a tree full of UNKNOWN with no stated cause reads as a broken client.
    */
   readonly sessionVisibility: 'not-provided' | 'unreachable' | 'available';
+  /**
+   * Whether this machine's message log could be read. Reported once, like
+   * `sessionVisibility`, and never collapsed into "this agent has no messages".
+   */
+  readonly messageLog: MessageLogReachability;
   readonly architects: readonly ArchitectGroup[];
   /**
    * Builders `global.db` does not attribute to an architect present here. They
@@ -69,6 +80,8 @@ function rowFrom(identity: ThreadIdentity, t3code: Parameters<typeof deriveRowSt
     ...(identity.worktree ? { worktree: identity.worktree } : {}),
     ...(identity.porch ? { porch: identity.porch } : {}),
     status: deriveRowStatus(identity, t3code),
+    ...(identity.messages && identity.messages.length > 0 ? { messages: identity.messages } : {}),
+    machine: machineKey,
   };
 }
 
@@ -119,6 +132,7 @@ function buildWorkspace(connection: MachineState, machineKey: string): Workspace
     path: snapshot.workspacePath,
     generatedAt: snapshot.generatedAt,
     sessionVisibility: t3code,
+    messageLog: protocol.messageLog ?? 'not-provided',
     architects: architectRows.map((architect) => ({
       key: architect.key,
       architect,

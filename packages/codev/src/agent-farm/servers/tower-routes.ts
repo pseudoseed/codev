@@ -49,6 +49,7 @@ import { fetchTeamGitHubData, type TeamMemberGitHubData } from '../../lib/team-g
 import { resolveTarget, resolveAgentInRegistry, broadcastMessage, isResolveError, type ResolveResult } from './tower-messages.js';
 import { handleCommandRoute, COMMAND_ROUTE } from './command-relay.js';
 import { handleV2Route } from './v2-routes.js';
+import { isClientPath, serveClientStatic } from './client-static.js';
 import { handleAgentRoute } from './agent-routes.js';
 import { handleCanvasRoute, CANVAS_ROUTE_PREFIX } from './canvas-relay.js';
 import { formatArchitectMessage, formatBuilderMessage, formatUserViaVsCodeMessage } from '../utils/message-format.js';
@@ -308,6 +309,13 @@ export async function handleRequest(
     // Dispatch only — every v2 decision still belongs to handleV2Route.
     if (url.pathname === '/v2' || url.pathname.startsWith('/v2/')) {
       return await handleV2Route(req, res, url);
+    }
+
+    // codev-client: /client/* and its /m/<id>/* machine proxy (Spec 146 Phase
+    // 12). Same dispatch shape as /v2 — one prefix branch, and every decision
+    // about the mount belongs to the module.
+    if (isClientPath(url.pathname)) {
+      return serveClientStatic(req, res, url);
     }
 
     // Tunnel endpoints: /api/tunnel/* (Spec 0097 Phase 4)

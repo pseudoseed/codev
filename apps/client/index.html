@@ -17,8 +17,10 @@
       `frame-ancestors` is NOT here: a <meta> CSP silently ignores it, and a
       directive that does nothing is worse than an absent one because it reads
       as protection. It is sent as a response header instead — by the dev server
-      in `vite.config.ts` and by `scripts/serve.mjs` for the built bundle, and
-      whatever else serves this bundle must send it too.
+      in `vite.config.ts`, by `scripts/serve.mjs` for the built bundle, and by
+      Tower's `/client/` mount (`servers/client-static.ts`), which is where this
+      bundle is served from in production. Whatever else serves it must send it
+      too; `client-static.test.ts` asserts Tower does.
     -->
     <meta
       http-equiv="Content-Security-Policy"

@@ -49,6 +49,7 @@ playwright-report/
 packages/codev/dashboard-dist/
 apps/web/dist/
 packages/codev/v2-dist/
+packages/codev/client-dist/
 apps/v2/dist/
 
 # three.js vendored at build time from the `three` devDependency (copy-three.mjs);
