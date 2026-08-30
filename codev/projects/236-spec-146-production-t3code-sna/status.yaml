@@ -1,7 +1,7 @@
 id: '236'
 title: spec-146-production-t3code-sna
 protocol: aspir
-phase: specify
+phase: plan
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -10,7 +10,7 @@ gates:
   verify-approval:
     status: pending
 iteration: 1
-build_complete: true
+build_complete: false
 history: []
 started_at: '2026-08-30T04:48:34.619Z'
-updated_at: '2026-08-30T04:55:48.459Z'
+updated_at: '2026-08-30T05:06:04.014Z'
