@@ -490,6 +490,10 @@ async function main() {
               RESUB_THREAD_ID: thread.threadId,
               RESUB_CURSOR_PATH: cursorPath,
               RESUB_WAIT_MS: '120000',
+              // The parent's observation, handed over rather than re-derived:
+              // the `running` event is at or below the cursor by construction,
+              // so the child cannot see it and must be told.
+              RESUB_TURN_IN_FLIGHT: activeAtDeath ? '1' : '0',
             },
           },
         );

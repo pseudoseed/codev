@@ -36,6 +36,29 @@ const accessToken = process.env.RESUB_ACCESS_TOKEN;
 const threadId = process.env.RESUB_THREAD_ID;
 const cursorPath = process.env.RESUB_CURSOR_PATH;
 const waitMs = Number(process.env.RESUB_WAIT_MS ?? '120000');
+/**
+ * The parent observed a turn IN FLIGHT when it was torn down.
+ *
+ * This is what makes the first `activeTurnId: null` in the replay readable as
+ * that turn's completion, and the first version got it wrong in the direction
+ * that produces a false NEGATIVE.
+ *
+ * That version required a non-null `activeTurnId` to appear in the catch-up
+ * before it would count a null one — `TurnTracker`'s latch, which exists because
+ * a thread's CREATION event is a null with no turn before it. But the cursor here
+ * is mid-turn by construction: the parent awaited `running` before it died, so
+ * the running event is at or BELOW the cursor and `afterSequence` excludes it.
+ * Whether a second non-null one happens to land above the cursor is a detail of
+ * how chatty the driver's session updates are — it held on the runs measured
+ * here, and a driver that emits one `running` and nothing else until the settle
+ * would have made this report "the completion event did not come back" about a
+ * completion event that did.
+ *
+ * So the latch is supplied by the parent's observation instead of inferred from
+ * the replay. When the parent did NOT see a turn in flight, the latch is kept,
+ * because then the creation-event case is live again.
+ */
+const turnWasInFlight = process.env.RESUB_TURN_IN_FLIGHT === '1';
 
 const report = {
   cursorReadFromDisk: null,
@@ -43,6 +66,7 @@ const report = {
   synchronized: false,
   catchUpSequences: [],
   sawSettleInCatchUp: false,
+  sawRunningInCatchUp: false,
   settleSequence: null,
   error: null,
 };
@@ -82,6 +106,7 @@ try {
   };
   report.afterSequenceSent = payload.afterSequence;
 
+  report.turnWasInFlight = turnWasInFlight;
   let sawRunningInCatchUp = false;
   const done = new Promise((resolve) => {
     void client
@@ -101,12 +126,15 @@ try {
         if (activeTurnId === undefined) return;
         if (activeTurnId !== null) {
           sawRunningInCatchUp = true;
+          report.sawRunningInCatchUp = true;
           return;
         }
-        // A null before any running is the thread-creation shape, not a
-        // completion — the same latch `TurnTracker` keeps, kept again here
-        // because this process has no tracker to keep it.
-        if (sawRunningInCatchUp && !report.sawSettleInCatchUp) {
+        // The latch, satisfied either by the parent's observation that a turn
+        // was in flight when it died, or by seeing the turn start inside this
+        // replay. Requiring only the second produced a false negative whenever
+        // the driver's `running` event fell at or below the cursor, which is
+        // where it normally falls.
+        if ((turnWasInFlight || sawRunningInCatchUp) && !report.sawSettleInCatchUp) {
           report.sawSettleInCatchUp = true;
           report.settleSequence = event.sequence;
         }
