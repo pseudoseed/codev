@@ -7,6 +7,11 @@ approval through the capability path. Spec 146 phase 11.
 React 19, Vite 6, Vitest 4, Playwright — the same stack as `apps/v2`, which this
 replaces in phase 12.
 
+**Phase 12 added the tiled grid and the Tower mount.** The client opens on a grid
+of panes — one per builder, an architect strip below it — and Tower serves it at
+`/client/`. The tree is still here at `/client/?view=tree`, and the Grid/Tree
+switch in the header moves between them.
+
 ## Run it in one command
 
 ```bash
@@ -81,6 +86,47 @@ blame the server for a configuration mistake.
 setup that had to widen the CSP to reach a second port would not be testing what
 runs.
 
+## The two views
+
+| View | URL | What it is for |
+|---|---|---|
+| Grid (default) | `/client/` | Watching work. One tile per builder, the architect in a strip below, the last three messages in each tile. |
+| Tree | `/client/?view=tree` | Diagnosing a machine. The only view that shows machine boundaries, connection bands (LIVE / STALE / DISCONNECTED / ACCESS REVOKED / CANNOT VERIFY) and the unattributed-builder grouping. |
+
+The grid's geometry is arithmetic, and it lives in `src/responsive/layout.ts`
+with its own unit tests, because the criteria it serves are numbers:
+
+| Viewport | Layout |
+|---|---|
+| below 700px | One pane per screen with a pager. It **pages rather than shrinks**, and nothing is allowed to widen the document. |
+| 700–1919px | A near-square grid of builder tiles, every one at least **340x240 CSS px**, body text at **13px or larger**. The architect gets a persistent strip below the grid and expands to a full pane on demand, replacing the grid. |
+| 1920px and wider | The architect may take a seventh equal tile; the strip goes away. |
+
+`repeat(auto-fill, minmax(340px, 1fr))` is the obvious CSS for this and gives the
+wrong answer: four 340px columns fit in 1440 less padding, so six builders would
+tile 4 + 2 rather than the 3x2 the spec requires. The column count is therefore
+computed — near-square, capped by what fits — and the CSS applies it.
+
+## The last three messages
+
+Each pane shows the last three messages addressed to that agent, and the
+architect strip shows its last one. They come from the **mailbox** — the durable
+record of `afx send` traffic — over `/api/agent/v1/*` only. The v2 and overview
+surfaces stay count-only (`heldCount`, never bodies): they are reached with
+Tower's shared key rather than a per-machine revocable credential, and that
+difference is the whole reason the rule exists.
+
+Three absences are three different sentences, never one blank:
+
+| What the pane says | What is true |
+|---|---|
+| No messages have been sent to this agent | The log was read and is empty. |
+| This machine's message log would not open | The mailbox threw. The agent may have several. |
+| This server does not report messages | An older server that predates the field. |
+
+A body longer than 240 characters is cut, and the pane says **CUT** on it. A
+message trimmed silently is a partial message reported as a complete short one.
+
 ## Serving the built bundle
 
 ```bash
@@ -91,9 +137,61 @@ pnpm serve            # http://127.0.0.1:4180/client/
 `scripts/serve.mjs` serves `dist/`, answers `machines.json`, proxies `/m/<id>/`,
 and sends the `frame-ancestors` header a `<meta>` CSP silently ignores.
 
-**Tower does not serve this client yet.** Phase 12 replaces `apps/v2` and moves
-the static mount; until then `scripts/serve.mjs` is the only server for the built
-bundle, and the root `pnpm build` does not include it.
+### Tower serves it at `/client/`
+
+Phase 12 moved the mount into Tower (`packages/codev/src/agent-farm/servers/client-static.ts`),
+so `scripts/serve.mjs` is now the loopback convenience rather than the only
+server. The root `pnpm build` includes this app: `packages/codev`'s
+`bundle-assets` runs `copy-client`, which builds `apps/client` and copies its
+`dist/` to `packages/codev/client-dist/`, the same way `copy-v2` handles
+`apps/v2`.
+
+| Path | Served |
+|---|---|
+| `/client/` | The shell, with `Content-Security-Policy: frame-ancestors 'none'` as a **response header** — a `<meta>` CSP silently ignores that directive. |
+| `/client/assets/*` | The built bundle. |
+| `/client/machines.json` | The operator's machine list, each origin rewritten to `/m/<id>` so the page never makes a cross-origin request. |
+| `/m/<id>/*` | Reverse proxy to that machine's `codev-agent`, streamed rather than buffered because these are SSE. |
+
+**Tower never injects its shared key into this page**, unlike `/v2/`. That key
+cannot be revoked for one machine without rotating it for all, so a page holding
+it would have Tower-wide access that revoking a machine credential would not take
+away. The page carries per-machine credentials instead.
+
+#### The machine list Tower reads
+
+`~/.agent-farm/client-machines.json` (or `$CODEV_AGENT_FARM_DIR/client-machines.json`),
+**mode 0600**, the same array shape as `.dev-machines.json` above. Tower does not
+create it and does not mint the credentials in it; an `afx pair` command for that
+does not exist yet and is tracked separately.
+
+Four problems, four answers — an absent file and a mistyped one need opposite
+next actions, so they never share one empty list:
+
+| Signal | Meaning |
+|---|---|
+| `CLIENT_MACHINES_ABSENT` | No file. Tower serves the client but has nothing to connect it to. |
+| `CLIENT_MACHINES_MODE` | Group- or world-readable. Refused, because it holds credentials. |
+| `CLIENT_MACHINES_UNREADABLE` | Present but not parseable as a JSON array. |
+| (entry dropped) | A malformed entry is dropped and the rest are served. |
+
+### Reaching it from an iPad over a tailnet
+
+```bash
+afx tower start                                   # or leave your running Tower alone
+tailscale serve --https=443 http://127.0.0.1:4100
+tailscale serve status                            # note the https://<host>.<tailnet>.ts.net URL
+```
+
+Then open `https://<host>.<tailnet>.ts.net/client/` on the iPad. An iPad in
+portrait is 820px, which is a grid width rather than a paged one.
+
+Tear it down afterwards — leaving it up publishes a Tower to your whole tailnet:
+
+```bash
+tailscale serve --https=443 off
+tailscale serve status                            # must list nothing
+```
 
 ## Tests
 

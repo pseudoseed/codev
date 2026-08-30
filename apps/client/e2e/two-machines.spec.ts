@@ -75,7 +75,13 @@ test.afterAll(async () => {
  * and the one `connect-src 'self'` permits.
  */
 async function openClient(page: Page): Promise<void> {
-  await page.goto(`${clientOrigin}/client/`);
+  /*
+   * `?view=tree` because phase 12 made the tiled GRID the default view. The tree
+   * is still the client's other half and is the only view that shows machine
+   * boundaries, connection bands and the unattributed grouping — which is what
+   * every criterion in this file is about — so this suite asks for it by name.
+   */
+  await page.goto(`${clientOrigin}/client/?view=tree`);
 }
 
 /** Which machines the served `machines.json` announces on the next load. */
