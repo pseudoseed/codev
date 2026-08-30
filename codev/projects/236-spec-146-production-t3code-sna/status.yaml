@@ -5,10 +5,10 @@ phase: implement
 plan_phases:
   - id: phase_1
     title: Snapshot status vocabulary and the session-state mapping
-    status: in_progress
+    status: complete
   - id: phase_2
     title: The t3code session cache and the production provider
-    status: pending
+    status: in_progress
   - id: phase_3
     title: afx pair issue/list/revoke
     status: pending
@@ -24,14 +24,14 @@ plan_phases:
   - id: phase_7
     title: Threat model, failure matrix, and the dev-check revocation
     status: pending
-current_plan_phase: phase_1
+current_plan_phase: phase_2
 gates:
   pr:
     status: pending
   verify-approval:
     status: pending
-iteration: 2
-build_complete: true
+iteration: 1
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -48,4 +48,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_1-iter1-opencode.txt
         stated: true
 started_at: '2026-08-30T04:48:34.619Z'
-updated_at: '2026-08-30T06:04:59.315Z'
+updated_at: '2026-08-30T06:10:51.039Z'
+context_refreshes:
+  - boundary: plan-phase:phase_2
+    at: '2026-08-30T06:10:51.039Z'
