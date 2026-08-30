@@ -318,3 +318,18 @@ Also filed: the two-writer journal race on #231 (this PR made Tower a second wri
 blocking-for-enablement; and `afx send` always reporting pending for a thread-backed agent on
 #227. Corrected #227's `installThreadSpawnFactory` fix shape — drop the call, do not key it — and
 named the six doc files #226 must carry.
+
+## Main-merge sequence complete
+
+1. `git merge origin/main` — **no conflicts**. The two branches' changed-file sets do not
+   intersect (main 67 files, mine 30, intersection empty), which the pre-merge reconnaissance
+   predicted.
+2. Cherry-picked the two air-220 porch state commits; `220-spec-146-phase-11-codev-client/status.yaml`
+   now reads `phase: verified` rather than stalling at `pr`.
+3. **On the merged tree:** full suite `351 passed | 3 skipped` files, `6908 passed | 52 skipped`
+   tests, 0 failed, plus v2 `180 passed`. `porch check` green. Live criteria re-run under the
+   claude driver: cold start pid 66278 → restart preserved → pid 69757 → codeword returned, 2
+   passed.
+4. PR body carries the disclosure for the 220 pair and the reason the merge mattered more.
+
+Phase 11 and phase 9 do not interact badly. Phase 11's three new test files run alongside mine.
