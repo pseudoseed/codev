@@ -52,6 +52,32 @@ function createProcessThreadEngine(): ThreadEngine & { exited(threadId: string):
       return threadId;
     },
 
+    /**
+     * Issue #219 added `attach` to `ThreadEngine` so a double could not diverge from
+     * the contract — and this double diverged from it in the same commit, silently:
+     * `packages/codev/tsconfig.json` excludes `**\/__tests__/**`, the package has no
+     * check-types script, and CI typechecks only `packages/types`, so a missing member
+     * on a `ThreadEngine &` annotation is a type error nothing ever runs. See #210.
+     *
+     * Real here, not a stub: an attached thread is one this engine did not create, so
+     * it has no child process and nothing to interrupt until a turn starts.
+     */
+    async attach(input) {
+      const existing = records.get(input.threadId);
+      if (existing) return existing;
+      const record: ThreadRecord = {
+        threadId: input.threadId,
+        worktreePath: input.worktreePath,
+        branch: input.branch,
+        builderId: input.builderId,
+        activeTurnId: null,
+        merged: false,
+        launched: true,
+      };
+      records.set(input.threadId, record);
+      return record;
+    },
+
     async startTurn(threadId, text) {
       const record = records.get(threadId);
       if (!record) throw new Error(`Unknown thread ${threadId}`);

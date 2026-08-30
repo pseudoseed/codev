@@ -17,9 +17,9 @@ import { describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DispatchJournal } from '../../../../porch-driver/src/commands.js';
-import { TurnTracker } from '../../../../porch-driver/src/turn.js';
-import { DriverThread } from '../../../../porch-driver/src/thread.js';
+import { DispatchJournal } from '@cluesmith/porch-driver/commands';
+import { TurnTracker } from '@cluesmith/porch-driver/turn';
+import { DriverThread } from '@cluesmith/porch-driver/thread';
 import { createPorchThreadEngine } from './helpers/porch-thread-engine.js';
 import { createMemoryThreadEngine } from '../thread-runtime.js';
 

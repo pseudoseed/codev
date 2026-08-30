@@ -97,3 +97,22 @@ Three blocking issues, all fixed, and fixing the first exposed a fourth defect.
 The live test's post-restart turn now goes through a real child process calling
 `makeDeliveryPorts().writeMessage` against the built dist. That is what catches issue 1;
 driving the engine from the test process cannot see it.
+
+## Review round 3 (claude lane, APPROVE HIGH with findings)
+
+- **Fixed:** `spec-146-phase-9-interrupt-side-effect.test.ts` returned `ThreadEngine & {…}` from
+  a literal with no `attach` — a type error nothing would ever surface, because
+  `packages/codev/tsconfig.json` excludes `**/__tests__/**`, the package has no check-types
+  script, and CI typechecks only `packages/types` (#210). The interface gained a member and a
+  double diverged from it in the same commit that claimed doubles could not. Also re-pointed my
+  own new test files at `@cluesmith/porch-driver/*` rather than `../../../../porch-driver/src/*`,
+  which was producing duplicate-module-identity errors of the same invisible class; all five
+  files this issue touches typecheck clean with the exclude lifted. 289 pre-existing errors are
+  behind that exclude — #210's scope, not this one's.
+- **Already closed in 35c37fd23, before the finding arrived:** the reviewer flagged that
+  `restart` does not wait for the port to be released. It does — `t3-server.mjs:532-546` polls
+  `ownedPortHolders()` to empty with a 30 s bound and exits 3 as `PORT_NOT_RELEASED`. The lane
+  reviewed `b560e1b8c`, where it was absent.
+- **Filed, not built:** #223 — a thread-backed row held as `no-live-pty` sends the operator to
+  restart a session when the real fault is an uninitialised backend in Tower's process.
+  Architect's ruling: it is a user-global DB migration and belongs in its own change.

@@ -57,9 +57,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { WebSocket } from 'ws';
-import { DispatchJournal } from '../../../../porch-driver/src/commands.js';
-import { TurnTracker } from '../../../../porch-driver/src/turn.js';
-import { createProject } from '../../../../porch-driver/src/thread.js';
+import { DispatchJournal } from '@cluesmith/porch-driver/commands';
+import { TurnTracker } from '@cluesmith/porch-driver/turn';
+import { createProject } from '@cluesmith/porch-driver/thread';
 import { createPorchThreadEngine } from './helpers/porch-thread-engine.js';
 
 const repoRoot = resolve(import.meta.dirname, '../../../../..');
@@ -144,7 +144,8 @@ async function connect(port: number, token: string): Promise<Connection> {
   const client = new T3Client({
     send: (d: string) => socket.send(d),
     close: () => socket.close(),
-    addEventListener: (t: string, l: (ev: unknown) => void) => socket.addEventListener(t, l as never),
+    addEventListener: ((t: string, l: (ev: unknown) => void) =>
+      socket.addEventListener(t as 'message', l as never)) as never,
     get readyState() {
       return socket.readyState;
     },

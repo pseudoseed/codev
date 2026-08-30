@@ -151,6 +151,10 @@ the user-global database and a user-visible vocabulary change, which is the arch
 
 ### `project.create` is not idempotent, and the second process paid for it
 
+**It fails on the second use, which means it fails for the user and not for the author.** It
+worked in the first process to run against a workspace and failed in every one after, so it
+would have passed any test that ran once and any manual check by whoever built it.
+
 Found by the fix above, on its first run. t3code refuses a second active project for a workspace
 root (`requireActiveProjectWorkspaceRootAbsent`), and `ensureThreadBackendReady` created one
 unconditionally. So it worked in the **first** process to run against a workspace and failed in
@@ -188,6 +192,22 @@ server this harness owns, and waits (bounded, 30 s) for the port to be released 
 because `stop` signals and does not wait. Three named refusals: `NOT_RUNNING`, `NO_DATA_TO_KEEP`,
 `PORT_NOT_RELEASED`, all exit 3.
 
+### The interface gained a member and a double diverged from it in the same commit
+
+`ThreadEngine` gained a required `attach` — stated in this document as the reason to put it on
+the interface, "so a test double cannot diverge from the contract". A double diverged from it
+immediately: `spec-146-phase-9-interrupt-side-effect.test.ts` returns `ThreadEngine & {…}` from
+an object literal that had no `attach`.
+
+Nothing would ever have surfaced it. `packages/codev/tsconfig.json` excludes `**/__tests__/**`,
+the package has no check-types script, and CI's only typecheck covers `packages/types`. A type
+error in a test file is invisible here — issue #210's blind spot, doing real damage rather than
+theoretical, in the commit that added the guarantee.
+
+The double is fixed, and the five test files this issue touches were typechecked with the
+exclude lifted and are clean. Lifting it for the tree is not attempted: 289 pre-existing errors
+are behind it, which is #210's scope and not this one's.
+
 ## What is still NOT met, stated rather than left to be discovered
 
 **`afx interrupt` and `afx cleanup` are unchanged.** Both still reach `getThreadEngine()` in a
@@ -195,7 +215,12 @@ process where none is registered. The delivery path is fixed; these two are not,
 init-plus-attach shape would fix them.
 
 **The held-reason vocabulary is still three values.** "Tower cannot reach the thread" and "the
-PTY is gone" are held identically. The log now separates them; the row does not.
+PTY is gone" are held identically. The log now separates them; the row does not — and the
+operator's next action differs: a missing PTY means restart the session, an unreachable thread
+means the backend is not initialised in Tower's process. Filed as **#223** rather than built
+here, on the architect's ruling: it is a migration on the user-global `global.db`, and
+`schema.ts:278` pins the vocabulary with a CHECK constraint so the migration and the writers
+have to land together.
 
 ## Explicitly not attempted
 
