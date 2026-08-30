@@ -648,3 +648,28 @@ render as **unknown, not refused**, because the host stopping is not evidence th
 unapproved.
 
 Suites: client 225 passing, e2e 7 passing, server 7053 passing.
+
+### Phase 6 iteration 2 — opencode APPROVE, claude REQUEST_CHANGES on three
+
+All three real, all fixed.
+
+1. **A thrown `fetch` on the SUBMIT reached the panel's catch**, which carries no `unconfirmed`,
+   so a request that may well have started an approval rendered as "not approved". The same
+   defect I had just fixed for the poll, **one call earlier** — I fixed the loop and not the call
+   in front of it.
+2. **A 401 mid-poll was retried for thirty minutes** and then reported a bare `unconfirmed`. The
+   synchronous path already treats 401 as `sessionEnded`, so the two paths disagreed and the dead
+   session was never dropped — the human keeps an Approve button they can only escape by
+   reloading. 401 now stops alongside 403.
+3. **`.gate-progress` had no CSS at all.** The one new element in the phase, rendering at the
+   browser's 16px with default margins inside an 11px panel. Every test passed: it rendered, its
+   text was right, and nothing in the suite can see a font size. That is #112's failure exactly.
+
+For (3) I added `styled.test.ts`, which collects every class name the components emit and asserts
+the stylesheet knows each one. It does **not** claim the rule is right or that the element looks
+correct — only that the stylesheet has heard of it. Judging appearance still means opening the
+page. Ran against the current tree: 62 classes emitted, 0 unstyled.
+
+e2e re-run after the changes: 7 passing.
+
+Suites: client 229 passing (13 files), e2e 7 passing, server 7053 passing.

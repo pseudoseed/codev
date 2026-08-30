@@ -621,6 +621,48 @@ describe('approveGate, asynchronously', () => {
   }, 20_000);
 
   /*
+   * THE SAME RULE AS THE POLL, ONE CALL EARLIER. A submit that never completed
+   * may well have reached the server and started an approval, so reporting "not
+   * approved" would be a verdict nobody is entitled to.
+   */
+  it('reports a submit that never completed as unconfirmed, not as a refusal', async () => {
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (url.includes('/approval-capabilities')) {
+        return new Response(JSON.stringify({ capabilityId: 'cap-1', presentation: 'cap-1.s' }), { status: 201 });
+      }
+      if (url.includes('/approval-nonces')) {
+        return new Response(JSON.stringify({ nonce: 'n-1' }), { status: 201 });
+      }
+      void init;
+      throw new TypeError('Failed to fetch');
+    }) as unknown as typeof globalThis.fetch;
+
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, unconfirmed: true, signal: 'GATE_APPROVAL_UNCONFIRMED' });
+    expect((result as { message: string }).message).toContain('may already be running');
+  }, 20_000);
+
+  /*
+   * A 401 MID-POLL IS THE SESSION ENDING, and the synchronous path already
+   * treats it that way. Retrying it to the deadline and reporting a bare
+   * unconfirmed left the dead session in place, so the human kept an Approve
+   * button they could only escape by reloading.
+   */
+  it('drops the session on a 401 instead of retrying for thirty minutes', async () => {
+    const { fetchImpl, calls } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-13', state: 'submitted' } },
+        { status: 401, body: { signal: 'HUMAN_SESSION_REQUIRED', message: 'that session is gone' } },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, sessionEnded: true });
+    // It stopped: two credential calls, one submit, one poll.
+    expect(calls).toHaveLength(4);
+  }, 20_000);
+
+  /*
    * A CONFLICT IS NOT A REFUSAL OF THIS GATE. An approval for this project is
    * already running and the server names it, so the human is told to wait rather
    * than to try again.

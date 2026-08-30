@@ -356,6 +356,32 @@ html, body, #root {
 
 .gate-note { flex-basis: 100%; margin: 0; font-size: 11px; color: var(--graphite); line-height: 1.4; }
 
+/*
+ * What a waiting human is told while an approval runs.
+ *
+ * SIZED AND SPACED EXPLICITLY, because nothing above it sets either: a bare
+ * <p> here inherits the browser's 16px and its default margins, so the one new
+ * element in this phase would have rendered half again the size of every line
+ * around it, inside an 11px panel. No test in this suite can see that — which is
+ * exactly the class of defect #112 shipped, and the reason a rule is written the
+ * moment an element is.
+ *
+ * Ochre rather than moss or rust: this is neither a result nor a fault, it is
+ * work in progress, and borrowing either colour would say something the state
+ * does not.
+ */
+.gate-progress {
+  flex-basis: 100%;
+  margin: 6px 0 0;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  line-height: 1.4;
+  color: var(--graphite);
+  border-left: var(--rule) solid var(--ochre);
+  background: var(--bone);
+}
+
 .gate-result {
   margin: 8px 0 0;
   padding: 6px 8px;

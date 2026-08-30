@@ -228,12 +228,36 @@ export async function approveGate(
    * agent-host tool gained an operation store in the same change — so this is for
    * a host running an older build, which is exactly when a client must not assume.
    */
-  const submitted = await send(fetchImpl, api(config, `/workspaces/${workspace}/gates/approvals`), authed, {
-    projectId: gate.projectId,
-    gateName: gate.gateName,
-    capability,
-    nonce,
-  });
+  /*
+   * A SUBMIT THAT NEVER COMPLETED IS NOT A REFUSAL EITHER.
+   *
+   * The poll learned this rule; the submit had not. A thrown `fetch` here
+   * reached the panel's own catch, which carries no `unconfirmed`, so a request
+   * that may well have reached the server and started an approval rendered as
+   * "not approved" — the same defect as the poll's, one call earlier.
+   *
+   * There is no way to know from here whether the server received it, and that
+   * is precisely what `unconfirmed` is for.
+   */
+  let submitted: Json;
+  try {
+    submitted = await send(fetchImpl, api(config, `/workspaces/${workspace}/gates/approvals`), authed, {
+      projectId: gate.projectId,
+      gateName: gate.gateName,
+      capability,
+      nonce,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'GATE_APPROVAL_UNCONFIRMED',
+      message:
+        `the request to approve ${gate.gateName} did not complete (${(error as Error).message}), so `
+        + 'whether this host received it is unknown. It may already be running — check before '
+        + 'approving again.',
+    };
+  }
   if (submitted.status !== 501) {
     return await pollApproval(fetchImpl, config, authed, workspace, submitted, gate, onProgress);
   }
@@ -385,10 +409,21 @@ async function pollApproval(
       continue;
     }
 
-    // 403 IS A DEFINITE ANSWER, and the only one here that is: this session may
-    // not read this operation, and retrying will never change that. Every other
-    // failure is "I could not read it", which is not a verdict on the gate.
-    if (polled.status === 403) return refusal(polled, 'this session may not read that approval');
+    /*
+     * TWO DEFINITE ANSWERS, and only two. 403 says this session may not read this
+     * operation; 401 says the session is gone — expired, idled out or revoked.
+     * Neither changes by retrying, and the 401 matters more than it looks: the
+     * synchronous path already treats it as `sessionEnded`, so retrying it here
+     * for thirty minutes and then reporting a bare `unconfirmed` left the dead
+     * session in place and the human with an Approve button they could only
+     * escape by reloading. The two paths must agree about what a 401 means.
+     *
+     * Every other failure is "I could not read it", which is not a verdict on
+     * the gate.
+     */
+    if (polled.status === 403 || polled.status === 401) {
+      return refusal(polled, 'this session can no longer read that approval');
+    }
     if (polled.status !== 200) {
       await new Promise((wait) => setTimeout(wait, POLL_INTERVAL_MS));
       continue;
