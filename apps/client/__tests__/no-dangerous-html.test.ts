@@ -17,6 +17,34 @@ function walk(dir: string): string[] {
  * The client holds credentials for N servers, so an XSS here is credential
  * theft rather than defacement. Agent output is text, and React escapes text.
  */
+/**
+ * A page holding N machines' credentials must not narrate. Browser consoles are
+ * read over shoulders, captured by extensions, and pasted into bug reports, and
+ * the natural thing to log while debugging a connection is the request that
+ * failed — which carries the credential in a header. Cheaper to forbid the
+ * mechanism than to review each call for what it happens to include.
+ */
+describe('the client never writes to the console', () => {
+  it('has no console call anywhere in the app', () => {
+    const offenders = walk(SRC)
+      .filter((file) => /console\s*\.\s*(log|info|warn|error|debug|trace|dir|table)/.test(readFileSync(file, 'utf8')))
+      .map((file) => file.slice(SRC.length + 1));
+    expect(offenders).toEqual([]);
+  });
+
+  it('never puts a credential into a message a human will read', () => {
+    for (const file of walk(SRC)) {
+      const source = readFileSync(file, 'utf8');
+      // The credential reaches exactly one place: a request header.
+      for (const line of source.split('\n')) {
+        if (!line.includes('config.credential')) continue;
+        expect(line, `${file}: credential outside a header`)
+          .toContain('MACHINE_CREDENTIAL_HEADER');
+      }
+    }
+  });
+});
+
 describe('agent output is never injected as markup', () => {
   it('has no dangerouslySetInnerHTML anywhere in the app', () => {
     const offenders = walk(SRC).filter((file) =>
