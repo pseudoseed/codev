@@ -773,11 +773,21 @@ describe('through buildAgentProtocolSnapshot, as the route builds it', () => {
 /**
  * WHICH STATUSES THIS PROVIDER CAN ACTUALLY EMIT (Spec 236, phase 2, revised).
  *
- * The spec's status table promised eight and the provider could reach seven:
- * `ThreadBackendAvailability` has no `unreachable` kind, so a failed connect
- * becomes `cooling-down` and there is no path to `unreachable` at all. A status
- * a consumer is told to expect and no producer can emit is worse than one that
- * does not exist — it invites a branch nothing will ever take.
+ * The spec's status table promised eight and the provider can reach SIX. Two are
+ * out, for two different reasons, and the reasons are not interchangeable:
+ *
+ * - `unreachable` — `ThreadBackendAvailability` has no such kind, so a failed
+ *   connect becomes `cooling-down` and no path reaches it. Reserved for a
+ *   producer that genuinely observes it; the registry still signals
+ *   `T3CODE_UNREACHABLE` on it.
+ * - `not-provided` — what a host that wires NO provider reports. This one IS the
+ *   provider, so it can never be the answer here.
+ *
+ * A status a consumer is told to expect and no producer can emit is worse than
+ * one that does not exist — it invites a branch nothing will ever take. This
+ * comment and the docs said SEVEN while the assertion below listed six, which is
+ * the same defect one level up: a count nobody recomputed after the second
+ * exclusion was found.
  *
  * The contract was revised deliberately rather than the variant deleted: deleting
  * it folds "unreachable" into "cooling-down" at the type level, which is the
@@ -798,7 +808,7 @@ describe('the statuses Tower\'s provider can emit', () => {
     { kind: 'misconfigured', message: 'serverUrl without bootstrapToken' },
   ];
 
-  it('emits seven of the eight, and never `unreachable`', async () => {
+  it('emits six of the eight, and never `unreachable` or `not-provided`', async () => {
     const emitted = new Set<string>();
     for (const availability of CONNECTOR_STATES) {
       for (const threads of [[] as string[], ['th-1']]) {

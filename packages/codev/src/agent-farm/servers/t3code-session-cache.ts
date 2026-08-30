@@ -337,6 +337,12 @@ export class T3codeSessionCache {
    * five-layer config read, and on a request path that is per-request file I/O
    * plus a side effect on a code path whose whole contract is that it returns
    * immediately.
+   *
+   * NOT PURE, AND SAYING SO. Reading discards entries past the retention window
+   * and cancels their subscriptions — an in-memory eviction, no I/O. It happens
+   * here rather than only in the sweep because the alternative is publishing
+   * content this read has just determined is too old to publish, and a caller
+   * that reads twice in the same millisecond gets the same answer both times.
    */
   snapshot(workspacePath: string): T3codeThreadSnapshot {
     const cache = this.#caches.get(canonicalWorkspaceKey(workspacePath));
@@ -360,7 +366,7 @@ export class T3codeSessionCache {
     }
     if (availability.kind !== 'ready') return { status: 'connecting' };
 
-    const threads = this.#observed(cache);
+    const threads = this.#observed(canonicalWorkspaceKey(workspacePath), cache);
     if (threads.length === 0) {
       /*
        * READY WITH NOTHING TO WATCH IS NOT "CONNECTING".
@@ -405,14 +411,22 @@ export class T3codeSessionCache {
    * Entries past the discard window are dropped here rather than published with a
    * large age: content that old is a wrong answer wearing a disclaimer.
    */
-  #observed(cache: WorkspaceCache): Array<{ thread: LiveThread; ageMs: number }> {
+  #observed(key: string, cache: WorkspaceCache): Array<{ thread: LiveThread; ageMs: number }> {
     const now = this.#now();
     const observed: Array<{ thread: LiveThread; ageMs: number }> = [];
     for (const [threadId, entry] of cache.threads) {
       if (entry.observedAt === undefined) continue;
       const ageMs = entry.watching ? 0 : now - entry.observedAt;
       if (ageMs >= this.#discardAfterMs) {
-        cache.threads.delete(threadId);
+        /*
+         * `#forget`, NOT a bare delete — it cancels the subscription too.
+         *
+         * This dropped the entry and left the stream open, which is the same
+         * defect a reviewer found in the sweep's removal path, in a second
+         * place: a subscription whose only reference has just been discarded is
+         * one nothing will ever read or close.
+         */
+        this.#forget(key, cache, threadId);
         continue;
       }
       observed.push({

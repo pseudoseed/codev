@@ -392,11 +392,25 @@ describe('approveGate, asynchronously', () => {
     const { fetchImpl, calls } = router({
       ...credentials,
       '/gates/approvals': [
-        { status: 202, body: { operationId: 'op-1', state: 'submitted' } },
-        { status: 200, body: { state: 'running', phase: 'review', checks: ['build', 'tests'] } },
+        {
+          status: 202,
+          body: {
+            operationId: 'op-1',
+            state: 'submitted',
+            // THE FULL CONTRACT. These fixtures omitted the receipt and the
+            // identity fields, so nothing ever exercised the checks that read
+            // them — the tests demonstrated the hole rather than the rule.
+            receipt: 'receipt-op-1',
+            projectId: '146',
+            gateName: 'pr',
+          },
+        },
+        { status: 200, body: { projectId: '146', gateName: 'pr', state: 'running', phase: 'review', checks: ['build', 'tests'] } },
         {
           status: 200,
           body: {
+            projectId: '146',
+            gateName: 'pr',
             state: 'succeeded',
             record: {
               machine: 'alpha',
@@ -433,8 +447,20 @@ describe('approveGate, asynchronously', () => {
     const { fetchImpl } = router({
       ...credentials,
       '/gates/approvals': [
-        { status: 202, body: { operationId: 'op-2', state: 'submitted' } },
-        { status: 200, body: { state: 'refused', code: 'PHASE_CHECKS_FAILED', message: 'the checks did not pass' } },
+        {
+          status: 202,
+          body: {
+            operationId: 'op-2',
+            state: 'submitted',
+            // THE FULL CONTRACT. These fixtures omitted the receipt and the
+            // identity fields, so nothing ever exercised the checks that read
+            // them — the tests demonstrated the hole rather than the rule.
+            receipt: 'receipt-op-2',
+            projectId: '146',
+            gateName: 'pr',
+          },
+        },
+        { status: 200, body: { projectId: '146', gateName: 'pr', state: 'refused', code: 'PHASE_CHECKS_FAILED', message: 'the checks did not pass' } },
       ],
     });
     const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
@@ -454,10 +480,24 @@ describe('approveGate, asynchronously', () => {
     const { fetchImpl } = router({
       ...credentials,
       '/gates/approvals': [
-        { status: 202, body: { operationId: 'op-3', state: 'submitted' } },
+        {
+          status: 202,
+          body: {
+            operationId: 'op-3',
+            state: 'submitted',
+            // THE FULL CONTRACT. These fixtures omitted the receipt and the
+            // identity fields, so nothing ever exercised the checks that read
+            // them — the tests demonstrated the hole rather than the rule.
+            receipt: 'receipt-op-3',
+            projectId: '146',
+            gateName: 'pr',
+          },
+        },
         {
           status: 200,
           body: {
+            projectId: '146',
+            gateName: 'pr',
             state: 'interrupted',
             gateAfterInterruption: 'approved',
             message: 'this host stopped while op-3 was running, and status.yaml now shows pr APPROVED.',
@@ -474,8 +514,20 @@ describe('approveGate, asynchronously', () => {
     const { fetchImpl } = router({
       ...credentials,
       '/gates/approvals': [
-        { status: 202, body: { operationId: 'op-4', state: 'submitted' } },
-        { status: 200, body: { state: 'failed', message: 'ENOSPC writing status.yaml' } },
+        {
+          status: 202,
+          body: {
+            operationId: 'op-4',
+            state: 'submitted',
+            // THE FULL CONTRACT. These fixtures omitted the receipt and the
+            // identity fields, so nothing ever exercised the checks that read
+            // them — the tests demonstrated the hole rather than the rule.
+            receipt: 'receipt-op-4',
+            projectId: '146',
+            gateName: 'pr',
+          },
+        },
+        { status: 200, body: { projectId: '146', gateName: 'pr', state: 'failed', message: 'ENOSPC writing status.yaml' } },
       ],
     });
     const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
@@ -487,10 +539,24 @@ describe('approveGate, asynchronously', () => {
     const { fetchImpl } = router({
       ...credentials,
       '/gates/approvals': [
-        { status: 202, body: { operationId: 'op-5', state: 'submitted' } },
+        {
+          status: 202,
+          body: {
+            operationId: 'op-5',
+            state: 'submitted',
+            // THE FULL CONTRACT. These fixtures omitted the receipt and the
+            // identity fields, so nothing ever exercised the checks that read
+            // them — the tests demonstrated the hole rather than the rule.
+            receipt: 'receipt-op-5',
+            projectId: '146',
+            gateName: 'pr',
+          },
+        },
         {
           status: 200,
           body: {
+            projectId: '146',
+            gateName: 'pr',
             state: 'succeeded',
             record: {
               machine: 'alpha',
@@ -512,10 +578,24 @@ describe('approveGate, asynchronously', () => {
     const { fetchImpl } = router({
       ...credentials,
       '/gates/approvals': [
-        { status: 202, body: { operationId: 'op-6', state: 'submitted' } },
+        {
+          status: 202,
+          body: {
+            operationId: 'op-6',
+            state: 'submitted',
+            // THE FULL CONTRACT. These fixtures omitted the receipt and the
+            // identity fields, so nothing ever exercised the checks that read
+            // them — the tests demonstrated the hole rather than the rule.
+            receipt: 'receipt-op-6',
+            projectId: '146',
+            gateName: 'pr',
+          },
+        },
         {
           status: 200,
           body: {
+            projectId: '146',
+            gateName: 'pr',
             state: 'succeeded',
             record: {
               machine: 'beta',
@@ -535,8 +615,20 @@ describe('approveGate, asynchronously', () => {
     const { fetchImpl } = router({
       ...credentials,
       '/gates/approvals': [
-        { status: 202, body: { operationId: 'op-7', state: 'submitted' } },
-        { status: 200, body: { state: 'succeeded', record: {} } },
+        {
+          status: 202,
+          body: {
+            operationId: 'op-7',
+            state: 'submitted',
+            // THE FULL CONTRACT. These fixtures omitted the receipt and the
+            // identity fields, so nothing ever exercised the checks that read
+            // them — the tests demonstrated the hole rather than the rule.
+            receipt: 'receipt-op-7',
+            projectId: '146',
+            gateName: 'pr',
+          },
+        },
+        { status: 200, body: { projectId: '146', gateName: 'pr', state: 'succeeded', record: {} } },
       ],
     });
     const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
@@ -547,8 +639,20 @@ describe('approveGate, asynchronously', () => {
     const { fetchImpl } = router({
       ...credentials,
       '/gates/approvals': [
-        { status: 202, body: { operationId: 'op-8', state: 'submitted' } },
-        { status: 200, body: { state: 'hibernating' } },
+        {
+          status: 202,
+          body: {
+            operationId: 'op-8',
+            state: 'submitted',
+            // THE FULL CONTRACT. These fixtures omitted the receipt and the
+            // identity fields, so nothing ever exercised the checks that read
+            // them — the tests demonstrated the hole rather than the rule.
+            receipt: 'receipt-op-8',
+            projectId: '146',
+            gateName: 'pr',
+          },
+        },
+        { status: 200, body: { projectId: '146', gateName: 'pr', state: 'hibernating' } },
       ],
     });
     const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
@@ -569,11 +673,25 @@ describe('approveGate, asynchronously', () => {
     const { fetchImpl } = router({
       ...credentials,
       '/gates/approvals': [
-        { status: 202, body: { operationId: 'op-10', state: 'submitted' } },
+        {
+          status: 202,
+          body: {
+            operationId: 'op-10',
+            state: 'submitted',
+            // THE FULL CONTRACT. These fixtures omitted the receipt and the
+            // identity fields, so nothing ever exercised the checks that read
+            // them — the tests demonstrated the hole rather than the rule.
+            receipt: 'receipt-op-10',
+            projectId: '146',
+            gateName: 'pr',
+          },
+        },
         { status: 503, body: { signal: 'APPROVAL_OPERATION_STORE_UNREADABLE' } },
         {
           status: 200,
           body: {
+            projectId: '146',
+            gateName: 'pr',
             state: 'succeeded',
             record: { machine: 'alpha', sessionId: 's1', approvedAt: '2026-08-30T01:00:00Z' },
           },
@@ -596,12 +714,20 @@ describe('approveGate, asynchronously', () => {
         return new Response(JSON.stringify({ nonce: 'n-1' }), { status: 201 });
       }
       if (init?.method === 'POST') {
-        return new Response(JSON.stringify({ operationId: 'op-11', state: 'submitted' }), { status: 202 });
+        return new Response(JSON.stringify({
+          operationId: 'op-11',
+          state: 'submitted',
+          receipt: 'receipt-op-11',
+          projectId: '146',
+          gateName: 'pr',
+        }), { status: 202 });
       }
       polls += 1;
       // The network drops once. Nothing has been learned about the gate.
       if (polls === 1) throw new TypeError('Failed to fetch');
       return new Response(JSON.stringify({
+        projectId: '146',
+        gateName: 'pr',
         state: 'succeeded',
         record: { machine: 'alpha', sessionId: 's1', approvedAt: '2026-08-30T01:00:00Z' },
       }), { status: 200 });
@@ -621,7 +747,19 @@ describe('approveGate, asynchronously', () => {
     const { fetchImpl, calls } = router({
       ...credentials,
       '/gates/approvals': [
-        { status: 202, body: { operationId: 'op-12', state: 'submitted' } },
+        {
+          status: 202,
+          body: {
+            operationId: 'op-12',
+            state: 'submitted',
+            // THE FULL CONTRACT. These fixtures omitted the receipt and the
+            // identity fields, so nothing ever exercised the checks that read
+            // them — the tests demonstrated the hole rather than the rule.
+            receipt: 'receipt-op-12',
+            projectId: '146',
+            gateName: 'pr',
+          },
+        },
         { status: 403, body: { signal: 'APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION', message: 'another session' } },
       ],
     });
@@ -663,7 +801,19 @@ describe('approveGate, asynchronously', () => {
     const { fetchImpl, calls } = router({
       ...credentials,
       '/gates/approvals': [
-        { status: 202, body: { operationId: 'op-13', state: 'submitted' } },
+        {
+          status: 202,
+          body: {
+            operationId: 'op-13',
+            state: 'submitted',
+            // THE FULL CONTRACT. These fixtures omitted the receipt and the
+            // identity fields, so nothing ever exercised the checks that read
+            // them — the tests demonstrated the hole rather than the rule.
+            receipt: 'receipt-op-13',
+            projectId: '146',
+            gateName: 'pr',
+          },
+        },
         { status: 401, body: { signal: 'HUMAN_SESSION_REQUIRED', message: 'that session is gone' } },
       ],
     });
@@ -706,7 +856,19 @@ describe('approveGate, asynchronously', () => {
     const { fetchImpl, calls } = router({
       ...credentials,
       '/gates/approvals': [
-        { status: 202, body: { operationId: 'op-14', state: 'submitted' } },
+        {
+          status: 202,
+          body: {
+            operationId: 'op-14',
+            state: 'submitted',
+            // THE FULL CONTRACT. These fixtures omitted the receipt and the
+            // identity fields, so nothing ever exercised the checks that read
+            // them — the tests demonstrated the hole rather than the rule.
+            receipt: 'receipt-op-14',
+            projectId: '146',
+            gateName: 'pr',
+          },
+        },
         { status: 404, body: { signal: 'APPROVAL_OPERATION_UNKNOWN' } },
       ],
     });
@@ -770,6 +932,8 @@ describe('approveGate, asynchronously', () => {
             signal: 'APPROVAL_OPERATION_RESUMED',
             operationId: 'op-original',
             receipt: 'receipt-original',
+            projectId: '146',
+            gateName: 'pr',
             state: 'running',
             message: 'resuming it rather than starting a second run',
           },
@@ -777,6 +941,8 @@ describe('approveGate, asynchronously', () => {
         {
           status: 200,
           body: {
+            projectId: '146',
+            gateName: 'pr',
             state: 'succeeded',
             record: { outcome: 'approved', approvedAt: '2026-08-30T12:30:00Z', machine: 'laptop' },
           },
@@ -813,10 +979,12 @@ describe('approveGate, asynchronously', () => {
     const { fetchImpl, calls } = router({
       ...credentials,
       '/gates/approvals': [
-        { status: 202, body: { operationId: 'op-15', state: 'submitted', receipt } },
+        { status: 202, body: { operationId: 'op-15', state: 'submitted', receipt, projectId: '146', gateName: 'pr' } },
         {
           status: 200,
           body: {
+            projectId: '146',
+            gateName: 'pr',
             state: 'succeeded',
             record: { outcome: 'approved', approvedAt: '2026-08-30T12:00:00Z', machine: 'laptop' },
           },
@@ -953,5 +1121,106 @@ describe('approveGate, asynchronously', () => {
     const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
     expect(result).toMatchObject({ ok: false, unconfirmed: true });
     expect((result as { message: string }).message).toContain('plan-approval');
+  }, 20_000);
+
+  /*
+   * AN ABSENT FIELD IS NOT AGREEMENT.
+   *
+   * The identity check read "reject if present and different", so a 202 or a
+   * poll that simply OMITTED the project and gate passed — and the fixtures in
+   * this file omitted them, so the tests demonstrated the hole rather than the
+   * rule.
+   *
+   * That is this project's own defect inverted. Everywhere else it removed
+   * "I could not tell" being spelled as "no"; here a body that says nothing
+   * about which gate it describes was read as saying it describes this one.
+   */
+  it.each([
+    ['project id', { operationId: 'op-20', state: 'submitted', receipt: 'r-20', gateName: 'pr' }],
+    ['gate name', { operationId: 'op-20', state: 'submitted', receipt: 'r-20', projectId: '146' }],
+    ['both', { operationId: 'op-20', state: 'submitted', receipt: 'r-20' }],
+  ])('will not act on a 202 that omits the %s', async (_what, body) => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body },
+        {
+          status: 200,
+          body: {
+            projectId: '146',
+            gateName: 'pr',
+            state: 'succeeded',
+            record: { outcome: 'approved', approvedAt: '2026-08-30T14:00:00Z', machine: 'laptop' },
+          },
+        },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result, 'an unidentified operation settled this gate')
+      .toMatchObject({ ok: false, unconfirmed: true });
+  }, 20_000);
+
+  /*
+   * AND THE SAME ON THE POLL, since the record read is the record reported.
+   */
+  it.each([
+    ['project id', { gateName: 'pr' }],
+    ['gate name', { projectId: '146' }],
+    ['both', {}],
+  ])('will not settle from a poll body that omits the %s', async (_what, identity) => {
+    const { fetchImpl } = router({
+      ...credentials,
+      '/gates/approvals': [
+        {
+          status: 202,
+          body: { operationId: 'op-21', state: 'submitted', receipt: 'r-21', projectId: '146', gateName: 'pr' },
+        },
+        {
+          status: 200,
+          body: {
+            ...identity,
+            state: 'succeeded',
+            record: { outcome: 'approved', approvedAt: '2026-08-30T14:00:00Z', machine: 'laptop' },
+          },
+        },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result, 'an unidentified record settled this gate')
+      .toMatchObject({ ok: false, unconfirmed: true });
+  }, 20_000);
+
+  /*
+   * A 202 WITHOUT A RECEIPT IS NOT A DURABLE OPERATION.
+   *
+   * It was accepted and then polled on the memory-backed session alone, which
+   * works right up until the host restarts — the one case the receipt exists
+   * for. The contract always returns one, so its absence is not an older host to
+   * accommodate; it is something wrong with this answer.
+   */
+  it('will not proceed on a 202 that carries no receipt', async () => {
+    const { fetchImpl, calls } = router({
+      ...credentials,
+      '/gates/approvals': [
+        { status: 202, body: { operationId: 'op-22', state: 'submitted', projectId: '146', gateName: 'pr' } },
+        {
+          status: 200,
+          body: {
+            projectId: '146',
+            gateName: 'pr',
+            state: 'succeeded',
+            record: { outcome: 'approved', approvedAt: '2026-08-30T14:00:00Z', machine: 'laptop' },
+          },
+        },
+      ],
+    });
+    const result = await approveGate(fetchImpl, config, session, { projectId: '146', gateName: 'pr' });
+    expect(result).toMatchObject({ ok: false, unconfirmed: true });
+    expect((result as { message: string }).message).toContain('op-22');
+    // UNCONFIRMED, NOT REFUSED: the approval may well be running. What is lost
+    // is this client's ability to follow it across a restart.
+    expect((result as { message: string }).message).toContain('may be running');
+    // And it did not poll on a footing it cannot recover from.
+    expect(calls.filter((call) => call.url.includes('/gates/approvals/'))).toHaveLength(0);
   }, 20_000);
 });

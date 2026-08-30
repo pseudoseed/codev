@@ -410,6 +410,17 @@ const MAX_CONCURRENT_PER_HOST = 4;
  *
  * The record is marked `interrupted` with a message naming the foreign host, so
  * the recovery is visible in the operator's history rather than silent.
+ *
+ * ## Where it runs, and the consequence
+ *
+ * From `submit()` only. An abandoned foreign record is therefore cleared by the
+ * next submission on this host, not by a timer — so it can sit nonterminal in the
+ * file indefinitely while nobody is approving anything, and `records()` will show
+ * it that way. Deliberate rather than overlooked: this store has no background
+ * loop, and adding one to tidy a record that blocks nothing while nobody is
+ * submitting is a process for a problem that exists only at submission. If the
+ * file ever needs to be self-tidying, that is the change, and this note says it
+ * was considered.
  */
 const FOREIGN_HOST_LEASE_MS = 6 * 60 * 60 * 1000;
 

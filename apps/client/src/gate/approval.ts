@@ -359,7 +359,24 @@ export interface ApprovalProgress {
   readonly checks?: readonly string[];
 }
 
-/** How long between polls, and how long before this client stops waiting. */
+/**
+ * How long between polls, and how long before this client stops waiting.
+ *
+ * FLAT, NOT BACKED OFF, AND THAT IS A REAL COST. A gate that runs the full 30
+ * minutes is 1,800 requests, each of which reads and parses an operations file
+ * holding up to 24 hours of records. Backing off would cut that by an order of
+ * magnitude at the price of a settled approval sitting unnoticed for however
+ * long the current interval had grown to.
+ *
+ * Kept flat here because a human is watching this panel and the delay they see
+ * is the product: an approval that finished 45 seconds ago and still says
+ * "running" is the spinner this whole phase exists to remove. The cost is one
+ * client, on one host, for the duration of one approval.
+ *
+ * If it ever needs to change, the right shape is a bound — back off to a ceiling
+ * of a few seconds rather than growing without limit, so the worst case a human
+ * sees stays small.
+ */
 const POLL_INTERVAL_MS = 1_000;
 const POLL_LIMIT_MS = 30 * 60_000;
 
@@ -451,7 +468,32 @@ async function pollApproval(
    * is the second way in — so this client keeps polling across a host restart
    * instead of losing the answer it was waiting for.
    */
+  /*
+   * A 202 WITHOUT A RECEIPT IS NOT A DURABLE OPERATION.
+   *
+   * The receipt is what makes an interrupted approval readable after the restart
+   * that destroys the submitting session — the durable path built over rounds 2
+   * and 3. Accepting a 202 without one and polling on the memory-backed session
+   * alone silently gives that up: it works right up until the host restarts,
+   * which is the one case the receipt exists for.
+   *
+   * The contract always returns one, so its absence is not an older host being
+   * accommodated — it is something wrong with this answer. Unconfirmed, because
+   * the operation may well be running; what cannot be trusted is this client's
+   * ability to follow it.
+   */
   const receipt = text(submitted.body, 'receipt');
+  if (!receipt) {
+    return {
+      ok: false,
+      unconfirmed: true,
+      signal: 'GATE_APPROVAL_UNCONFIRMED',
+      message:
+        `this host accepted approval ${operationId} without a receipt, so this client cannot `
+        + 'read the outcome if the host restarts. The approval may be running; check the gate '
+        + 'rather than submitting again.',
+    };
+  }
   /*
    * IN A HEADER, NEVER IN THE URL. It is a bearer secret, and a URL is copied by
    * things that were not asked: Tower logs `req.url` during the boot window and
@@ -460,7 +502,7 @@ async function pollApproval(
    * of course. `agent-auth.ts` had already written this rule down for the pairing
    * token; the first draft of this line crossed it.
    */
-  const polling = receipt ? { ...authed, [APPROVAL_RECEIPT_HEADER]: receipt } : authed;
+  const polling = { ...authed, [APPROVAL_RECEIPT_HEADER]: receipt };
 
   /*
    * THE OPERATION MUST BE THIS GATE'S, AND THE CLIENT CHECKS RATHER THAN ASSUMES.
@@ -477,13 +519,32 @@ async function pollApproval(
    * the other half being right, and the outcome of an approval is not a place to
    * trust a single implementation.
    */
+  /*
+   * REQUIRED AND EQUAL, NOT "EQUAL IF PRESENT".
+   *
+   * The first version of this checked `if (project && project !== …)`, so a body
+   * that OMITTED the fields passed — and a body that says nothing about which
+   * gate it describes is precisely the body that must not settle one. Treating
+   * absent as matching is this project's own defect inverted: an "I could not
+   * tell" acted on as agreement.
+   *
+   * Requiring them is safe against every host that can produce a 202 here. A host
+   * predating this route answers 404 and the synchronous path is taken; a current
+   * host with no operation store answers 501 and the same. So any 202 reaching
+   * this point comes from a host whose contract always names the project and the
+   * gate — and if one does not, that is the anomaly worth stopping on.
+   *
+   * ABSENT AND DIFFERENT GET DIFFERENT WORDS, because they send a reader to
+   * different places: one is a host that did not say, the other is a host that
+   * said something else.
+   */
   const identityMismatch = (body: Record<string, unknown>): string | null => {
     const project = text(body, 'projectId');
     const named = text(body, 'gateName');
-    if (project && project !== gate.projectId) {
-      return `project ${project} rather than ${gate.projectId}`;
-    }
-    if (named && named !== gate.gateName) return `gate ${named} rather than ${gate.gateName}`;
+    if (!project) return `no project id, so it cannot be shown to describe ${gate.projectId}`;
+    if (project !== gate.projectId) return `project ${project} rather than ${gate.projectId}`;
+    if (!named) return `no gate name, so it cannot be shown to describe ${gate.gateName}`;
+    if (named !== gate.gateName) return `gate ${named} rather than ${gate.gateName}`;
     return null;
   };
   const submittedMismatch = identityMismatch(submitted.body);

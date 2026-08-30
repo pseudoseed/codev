@@ -1115,3 +1115,50 @@ asserting the state would otherwise agree with the claim the text used to make.
 codex declared it could not run tests in its environment and that its findings came from reading
 complete files. Both were real anyway, and I verified each against the code before touching it —
 which is the only reason that declaration is useful rather than a reason to discount the round.
+
+## Round 7 — an absent field read as agreement, and a count nobody recomputed
+
+### The identity check failed open
+
+Round 5's client-side gate check was written as *reject if present and different*. So a 202 or a
+poll that simply **omitted** the project and gate passed it — and the fixtures in this file
+omitted them, so the suite demonstrated the hole rather than the rule. Twelve 202 bodies and
+twelve poll bodies, none carrying the fields the real contract always sends.
+
+That is this project's own defect inverted. Everywhere else it removed "I could not tell" being
+spelled as "no"; here a body saying nothing about which gate it describes was read as saying it
+describes this one. **Absent is not agreement.**
+
+Requiring the fields is safe against every host that can produce a 202 here: a host predating the
+route answers 404 and the synchronous path is taken, a current host with no operation store
+answers 501 and the same. Absent and different get different words, because they send a reader to
+different places — one is a host that did not say, the other is a host that said something else.
+
+### The durable contract was optional in practice
+
+A 202 without a receipt was accepted and then polled on the memory-backed session alone — which
+works right up until the host restarts, the one case the receipt was built for over rounds 2 and
+3. The contract always returns one, so absence is not an older host to accommodate; it is
+something wrong with the answer. Unconfirmed, and the client does not poll on a footing it cannot
+recover from.
+
+**Sixth fixture instance**, and like the fifth it predated the check: nothing in the file ever sent
+a body that could disagree, because nothing ever sent the fields at all.
+
+### The count was wrong in four places
+
+`seven emitted by this provider` — while the test pinning it asserts **six**, and its own title
+said seven too. Two statuses are excluded for two different reasons, and the second was found
+after the sentence was written and never recomputed: `unreachable` has no connector state behind
+it, and `not-provided` is what a host wiring *no* provider reports.
+
+Corrected in the test title, its docblock, `apps/client/README.md` and the spec. Grepped for the
+claim rather than fixing the two lines named — which found four sites, not two.
+
+**Correction to this log:** entries above at "Clarified the README" and "Revised the contract
+deliberately" both say seven. They were accurate to what I believed when written and are wrong;
+the number is six. Left in place with this correction rather than edited, because a narrative log
+that quietly rewrites itself is worth less than one that records when it was wrong.
+
+`apps/client/README.md` also still said an `afx pair` command "does not exist yet and is tracked
+separately" — shipped in this PR, in this project.

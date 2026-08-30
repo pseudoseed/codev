@@ -131,7 +131,7 @@ Poll but not submit. 403 but not 401. Element but not its CSS rule. Thrown fetch
 401/403 but not 404. Each fix was correct and each was too narrow by exactly one step.
 
 **A second shape, and it is the more dangerous one: the fixture sharing the code's premise.**
-Five separate instances in this one project, which makes it a pattern rather than bad luck — and
+Six separate instances in this one project, which makes it a pattern rather than bad luck — and
 **all four were found by reverting the fix and watching what failed, never by a test going red on
 its own.** That is the whole reason the habit is worth the minutes it costs: a fixture that agrees
 with the bug is, by construction, invisible to the suite it lives in.
@@ -151,6 +151,9 @@ The four:
 5. Three auth tests built human sessions with no machine, and one seeded an operation with no
    machine — so nothing in the suite ever presented two identities that could disagree, and a
    session usable from any device looked exactly like one bound to its own.
+6. Twenty-four client fixtures omitted the `projectId`, `gateName` and `receipt` that the real
+   contract always sends, so the identity check could not fire in a test even when it worked —
+   and the check itself had been written to tolerate exactly that absence.
 
 Every one of them was invisible to a green suite, because the test agreed with the code.
 
@@ -295,6 +298,49 @@ before the retry lands, so the retry legitimately starts a new one and the test 
 — exactly how the e2e "shows what it is running" case failed earlier here. What makes it a
 recovery rather than a claim of one: the outcome observed is the ORIGINAL operation's, and
 exactly one operation exists for the episode, so the checks did not run twice.
+
+## Absent is not agreement
+
+The client-side gate check added in round 5 was written as *reject if present and different*. A
+body that **omitted** the project and gate therefore passed — and a body that says nothing about
+which gate it describes is exactly the body that must not settle one.
+
+This is the project's own subject inverted. Every other finding removed "I could not tell" being
+spelled as "no". Here a silence was read as a yes.
+
+Two things make it worth more than its one-line fix. The first is that the check had already been
+argued for correctly, in the review of the round before: *two checks that share an assumption are
+one check*. This one shared a different assumption — that the field would be there — and the
+argument that produced it did not reach that far.
+
+The second is that **the fixtures demonstrated the hole**. Twelve 202 bodies and twelve poll
+bodies in the client suite omitted the identity fields the real contract always sends, so the
+check could never fire in a test even when it was working. Sixth instance, and like the fifth the
+blindness predated the check: nothing in the file ever sent a body that *could* disagree.
+
+Requiring the fields is safe against every host that can produce a 202 here — a host predating the
+route answers 404 and a current host with no operation store answers 501, and both take the
+synchronous path. Absent and different get different words in the message, because they send a
+reader to different places: one is a host that did not say, the other is a host that said
+something else.
+
+The same shape appeared once more in the same round: a 202 without a receipt was accepted and then
+polled on the memory-backed session alone. That works right up until the host restarts, which is
+the one case the receipt was built for. The contract always returns one, so its absence is not an
+older host to accommodate.
+
+## A count nobody recomputed
+
+`seven emitted by this provider` appeared in the spec, the client README, a test's docblock and
+that test's own title — while the assertion inside it listed **six**.
+
+Two statuses are excluded and for two unrelated reasons: `unreachable` has no connector state
+behind it, and `not-provided` is what a host wiring *no* provider reports. The sentence was
+written when only the first was known, and the second never sent anyone back to the number.
+
+Worth recording because of how it was found: grepping for the *claim* rather than fixing the two
+lines a reviewer named turned two sites into four. A count is a derived fact stated as a literal,
+and nothing recomputes it.
 
 ## Two credentials, never compared with each other
 

@@ -168,8 +168,14 @@ away. The page carries per-machine credentials instead.
 
 `~/.agent-farm/client-machines.json` (or `$CODEV_AGENT_FARM_DIR/client-machines.json`),
 **mode 0600**, the same array shape as `.dev-machines.json` above. Tower does not
-create it and does not mint the credentials in it; an `afx pair` command for that
-does not exist yet and is tracked separately.
+create it and does not mint the credentials in it.
+
+**`afx pair issue` is how a machine gets one** — `--purpose machine-credential`
+for a device, `--purpose client-session` for the session that an approval costs.
+`afx pair list` shows what is outstanding and `afx pair revoke <machine>`
+withdraws it. This paragraph said the command "does not exist yet and is tracked
+separately"; spec 236 shipped it, and the sentence outlived the fact by one
+release.
 
 **`origin` must be `https://` for anything that is not loopback.** A remote
 `http://` entry would send that machine's credential in the clear, so the proxy
@@ -344,8 +350,14 @@ how old that is. The read path performs no I/O.
 
 **What a row can now say, and what it still cannot.**
 
-`t3code` carries eight statuses rather than three. Tower's provider emits seven
-of them:
+`t3code` carries eight statuses rather than three. Tower's provider emits **six**
+of them. The two it does not are excluded for different reasons: `unreachable` is
+reserved for a producer that genuinely observes one (this connector's union has no
+such state, so a failed connect is `cooling-down`), and `not-provided` is what a
+host wiring *no* provider reports — this one is the provider.
+
+This paragraph said "seven" while the test pinning it listed six; the count was
+not recomputed when the second exclusion was found.
 
 | Status | Means |
 |---|---|

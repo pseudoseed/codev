@@ -392,6 +392,17 @@ export class ApprovalCapabilityStore {
       const revokedAt = new Date(this.#now()).toISOString();
       let revoked = 0;
       for (const entry of capabilities) {
+        /*
+         * NO EXPIRY ON THE LEGACY BRANCH, on purpose.
+         *
+         * A record without `pairedMachine` predates the field. Matching it on the
+         * host is what this store always did, so the fallback preserves what an
+         * old record means rather than reinterpreting it — and it needs no cutoff
+         * date, because capabilities carry their own expiry and a record that
+         * outlives it stops verifying on its own. The branch becomes dead code
+         * once every live capability has been reissued, and can be deleted then
+         * without ceremony.
+         */
         const owned = entry.pairedMachine !== undefined
           ? entry.pairedMachine === machine
           : entry.machine === machine;

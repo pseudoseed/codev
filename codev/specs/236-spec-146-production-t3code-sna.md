@@ -364,7 +364,12 @@ matrix carries that row.
 
 **The claim is pinned by a test** that asserts exactly which statuses Tower's provider can emit,
 so the table above and the code cannot drift apart again. Criterion 2 is therefore *eight
-statuses in the vocabulary, seven emitted by this provider*, and both halves are checkable.
+statuses in the vocabulary, six emitted by this provider*, and both halves are checkable.
+
+Two are excluded and not for the same reason: `unreachable` has no connector state behind it and
+is reserved for a producer that genuinely observes one, and `not-provided` is what a host wiring
+**no** provider reports. This sentence said "seven" until round 7 — the count was written when
+only the first exclusion was known and never recomputed after the second.
 
 #### Decision 1 — staleness policy
 
