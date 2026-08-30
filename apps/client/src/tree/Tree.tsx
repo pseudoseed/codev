@@ -1,7 +1,12 @@
+import type { GateApprovalHandle } from '../gate/GatePanel.js';
 import type { MachineNode } from './build.js';
 import { MachineSubtree } from './MachineSubtree.js';
 
-export function Tree({ machines, nowMs }: { machines: readonly MachineNode[]; nowMs: number }) {
+export function Tree({ machines, nowMs, approvalFor }: {
+  machines: readonly MachineNode[];
+  nowMs: number;
+  approvalFor?: (machineKey: string) => GateApprovalHandle | null;
+}) {
   if (machines.length === 0) {
     return (
       <p className="empty-note">
@@ -11,7 +16,14 @@ export function Tree({ machines, nowMs }: { machines: readonly MachineNode[]; no
   }
   return (
     <nav className="tree" aria-label="Machines, workspaces, architects and builders">
-      {machines.map((node) => <MachineSubtree node={node} nowMs={nowMs} key={node.key} />)}
+      {machines.map((node) => (
+        <MachineSubtree
+          node={node}
+          nowMs={nowMs}
+          approval={approvalFor?.(node.key) ?? null}
+          key={node.key}
+        />
+      ))}
     </nav>
   );
 }

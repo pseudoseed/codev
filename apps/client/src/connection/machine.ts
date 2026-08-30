@@ -22,13 +22,25 @@ export interface MachineConfig {
   readonly towerKey?: string;
 }
 
-export type DisconnectWhy = 'auth' | 'transport' | 'protocol';
+/**
+ * Why a subtree is closed.
+ *
+ * `revoked` IS NOT `auth`, AND IT IS NOT A GENERIC DISCONNECT. A withdrawn
+ * credential is a decision a human made; an unreachable server is a fault. They
+ * send an operator to two different places — reissue, or go find out why the box
+ * is down — and reconnecting fixes exactly one of them. The server already keeps
+ * these apart across seven machine-credential codes; collapsing them here would
+ * undo that at the last step, which is where it would actually be read.
+ */
+export type DisconnectWhy = 'auth' | 'revoked' | 'transport' | 'protocol';
 
 export interface MachineState {
   readonly config: MachineConfig;
   readonly status: 'connecting' | 'live' | 'disconnected';
   readonly why: DisconnectWhy | null;
   readonly message: string | null;
+  /** The server's own code, verbatim, when it gave one. Never invented. */
+  readonly signal: string | null;
   /** Last snapshot received. Retained while disconnected, and labelled as stale. */
   readonly snapshot: AgentProtocolSnapshot | null;
   /**
@@ -127,6 +139,7 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
     status: 'connecting',
     why: null,
     message: null,
+    signal: null,
     snapshot: null,
     lastLiveAt: null,
     retrying: true,
@@ -138,12 +151,40 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
   }
 
   /** Fail closed: no retry, and the subtree says why. */
-  function failClosed(why: DisconnectWhy, message: string): void {
-    emit({ status: 'disconnected', why, message, retrying: false });
+  function failClosed(why: DisconnectWhy, message: string, signal: string | null = null): void {
+    emit({ status: 'disconnected', why, message, signal, retrying: false });
   }
 
-  function drop(why: DisconnectWhy, message: string): void {
-    emit({ status: 'disconnected', why, message, retrying: true });
+  function drop(why: DisconnectWhy, message: string, signal: string | null = null): void {
+    emit({ status: 'disconnected', why, message, signal, retrying: true });
+  }
+
+  /**
+   * Turn a refusal into the two facts a human acts on: was it withdrawn, and
+   * what did the server call it. A body this client cannot parse yields no
+   * signal rather than a guessed one.
+   */
+  async function refusal(response: Response): Promise<{ why: DisconnectWhy; message: string; signal: string | null }> {
+    let body: { signal?: unknown; message?: unknown } = {};
+    try {
+      body = await response.json() as typeof body;
+    } catch {
+      /* a refusal with no readable body still refuses */
+    }
+    const signal = typeof body.signal === 'string' ? body.signal : null;
+    const message = typeof body.message === 'string' ? body.message : null;
+    if (signal === 'MACHINE_CREDENTIAL_REVOKED') {
+      return {
+        why: 'revoked',
+        signal,
+        message: message ?? 'this machine\'s access was withdrawn',
+      };
+    }
+    return {
+      why: 'auth',
+      signal,
+      message: message ?? `the server refused this machine's credential (HTTP ${response.status})`,
+    };
   }
 
   async function openOnce(): Promise<'failed-closed' | 'retry'> {
@@ -171,8 +212,8 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
 
     if (response.status === 401 || response.status === 403) {
       release();
-      void response.body?.cancel().catch(() => {});
-      failClosed('auth', 'this machine is not authorized; its credential was refused or revoked');
+      const refused = await refusal(response);
+      failClosed(refused.why, refused.message, refused.signal);
       return 'failed-closed';
     }
     if (response.status !== 200 || !response.body) {
@@ -227,7 +268,15 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
         if (frame.event === 'comment') continue;
         if (frame.event === 'protocol-state-unauthorized') {
           finish();
-          failClosed('auth', parseMessage(frame.data, 'this stream is no longer authorized'));
+          // Criterion 15's live case: the credential was revoked while the
+          // stream was open. The server re-checks and names the code; it is not
+          // re-derived from the fact that the stream stopped.
+          const code = parseField(frame.data, 'code');
+          failClosed(
+            code === 'MACHINE_CREDENTIAL_REVOKED' ? 'revoked' : 'auth',
+            parseMessage(frame.data, 'this stream is no longer authorized'),
+            code,
+          );
           return 'failed-closed';
         }
         if (frame.event === 'protocol-state-error') {
@@ -284,6 +333,15 @@ function parseSnapshot(data: string): AgentProtocolSnapshot | null {
   try {
     const body = JSON.parse(data) as { snapshot?: unknown };
     return validateSnapshot(body.snapshot ?? body);
+  } catch {
+    return null;
+  }
+}
+
+function parseField(data: string, key: string): string | null {
+  try {
+    const body = JSON.parse(data) as Record<string, unknown>;
+    return typeof body[key] === 'string' ? body[key] as string : null;
   } catch {
     return null;
   }

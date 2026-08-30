@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import type { ThreadRow } from './build.js';
+import { GatePanel, type GateApprovalHandle } from '../gate/GatePanel.js';
 import { StatusStamp } from './StatusStamp.js';
 
 const PREFIX: Record<ThreadRow['role'], string> = {
@@ -24,7 +26,10 @@ function displayName(row: ThreadRow): string {
   return row.role === 'builder' ? row.name.replace(/^builder-/, '') : row.name;
 }
 
-export function ThreadRowView({ row }: { row: ThreadRow }) {
+export function ThreadRowView({ row, approval }: { row: ThreadRow; approval?: GateApprovalHandle | null }) {
+  // Owned by the ROW, not by the gate panel: an approval removes the gate, so a
+  // result held inside the panel would disappear with it.
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
   const porch = row.porch;
   const classes = [
     'thread-row',
@@ -56,6 +61,17 @@ export function ThreadRowView({ row }: { row: ThreadRow }) {
 
       {row.status.kind === 'unknown' && row.status.why ? (
         <p className="row-why">{row.status.why}</p>
+      ) : null}
+
+      <GatePanel
+        status={row.status}
+        projectId={porch?.projectId}
+        approval={approval ?? null}
+        onResult={(next) => setResult(next.message === '' ? null : next)}
+      />
+
+      {result ? (
+        <p className={result.ok ? 'gate-result is-ok' : 'gate-result is-refused'}>{result.message}</p>
       ) : null}
     </div>
   );

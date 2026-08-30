@@ -46,7 +46,7 @@ describe('deriveRowStatus', () => {
       ],
     };
     const status = deriveRowStatus(
-      identity({ porch: porch({ 'spec-approval': { status: 'pending', request } }) }),
+      identity({ porch: porch({ 'spec-approval': { status: 'pending', requested_at: '2026-08-29T10:00:00Z', request } }) }),
       'available',
     );
     expect(status.gateRequest?.question).toBe('Ship the driver behind a flag?');
@@ -57,11 +57,41 @@ describe('deriveRowStatus', () => {
     const status = deriveRowStatus(
       identity({
         sessionState: 'settled',
-        porch: porch({ 'plan-approval': { status: 'pending' } }),
+        porch: porch({ 'plan-approval': { status: 'pending', requested_at: '2026-08-29T10:00:00Z' } }),
       }),
       'available',
     );
     expect(status.kind).toBe('blocked');
+  });
+
+  /*
+   * THE REAL SHAPE, read off two live status.yaml files on 2026-08-29.
+   *
+   * Porch declares a project's gates at init, so every AIR project carries
+   * `gates.pr.status: pending` from its first commit until the PR merges. Both
+   * `219` and `220` looked exactly like this while both were mid-implementation,
+   * and reading `pending` alone reported both as blocked on a human.
+   */
+  it('does not call a declared-but-unrequested gate a block', () => {
+    const status = deriveRowStatus(
+      identity({ sessionState: 'running', porch: porch({ pr: { status: 'pending' } }) }),
+      'available',
+    );
+    expect(status.kind).toBe('turning');
+    expect(status.gate).toBeUndefined();
+  });
+
+  it('blocks on the same gate once porch requests it', () => {
+    const status = deriveRowStatus(
+      identity({
+        sessionState: 'running',
+        porch: porch({ pr: { status: 'pending', requested_at: '2026-08-30T00:51:52.013Z' } }),
+      }),
+      'available',
+    );
+    expect(status.kind).toBe('blocked');
+    expect(status.gate).toBe('pr');
+    expect(status.gateRequestedAt).toBe('2026-08-30T00:51:52.013Z');
   });
 
   it('ignores approved gates', () => {

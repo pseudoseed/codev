@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { loadMachines, type MachineConfigLoad } from './config.js';
 import { connectMachine, type MachineConfig, type MachineState } from './connection/machine.js';
+import { approveGate, openHumanSession, type HumanSession } from './gate/approval.js';
+import type { GateApprovalHandle } from './gate/GatePanel.js';
 import { buildTree } from './tree/build.js';
 import { Tree } from './tree/Tree.js';
 
@@ -15,6 +17,13 @@ export function App() {
   const [load, setLoad] = useState<MachineConfigLoad | null>(null);
   const [states, setStates] = useState<Record<string, MachineState>>({});
   const [nowMs, setNowMs] = useState(() => Date.now());
+  /*
+   * A human session belongs to ONE machine. Sessions are per host — each server
+   * issues and revokes its own — so a single shared session would either be
+   * presented to hosts that never issued it, or would silently let one machine's
+   * approval stand in for another's. Kept in memory only, never in storage.
+   */
+  const [sessions, setSessions] = useState<Record<string, HumanSession>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -39,6 +48,32 @@ export function App() {
     const timer = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  const approvalFor = useCallback((machineKey: string): GateApprovalHandle | null => {
+    const config = configs.find((candidate) => candidate.id === machineKey);
+    if (!config) return null;
+    const session = sessions[machineKey] ?? null;
+    const fetchImpl = globalThis.fetch.bind(globalThis);
+    return {
+      session: session ? { sessionId: session.sessionId } : null,
+      openSession: async (pairingToken) => {
+        const result = await openHumanSession(fetchImpl, config, pairingToken);
+        if (!result.ok) return { ok: false, message: `${result.signal}: ${result.message}` };
+        setSessions((prev) => ({ ...prev, [machineKey]: result.session }));
+        return { ok: true, message: `session open until ${result.session.expiresAt}` };
+      },
+      approve: async (gate) => {
+        if (!session) return { ok: false, message: 'no human session is open on this machine' };
+        const result = await approveGate(fetchImpl, config, session, gate);
+        return result.ok
+          ? {
+            ok: true,
+            message: `approved on ${result.machine} at ${result.approvedAt}, session ${result.sessionId}`,
+          }
+          : { ok: false, message: `${result.signal}: ${result.message}` };
+      },
+    };
+  }, [configs, sessions]);
 
   const machines = buildTree(configs.map((config) => states[config.id]).filter(Boolean));
   const live = machines.filter((machine) => machine.connection.status === 'live').length;
@@ -68,7 +103,7 @@ export function App() {
                 and {load.dropped === 1 ? 'is' : 'are'} not shown.
               </p>
             ) : null}
-            <Tree machines={machines} nowMs={nowMs} />
+            <Tree machines={machines} nowMs={nowMs} approvalFor={approvalFor} />
           </>
         )}
       </main>

@@ -86,11 +86,26 @@ export function deriveRowStatus(identity: ThreadIdentity, t3code: T3codeReachabi
   return sessionUnobservable(t3code);
 }
 
+/**
+ * A gate blocks a row only once it has been REQUESTED.
+ *
+ * `status: 'pending'` alone does not mean a human is being waited on. Porch
+ * declares a project's gates at init and they sit `pending` for its whole life:
+ * every AIR project carries `gates.pr.status: pending` from its first commit.
+ * The pair that means "awaiting a human" is `pending` AND `requested_at`, and
+ * porch itself tests exactly that pair in four places — `next.ts` before it
+ * refuses to advance, `porch status` before it prints WAITING FOR HUMAN
+ * APPROVAL, and `porch pending` when it lists what is actually waiting.
+ *
+ * Reading `pending` alone reported two builders as blocked on a `pr` gate while
+ * both were mid-implementation. A status the tree shows confidently and wrongly
+ * is worse than one it declines to show.
+ */
 function pendingGate(identity: ThreadIdentity): RowStatus | null {
   const gates = identity.porch?.gates;
   if (!gates) return null;
   const pending = Object.entries(gates)
-    .filter(([, gate]) => gate.status === 'pending')
+    .filter(([, gate]) => gate.status === 'pending' && Boolean(gate.requested_at))
     // Newest request first, then by name, so the same state always renders the
     // same row rather than following object key order.
     .sort((a, b) => {

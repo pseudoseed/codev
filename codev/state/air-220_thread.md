@@ -57,10 +57,69 @@ Killed the host with the page open and watched it: DISCONNECTED band, relative *
 last-live timestamp, "retrying", the reason, and the retained subtree dimmed under "Showing the
 last state received. It is not current."
 
-## Still to do (slices 2 and 3)
+## Slice 2: the gate derivation bug, two missing routes, approval, multi-machine
 
-- Multi-machine: two machines in one tree, independently live (criterion 7); revoking one machine's
-  token fails that subtree closed and leaves the other alone (criterion 15).
-- Gate rendering and approval through phase 6's capability path (criterion 9b). Derivation already
-  carries the structured question and choices; nothing renders them yet.
-- Playwright e2e against two live `codev-agent-host` instances.
+### The gate bug the architect caught by looking
+
+Both builders read `GATE PR` while both were mid-implementation. Settled against porch's own
+predicate rather than against what looked right: porch treats a gate as awaiting a human only when
+`status === 'pending'` **and** `requested_at` is set — `next.ts:363`, `index.ts:407`, `1267`,
+`1332`. Porch declares a project's gates at init, so every AIR project carries
+`gates.pr.status: pending` from its first commit until the PR merges. Reading `pending` alone made
+the tree's central claim false on every row.
+
+### Two routes criterion 9b needed that did not exist
+
+Phase 6 built the approval capability. Phase 7 built the route table. Between them there was no way
+for a browser to obtain the human-paired session that gates issuance — `completePairing` had no
+caller outside its own file — and no way to spend a capability, because porch reads it from an
+environment only a server-side caller can set. Both shipped green.
+
+- `POST /api/agent/v1/human-sessions`, a new auth mode `machine-credential-and-pairing-token`. A
+  fresh pairing token is required on top of the machine credential, because that credential is a
+  file a same-uid builder can read — and the standing argument for why a declared principal is only
+  defence in depth is that a builder "has no human-paired session".
+- `POST /api/agent/v1/workspaces/<ws>/gates/approve`, which calls porch's own `approve` in-process.
+  porch stays the only writer of `status.yaml`.
+
+`approve()` gained `onRefusal: 'exit' | 'throw'` (default `'exit'`, so every existing caller is
+unchanged). Its three `process.exit(1)` sites plus the failing-checks exit would have ended Tower
+and answered the request with nothing.
+
+`agent-approval-path.test.ts` is the test whose absence let this happen: one journey over a real
+HTTP server with the real `fetch`, from a client holding nothing to a gate approved in a real
+`status.yaml`. Every step is a request; nothing is called directly.
+
+### Also fixed while building it
+
+- Capability issuance accepted a client-supplied `machine`, and `verify` compares that against the
+  HOST's identity — so it minted capabilities that could never verify anywhere, and the caller only
+  found out at the moment of approval, where it reads as a revocation. Refused at issuance now.
+- The approval result lived inside `GatePanel`. A successful approval removes the gate, the stream
+  delivers the new snapshot in milliseconds, and the panel unmounts — so the confirmation a human
+  had just earned flashed and vanished. The row owns the result now.
+- `handleGateApprove` passes `CODEV_AGENT_FARM_DIR` through, so a host running over a database
+  snapshot cannot send porch's post-approval notification at the operator's real Tower.
+
+### Criterion 15
+
+A revoked credential is not a generic disconnect: `DisconnectWhy` gained `revoked`, the client
+carries the server's own signal verbatim, and the subtree renders a distinct band saying
+reconnecting will not help. `MACHINE_STORE_UNREADABLE` stays `auth`, because "I could not check"
+is not "you were withdrawn".
+
+### The e2e harness, and two ways it lied before it worked
+
+Four Playwright tests against two live `codev-agent-host` processes, real workspaces, real git
+repositories with real remotes (porch commits every state write), and porch's own `approve`.
+
+1. `route.fetch` BUFFERS. Proxying the machines through Playwright's route table delivered an SSE
+   stream that was live on the wire and empty in the page — a harness failure that reads exactly
+   like a broken client. The proxy moved into the fixture's own server.
+2. `tsx <file>` spawns the server as a CHILD. Killing the process the harness held killed a
+   wrapper and left the server listening, so the test watched a client stay LIVE against a host it
+   believed it had stopped. Now `node --import tsx`, and `stop()` waits for the port to actually
+   close before it returns.
+
+Both are the same shape as the defects this initiative keeps finding, one layer down: a thing that
+reported success while the thing it named had not happened.

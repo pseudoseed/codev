@@ -212,6 +212,12 @@ describe('failure matrix signals are distinct', () => {
       PAIRING_ID_REQUIRED: 'argument validation thrown by completePairing',
       PAIRING_LIFETIME_INVALID: 'argument validation thrown by completePairing',
       PAIRING_PRINCIPAL_REFUSED: 'a non-human principal tried to pair; refusal, not a service failure',
+      // Phase 11's two new routes. Both answer "your request was wrong, or it
+      // worked", never "a service or file failed", so neither is a matrix row.
+      HUMAN_SESSION_ISSUED: 'the SUCCESS case of human-session issuance',
+      HUMAN_SESSION_REQUEST_MALFORMED: '400 for an unreadable body; malformed request',
+      HUMAN_SESSION_REFUSED: 'completePairing rejected the attestation; a refusal, not a failure',
+      GATE_APPROVED: 'the SUCCESS case of a gate approval',
       // Stream event types, not signal codes. STATE_STREAM_WATCH_FAILED is both —
       // it carries a signal whose code equals the event type.
       PROTOCOL_STATE_SNAPSHOT: 'stream event type, not a failure signal',

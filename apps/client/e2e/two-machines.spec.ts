@@ -1,0 +1,186 @@
+/**
+ * Criteria 7, 8, 9b and 15, against two live servers.
+ *
+ * Every assertion here is about a running system: two `codev-agent` hosts, two
+ * real workspaces on disk, the built client served as a static bundle, and
+ * porch's own `approve` writing a real `status.yaml`. One host is killed and one
+ * credential is really revoked, because a single-server approximation of either
+ * is not evidence.
+ */
+import { expect, test, type Page } from '@playwright/test';
+// @ts-expect-error — the harness is plain ESM on purpose; it carries no types.
+import { cleanupScratch, makeWorkspace, readStatus, serveClient, startHost } from './fixture.mjs';
+
+const GATE = {
+  question: 'Ship the porch driver behind a flag?',
+  choices: [
+    { label: 'Behind a flag', consequence: 'Existing workspaces are untouched', recommended: true },
+    { label: 'On by default', consequence: 'Every workspace picks it up at once' },
+  ],
+};
+
+// Ephemeral, because a fixed port is a promise about a machine this test does
+// not own. Each host reports the port it actually bound.
+const EPHEMERAL = 0;
+
+interface Machine {
+  workspace: any;
+  host: any;
+  entry: Record<string, unknown>;
+}
+
+let alpha: Machine;
+let beta: Machine;
+let staticServer: any;
+let clientOrigin: string;
+let visible: Array<Record<string, unknown>> = [];
+
+async function stand(label: string, gate: unknown): Promise<Machine> {
+  const workspace = makeWorkspace(label, gate);
+  const host = await startHost({ port: EPHEMERAL, workspace, machine: label });
+  return {
+    workspace,
+    host,
+    entry: {
+      id: label,
+      label,
+      origin: `http://127.0.0.1:${host.port}`,
+      workspacePath: host.workspacePath,
+      credential: host.credential,
+    },
+  };
+}
+
+test.beforeAll(async () => {
+  alpha = await stand('alpha', GATE);
+  beta = await stand('beta', null);
+  staticServer = await serveClient(EPHEMERAL, () => visible);
+  clientOrigin = `http://127.0.0.1:${staticServer.address().port}`;
+});
+
+test.afterAll(async () => {
+  await alpha?.host.stop().catch(() => {});
+  await beta?.host.stop().catch(() => {});
+  await staticServer?.shutdown();
+  cleanupScratch();
+});
+
+/**
+ * Open the client. The fixture's own server proxies `/m/<id>/` to each host, so
+ * the page reaches every machine same-origin — the shape the dev server uses,
+ * and the one `connect-src 'self'` permits.
+ */
+async function openClient(page: Page): Promise<void> {
+  await page.goto(`${clientOrigin}/client/`);
+}
+
+/** Which machines the served `machines.json` announces on the next load. */
+function announce(...entries: Array<Record<string, unknown>>): void {
+  visible = entries;
+}
+
+test.describe('two machines, independently live', () => {
+  test('criterion 7: both subtrees render their own rows and both are live', async ({ page }) => {
+    announce(alpha.entry, beta.entry);
+    await openClient(page);
+
+    await expect(page.locator('[data-machine="alpha"] .conn-live')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('[data-machine="beta"] .conn-live')).toBeVisible({ timeout: 30_000 });
+
+    await expect(page.locator('[data-machine="alpha"] [data-id="builder-alpha-gated"]')).toBeVisible();
+    await expect(page.locator('[data-machine="beta"] [data-id="builder-beta-gated"]')).toBeVisible();
+    // Each machine shows only its own rows.
+    await expect(page.locator('[data-machine="alpha"] [data-id="builder-beta-gated"]')).toHaveCount(0);
+    await expect(page.locator('[data-machine="alpha"] .architect-group')).toHaveCount(1);
+  });
+
+  test('criterion 3: the blocked builder shows its question and choices in the row', async ({ page }) => {
+    announce(alpha.entry, beta.entry);
+    await openClient(page);
+    const row = page.locator('[data-machine="alpha"] [data-id="builder-alpha-gated"]');
+    await expect(row).toBeVisible({ timeout: 30_000 });
+
+    await expect(row.locator('.status-stamp')).toHaveText('GATE PR');
+    await expect(row.locator('.gate-question')).toHaveText(GATE.question);
+    await expect(row.locator('.gate-choices li')).toHaveCount(2);
+    await expect(row.locator('.gate-choices li.is-recommended .choice-label')).toHaveText('Behind a flag');
+    await expect(row.locator('.gate-choices li').first()).toContainText('Existing workspaces are untouched');
+
+    // A builder with no requested gate is not blocked, and looks different.
+    const quiet = page.locator('[data-machine="alpha"] [data-id="builder-alpha-quiet"]');
+    await expect(quiet).toHaveAttribute('data-status', /^(?!blocked).*/);
+    await expect(quiet.locator('.gate-panel')).toHaveCount(0);
+  });
+});
+
+test.describe('honest degradation', () => {
+  test('criterion 8: one server stopped, its subtree is dated and the other stays live', async ({ page }) => {
+    announce(alpha.entry, beta.entry);
+    await openClient(page);
+    await expect(page.locator('[data-machine="beta"] .conn-live')).toBeVisible({ timeout: 30_000 });
+
+    await beta.host.stop();
+
+    const band = page.locator('[data-machine="beta"] .conn-down');
+    await expect(band).toBeVisible({ timeout: 60_000 });
+    await expect(band).toContainText('DISCONNECTED');
+    // The timestamp is what makes last-known distinguishable from current.
+    await expect(band).toContainText(/last live .* ago · \d{4}-\d{2}-\d{2}T/);
+    await expect(page.locator('[data-machine="beta"] .stale-note')).toContainText('It is not current.');
+    // Not blank: the rows it had are still there.
+    await expect(page.locator('[data-machine="beta"] .thread-row')).toHaveCount(3);
+
+    // Alpha is untouched.
+    await expect(page.locator('[data-machine="alpha"] .conn-live')).toBeVisible();
+    await expect(page.locator('[data-machine="alpha"] .conn-down')).toHaveCount(0);
+  });
+});
+
+test.describe('approving a real gate', () => {
+  test('criterion 9b and 15: approve on alpha, then revoke alpha and fail it closed', async ({ page }) => {
+    announce(alpha.entry);
+    await openClient(page);
+    const row = page.locator('[data-machine="alpha"] [data-id="builder-alpha-gated"]');
+    await expect(row.locator('.gate-panel')).toBeVisible({ timeout: 30_000 });
+
+    // A human session costs a fresh pairing token; the client asks for one.
+    await expect(row.locator('.gate-token')).toBeVisible();
+    const token = await mintPairingToken();
+    await row.locator('.gate-token').fill(token);
+    await row.getByRole('button', { name: /open a human session/i }).click();
+
+    const approveButton = row.getByRole('button', { name: /approve pr/i });
+    await expect(approveButton).toBeVisible({ timeout: 20_000 });
+    await approveButton.click();
+    await expect(row.locator('.gate-result.is-ok')).toBeVisible({ timeout: 30_000 });
+    // The gate is gone from the row, and the confirmation outlived it.
+    await expect(row.locator('.gate-panel')).toHaveCount(0);
+
+    // CRITERION 9b: porch wrote it, with session id, machine and timestamp.
+    const gated = alpha.workspace.builders.find((b: any) => b.projectId === 'alpha-gated');
+    const status = readStatus(gated.statusPath);
+    expect(status).toContain('status: approved');
+    expect(status).toContain('authorization: capability');
+    expect(status).toContain('machine: alpha');
+    expect(status).toMatch(/session_id: [0-9a-f-]{36}/);
+    expect(status).toMatch(/approved_at: '?\d{4}-\d{2}-\d{2}T/);
+
+    // CRITERION 15: revoke this machine and the subtree fails closed, as a
+    // revocation and not as a generic disconnect.
+    await alpha.host.revoke();
+    const revoked = page.locator('[data-machine="alpha"] .conn-revoked');
+    await expect(revoked).toBeVisible({ timeout: 60_000 });
+    await expect(revoked).toContainText('ACCESS REVOKED');
+    await expect(revoked).toContainText('not retrying');
+    await expect(revoked).toContainText('MACHINE_CREDENTIAL_REVOKED');
+    await expect(page.locator('[data-machine="alpha"] .conn-down')).toHaveCount(0);
+  });
+});
+
+/** Mint a token the way an operator does: on the host, out of band. */
+async function mintPairingToken(): Promise<string> {
+  const { PairingStore } = await import(
+    '../../../packages/codev/src/agent-farm/lib/pairing.js'
+  );
+  return new PairingStore({ root: `${alpha.host.stateRoot}/pairing` }).issue().token;
+}

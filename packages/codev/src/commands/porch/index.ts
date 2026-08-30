@@ -883,6 +883,28 @@ export interface ApproveOptions {
   readonly cwd?: string;
   readonly capabilities?: ApprovalCapabilityStore;
   readonly nonces?: ApprovalNonceStore;
+  /**
+   * What a refusal does. The CLI exits; a SERVER MUST NOT.
+   *
+   * Spec 146 Phase 11 calls this function in codev-agent's process to spend a
+   * capability, and `process.exit(1)` there would take Tower down and answer the
+   * request with nothing at all — the worst possible spelling of "refused".
+   * Defaults to `'exit'`, so every existing caller behaves exactly as before.
+   */
+  readonly onRefusal?: 'exit' | 'throw';
+}
+
+/**
+ * A refusal raised instead of exiting, for in-process callers.
+ *
+ * Carries the same `code` and `message` the CLI prints, so a route can answer
+ * with the reason rather than a generic failure.
+ */
+export class ApprovalRefusedError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = 'ApprovalRefusedError';
+  }
 }
 
 /**
@@ -920,6 +942,14 @@ export async function approve(
   //
   // The flag is checked first only because it is the cheaper, more actionable
   // message; failing it is not an authorization decision.
+  // Annotated on the BINDING, not just the arrow. TypeScript narrows after a
+  // call only when the variable itself is declared to return `never`; without
+  // the annotation every line below a refusal is still considered reachable.
+  const refuse: (code: string, message: string) => never = (code, message) => {
+    if (options.onRefusal === 'throw') throw new ApprovalRefusedError(code, message);
+    process.exit(1);
+  };
+
   if (!hasHumanFlag) {
     console.log('');
     console.log(chalk.red('ERROR: Human approval required.'));
@@ -928,7 +958,7 @@ export async function approve(
     console.log('');
     console.log(chalk.cyan(`    porch approve ${projectId} ${gateName} --a-human-explicitly-approved-this`));
     console.log('');
-    process.exit(1);
+    refuse('HUMAN_APPROVAL_REQUIRED', 'this call did not assert an explicit human approval');
   }
 
   const approvalDecision = resolveApprovalAuthorization({
@@ -949,7 +979,7 @@ export async function approve(
     console.log(chalk.cyan(`    ${CAPABILITY_ENV_VAR}=<id>.<secret> ${NONCE_ENV_VAR}=<nonce> \\`));
     console.log(chalk.cyan(`      porch approve ${projectId} ${gateName} --a-human-explicitly-approved-this`));
     console.log('');
-    process.exit(1);
+    refuse(approvalDecision.code, approvalDecision.message);
   }
   const approvalRecord = approvalDecision.record;
   if (approvalRecord.authorization === 'flag-only') {
@@ -1025,6 +1055,14 @@ export async function approve(
       console.log(formatCheckResults(results));
 
       if (!allChecksPassed(results)) {
+        // The CLI exits here. A server MUST NOT: failing checks are a refusal
+        // with a reason, not a reason to end the process and answer nothing.
+        if (options.onRefusal === 'throw') {
+          throw new ApprovalRefusedError(
+            'PHASE_CHECKS_FAILED',
+            `the ${state.phase} phase checks did not pass, so the gate was not approved`,
+          );
+        }
         exitChecksNotPassed(results, 'Cannot approve gate.');
       }
     } else {
@@ -1042,7 +1080,7 @@ export async function approve(
     console.log(chalk.red(`ERROR: approval refused (${nonceCommit.code}).`));
     console.log(`  ${nonceCommit.message}`);
     console.log('');
-    process.exit(1);
+    refuse(nonceCommit.code, nonceCommit.message);
   }
 
   state.gates[gateName].status = 'approved';

@@ -8,6 +8,8 @@ import {
   APPROVAL_SIGNAL,
   ApprovalCapabilityStore,
   ApprovalNonceStore,
+  CAPABILITY_ENV_VAR,
+  NONCE_ENV_VAR,
   issueApprovalCapability,
 } from '../lib/approval-capability.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
@@ -363,10 +365,34 @@ function handleApprovalRoute(
         writeJson(res, 400, { signal: 'APPROVAL_REQUEST_MALFORMED' });
         return;
       }
+      /*
+       * `machine` NAMES THE HOST THAT WILL VERIFY THIS CAPABILITY, not the
+       * device asking for it. `verify` compares the stored name against THIS
+       * host's own identity, so a capability issued for a client-supplied name
+       * can never verify anywhere — it would be handed over looking valid and
+       * refused as APPROVAL_CAPABILITY_FOREIGN_MACHINE at the moment of use,
+       * which reads as a revocation rather than as a bad request.
+       *
+       * So a mismatch is refused HERE, at issuance, where the caller can still
+       * be told what it did. Omitting the field is the normal case and takes the
+       * host's identity. Silently ignoring a value the client set would be the
+       * same defect with a quieter spelling.
+       */
+      const declaredMachine = typeof body.machine === 'string' ? body.machine.trim() : undefined;
+      if (declaredMachine !== undefined && declaredMachine !== context.approvalCapabilities.machine) {
+        writeJson(res, 400, {
+          signal: APPROVAL_SIGNAL.APPROVAL_CAPABILITY_FOREIGN_MACHINE,
+          message:
+            `a capability can only be issued for this host (${context.approvalCapabilities.machine}); `
+            + `"${declaredMachine}" would never verify anywhere`,
+          machine: context.approvalCapabilities.machine,
+        });
+        return;
+      }
       const outcome = issueApprovalCapability(context.approvalCapabilities, {
         humanSession: { paired: true, sessionId: humanSessionId },
         declaredPrincipal: typeof body.principalKind === 'string' ? body.principalKind : undefined,
-        machine: typeof body.machine === 'string' ? body.machine : undefined,
+        machine: declaredMachine,
         lifetimeMs: typeof body.lifetimeMs === 'number' ? body.lifetimeMs : undefined,
       });
       if (!outcome.issued) {
@@ -559,6 +585,186 @@ function writeRefusal(res: http.ServerResponse, outcome: AgentAuthOutcome): void
 }
 
 /**
+ * Turn a fresh pairing token into a human-paired session.
+ *
+ * THE PATH PHASE 6 BUILT AND NOTHING COULD REACH. `completePairing` had no
+ * caller outside its own file, so no browser could ever hold a session, so the
+ * approval capability it gates could never be issued, so criterion 9b was
+ * unreachable while every unit test around it passed. Adding the route is half
+ * the fix; the other half is the end-to-end test that drives a request through
+ * it, in `agent-approval-path.test.ts`.
+ *
+ * The token is spent HERE and not in the auth layer, for the same reason machine
+ * redemption spends it here: the auth layer does not yet know what it is being
+ * spent on, and a token consumed for a request that then fails is a token the
+ * human has to mint again.
+ */
+function handleHumanSessionIssue(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  context: AgentRouteContext,
+  machine: string,
+): void {
+  const raw = req.headers[PAIRING_TOKEN_HEADER];
+  const token = Array.isArray(raw) ? raw[0] : raw;
+  void readJsonBody(req).then((body) => {
+    if (!body) {
+      writeJson(res, 400, { signal: 'HUMAN_SESSION_REQUEST_MALFORMED' });
+      return;
+    }
+    let redemption;
+    try {
+      redemption = context.pairings.redeem(token, { machine });
+    } catch (error) {
+      context.log('ERROR', `pairing store unreadable: ${(error as Error).message}`);
+      writeJson(res, 503, {
+        signal: PAIRING_SIGNAL.PAIRING_STORE_UNREADABLE,
+        message: 'the pairing store could not be read',
+      });
+      return;
+    }
+    if (!redemption.redeemed || !redemption.pairingId) {
+      writeJson(res, 401, { signal: redemption.code, message: redemption.message });
+      return;
+    }
+    let issued: IssuedHumanSession;
+    try {
+      issued = context.humanSessions.completePairing({
+        pairingId: redemption.pairingId,
+        principalKind: 'human-client',
+        lifetimeMs: typeof body.lifetimeMs === 'number' ? body.lifetimeMs : undefined,
+      });
+    } catch (error) {
+      // The token was spent on a ceremony that did not complete. Put it back
+      // rather than leave the human holding neither a token nor a session.
+      context.pairings.release(redemption.pairingId);
+      writeJson(res, 400, {
+        signal: 'HUMAN_SESSION_REFUSED',
+        message: (error as Error).message,
+      });
+      return;
+    }
+    writeJson(res, 201, {
+      signal: 'HUMAN_SESSION_ISSUED',
+      sessionId: issued.sessionId,
+      /*
+       * THE JOINED FORM, because that is what `recognize` reads.
+       *
+       * `completePairing` hands back the id and the secret separately, and the
+       * header carries `<sessionId>.<secret>`. Returning the two halves and
+       * leaving the client to join them puts a wire format in every client that
+       * only this file should know — and a client that joins them wrongly gets
+       * MALFORMED, which is indistinguishable from a bad secret.
+       */
+      presentation: `${issued.sessionId}.${issued.credential}`,
+      expiresAt: issued.expiresAt,
+    });
+  }).catch((error: unknown) => guardRouteFailure(res, context, 'human-session-issue', error));
+}
+
+/**
+ * Spend a capability and a nonce by asking porch to approve a gate.
+ *
+ * PORCH REMAINS THE ONLY WRITER OF `status.yaml`. This route does not touch it;
+ * it calls porch's own `approve`, which resolves the capability, records who
+ * approved with what, and commits. The capability presentation arrives in the
+ * body because the host keeps only a verifier — it cannot present what it
+ * deliberately cannot reconstruct.
+ *
+ * `onRefusal: 'throw'` is not a nicety. porch's CLI answers a refusal with
+ * `process.exit(1)`, and that inside Tower would end the process and answer the
+ * request with nothing.
+ */
+function handleGateApprove(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  workspacePath: string,
+  context: AgentRouteContext,
+  humanSessionId: string,
+): void {
+  void readJsonBody(req).then(async (body) => {
+    const projectId = body && typeof body.projectId === 'string' ? body.projectId : '';
+    const gateName = body && typeof body.gateName === 'string' ? body.gateName : '';
+    const capability = body && typeof body.capability === 'string' ? body.capability : '';
+    const nonce = body && typeof body.nonce === 'string' ? body.nonce : '';
+    if (!projectId || !gateName || !capability || !nonce) {
+      writeJson(res, 400, {
+        signal: 'APPROVAL_REQUEST_MALFORMED',
+        message: 'projectId, gateName, capability and nonce are all required',
+      });
+      return;
+    }
+
+    // The capability must belong to THIS session before it is spent. porch
+    // checks it again; this check is what stops one session spending another's.
+    const capabilityId = capability.split('.')[0] ?? '';
+    const stored = context.approvalCapabilities.describe(capabilityId);
+    if (!stored || stored.revokedAt || Date.parse(stored.expiresAt) <= Date.now()) {
+      writeJson(res, 404, {
+        signal: APPROVAL_SIGNAL.APPROVAL_CAPABILITY_UNKNOWN,
+        message: 'no live capability with that id on this host',
+      });
+      return;
+    }
+    if (stored.sessionId !== humanSessionId) {
+      writeJson(res, 403, {
+        signal: APPROVAL_SIGNAL.APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION,
+        message: 'that capability was issued to a different human session',
+      });
+      return;
+    }
+
+    // Imported here, not at module load. porch's entry point pulls in the whole
+    // state layer, and this module is loaded by every Tower start.
+    const { approve, ApprovalRefusedError } = await import('../../commands/porch/index.js');
+    try {
+      await approve(workspacePath, projectId, gateName, true, undefined, {
+        // A DELIBERATELY MINIMAL ENVIRONMENT. Inheriting process.env would carry
+        // Tower's own CODEV_ARCHITECT_NAME / CODEV_WORKTREE_ROOT into the caller
+        // attribution and record this approval as an architect session, which it
+        // is not. What approved it is a human-paired client, and the capability
+        // is the evidence.
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          /*
+           * PASSED THROUGH, NOT DROPPED. porch notifies the builder's terminal
+           * after an approval, and that notification resolves Tower through
+           * this variable. A host running over a database snapshot sets it to
+           * its own state root; dropping it here would send that host's
+           * approvals at the operator's REAL Tower and its real builders.
+           * Production does not set it and is unaffected.
+           */
+          ...(process.env.CODEV_AGENT_FARM_DIR
+            ? { CODEV_AGENT_FARM_DIR: process.env.CODEV_AGENT_FARM_DIR }
+            : {}),
+          [CAPABILITY_ENV_VAR]: capability,
+          [NONCE_ENV_VAR]: nonce,
+        },
+        cwd: workspacePath,
+        capabilities: context.approvalCapabilities,
+        nonces: context.approvalNonces,
+        onRefusal: 'throw',
+      });
+    } catch (error) {
+      if (error instanceof ApprovalRefusedError) {
+        writeJson(res, 403, { signal: error.code, message: error.message });
+        return;
+      }
+      throw error;
+    }
+    writeJson(res, 200, {
+      signal: 'GATE_APPROVED',
+      projectId,
+      gateName,
+      machine: stored.machine,
+      sessionId: humanSessionId,
+      approvedAt: new Date().toISOString(),
+    });
+  }).catch((error: unknown) => guardRouteFailure(res, context, 'gate-approve', error));
+}
+
+/**
  * Return true when the request belongs to codev-agent.
  *
  * THE ROUTE TABLE IS THE ROUTER. Every request resolves through
@@ -628,6 +834,10 @@ export function handleAgentRoute(
       return true;
     }
 
+    case 'human-session-issue':
+      handleHumanSessionIssue(req, res, context, outcome.machine as string);
+      return true;
+
     case 'machine-credential-revoke':
       handleMachineRevoke(res, url, context);
       return true;
@@ -637,6 +847,21 @@ export function handleAgentRoute(
     case 'approval-capability-revoke-machine':
       handleApprovalRoute(req, res, url, context, outcome.humanSessionId as string);
       return true;
+
+    case 'gate-approve': {
+      const match = url.pathname.match(/^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approve$/);
+      const workspace = match ? decodeWorkspace(match[1]) : null;
+      if (!workspace) {
+        writeJson(res, 400, { signal: 'WORKSPACE_PATH_INVALID' });
+        return true;
+      }
+      if (!context.isKnownWorkspace(workspace)) {
+        writeJson(res, 404, { signal: 'WORKSPACE_NOT_REGISTERED' });
+        return true;
+      }
+      handleGateApprove(req, res, workspace, context, outcome.humanSessionId as string);
+      return true;
+    }
 
     case 'workspace-state':
     case 'workspace-stream': {

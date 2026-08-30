@@ -65,7 +65,11 @@ const IDENTITIES: ThreadIdentity[] = [
       protocol: 'spir',
       phase: 'plan',
       currentPlanPhase: 'phase_11',
-      gates: { 'plan-approval': { status: 'pending', requested_at: '2026-08-29T11:00:00Z' } },
+      gates: {
+        // Declared-but-unrequested, exactly as porch leaves it. Not a block.
+        pr: { status: 'pending' },
+        'plan-approval': { status: 'pending', requested_at: '2026-08-29T11:00:00Z' },
+      },
       artifactRoot: '/Users/x/dev/codev/.builders/spir-146',
       statusPath: '/Users/x/dev/codev/.builders/spir-146/codev/projects/146/status.yaml',
     },

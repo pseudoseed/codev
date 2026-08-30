@@ -1,3 +1,4 @@
+import type { GateApprovalHandle } from '../gate/GatePanel.js';
 import type { MachineNode } from './build.js';
 import { ThreadRowView } from './ThreadRowView.js';
 
@@ -38,9 +39,18 @@ function ConnectionStrip({ node, nowMs }: { node: MachineNode; nowMs: number }) 
       </div>
     );
   }
+  /*
+   * REVOKED IS ITS OWN BAND, not a shade of disconnected.
+   *
+   * A withdrawn credential is a decision somebody made; an unreachable server is
+   * a fault. Rendering the first as the second sends an operator to check a box
+   * that is fine, and leaves them waiting for a reconnection that is never
+   * coming — the retry line says so out loud for that reason.
+   */
+  const revoked = connection.why === 'revoked';
   return (
-    <div className="conn-strip conn-down">
-      <span className="stamp conn-word">DISCONNECTED</span>
+    <div className={`conn-strip ${revoked ? 'conn-revoked' : 'conn-down'}`}>
+      <span className="stamp conn-word">{revoked ? 'ACCESS REVOKED' : 'DISCONNECTED'}</span>
       <span className="conn-detail">
         {connection.lastLiveAt
           ? `last live ${relative(connection.lastLiveAt, nowMs)} · ${connection.lastLiveAt}`
@@ -48,11 +58,22 @@ function ConnectionStrip({ node, nowMs }: { node: MachineNode; nowMs: number }) 
         {connection.retrying ? ' · retrying' : ' · not retrying'}
       </span>
       {connection.message ? <p className="conn-why">{connection.message}</p> : null}
+      {revoked ? (
+        <p className="conn-why">
+          Reconnecting will not help. This machine needs to be paired again before its subtree
+          can be live.
+        </p>
+      ) : null}
+      {connection.signal ? <p className="conn-signal stamp">{connection.signal}</p> : null}
     </div>
   );
 }
 
-export function MachineSubtree({ node, nowMs }: { node: MachineNode; nowMs: number }) {
+export function MachineSubtree({ node, nowMs, approval }: {
+  node: MachineNode;
+  nowMs: number;
+  approval?: GateApprovalHandle | null;
+}) {
   const down = node.connection.status !== 'live';
   const workspace = node.workspace;
   return (
@@ -93,12 +114,12 @@ export function MachineSubtree({ node, nowMs }: { node: MachineNode; nowMs: numb
 
           {workspace.architects.map((group) => (
             <div className="architect-group" key={group.key}>
-              <ThreadRowView row={group.architect} />
+              <ThreadRowView row={group.architect} approval={approval} />
               <div className="builder-list">
                 {group.builders.length === 0 ? (
                   <p className="empty-note nested">No builders under this architect.</p>
                 ) : (
-                  group.builders.map((row) => <ThreadRowView row={row} key={row.key} />)
+                  group.builders.map((row) => <ThreadRowView row={row} approval={approval} key={row.key} />)
                 )}
               </div>
             </div>
@@ -110,7 +131,9 @@ export function MachineSubtree({ node, nowMs }: { node: MachineNode; nowMs: numb
                 builders with no architect recorded on this machine
               </div>
               <div className="builder-list">
-                {workspace.unattributedBuilders.map((row) => <ThreadRowView row={row} key={row.key} />)}
+                {workspace.unattributedBuilders.map((row) => (
+                  <ThreadRowView row={row} approval={approval} key={row.key} />
+                ))}
               </div>
             </div>
           ) : null}
@@ -119,7 +142,9 @@ export function MachineSubtree({ node, nowMs }: { node: MachineNode; nowMs: numb
             <div className="architect-group orphan-group">
               <div className="group-label stamp">threads with no Codev identity</div>
               <div className="builder-list">
-                {workspace.unmanagedThreads.map((row) => <ThreadRowView row={row} key={row.key} />)}
+                {workspace.unmanagedThreads.map((row) => (
+                  <ThreadRowView row={row} approval={approval} key={row.key} />
+                ))}
               </div>
             </div>
           ) : null}

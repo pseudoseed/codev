@@ -95,7 +95,7 @@ describe('buildTree', () => {
         protocol: 'air',
         phase: 'implement',
         currentPlanPhase: null,
-        gates: { 'plan-approval': { status: 'pending' } },
+        gates: { 'plan-approval': { status: 'pending', requested_at: '2026-08-29T11:00:00Z' } },
         artifactRoot: '/w/.builders/air-9',
         statusPath: '/w/.builders/air-9/codev/projects/9/status.yaml',
       },

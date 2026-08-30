@@ -233,3 +233,144 @@ html, body, #root {
   background: var(--chalk);
   font-size: 12px;
 }
+
+/* ---------- the gate, in the row ---------- */
+
+.gate-panel {
+  margin-top: 8px;
+  border: var(--rule) solid var(--rust);
+  background: var(--chalk);
+  padding: 10px 12px;
+}
+
+.gate-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+
+.gate-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--rust);
+}
+
+.gate-since { font-size: 10px; color: var(--graphite); }
+
+.gate-question {
+  margin: 6px 0 10px;
+  font-family: var(--font-display);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.gate-question.is-absent {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--graphite);
+}
+
+.gate-choices { list-style: none; margin: 0 0 8px; padding: 0; }
+
+.gate-choices li {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 8px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--concrete);
+  margin-bottom: 4px;
+  background: var(--bone);
+}
+
+.gate-choices li.is-recommended { border-left-color: var(--moss); }
+
+.choice-label { font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+
+.choice-flag {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--moss);
+  align-self: center;
+}
+
+.choice-consequence {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--graphite);
+  line-height: 1.4;
+}
+
+.gate-excerpt {
+  margin: 0 0 8px;
+  padding: 8px;
+  background: var(--ink);
+  color: var(--bone);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-x: auto;
+  max-height: 220px;
+}
+
+.gate-approve {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--concrete);
+}
+
+.gate-token {
+  flex: 1 1 220px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--ink);
+  background: var(--bone);
+  color: var(--ink);
+}
+
+.gate-button {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 7px 12px;
+  border: var(--rule) solid var(--ink);
+  background: var(--bone);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.gate-button.is-primary { background: var(--rust); border-color: var(--rust); color: var(--chalk); }
+.gate-button.is-primary:hover:not(:disabled) { background: var(--rustdark); border-color: var(--rustdark); }
+.gate-button:disabled { opacity: 0.5; cursor: default; }
+
+.gate-note { flex-basis: 100%; margin: 0; font-size: 11px; color: var(--graphite); line-height: 1.4; }
+
+.gate-result {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  border-left: var(--rule) solid var(--ochre);
+  background: var(--bone);
+}
+
+.gate-result.is-ok { border-left-color: var(--moss); }
+.gate-result.is-refused { border-left-color: var(--rust); }
+
+/*
+ * Revoked reads as a decision, not a fault: solid rather than hatched, and
+ * carrying the reissue instruction the disconnected band has no business giving.
+ */
+.conn-revoked {
+  background: var(--ink);
+  border-bottom: var(--rule) solid var(--ink);
+  color: var(--bone);
+}
+
+.conn-revoked .conn-word { color: var(--ink); background: var(--ochre); border-color: var(--ochre); }
+.conn-revoked .conn-detail { color: var(--bone); }
+.conn-revoked .conn-why { color: var(--bone); }
+
+.conn-signal { flex-basis: 100%; margin: 4px 0 0; font-size: 10px; letter-spacing: 0.06em; opacity: 0.75; }

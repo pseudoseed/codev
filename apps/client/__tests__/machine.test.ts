@@ -184,3 +184,65 @@ describe('silence', () => {
     expect(seen[seen.length - 1].status).toBe('live');
   });
 });
+
+describe('a revoked credential is not a generic disconnect', () => {
+  it('names revocation when the server refuses at the handshake', async () => {
+    const fetchImpl = (async () => new Response(
+      JSON.stringify({
+        signal: 'MACHINE_CREDENTIAL_REVOKED',
+        message: 'credential cred-1 was revoked at 2026-08-30T01:00:00Z',
+      }),
+      { status: 403 },
+    )) as unknown as typeof globalThis.fetch;
+    const seen = await drive(fetchImpl);
+    const last = seen[seen.length - 1];
+    expect(last.why).toBe('revoked');
+    expect(last.signal).toBe('MACHINE_CREDENTIAL_REVOKED');
+    expect(last.retrying).toBe(false);
+    expect(last.message).toContain('revoked');
+  });
+
+  it('names revocation when it happens mid-stream', async () => {
+    const fetchImpl = (async () => new Response(sseBody([
+      frame('protocol-state', { snapshot: SNAPSHOT }),
+      frame('protocol-state-unauthorized', {
+        type: 'STREAM_AUTHORIZATION_LOST',
+        code: 'MACHINE_CREDENTIAL_REVOKED',
+        message: 'that machine credential was revoked',
+      }),
+    ]), { status: 200 })) as unknown as typeof globalThis.fetch;
+    const seen = await drive(fetchImpl);
+    const last = seen[seen.length - 1];
+    expect(last.why).toBe('revoked');
+    expect(last.signal).toBe('MACHINE_CREDENTIAL_REVOKED');
+    expect(last.retrying).toBe(false);
+  });
+
+  /*
+   * "I could not read the credential store" must not be spelled as "you were
+   * revoked": one sends an operator to reissue, the other to look at a disk.
+   */
+  it('does not call an unreadable credential store a revocation', async () => {
+    const fetchImpl = (async () => new Response(sseBody([
+      frame('protocol-state-unauthorized', {
+        type: 'STREAM_AUTHORIZATION_LOST',
+        code: 'MACHINE_STORE_UNREADABLE',
+        message: 'credential could not be re-checked',
+      }),
+    ]), { status: 200 })) as unknown as typeof globalThis.fetch;
+    const seen = await drive(fetchImpl);
+    const last = seen[seen.length - 1];
+    expect(last.why).toBe('auth');
+    expect(last.signal).toBe('MACHINE_STORE_UNREADABLE');
+  });
+
+  it('does not call an unauthenticated machine revoked', async () => {
+    const fetchImpl = (async () => new Response(
+      JSON.stringify({ signal: 'MACHINE_CREDENTIAL_UNKNOWN', message: 'no such credential here' }),
+      { status: 401 },
+    )) as unknown as typeof globalThis.fetch;
+    const seen = await drive(fetchImpl);
+    expect(seen[seen.length - 1].why).toBe('auth');
+    expect(seen[seen.length - 1].signal).toBe('MACHINE_CREDENTIAL_UNKNOWN');
+  });
+});
