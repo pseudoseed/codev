@@ -39,10 +39,11 @@ gates:
       caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
   dev-approval:
     status: pending
+    requested_at: '2026-08-30T16:07:10.673Z'
   pr:
     status: pending
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-30T15:18:07.177Z'
-updated_at: '2026-08-30T15:39:04.069Z'
+updated_at: '2026-08-30T16:07:10.674Z'
