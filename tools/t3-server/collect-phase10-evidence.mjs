@@ -26,7 +26,7 @@
  * this script never gets to make the second claim on the strength of the first.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -95,6 +95,36 @@ function sha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
+/**
+ * The harness AND the implementation it exercised.
+ *
+ * The first version hashed only the harness — the runner, the witness, the
+ * resubscriber, the launcher — and review was right that this left the evidence
+ * green across changes to the code actually under test. The runner imports
+ * `packages/porch-driver/dist/*` and `packages/t3-client/dist/*`; a change to
+ * `turn.ts` is exactly the kind of thing these runs are evidence ABOUT, and it
+ * could have landed without disturbing a single recorded hash.
+ *
+ * SOURCES, NOT `dist`, AND THAT IS DELIBERATE.
+ *
+ * `dist` is gitignored, so a clean checkout has none of it and a test asserting
+ * dist hashes would fail for everyone who had not built — turning a real guard
+ * into an obstacle people learn to skip. The committed sources are the portable
+ * identity of the implementation. The dist hashes are recorded too, under
+ * `executed`, because they are what actually ran; they are observation rather
+ * than assertion, which is the honest split between "what this evidence is about"
+ * and "what happened to be on this machine".
+ */
+function hashTree(relativeDir, filter) {
+  const absolute = join(repoRoot, relativeDir);
+  const out = {};
+  for (const name of readdirSync(absolute).sort()) {
+    if (!filter(name)) continue;
+    out[`${relativeDir}/${name}`] = sha256(join(absolute, name));
+  }
+  return out;
+}
+
 const describes = {
   'packages/codev/src/agent-farm/__tests__/helpers/air-235-full-protocol.mjs': null,
   'packages/codev/src/agent-farm/__tests__/helpers/air-235-pty-witness.mjs': null,
@@ -115,6 +145,21 @@ for (const relative of Object.keys(describes)) {
   }
   describes[relative] = sha256(absolute);
 }
+// The implementation under test: both packages the runner drives.
+Object.assign(describes, hashTree('packages/porch-driver/src', (n) => n.endsWith('.ts')));
+Object.assign(describes, hashTree('packages/t3-client/src', (n) => n.endsWith('.ts')));
+
+/** What actually executed on this machine. Recorded, not asserted — `dist` is gitignored. */
+const executed = {};
+for (const [pkg, files] of [
+  ['packages/porch-driver/dist', ['commands.js', 'turn.js', 'thread.js', 'cursor.js', 'checks.js']],
+  ['packages/t3-client/dist', ['client.js', 'auth.js', 'subscription.js', 'resume.js']],
+]) {
+  for (const file of files) {
+    const absolute = join(repoRoot, pkg, file);
+    executed[`${pkg}/${file}`] = existsSync(absolute) ? sha256(absolute) : null;
+  }
+}
 
 const evidence = {
   _comment:
@@ -129,6 +174,7 @@ const evidence = {
     bind: '127.0.0.1 only, one server and one data directory per run',
   },
   describes,
+  executed,
   runs,
   ...(longGateLabel === null
     ? {}
@@ -180,9 +226,8 @@ writeFileSync(
 );
 
 console.log(`wrote ${evidencePath}`);
-for (const [relative, hash] of Object.entries(describes)) {
-  console.log(`  describes ${relative} @ ${hash.slice(0, 12)}`);
-}
+console.log(`  describes ${Object.keys(describes).length} committed sources`);
+console.log(`  executed ${Object.values(executed).filter(Boolean).length} built artifacts`);
 console.log(`filled the results table in ${parityPath}`);
 for (const run of runs) {
   const notMet = Object.entries(run.criteria).filter(([, c]) => c.outcome !== 'met');

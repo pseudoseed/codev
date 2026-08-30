@@ -71,8 +71,10 @@ interface RunEvidence {
 interface EvidenceFile {
   readonly recordedAt: string;
   readonly server: Record<string, unknown>;
-  /** Repo-relative path → sha256 of the code this evidence describes. */
+  /** Repo-relative path → sha256 of the committed code this evidence describes. */
   readonly describes: Record<string, string>;
+  /** Repo-relative path → sha256 of the built artifact that actually ran, or null. */
+  readonly executed: Record<string, string | null>;
   readonly runs: ReadonlyArray<RunEvidence>;
   readonly longGate: { readonly startedAt: string; readonly gateSeconds: number; readonly harness: string };
 }
@@ -241,7 +243,7 @@ describe('Spec 146 Phase 10 — the recorded full-protocol runs', () => {
       'this evidence has no `describes` block, so it does not say what code produced it. Regenerate it with '
         + 'tools/t3-server/collect-phase10-evidence.mjs.',
     ).toBeDefined();
-    expect(Object.keys(describes).length, 'the evidence names no source at all').toBeGreaterThanOrEqual(4);
+    expect(Object.keys(describes).length, 'the evidence names no source at all').toBeGreaterThanOrEqual(20);
     for (const [relative, recorded] of Object.entries(describes)) {
       const absolute = join(repoRoot, relative);
       expect(existsSync(absolute), `the evidence names ${relative}, which does not exist`).toBe(true);
@@ -260,12 +262,26 @@ describe('Spec 146 Phase 10 — the recorded full-protocol runs', () => {
     // trivially-stable file. The launcher counts: it writes the provider opt-in
     // without which a turn on some drivers is refused, so evidence gathered
     // without it describes a different experiment.
-    for (const required of ['air-235-full-protocol.mjs', 'air-235-resubscribe.mjs', 'full-protocol-run.sh']) {
+    // The harness AND the implementation. The first version named only harness
+    // files, which left the evidence green across a change to `turn.ts` — the
+    // exact kind of change these runs are evidence ABOUT.
+    for (const required of [
+      'air-235-full-protocol.mjs',
+      'air-235-resubscribe.mjs',
+      'full-protocol-run.sh',
+      'packages/porch-driver/src/turn.ts',
+      'packages/porch-driver/src/thread.ts',
+      'packages/t3-client/src/subscription.ts',
+    ]) {
       expect(
         Object.keys(describes).some((k) => k.endsWith(required)),
         `the evidence does not record a hash for ${required}`,
       ).toBe(true);
     }
+    // `dist` is gitignored, so what actually executed is recorded rather than
+    // asserted — a test demanding dist hashes fails for anyone who has not built,
+    // which turns a real guard into one people learn to skip.
+    expect(loadEvidence().executed, 'the evidence does not record what actually executed').toBeDefined();
   });
 
   it('enacts the phases and checks the BUGFIX protocol actually defines', () => {
