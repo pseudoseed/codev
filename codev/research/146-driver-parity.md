@@ -207,6 +207,11 @@ Worth stating, because each was suspected and tested rather than assumed:
   protocol's definition cannot move underneath this evidence silently — but that is a guard
   against drift, not a demonstration that porch drove anything.
 
+  The deliverable enumerates the steps and all of them run, so it is met as written. "Porch drove
+  them" is the stronger claim and it is not supported. Filed as #240, which also carries the
+  blocker underneath: `--no-enter` is terminally refused on threads and porch gate notifications
+  use `--no-enter`, so a thread-backed builder cannot be told its gate is waiting.
+
 - Nothing about **Codex** beyond the spike. The full protocol has still never run end to end on
   it, and this phase could not change that.
 - Nothing about `cursor` or `grok`, the two t3code driver kinds with no Codev harness.
