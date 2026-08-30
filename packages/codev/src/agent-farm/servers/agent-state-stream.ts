@@ -15,6 +15,18 @@ import type { AgentStateSignal } from './status-reader.js';
  */
 export const RECONCILE_INTERVAL_MS = 5_000;
 
+/**
+ * SSE heartbeat interval.
+ *
+ * Without one, a stream that has gone quiet and a stream whose server died look
+ * identical to a client: both are silence. Snapshots are emitted only on change,
+ * so a healthy workspace can be silent for hours, and a client cannot set any
+ * staleness deadline against that. The heartbeat is what makes silence mean
+ * something — it is a comment line, so it costs a client nothing to ignore and
+ * gives one that watches the clock a definite answer.
+ */
+export const HEARTBEAT_INTERVAL_MS = 10_000;
+
 export interface AgentStreamSnapshot<T> {
   readonly payload: T;
   /** Workspace and builder artifact roots represented by payload. */
@@ -362,6 +374,7 @@ export function openAgentStateSse<T>(
   options: Omit<StateStreamOptions<T>, 'onEvent'> & {
     readonly stillAuthorized?: () => StreamAuthorization;
     readonly reauthorizeMs?: number;
+    readonly heartbeatMs?: number;
   },
 ): StateSubscription {
   res.writeHead(200, {
@@ -373,6 +386,7 @@ export function openAgentStateSse<T>(
 
   let terminated = false;
   let reauthorizeTimer: NodeJS.Timeout | undefined;
+  let heartbeatTimer: NodeJS.Timeout | undefined;
   // `watchAgentState` emits its opening snapshot SYNCHRONOUSLY, so `terminate`
   // can run before the subscription exists — a credential already revoked when
   // the stream opens hits exactly that. Hold it in a `let` and close on
@@ -395,6 +409,7 @@ export function openAgentStateSse<T>(
     }
     subscription?.close();
     if (reauthorizeTimer !== undefined) clearInterval(reauthorizeTimer);
+    if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
   };
 
   /** Returns true while the stream may keep delivering. */
@@ -445,9 +460,21 @@ export function openAgentStateSse<T>(
     }
   }
 
+  if (!terminated) {
+    const heartbeatMs = options.heartbeatMs ?? HEARTBEAT_INTERVAL_MS;
+    if (heartbeatMs > 0) {
+      heartbeatTimer = setInterval(() => {
+        if (terminated || res.destroyed || res.writableEnded) return;
+        res.write(`: heartbeat ${new Date().toISOString()}\n\n`);
+      }, heartbeatMs);
+      heartbeatTimer.unref();
+    }
+  }
+
   const stream = subscription;
   const close = (): void => {
     if (reauthorizeTimer !== undefined) clearInterval(reauthorizeTimer);
+    if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
     stream.close();
   };
   req.once('close', close);

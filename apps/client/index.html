@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      This client holds credentials for N machines, so an XSS here is credential
+      theft, not defacement. No inline script, no eval, and connections only to
+      this origin and loopback codev-agents. `connect-src` is widened at build
+      time when a deployment fronts remote machines; it is never `*`.
+    -->
+    <!--
+      This client holds credentials for N machines, so an XSS here is credential
+      theft rather than defacement. No inline script, no eval, and no remote
+      origin: every machine is reached through a same-origin path prefix, which
+      is why `connect-src` is `'self'` and never `*`.
+
+      `style-src` allows inline styles and `script-src` does not, deliberately.
+      Script execution is the credential-theft path; an inline style cannot make
+      a request, and `default-src 'none'` with `img-src 'self' data:` closes the
+      CSS-exfiltration route that would otherwise make that claim untrue.
+
+      `frame-ancestors` is NOT here: a <meta> CSP silently ignores it, and a
+      directive that does nothing is worse than an absent one because it reads
+      as protection. It is sent as a response header instead — by the dev server
+      in `vite.config.ts`, and it must be sent by whatever serves the built
+      bundle.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'"
+    />
+    <title>Codev</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,151 @@
+/*
+ * Codev v2 — design tokens, extracted from the approved UX Pilot mockups.
+ * Source: uxpilot page SXl8jE8uNyYLwBsG6vsL, 2026-08-21.
+ *
+ * The mockups ship these as a Tailwind CDN config. This file is the
+ * framework-neutral form so apps/v2 can adopt them without inheriting
+ * Tailwind-via-CDN, which is a prototype convenience, not a build target.
+ */
+
+:root {
+  /* ---- ground and ink ---- */
+  --bone:     #EDE8DE;  /* page ground. warm, not grey, not white */
+  --chalk:    #F6F3EB;  /* raised surfaces: cards, plots, header, footer */
+  --concrete: #DAD3C4;  /* rules, dividers, blueprint grid lines */
+  --ink:      #221F1A;  /* text, borders, terminal ground */
+  --graphite: #4A463D;  /* secondary text, muted labels */
+
+  /* ---- signal ---- */
+  --rust:     #B5502A;  /* GATES AND ATTENTION ONLY. never decoration */
+  --rustdark: #8C3D1F;  /* rust hover/pressed */
+  --ochre:    #C08A2E;  /* warnings, stalled work, terminal caution lines */
+  --moss:     #5C6B4F;  /* healthy, running, online */
+
+  /* ---- type ---- */
+  --font-display: "Fraunces", Georgia, serif;
+  --font-sans:    "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono:    "IBM Plex Mono", ui-monospace, monospace;
+
+  /* ---- structure ---- */
+  --rule: 1.5px;        /* the border weight the whole design rests on */
+}
+
+/*
+ * NOTE ON THE SANS FACE
+ * Was Space Grotesk, which is on the standard "AI-generated design" tell list.
+ * Swapped for IBM Plex Sans: same superfamily as the mono already carrying most
+ * of the UI text, so it harmonises by construction rather than by taste, and it
+ * drops a font dependency instead of adding one. The sans carries almost no
+ * weight here anyway — nearly all UI text is IBM Plex Mono (.stamp) or Fraunces
+ * (display).
+ */
+
+/* ---------- the recurring patterns ---------- */
+
+/* Uppercase letterspaced micro-label. Used for nearly every piece of UI
+   chrome: MACHINE LOT, LIVE PANES, THE QUESTION, HELD FOR. */
+.stamp {
+  font-family: var(--font-mono);
+  letter-spacing: 0.06em;
+}
+
+/* Blueprint grid. Background of the site view only. */
+.grid-bg {
+  background-image:
+    linear-gradient(var(--concrete) 1px, transparent 1px),
+    linear-gradient(90deg, var(--concrete) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* A machine's surveyed lot. Containment is how hierarchy is shown. */
+.plot {
+  border: var(--rule) solid var(--ink);
+  background: var(--chalk);
+}
+
+/* Surveyor's corner tick on a plot. Small, and does a lot of the work. */
+.corner::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 10px;
+  height: 10px;
+  border-top: var(--rule) solid var(--ink);
+  border-left: var(--rule) solid var(--ink);
+}
+
+/* A builder row. The left stake reads as driven into the workspace. */
+.stake {
+  border-left: 3px solid var(--ink);
+}
+
+/* Offline machine: keeps its shape, loses its life. Never hidden. */
+.dim-sub {
+  opacity: 0.42;
+  filter: grayscale(55%);
+}
+
+/* Per-builder activity trace. Bar heights are output volume over time.
+   This is the one piece of real information design in the mockup:
+   working vs stalled is legible without reading a word. */
+.spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 22px;
+}
+.spark i {
+  display: block;
+  width: 3px;
+  background: var(--ink);
+}
+/* A zero bucket still draws a floor bar, so an idle trace is a flat baseline
+   rather than an empty box. Muted, because idle is quiet, not alarming. */
+.spark i.idle { background: var(--graphite); opacity: 0.34; }
+/* Colour follows the same discipline as the stamps: moss runs, ochre stalls,
+   and everything else stays ink. Gate rows are deliberately not rust — the
+   rust belongs to the gate stamp, not to a decoration beside it. */
+.spark[data-status='running'] i.live { background: var(--moss); }
+.spark[data-status='stalled'] i.live { background: var(--ochre); }
+
+/* Something needs a human. The only animation in the design. */
+.needs-attn { animation: pulseAttn 2.2s ease-in-out infinite; }
+@keyframes pulseAttn {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(181, 80, 42, 0); }
+  50%      { box-shadow: 0 0 0 3px rgba(181, 80, 42, 0.18); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .needs-attn { animation: none; box-shadow: 0 0 0 2px rgba(181, 80, 42, 0.3); }
+}
+
+/* Torn-ticket rule under the gate header. */
+.ticket-edge {
+  background-image: repeating-linear-gradient(90deg, var(--ink) 0 10px, transparent 10px 18px);
+  height: 2px;
+}
+
+/* Diagonal hatch behind the gate view. Distinguishes "stopped" from the
+   site view's grid, which reads as "in progress". */
+.hatch {
+  background-image: repeating-linear-gradient(135deg, var(--ink) 0, var(--ink) 1px, transparent 1px, transparent 8px);
+  opacity: 0.06;
+}
+
+/* Square scrollbars. No rounding anywhere in this design. */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #C7BFAC; border-radius: 0; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/*
+ * COLOUR DISCIPLINE — the rule that keeps this from becoming noise:
+ *   rust  = a human is needed. Gates, and nothing else.
+ *   ochre = something may be wrong but nobody is blocked. Stalled, warnings.
+ *   moss  = healthy. Running, online.
+ *   ink   = everything else.
+ * There is no fifth colour, and rust is never used for emphasis.
+ *
+ * DARK MODE is tokens-dark.css. Designed, not derived. The light terminals
+ * are already ink-on-chalk inversions; inverting the whole page destroys
+ * that. The dark file keeps the room and adds --well for the screens.
+ */

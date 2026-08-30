@@ -1,0 +1,235 @@
+/*
+ * The client's own sheet. Tokens come from tokens.css, which is the design
+ * language apps/v2 established: warm ground, ink rules, containment as the way
+ * hierarchy is shown, and rust reserved for gates.
+ */
+
+html, body, #root {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bone);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+.page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- header ---------- */
+
+.app-header {
+  border-bottom: var(--rule) solid var(--ink);
+  background: var(--chalk);
+  padding: 0 20px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.mark { display: flex; align-items: center; gap: 10px; }
+
+.mark-badge {
+  width: 28px;
+  height: 28px;
+  border: var(--rule) solid var(--ink);
+  background: var(--ink);
+  color: var(--chalk);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+.mark-name { font-family: var(--font-display); font-size: 18px; font-weight: 600; }
+
+.mark-rule { width: 1px; align-self: stretch; margin: 14px 0; background: var(--concrete); }
+
+.header-register { font-size: 11px; text-transform: uppercase; color: var(--graphite); }
+
+/* ---------- the tree ---------- */
+
+.app-body { padding: 18px; }
+
+.tree {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 720px;
+}
+
+.machine {
+  border: var(--rule) solid var(--ink);
+  background: var(--chalk);
+}
+
+.machine-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 12px 14px 8px;
+}
+
+.machine-name { margin: 0; font-family: var(--font-display); font-size: 19px; font-weight: 600; }
+
+.machine-origin { font-size: 11px; color: var(--graphite); }
+
+/* ---------- connection: three states, three appearances ---------- */
+
+.conn-strip {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 14px 8px;
+  border-bottom: 1px solid var(--concrete);
+  font-size: 11px;
+  color: var(--graphite);
+}
+
+.conn-word {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border: 1px solid currentColor;
+}
+
+.conn-live .conn-word { color: var(--moss); }
+.conn-connecting .conn-word { color: var(--ochre); }
+
+/* Disconnected is not a dimmer shade of live. It is its own band. */
+.conn-down {
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 8px,
+    rgba(181, 80, 42, 0.10) 8px 16px
+  );
+  border-bottom: var(--rule) solid var(--rust);
+}
+
+.conn-down .conn-word { color: var(--chalk); background: var(--rust); border-color: var(--rust); }
+
+.conn-detail { font-family: var(--font-mono); }
+
+.conn-why {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--ink);
+}
+
+/* ---------- workspace ---------- */
+
+.workspace { padding: 10px 14px 14px; }
+
+.workspace.is-stale { opacity: 0.72; }
+
+.workspace-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+
+.workspace-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--graphite);
+}
+
+.workspace-path { font-family: var(--font-mono); font-size: 12px; }
+
+.stale-note {
+  margin: 0 0 10px;
+  padding: 6px 8px;
+  border-left: var(--rule) solid var(--rust);
+  background: var(--bone);
+  font-size: 11px;
+}
+
+.empty-note { margin: 6px 0; font-size: 12px; color: var(--graphite); }
+.empty-note.nested { margin: 0 0 0 2px; }
+
+/* ---------- groups and rows ---------- */
+
+.architect-group {
+  border: 1px solid var(--concrete);
+  background: var(--bone);
+  margin-bottom: 10px;
+}
+
+.orphan-group { border-style: dashed; }
+
+.group-label {
+  display: block;
+  padding: 6px 10px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--graphite);
+  border-bottom: 1px solid var(--concrete);
+}
+
+.builder-list {
+  padding: 0 10px 8px 22px;
+  border-left: 1px solid var(--concrete);
+  margin-left: 10px;
+}
+
+.thread-row { padding: 8px 10px; border-bottom: 1px solid var(--concrete); }
+.builder-list .thread-row:last-child { border-bottom: none; }
+
+.role-architect { background: var(--chalk); border-bottom: 1px solid var(--concrete); }
+
+.thread-row.needs-attn { border-left: var(--rule) solid var(--rust); background: rgba(181, 80, 42, 0.06); }
+
+.thread-row.is-unmanaged { border-left: var(--rule) dashed var(--ochre); }
+
+.thread-row-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+.thread-name { font-size: 13px; }
+
+/* The prefix is what makes a name readable at a glance. It is never dropped. */
+.kind-prefix { color: var(--graphite); }
+
+.thread-row-meta { margin-top: 3px; }
+
+.porch-phase { font-size: 10px; text-transform: uppercase; color: var(--graphite); }
+.porch-phase.is-absent { color: var(--ochre); }
+
+.row-why { margin: 4px 0 0; font-size: 11px; color: var(--graphite); }
+
+/* ---------- status stamps ---------- */
+
+.status-stamp {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+
+.stamp-gate { color: var(--chalk); background: var(--rust); border-color: var(--rust); }
+.stamp-turning { color: var(--moss); }
+.stamp-working { color: var(--graphite); }
+.stamp-settled { color: var(--graphite); border-style: dashed; }
+.stamp-unknown { color: var(--ochre); border-style: dotted; }
+
+/* ---------- signals ---------- */
+
+.signals { margin-top: 8px; font-size: 11px; }
+.signals summary { cursor: pointer; color: var(--graphite); text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em; }
+.signals ul { margin: 6px 0 0; padding-left: 18px; }
+.signals li { margin-bottom: 4px; }
+.signal-code { color: var(--ochre); }
+
+.config-error {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-left: var(--rule) solid var(--rust);
+  background: var(--chalk);
+  font-size: 12px;
+}
