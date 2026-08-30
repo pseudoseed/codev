@@ -72,7 +72,14 @@ Four things the issue does not say, established by reading the code:
   `running`, `turning`, `starting`, `ready` and renders anything else as `UNKNOWN` naming the
   word it did not know. So forwarding t3code's own vocabulary unchanged would leave `idle`,
   `interrupted`, `stopped` and `error` reading as UNKNOWN. **Criterion 3 needs a mapping
-  decision, not only a wire.**
+  decision, not only a wire**, and this spec makes it rather than leaving it to the plan.
+- **The client's snapshot validator hard-rejects unknown `t3code` values.** `validateSnapshot`
+  admits exactly `not-provided`, `unreachable` and `available`; anything else returns null, and
+  `snapshotRejection` classifies a present-but-unrecognised value as `unreadable` rather than
+  `older-server` — the absence of the field is what means "older server". So adding wire values
+  is not additive for a client that predates them: it blanks the whole machine, not one row.
+  That is the client's standing rule working as designed, and the spec states it rather than
+  leaving a builder to discover it as a red test and loosen the validator.
 
 There is a fifth limit that bounds what any of this can achieve today: `sessionState` is
 attached only to rows that carry a `thread_id`, and every real row in `global.db` is
@@ -103,6 +110,16 @@ the request.
 script mints a token, redeems it against a running Tower using `~/.agent-farm/local-key`, and
 writes the credential into `apps/client/.dev-machines.json`. It is a development affordance
 that documents itself as one.
+
+**There are two pairing ceremonies, not one, and a token is bound to exactly one of them.**
+`PairingStore.issue()` requires a `purpose` of `machine-credential` or `client-session`, and
+redemption enforces it — a token presented at the wrong ceremony is refused and, deliberately,
+not consumed. `POST /api/agent/v1/pairing/redeem` redeems `machine-credential`;
+`POST /api/agent/v1/human-sessions` redeems `client-session`. The dev script mints
+`machine-credential` only, so it can pair a device and can never open the human session that
+gate approval requires. Any operator command that mints only one purpose leaves criterion 9b
+exactly as unreachable as it is today — which makes `purpose` part of this spec's contract, not
+a flag the plan can pick.
 
 Revocation has no operator path at all. `DELETE /api/agent/v1/machines/<id>` and
 `DELETE /api/agent/v1/approval-capabilities/machine/<id>` are both declared `human-session` in
@@ -149,18 +166,27 @@ is written down where the next reader will find it.
 - [ ] 1. `tower-server.ts` passes a `t3codeSnapshot` provider, and
       `spec-146-phase-11-production-wiring.test.ts` is updated — not deleted — to assert the
       wired state and what it now guarantees.
-- [ ] 2. `T3codeThreadSnapshot` distinguishes at least: never asked, no t3code server
-      configured for this workspace, configured but unreachable, observed and fresh, observed
-      but stale. No two of those five share a code, and `stale` carries the age of what it is
-      reporting.
+- [ ] 2. `T3codeThreadSnapshot` carries the eight statuses in **Decision 1 — the snapshot
+      status set** below. No two share a code, each is emitted by exactly the producer named
+      there, and `stale` carries the age of what it is reporting.
 - [ ] 3. A snapshot served from cache reports when its data was observed. A consumer can
       compute the age without asking a second question.
 - [ ] 4. Every value in t3code's session-status vocabulary
-      (`idle`, `starting`, `running`, `ready`, `interrupted`, `stopped`, `error`) plus
-      thread-level settledness maps to a client status the client renders as a word rather
-      than as `UNKNOWN`. A value outside that set still reports `UNKNOWN` naming the value.
-- [ ] 5. A row with **no thread** reports its own reason ("this row has no t3code thread"),
-      distinct from the four snapshot-level reasons in criterion 2.
+      (`idle`, `starting`, `running`, `ready`, `interrupted`, `stopped`, `error`) combined with
+      thread-level settledness maps to a rendered word exactly as the table in **Decision 1 —
+      the session-state mapping** gives it, including its stated precedence. A value outside
+      that enum still reports `UNKNOWN` naming the value. The enumerating test derives its
+      value list from the generated contract, not from a typed list.
+- [ ] 4b. The client gains exactly the two new row words the mapping table introduces
+      (`STOPPED`, `ERROR`) and no others, so a crashed or torn-down session is never rendered
+      as `SETTLED`.
+- [ ] 5. A row with **no thread** reports its own row-specific reason ("this row has no t3code
+      thread"), distinct from every snapshot-level status in criterion 2.
+- [ ] 5b. The in-repo client validator accepts the new snapshot statuses and continues to
+      reject anything outside the set. A client build that predates them classifies the payload
+      as `unreadable` and blanks that machine — **fail-closed is the intended behaviour**, it is
+      recorded as the mixed-version cost, and the validator's allow-list is not loosened to make
+      a test pass.
 - [ ] 6. Building the provider never blocks the request that reads it: the snapshot function
       stays synchronous, performs no network call, and a workspace whose backend is
       connecting, cooling down or misconfigured is answered immediately with that state.
@@ -183,6 +209,11 @@ is written down where the next reader will find it.
 - [ ] 12. `afx pair issue` prints a token exactly once to stdout, records a non-empty
       `authority` naming the invoking operator, and the token appears in no log file and in no
       argv.
+- [ ] 12b. `afx pair issue` can mint **both** purposes — `machine-credential` and
+      `client-session` — and `purpose` is a **required** argument with no default. A command
+      that mints only `machine-credential` cannot open the human session criteria 7 and 8
+      depend on, so this is what makes those criteria reachable rather than a flag detail.
+      Refusing an unrecognised purpose happens at issue time, not at redemption.
 - [ ] 13. `afx pair list` reports outstanding tokens and paired machines, including revoked
       ones marked as revoked, and prints no secret or verifier.
 - [ ] 14. `afx pair revoke <machine>` succeeds for an operator holding no machine credential
@@ -190,11 +221,23 @@ is written down where the next reader will find it.
       approval capabilities.
 - [ ] 15. After `afx pair revoke`, that machine's every authenticated request fails closed
       with `MACHINE_CREDENTIAL_REVOKED`, and no other machine's records are touched.
-- [ ] 16. The live `dev-check` credential on the development machine is revocable by the new
-      command. This is the concrete case the issue names, and it is verified by doing it.
+- [ ] 16. The live `dev-check` credential on the development machine is revoked using the new
+      command. This is the concrete case the issue names, and it is verified by doing it —
+      **once, by the operator, as a recorded manual step**. It writes the real
+      `~/.agent-farm/machines/`, outside `CODEV_AGENT_FARM_DIR` isolation, and `revoke()`
+      returns false on an already-revoked record, so it is not idempotent and **must not be a
+      suite step**: automating it would have CI revoke real credentials. The review records what
+      was run and its output, and names the recovery — re-pair that machine — for a reader who
+      needs the credential back.
 - [ ] 17. The security trade behind criterion 14 is recorded in
       `146-approval-threat-model.md` in the terms that document already holds: what the
-      mechanism establishes, what it does not, and which test pins the residual.
+      mechanism establishes, what it does not, and which test pins the residual. It must answer
+      the **availability** argument, not only the confidentiality one: the route table's own
+      rationale privileges revocation because "an agent that could revoke could deny a human
+      their gate", and a shipped command makes that denial a one-liner. Both route `rationale`
+      strings (`machine-credential-revoke` and `approval-capability-revoke-machine`) are
+      reconciled with the command in the same change, so the repository does not carry two
+      documents asserting opposite things about one boundary.
 - [ ] 18. `agent-approval-path.test.ts`'s residual assertion — that a builder minting for
       itself records exactly that authority — still passes, or fails **because real authority
       was added**, with the change surfacing there rather than anywhere else.
@@ -285,29 +328,73 @@ Bounded by the existing cooldown and by the fact that unconfigured workspaces co
 
 **Recommended: 1B.**
 
-#### Staleness policy
+#### Decision 1 — the snapshot status set
+
+Eight statuses. They are not a taxonomy for its own sake: six of them are the exact answers
+the existing connector already computes, and collapsing any pair would spell two different
+operator remedies with one word — the failure this initiative is organised against.
+
+| Status | Means | Emitted by |
+|---|---|---|
+| `not-provided` | this host passes no provider at all | any host that wires none; retained for the agent-host tool and for compatibility |
+| `not-configured` | this workspace names no t3code server | the provider, from the config read |
+| `misconfigured` | a `threads` block that is half-written | the provider, from the connector's `misconfigured` |
+| `connecting` | a connect is in flight; nothing observed yet | the provider, from the connector's `connecting` |
+| `cooling-down` | the last connect failed and no retry happens until the window passes; carries when and why | the provider, from the connector's `cooling-down` |
+| `unreachable` | configured and reached for, and not reachable now | the provider, and any host observing unreachability another way |
+| `available` | observed within the freshness window; carries `observedAt` | the provider, from a fresh cache entry |
+| `stale` | last observed before the freshness window; carries `observedAt` and the age | the provider, from an aged cache entry |
+
+`connecting` and `cooling-down` must not collapse into `unreachable`: one resolves on its own
+and the other will not until a timer passes, which is the difference between "wait" and "go
+look at your server".
+
+#### Decision 1 — staleness policy
 
 The cache must never be able to say "settled" when it means "I last looked a while ago". So:
 
-- The snapshot type gains an explicit `not-configured` status — a workspace with no t3code
-  server is a fourth fact, not a spelling of `not-provided`.
-- `available` carries `observedAt` and means observed within a freshness window.
-- Beyond that window the cache reports `stale` with its age and its last-observed content
-  clearly labelled as such. A `stale` snapshot never derives `settled`; the client shows the
-  same STALE treatment it already gives a disconnected machine, for the same reason.
-- Beyond a longer discard window, the cached content is dropped and the snapshot reports
-  unreachable or not-configured on its own merits. Holding an hours-old session status is
-  holding a wrong answer.
+- `available` means observed within a freshness window, and carries `observedAt`.
+- Past that window the entry reports `stale` with its age and its last-observed content
+  labelled as such. **A `stale` snapshot never derives `SETTLED`** — a row whose last-known
+  content would render `SETTLED` renders `UNKNOWN` carrying the age instead, because "it had
+  finished when I last looked" is not "it has finished". Rows whose last-known content is
+  active render their word with the STALE treatment the client already gives a disconnected
+  machine.
+- Past a longer discard window the cached content is dropped and the status falls back to
+  reachability on its own merits. Holding an hours-old session status is holding a wrong
+  answer.
 
 The exact windows are an open question below; the *shape* — three bands, an age on the wire,
-and no derivation of `settled` from stale data — is the decision.
+and no derivation of `SETTLED` from stale data — is the decision.
 
-#### The vocabulary mapping
+#### Decision 1 — the session-state mapping
 
-t3code's `session.status` and the thread's settledness map onto the client's five words. The
-mapping is stated in the plan and asserted by a test that enumerates the contract's enum, so a
-server that adds a state fails a test rather than rendering as UNKNOWN in the field. An
-unmapped value still renders UNKNOWN naming the value — that branch stays.
+Pinned here rather than in the plan: this is what a row says to a person, so it is a WHAT.
+
+**Precedence, highest first:** a requested porch gate → session `error` → session activity
+(`running`, `starting`) → thread settledness → remaining session status. Porch outranks
+everything, as it already does. `error` outranks activity because a session that has failed is
+not doing work, whatever it last reported. Settledness outranks the idle statuses but not the
+active ones: `settledAt` is a past fact and a running turn is a present one.
+
+| Observation | Rendered |
+|---|---|
+| porch gate `pending` with `requested_at` | `GATE <name>` |
+| session `error` | `ERROR`, carrying `lastError` |
+| session `running` | `TURNING` |
+| session `starting` | `WORKING` |
+| session `ready` or `idle`, thread settled (`settledAt` set or `settledOverride`) | `SETTLED` |
+| session `ready` or `idle`, thread not settled | `WORKING` |
+| session `interrupted` or `stopped`, thread settled | `SETTLED` |
+| session `interrupted` or `stopped`, thread not settled | `STOPPED`, the reason naming which |
+| session absent (`null`) on an observed thread | `UNKNOWN`, row-specific |
+| any value outside the contract's enum | `UNKNOWN` naming the value |
+
+**Two new row words, and no more: `STOPPED` and `ERROR`.** Without them a torn-down or crashed
+session folds into `SETTLED`, which reads as "this finished its work" for a session that did
+not. `SETTLED` keeps meaning finished. The test that enumerates this table derives its value
+list from the generated contract rather than from a typed list, so a server that adds a state
+fails a test here rather than rendering `UNKNOWN` in the field.
 
 ### Decision 2 — where the asynchronous approval operation lives
 
@@ -394,8 +481,20 @@ revocation takes effect on the next request without a restart or an invalidation
 no new power — the threat model already states that a same-UID process can write these stores,
 and `PairingStore.issue()` already relies on exactly that access. What changes is that the
 capability is now *used* by a shipped command, so it must be stated rather than left implicit.
-*Risk:* Low, and honestly describable. A same-UID agent could already forge a capability
-record; being able to revoke one is strictly less dangerous than being able to mint one.
+
+**The objection this has to answer is availability, not confidentiality.** The route table
+privileges revocation with the words "an agent that could revoke could deny a human their
+gate" — that is a denial-of-service argument, and "a same-UID agent could already forge a
+capability" does not reach it. What does reach it: a same-UID agent can already write these
+stores directly, so it can already perform that denial, and it can also simply delete or
+corrupt the files. A shipped command makes the denial a one-liner rather than making it
+possible. The trade being accepted is therefore *convenience of an attack that was already
+available*, in exchange for the operator being able to withdraw access at all — and the
+alternative on offer is the status quo, where the human cannot revoke and the agent can still
+deny. That reasoning goes in the threat model, and the two route rationale strings are updated
+so the repository does not assert the opposite of its own command.
+
+*Risk:* Low, and honestly describable.
 
 #### Approach 3C: Keep the HTTP route and relax its auth
 
@@ -431,6 +530,11 @@ also what they do today through the dev script.
   by criterion 10. Resuming is more, and re-running phase checks after a restart may be the
   wrong default when the gate may already be approved. Recommendation: report only, and let the
   operator resubmit against a snapshot that now shows the gate's real state.
+- **What bounds the number of concurrent approval operations.** Each one can spawn a full
+  check set — a repository build and test suite — from Tower's process, and nothing in the
+  design as drafted stops N of them starting at once. A per-workspace or per-project
+  concurrency limit is the likely answer, with the refusal being its own distinguishable
+  state rather than a queue that hides the wait.
 - **How long an approval operation record is retained.** Long enough that a client returning
   after a disconnect still finds its answer; short enough that the store does not accumulate.
   The pairing store's tombstone retention is the nearest existing precedent.
@@ -453,6 +557,14 @@ also what they do today through the dev script.
   and the client renders a reason naming that.
 - A configured workspace whose server cannot be reached reports `unreachable` with the
   connector's own message, and a row does not fall back to `settled`.
+- Each of `connecting`, `cooling-down` and `misconfigured` reaches the wire as itself and is
+  not collapsed into `unreachable`; `cooling-down` carries when the failure was and why.
+- The client validator accepts every one of the eight statuses and rejects a ninth invented
+  value; a payload carrying an unrecognised status classifies as `unreadable` rather than
+  `older-server`, and a payload with the field absent still classifies as `older-server`.
+- A row whose last-known content would render `SETTLED` renders `UNKNOWN` with the age once
+  its entry is stale, while a row whose last-known content is active still renders its word
+  under the stale treatment.
 - A cache entry inside the freshness window reports `available` with `observedAt`; the same
   entry past the window reports `stale` with its age and derives no `settled`; past the discard
   window the content is gone and the status reflects reachability alone.
@@ -489,11 +601,20 @@ also what they do today through the dev script.
 - `issue` prints one token, and the token string appears in no file the command writes and in
   no captured log stream. Asserted over the whole captured output, not over a known variable.
 - `issue` records a non-empty authority naming the invoking operator, and refuses an empty one.
+- `issue` mints each purpose, and a token minted for one is refused at the other's ceremony —
+  and, per the store's existing behaviour, is **not consumed** by that refusal, so it still
+  works at the ceremony it was minted for.
+- `issue` with no purpose, or an unrecognised one, is refused at issue time with a message
+  naming the two valid values. It does not silently default.
+- A `client-session` token opens a human session, and that session can reach the approval
+  routes — the end-to-end link from the operator command to criterion 7, driven rather than
+  asserted.
 - `list` shows outstanding, redeemed, expired and revoked records without printing a secret or
   a verifier.
 - `revoke` succeeds with no credential present and with Tower not running; a subsequent
   authenticated request from that machine fails closed with `MACHINE_CREDENTIAL_REVOKED`, and a
-  second machine's requests continue to succeed.
+  second machine's requests continue to succeed. Driven against a scratch store under
+  `CODEV_AGENT_FARM_DIR`, never against the operator's real one.
 - `revoke` withdraws the machine's approval capabilities as well as its credential, and reports
   the two counts separately rather than as one boolean.
 - `revoke` on a machine that has nothing live reports that as its own answer, not as an error.
@@ -522,6 +643,10 @@ also what they do today through the dev script.
 | The pairing token leaks into a log, a shell history or argv | Low | High | Print once to stdout; never accept or emit it as an argument; assert its absence over the whole captured output |
 | Updating the phase-11 wiring test is mistaken for deleting an inconvenient check | Low | Medium | Update in place with a message that says what the wired state now guarantees; the issue names this expectation explicitly |
 | Scope creep into issue #234's static mount or tiling | Medium | Medium | Named as out of scope in Constraints; no client layout work in this spec |
+| `afx pair issue` ships minting only one purpose, leaving criterion 9b as unreachable as before | Medium | High — it is the whole point of the command | Criterion 12b makes both purposes and a required `purpose` argument part of the contract, and a test drives the `client-session` token all the way to an approval route |
+| A red validator test is "fixed" by loosening the snapshot allow-list | Medium | High — it would delete the client's refuse-what-you-cannot-read rule | Criterion 5b states fail-closed as intended and names the allow-list as the thing that must stay strict |
+| Criterion 16 is automated into the suite and CI revokes real credentials | Low | High | Criterion 16 names it a manual operator action, outside `CODEV_AGENT_FARM_DIR`, non-idempotent, with the re-pair recovery stated |
+| N concurrent approval operations each spawn a full check set from Tower | Medium | Medium | Raised as an Important open question with a per-workspace limit as the likely answer; the refusal must be its own state, not a hidden queue |
 
 ## References
 
