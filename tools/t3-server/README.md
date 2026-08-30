@@ -154,7 +154,7 @@ user's own T3 Code settings are never touched.**
 
 ```bash
 node tools/t3-server/collect-phase10-evidence.mjs claude-1h opencode-1h \
-  --long-gate gate-24h --long-gate-started <iso8601>
+  --long-gate gate-24h --long-gate-started <iso8601> --long-gate-harness <harness>
 ```
 
 Assembles the run outputs from `.runtime-runs/` into
@@ -165,7 +165,15 @@ it, so the evidence is regenerated every time the runs are — and a procedure t
 someone's memory gets done differently the second time.
 
 It exits `3`, never `1`, when a named run is missing. "The run has not finished" and "the run
-failed" are different facts.
+failed" are different facts. It also refuses `--long-gate` without both a start and a harness:
+recording a started run with no start recorded records nothing, and every run in this program
+says which driver produced it — the long gate does not get an exception, and it used to get one
+by defaulting to `claude`.
+
+`describes` in the output records a sha256 of the runner, the module witness, the resubscriber
+and this launcher. The launcher is in that list because it changes what a run MEANS rather than
+just how it starts: it writes the provider opt-in without which a turn on some drivers is
+refused.
 
 ## CI
 

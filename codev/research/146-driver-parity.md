@@ -35,6 +35,9 @@ server and one data directory per run. Reproduce with:
 ```
 T3_NODE=/absolute/path/to/node tools/t3-server/full-protocol-run.sh 3803 claude   claude-haiku-4-5 3600 claude-1h
 T3_NODE=/absolute/path/to/node tools/t3-server/full-protocol-run.sh 3804 opencode xai/grok-4.6    3600 opencode-1h
+
+node tools/t3-server/collect-phase10-evidence.mjs claude-1h opencode-1h \
+  --long-gate gate-24h --long-gate-started 2026-08-30T08:28:53Z --long-gate-harness claude
 ```
 
 Raw evidence: `codev/research/146-phase10-live-evidence.json`, regenerated from the run outputs
