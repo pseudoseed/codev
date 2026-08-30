@@ -576,3 +576,31 @@ fork head. Behind and unrelated now say so — otherwise a genuinely broken chec
 tolerated case for three phases.
 
 Fork commit `992b781f4314`. Codev repo: build green, 7283 passed, 55 skipped, 0 failed.
+
+### Phase 2, review round 2 — both lanes APPROVE
+
+opencode: no issues. claude: APPROVE with three non-blocking items, all real, all fixed.
+
+1. **Nothing pinned the two `CODEV_SCHEMA_GUARD_*` signals.** They *are* the mitigation for staying
+   out of the migration registry, and a rename or a merge into one line would have broken that deal
+   while every other test stayed green. Now asserted: APPLIED fires naming the columns it added,
+   NOOP fires on the next start, and neither ever fires alongside the other.
+2. **`apply-codev-guard.ts` called `applyCodevSchemaGuard` while its docstring said
+   `codevSchemaGuardStep`.** Fixed by making the code match the docstring, which is also the better
+   half: the step is what production calls and it emits the signal, so the one test that runs the
+   guard against a real file now exercises the logging path too.
+3. **The 8b evidence recorded `forkRoot` but no fork commit.** A path is not a version. Added
+   `forkCommit` — and the gap was live: the first regenerated evidence named `992b781f`, then a fork
+   commit changed the guard and the evidence still described the older one. Added an assertion that
+   the recorded commit equals the fork checkout's HEAD, skipping (not passing) when the fork is
+   absent.
+
+Fork `e1a858434a80`. Codev: build green, **7285 passed, 55 skipped, 0 failed**. 75 tests in the
+spec 250 suite.
+
+### Issue #199
+
+Per the architect's displacement ruling the classify-churn lesson stays COLD. The three instances
+from this project are filed on #199 as evidence instead — comment 5471612980 — with the argument
+that criterion 8b is a rung below the current slot-4 wording: there was no check to answer wrongly,
+because the harness had no verb that could host one, and an absence has no output to inspect.

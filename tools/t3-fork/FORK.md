@@ -137,6 +137,7 @@ against that file rather than against a layer it assembles.
 | 1 | `082e6ea521861fff37b90fcd789b5eaa5ef5d6a6` | Branch `codev` created at `upstreamBase`. No customization yet — the two identities exist and are equal on purpose, so every new assertion has a known answer. |
 | 2 | `1a414cee8409a407977ff6c6505fad1ab82f2ec8` | `role` and `parentThreadId` on the thread record, through the contract, the projector and both persistence paths. Columns applied by `apps/server/src/codev/schemaGuard.ts`, outside upstream's migration registry. |
 | 2 | `992b781f4314ec1df1abb752c7c9c5378ec13c26` | Review fixes: the "upstream migration still runs" test goes through the migrator instead of a raw `ALTER TABLE`, and `apps/server/scripts/apply-codev-guard.ts` runs the real guard against a file-backed database for criterion 8b. |
+| 2 | `e1a858434a8096d7a82e05347f8159d94f42c0b1` | The two `CODEV_SCHEMA_GUARD_*` log signals are pinned by a test — they are the whole mitigation for staying out of the migration registry and nothing enforced they stay two. |
 
 ### Migration 900 is abandoned, and must stay abandoned
 

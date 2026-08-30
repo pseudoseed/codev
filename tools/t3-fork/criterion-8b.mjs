@@ -84,6 +84,22 @@ function preForkServerOpens(label, { keepData }) {
   return opened;
 }
 
+/**
+ * The fork commit the guard came from.
+ *
+ * `forkRoot` alone names a path, and a path is not a version: the same evidence
+ * file would describe any guard that checkout happened to hold. Recorded so a
+ * reader can say WHICH guard passed, and so a later run against a different fork
+ * commit is visibly a different measurement.
+ */
+function forkCommit() {
+  try {
+    return execFileSync('git', ['-C', fork.root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  } catch {
+    return null;
+  }
+}
+
 const evidence = {
   criterion:
     'Spec 250 criterion 8b: the server is killed partway through applying the Codev columns and ' +
@@ -91,6 +107,7 @@ const evidence = {
   preForkCliVersion: pin.cliVersion,
   upstreamBase: pin.upstreamBase,
   forkRoot: fork.root,
+  forkCommit: forkCommit(),
   dbPath,
   steps: {},
 };

@@ -1115,6 +1115,39 @@ describe('spec 250: criterion 8b, the kill test', () => {
     expect(evidence.upstreamBase).toBe(pin.upstreamBase);
   });
 
+  it('names WHICH fork commit the guard under test came from', () => {
+    // A path is not a version: `forkRoot` alone would describe whatever that
+    // checkout happened to hold at the time, so the evidence could not say which
+    // guard passed.
+    expect(evidence.forkCommit, 'the evidence must record the fork commit, not just its path')
+      .toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  /**
+   * The fork half of the staleness guard.
+   *
+   * The mtime check below covers this repo's scripts. It cannot see the fork,
+   * where the guard itself lives — and the evidence went stale exactly that way
+   * once already: a fork commit changed the guard, and the recorded run still
+   * named the commit before it. Skipped rather than failed when the fork checkout
+   * is absent, because "I could not look" is not "it matches".
+   */
+  it('describes the fork commit that is actually checked out', () => {
+    const forkRoot = process.env.T3CODE_FORK_ROOT ?? DEFAULT_FORK_ROOT;
+    if (!existsSync(forkRoot)) return;
+    const head = spawnSync('git', ['-C', forkRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+    if (head.status !== 0) return;
+
+    expect(
+      evidence.forkCommit,
+      'the criterion 8b evidence names a different fork commit than the one checked out — ' +
+        'regenerate it with\n' +
+        '  export T3_NODE=/absolute/path/to/node T3_HARNESS_PORT=<free port>\n' +
+        '  node tools/t3-fork/criterion-8b.mjs > codev/research/250-criterion-8b-evidence.json\n' +
+        'rather than trusting a result recorded against an older guard.',
+    ).toBe(head.stdout.trim());
+  });
+
   it('started from a database the pre-fork server itself created and migrated', () => {
     expect(evidence.steps.preForkServerCreatedDatabase).toBe(true);
     expect(
@@ -1159,6 +1192,8 @@ describe('spec 250: criterion 8b, the kill test', () => {
       join(repoRoot, 'tools', 't3-fork', 'crash-apply-child.mjs'),
       join(repoRoot, 'tools', 't3-server', 't3-server.mjs'),
     ];
+    // The fork-side script the evidence depends on lives outside this repo, so it
+    // cannot be stat'd here. `forkCommit` above is what pins that half.
     for (const source of sources) {
       expect(
         evidenceAge,
