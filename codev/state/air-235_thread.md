@@ -157,3 +157,17 @@ file in 36 seconds.
   restarted twice, both times because the code under it had changed and a day-long run
   describing code that no longer exists is not evidence. Both restarts are recorded in
   `146-long-gate-evidence.md`.
+
+## The live block has actually been run
+
+A `T3_LIVE=1` block that has never executed is a code path with a docstring. This one was run
+end to end on port 3807 with a 60-second gate under claude/claude-haiku-4-5: server up, the whole
+protocol, the branch pushed and merged, server stopped, 415s, all ten criteria `met`. The
+recorded runs use 3600 because the criterion needs a real hour; the block itself needed proving
+once.
+
+Running it also found a hazard worth the trip. The block calls `t3-server.mjs stop` then `start`,
+and both DEFAULT to port 3799 and `tools/t3-server/.runtime` — and 3799 is the architect's own
+server. A live run with the variables unset would have stopped a colleague's server as its first
+act, presenting as their session dying for no reason. An unset port is now refused rather than
+defaulted, and the refusal is asserted so it reads as a refusal and not as a pass.
