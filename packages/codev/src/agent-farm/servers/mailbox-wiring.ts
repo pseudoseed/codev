@@ -442,13 +442,15 @@ async function deliverToThread(
   // the failure this project has spent two days on; a message that arrives and runs itself
   // is the worse half of it.
   //
-  // Refused rather than approximated. The row stays held and stays visible in `afx inbox`,
-  // which is the outcome `--no-enter` asks for, minus the composer.
+  // Refused rather than approximated, and the DELIVERY PATH THEN ENDS THE ROW — it does
+  // not hold it. A hold that can never clear is retried every tick and raises a starvation
+  // notice with no remedy that applies, so `deliverAgentMail` dismisses such a row and this
+  // is its backstop for anything that reaches `writeMessage` another way.
+  //
+  // Both of these sentences said "the row stays held" until round 5, while the caller
+  // dismissed it. One rule in two places with one of them wrong is how the next reader is
+  // misled — which is the whole reason it was worth correcting.
   if (noEnter) {
-    // The row does NOT stay held — the delivery path ends it terminally, because a hold
-    // that can never clear raises a starvation notice with no remedy. This comment said
-    // "stays held" while the caller dismissed it: one rule, two files, and one of them
-    // wrong is how the next reader is misled.
     log('ERROR', `[mailbox] ${where}: refusing a --no-enter message. A thread has no composer — `
       + `thread.turn.start is the submit — so delivering it would RUN a message that was sent to `
       + `sit and wait for a human. This is the backstop; the delivery path ends such a row `
