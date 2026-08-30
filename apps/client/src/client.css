@@ -216,6 +216,9 @@ html, body, #root {
 .stamp-turning { color: var(--moss); }
 .stamp-working { color: var(--graphite); }
 .stamp-settled { color: var(--graphite); border-style: dashed; }
+.stamp-stopped { color: var(--ochre); border-style: dashed; }
+/* Solid, not dotted: an errored session is a definite observation, not an absent one. */
+.stamp-error { color: var(--chalk); background: var(--rust); border-color: var(--rust); }
 .stamp-unknown { color: var(--ochre); border-style: dotted; }
 
 /* ---------- signals ---------- */

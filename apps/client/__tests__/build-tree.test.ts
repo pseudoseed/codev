@@ -39,7 +39,7 @@ const architect: ThreadIdentity = {
   roleId: 'main',
   workspacePath: '/w',
   management: 'unmanaged',
-  sessionState: 'ready',
+  session: { status: 'ready', settled: false },
 };
 
 function builder(id: string, over: Partial<ThreadIdentity> = {}): ThreadIdentity {
@@ -50,7 +50,7 @@ function builder(id: string, over: Partial<ThreadIdentity> = {}): ThreadIdentity
     workspacePath: '/w',
     worktree: `/w/.builders/${id}`,
     management: 'managed',
-    sessionState: 'running',
+    session: { status: 'running', settled: false },
     ...over,
   };
 }

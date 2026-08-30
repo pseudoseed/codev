@@ -1,5 +1,6 @@
 import type { GateApprovalHandle } from '../gate/GatePanel.js';
 import type { MachineNode } from './build.js';
+import type { T3codeObservation, T3codeReachability } from '../connection/types.js';
 import { ThreadRowView } from './ThreadRowView.js';
 
 function relative(iso: string, nowMs: number): string {
@@ -104,6 +105,51 @@ function ConnectionStrip({ node, nowMs }: { node: MachineNode; nowMs: number }) 
   );
 }
 
+/**
+ * The machine-level account of why rows cannot report a session.
+ *
+ * STATED ONCE, HERE, and never repeated under every row: a server-wide cause
+ * printed on each line buries the rows that have something specific to say under
+ * identical text. Each branch names a different remedy — upgrade the server,
+ * configure one, fix the config, wait, wait for a timer, check the server — so
+ * none of them may be merged for brevity.
+ *
+ * `stale` is the branch that must not read as an outage. The server has content
+ * and has stopped watching, so the rows still show their last-known word; what
+ * this says is how much to trust it.
+ */
+function sessionVisibilityNote(
+  visibility: T3codeReachability,
+  observation: T3codeObservation | undefined,
+): string {
+  const porchIsCurrent = ' Gates and phases come from porch and are current.';
+  switch (visibility) {
+    case 'not-configured':
+      return 'This workspace has no t3code server configured, so no row has a session to report.'
+        + porchIsCurrent;
+    case 'misconfigured':
+      return 'This workspace\u2019s t3code configuration is incomplete, so no session could be '
+        + 'observed. This is a configuration fault, not an unreachable server.' + porchIsCurrent;
+    case 'connecting':
+      return 'This server is still connecting to t3code. Session state should appear shortly.'
+        + porchIsCurrent;
+    case 'cooling-down':
+      return 'This server\u2019s last t3code connection failed and it is waiting before it '
+        + 'retries, so session state is unavailable until then.' + porchIsCurrent;
+    case 'unreachable':
+      return 'This machine cannot reach t3code, so no row can say whether its session is '
+        + 'working, turning or settled.' + porchIsCurrent;
+    case 'stale':
+      return 'This server has stopped watching t3code. Session words below are last-known, '
+        + `observed ${observation ? `${Math.max(0, Math.round(observation.ageMs / 1000))}s` : 'an unknown length of time'} `
+        + 'ago, and a row that looked settled is reported as unknown rather than finished.'
+        + porchIsCurrent;
+    default:
+      return 'This server does not report session state, so no row can say whether its session '
+        + 'is working, turning or settled.' + porchIsCurrent;
+  }
+}
+
 export function MachineSubtree({ node, nowMs, approval }: {
   node: MachineNode;
   nowMs: number;
@@ -143,9 +189,7 @@ export function MachineSubtree({ node, nowMs, approval }: {
 
           {workspace.sessionVisibility !== 'available' ? (
             <p className="session-note">
-              {workspace.sessionVisibility === 'unreachable'
-                ? 'This machine cannot reach t3code, so no row can say whether its session is working, turning or settled. Gates and phases come from porch and are current.'
-                : 'This server does not report session state, so no row can say whether its session is working, turning or settled. Gates and phases come from porch and are current.'}
+              {sessionVisibilityNote(workspace.sessionVisibility, workspace.sessionObservation)}
             </p>
           ) : null}
 

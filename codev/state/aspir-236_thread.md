@@ -104,3 +104,65 @@ the existing connector already computes, and `connecting` vs `cooling-down` is t
 between "wait" and "go look at your server". Fixed my own four/five arithmetic slip between
 criteria 2 and 5. Added the concurrency bound on approval operations as an Important open
 question.
+
+### Plan iteration 1 — consultation
+
+Both lanes REQUEST_CHANGES, both HIGH, and again they converged. The lead finding was one I
+had missed entirely and both found independently: **the plan asked for a mapping the wire could
+not carry.** `ThreadRegistrySnapshot.t3code` was a bare status string on the server
+(`thread-registry.ts:62`) and mirrored as a bare string on the client (`types.ts:71`), so
+`observedAt`, the stale age and thread settledness had no path to `deriveRowStatus` at all.
+Criteria 3 and 4 were unimplementable as written.
+
+Decisions taken in response, all in phase 1:
+
+- **`t3code` stays a string; `t3codeObservation` is a sibling.** Chosen over promoting `t3code`
+  to an object because `snapshotRejection` keys `older-server` on the field being *absent* — an
+  object-valued `t3code` would make a newer client reject an older server's bare string as
+  corrupt and blank the whole machine. The sibling keeps that direction validating.
+- **`ThreadIdentity.sessionState: string` → `session: { status, settled, lastError? }`.** One
+  string cannot carry both a session status and thread settledness, and both are needed:
+  `stopped` + settled finished, `stopped` + unsettled did not.
+- **`readThreadRegistry` attaches live threads on `stale` too**, not only `available`.
+  Otherwise a stale snapshot carries no per-row content and the stale rule has nothing to act on.
+
+Also fixed from review: `observedAt` now means **subscription liveness**, not event cadence
+(`subscribeThread` has no cadence, so an idle-but-live session would have aged into stale);
+the maintainer must rescan thread ids rather than read them once; the snapshot path must never
+call `requestThreadBackend` (it connects and does a five-layer config read); the startup pass is
+scoped by owning host/pid; handler names must share no prefix with `handleGateApprove`
+(`approval-writes.test.ts:138` slices source from `indexOf('function handleGateApprove')`); and
+`--authority` was both required and defaulted in my draft.
+
+`two-machines.spec.ts:235` is criterion 11's only end-to-end assertion and phase 6 reddens it.
+Named in the plan with what it becomes rather than left to be discovered as a red test.
+
+## Phase 1 — snapshot vocabulary and the session-state mapping
+
+Landed. Server: the eight-status union with payloads, `T3codeObservation`, `LiveThreadSession`,
+attach-on-stale, and `T3CODE_UNREACHABLE` extended to `cooling-down` but deliberately **not** to
+`not-configured` / `misconfigured` — a workspace that names no server has nothing to be
+unreachable, and borrowing that code would send an operator to check a server that does not
+exist.
+
+Client: the mapping table with its precedence (porch → `error` → activity → settledness → idle),
+two new words `STOPPED` and `ERROR`, the stale rule, per-status machine-level reasons, and the
+validator extended to the eight statuses plus a structured session and observation.
+
+**The old mapping recognised a word no server sends.** `fromSessionState` had a `case 'settled'`,
+but `settled` is not a t3code session status — settledness is a thread-level field. So the client
+had a branch for a value it would never receive and no branch for four values it would (`idle`,
+`interrupted`, `stopped`, `error`). That is now pinned by a test that reads the enum out of
+`packages/types/src/t3/generated/schema.json` rather than from a typed list, with an anchor
+asserting the read actually found `idle` and `error` so a schema-shape change cannot make the
+loop silently verify nothing.
+
+### Two environment notes for whoever picks this up
+
+1. **The worktree had no `node_modules`.** `pnpm install --frozen-lockfile` at the worktree root
+   was needed before anything could typecheck or run.
+2. **`packages/codev/skeleton/` is a gitignored build output and its absence fails 18 test files
+   / 80 tests** that have nothing to do with the change — protocol resolution falls back and
+   `Unknown review type "pr" ... protocols available here: "impl"` is what it looks like. `pnpm
+   --filter @cluesmith/codev run copy-skeleton` fixes it. I nearly recorded those 80 as a
+   regression; they are not.

@@ -126,9 +126,16 @@ describe('criterion 3 is NOT met by the production path, and this records why', 
     // The field the client reads to tell "asked and got nothing" from "never
     // asked". Without it the two are the same payload.
     expect(snapshot.t3code).toBe('not-provided');
-    // And no identity carries a session state to derive from.
+    // And no identity carries a session to derive from.
+    //
+    // The field was `sessionState`, a bare string, until the eight-status
+    // vocabulary landed. It is now a structured `session` because deciding
+    // whether a row is finished needs the session's status AND the thread's
+    // settledness — two facts on two objects in t3code's contract, which one
+    // string could not carry. This assertion's MEANING is unchanged: nothing was
+    // observed, and that is not "settled".
     for (const identity of snapshot.identities) {
-      expect(identity.sessionState).toBeUndefined();
+      expect(identity.session).toBeUndefined();
     }
   });
 

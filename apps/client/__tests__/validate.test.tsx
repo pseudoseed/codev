@@ -83,12 +83,84 @@ describe('validateSnapshot refuses a shape it cannot render', () => {
     expect(validateSnapshot(bad)).toBeNull();
   });
 
+  /*
+   * THE EIGHT-STATUS VOCABULARY, AND THE CROSS-VERSION RULE AROUND IT.
+   *
+   * The set is an allow-list on purpose: a value this build does not know is a
+   * payload it cannot read, and rendering half of one is what this validator
+   * exists to prevent. The allow-list is NOT loosened to make a test pass — if a
+   * new status is added to the server, it is added here too, deliberately.
+   */
+  it.each([
+    'not-provided', 'not-configured', 'misconfigured', 'connecting',
+    'cooling-down', 'unreachable', 'available', 'stale',
+  ])('accepts the %s snapshot status', (t3code) => {
+    expect(validateSnapshot(snapshot({ t3code }))).not.toBeNull();
+  });
+
+  it('still refuses a status outside the set rather than rendering half a payload', () => {
+    expect(validateSnapshot(snapshot({ t3code: 'sideways' }))).toBeNull();
+  });
+
+  /*
+   * WHY `t3codeObservation` IS A SIBLING RATHER THAN `t3code` BECOMING AN OBJECT.
+   *
+   * `snapshotRejection` tells an older server from a corrupt payload by whether
+   * `t3code` is ABSENT. Promote `t3code` to an object and an older server's bare
+   * string becomes "corrupt", blanking a whole machine over a version
+   * difference. As a sibling, the older server validates and simply carries no
+   * age — and an unknown age is handled as unknown, never as fresh.
+   */
+  it('accepts an older server: a valid status and no observation', () => {
+    const older = snapshot({ t3code: 'available' });
+    delete (older.protocol as Record<string, unknown>).t3codeObservation;
+    expect(validateSnapshot(older)).not.toBeNull();
+    expect(snapshotRejection(older)).toBeNull();
+  });
+
+  it('accepts a well-formed observation', () => {
+    const ok = snapshot({ t3code: 'stale' });
+    (ok.protocol as Record<string, unknown>).t3codeObservation =
+      { observedAt: '2026-08-29T10:00:00Z', ageMs: 5000 };
+    expect(validateSnapshot(ok)).not.toBeNull();
+  });
+
+  it.each([
+    ['a non-numeric age', { observedAt: '2026-08-29T10:00:00Z', ageMs: 'old' }],
+    ['an infinite age', { observedAt: '2026-08-29T10:00:00Z', ageMs: Infinity }],
+    ['no observedAt', { ageMs: 5000 }],
+    ['a non-object', 'recent'],
+  ])('refuses %s, because a present-but-malformed observation is unreadable', (_name, observation) => {
+    const bad = snapshot({ t3code: 'stale' });
+    (bad.protocol as Record<string, unknown>).t3codeObservation = observation;
+    expect(validateSnapshot(bad)).toBeNull();
+  });
+
+  it.each([
+    ['a session with no status', { settled: false }],
+    ['a session whose settled is a string', { status: 'idle', settled: 'yes' }],
+    ['a session whose lastError is a number', { status: 'error', settled: false, lastError: 5 }],
+    ['a session that is not an object', 'idle'],
+  ])('refuses %s on an identity', (_name, session) => {
+    const bad = snapshot();
+    const identities = (bad.protocol as Record<string, unknown>).identities as Array<Record<string, unknown>>;
+    identities[0].session = session;
+    expect(validateSnapshot(bad)).toBeNull();
+  });
+
+  it('accepts a well-formed identity session', () => {
+    const ok = snapshot();
+    const identities = (ok.protocol as Record<string, unknown>).identities as Array<Record<string, unknown>>;
+    identities[0].session = { status: 'running', settled: false };
+    expect(validateSnapshot(ok)).not.toBeNull();
+  });
+
   /* The client renders what porch says, so a null `currentPlanPhase` is normal. */
   it('accepts a null currentPlanPhase and an absent optional field', () => {
     const ok = snapshot();
     const identities = (ok.protocol as Record<string, unknown>).identities as Array<Record<string, unknown>>;
     delete identities[0].spawnedByArchitect;
-    delete identities[0].sessionState;
+    delete identities[0].session;
     expect(validateSnapshot(ok)).not.toBeNull();
   });
 });

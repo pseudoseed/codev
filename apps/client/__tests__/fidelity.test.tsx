@@ -28,7 +28,7 @@ const IDENTITIES: ThreadIdentity[] = [
     roleId: 'main',
     workspacePath: '/Users/x/dev/codev',
     management: 'unmanaged',
-    sessionState: 'ready',
+    session: { status: 'ready', settled: false },
   },
   {
     threadId: 'th-220',
@@ -38,7 +38,7 @@ const IDENTITIES: ThreadIdentity[] = [
     worktree: '/Users/x/dev/codev/.builders/air-220',
     management: 'managed',
     spawnedByArchitect: 'main',
-    sessionState: 'running',
+    session: { status: 'running', settled: false },
     porch: {
       projectId: '220',
       title: 'phase 11',
@@ -58,7 +58,7 @@ const IDENTITIES: ThreadIdentity[] = [
     worktree: '/Users/x/dev/codev/.builders/spir-146',
     management: 'managed',
     spawnedByArchitect: 'main',
-    sessionState: 'settled',
+    session: { status: 'idle', settled: true },
     porch: {
       projectId: '146',
       title: 'codev client',
@@ -238,7 +238,7 @@ describe('honest degradation', () => {
         protocol: {
           ...base.protocol,
           t3code: 'not-provided',
-          identities: base.protocol.identities.map(({ sessionState: _drop, ...rest }) => rest),
+          identities: base.protocol.identities.map(({ session: _drop, ...rest }) => rest),
         },
       },
     });
@@ -266,7 +266,7 @@ describe('honest degradation', () => {
         protocol: {
           ...base.protocol,
           identities: base.protocol.identities.map((identity) =>
-            identity.roleId === 'air-220' ? { ...identity, sessionState: 'hibernating' } : identity),
+            identity.roleId === 'air-220' ? { ...identity, session: { status: 'hibernating', settled: false } } : identity),
         },
       },
     });
@@ -298,7 +298,7 @@ describe('porch wins', () => {
         protocol: {
           ...base.protocol,
           identities: base.protocol.identities.map((identity) =>
-            identity.roleId === 'spir-146' ? { ...identity, sessionState: 'settled' } : identity),
+            identity.roleId === 'spir-146' ? { ...identity, session: { status: 'idle', settled: true } } : identity),
         },
       },
     });

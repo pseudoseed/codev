@@ -1,7 +1,9 @@
 import type {
   GateRequest,
+  T3codeObservation,
   T3codeReachability,
   ThreadIdentity,
+  ThreadSessionState,
 } from '../connection/types.js';
 
 /**
@@ -12,7 +14,14 @@ import type {
  * remedies, and spelling them the same way is the defect this client exists to
  * avoid — so `unknown` always carries `why`.
  */
-export type RowStatusKind = 'blocked' | 'turning' | 'working' | 'settled' | 'unknown';
+export type RowStatusKind =
+  | 'blocked'
+  | 'turning'
+  | 'working'
+  | 'settled'
+  | 'stopped'
+  | 'error'
+  | 'unknown';
 
 export interface RowStatus {
   readonly kind: RowStatusKind;
@@ -36,6 +45,8 @@ const WORD: Record<RowStatusKind, string> = {
   turning: 'TURNING',
   working: 'WORKING',
   settled: 'SETTLED',
+  stopped: 'STOPPED',
+  error: 'ERROR',
   unknown: 'UNKNOWN',
 };
 
@@ -44,41 +55,155 @@ export function statusWord(status: RowStatus): string {
 }
 
 /**
- * t3code's own session vocabulary, mapped to ours.
+ * t3code's session vocabulary AND the thread's settledness, mapped to ours.
  *
- * An unrecognised value is NOT quietly bucketed as working. A server newer than
- * this client would then be reported as running while it was doing something
- * this build has no word for.
+ * ## Why this takes two inputs
+ *
+ * t3code reports a session `status` — `idle | starting | running | ready |
+ * interrupted | stopped | error` — and records settledness SEPARATELY, on the
+ * thread, as `settledAt` / `settledOverride`. Neither answers "is this row
+ * finished" alone: a `stopped` session on a settled thread finished and was
+ * reaped, and a `stopped` session on an unsettled one did not finish. An earlier
+ * version of this function took one string and recognised `settled` as if it
+ * were a session status. It is not one, and no t3code server ever sends it.
+ *
+ * ## Precedence, and why it is this order
+ *
+ * `error` first: a session that has failed is not working, whatever it last
+ * reported, and folding it into anything else launders a crash.
+ *
+ * Then activity (`running`, `starting`), because a running turn is a PRESENT
+ * fact and `settledAt` is a PAST one. A settled thread that has been given more
+ * work is working.
+ *
+ * Then settledness, which is what separates a session that finished from one
+ * that was stopped or is merely quiet.
+ *
+ * (The porch gate outranks all of this and is applied by the caller.)
+ *
+ * ## Two words beyond the original four
+ *
+ * `STOPPED` and `ERROR` exist because the alternative is folding `interrupted`,
+ * `stopped` and `error` into `SETTLED` — rendering "this crashed" and "this was
+ * torn down" as "this finished its work". `SETTLED` keeps meaning finished.
+ *
+ * An unrecognised status is still NOT bucketed. A server newer than this build
+ * would otherwise be reported as running while doing something this build has no
+ * word for.
  */
-function fromSessionState(sessionState: string): RowStatus {
-  switch (sessionState) {
-    case 'settled':
-      return { kind: 'settled' };
+function fromSession(session: ThreadSessionState): RowStatus {
+  if (session.status === 'error') {
+    return {
+      kind: 'error',
+      why: session.lastError ?? 'the t3code session reported an error and gave no detail',
+      whyIsRowSpecific: true,
+    };
+  }
+  switch (session.status) {
     case 'running':
-    case 'turning':
       return { kind: 'turning' };
     case 'starting':
-    case 'ready':
       return { kind: 'working' };
+    case 'ready':
+    case 'idle':
+      return session.settled ? { kind: 'settled' } : { kind: 'working' };
+    case 'interrupted':
+    case 'stopped':
+      return session.settled
+        ? { kind: 'settled' }
+        : {
+            kind: 'stopped',
+            why: `the t3code session is ${session.status} and the thread is not settled`,
+            whyIsRowSpecific: true,
+          };
     default:
       return {
         kind: 'unknown',
-        why: `the server reported session state "${sessionState}", which this client does not recognise`,
+        why: `the server reported session status "${session.status}", which this client does not recognise`,
         whyIsRowSpecific: true,
       };
   }
 }
 
+/**
+ * Why no session could be read for this row.
+ *
+ * Every branch says something different, because each sends a reader somewhere
+ * different: upgrade the server, configure one, fix the config, wait, wait for a
+ * timer, check the server, or look at this one row. Collapsing any pair spells
+ * two remedies with one sentence.
+ *
+ * The row-specific branch at the end is only reached when t3code WAS observed
+ * and returned nothing for this thread — which is a fact about the thread, not
+ * about the machine, and is the one case that should not repeat the machine's
+ * sentence under every row.
+ */
 function sessionUnobservable(t3code: T3codeReachability): RowStatus {
-  if (t3code === 'unreachable') {
-    return { kind: 'unknown', why: 'this machine cannot reach t3code, so session state is unknown' };
+  switch (t3code) {
+    case 'not-provided':
+      return { kind: 'unknown', why: 'this server is not reporting session state' };
+    case 'not-configured':
+      return {
+        kind: 'unknown',
+        why: 'this workspace has no t3code server configured, so there is no session to report',
+      };
+    case 'misconfigured':
+      return {
+        kind: 'unknown',
+        why: 'this workspace\'s t3code configuration is incomplete, so no session could be observed',
+      };
+    case 'connecting':
+      return { kind: 'unknown', why: 'this server is still connecting to t3code' };
+    case 'cooling-down':
+      return {
+        kind: 'unknown',
+        why: 'this server\'s last t3code connection failed and it is waiting before retrying',
+      };
+    case 'unreachable':
+      return { kind: 'unknown', why: 'this machine cannot reach t3code, so session state is unknown' };
+    default:
+      return {
+        kind: 'unknown',
+        why: 't3code returned no state for this thread',
+        whyIsRowSpecific: true,
+      };
   }
-  if (t3code === 'not-provided') {
-    return { kind: 'unknown', why: 'this server is not reporting session state' };
-  }
+}
+
+/**
+ * How long ago the content was observed, in words a person reads.
+ *
+ * Never "unknown age" silently: a missing observation is reported as such,
+ * because a consumer that cannot see the age must not be allowed to assume it is
+ * small.
+ */
+function agePhrase(observation: T3codeObservation | undefined): string {
+  if (!observation) return 'an unknown length of time ago';
+  const seconds = Math.max(0, Math.round(observation.ageMs / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  return `${Math.round(minutes / 60)}h ago`;
+}
+
+/**
+ * The stale rule.
+ *
+ * A STALE SNAPSHOT NEVER DERIVES `SETTLED`. "It had finished when I last looked"
+ * is not "it has finished", and the second is what a `SETTLED` stamp asserts.
+ * That is the whole reason the age travels on the wire.
+ *
+ * Content that was ACTIVE when last seen keeps its word — a row that was turning
+ * is still the best answer available, and the machine already carries the STALE
+ * band that says how much to trust it. Only the finished-looking answer is
+ * withheld, because only that one closes a question a reader would otherwise
+ * stop asking.
+ */
+function stale(status: RowStatus, observation: T3codeObservation | undefined): RowStatus {
+  if (status.kind !== 'settled') return status;
   return {
     kind: 'unknown',
-    why: 't3code returned no state for this thread',
+    why: `this server stopped watching t3code; the session last looked settled ${agePhrase(observation)}`,
     whyIsRowSpecific: true,
   };
 }
@@ -91,11 +216,16 @@ function sessionUnobservable(t3code: T3codeReachability): RowStatus {
  * porch holds a pending gate is blocked, not finished. t3code's titles, pins and
  * activity entries are display projections and are never consulted here.
  */
-export function deriveRowStatus(identity: ThreadIdentity, t3code: T3codeReachability): RowStatus {
+export function deriveRowStatus(
+  identity: ThreadIdentity,
+  t3code: T3codeReachability,
+  observation?: T3codeObservation,
+): RowStatus {
   const gate = pendingGate(identity);
   if (gate) return gate;
-  if (identity.sessionState !== undefined) return fromSessionState(identity.sessionState);
-  return sessionUnobservable(t3code);
+  if (identity.session === undefined) return sessionUnobservable(t3code);
+  const status = fromSession(identity.session);
+  return t3code === 'stale' ? stale(status, observation) : status;
 }
 
 /**

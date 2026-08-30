@@ -6,6 +6,8 @@ const CLASS: Record<RowStatus['kind'], string> = {
   turning: 'stamp-turning',
   working: 'stamp-working',
   settled: 'stamp-settled',
+  stopped: 'stamp-stopped',
+  error: 'stamp-error',
   unknown: 'stamp-unknown',
 };
 

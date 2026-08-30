@@ -3,6 +3,8 @@ import { deriveRowStatus, type RowStatus } from '../status/derive.js';
 import type {
   AgentStateSignal,
   PorchStatusProjection,
+  T3codeObservation,
+  T3codeReachability,
   ThreadIdentity,
 } from '../connection/types.js';
 
@@ -35,7 +37,12 @@ export interface WorkspaceNode {
    * the machine, rather than repeated on every row — and never omitted, because
    * a tree full of UNKNOWN with no stated cause reads as a broken client.
    */
-  readonly sessionVisibility: 'not-provided' | 'unreachable' | 'available';
+  readonly sessionVisibility: T3codeReachability;
+  /**
+   * How old the reported session content is, when the server said. Absent on a
+   * server that predates the field, and on every status that carries no content.
+   */
+  readonly sessionObservation?: T3codeObservation;
   readonly architects: readonly ArchitectGroup[];
   /**
    * Builders `global.db` does not attribute to an architect present here. They
@@ -57,7 +64,12 @@ export interface MachineNode {
   readonly workspace: WorkspaceNode | null;
 }
 
-function rowFrom(identity: ThreadIdentity, t3code: Parameters<typeof deriveRowStatus>[1], machineKey: string): ThreadRow {
+function rowFrom(
+  identity: ThreadIdentity,
+  t3code: T3codeReachability,
+  machineKey: string,
+  observation?: T3codeObservation,
+): ThreadRow {
   const label = identity.roleId ?? identity.threadId ?? 'unnamed';
   return {
     key: `${machineKey}:${identity.role}:${identity.roleId ?? identity.threadId ?? label}`,
@@ -68,7 +80,7 @@ function rowFrom(identity: ThreadIdentity, t3code: Parameters<typeof deriveRowSt
     management: identity.management,
     ...(identity.worktree ? { worktree: identity.worktree } : {}),
     ...(identity.porch ? { porch: identity.porch } : {}),
-    status: deriveRowStatus(identity, t3code),
+    status: deriveRowStatus(identity, t3code, observation),
   };
 }
 
@@ -89,10 +101,13 @@ function buildWorkspace(connection: MachineState, machineKey: string): Workspace
   const snapshot = connection.snapshot!;
   const { protocol } = snapshot;
   const t3code = protocol.t3code;
+  // Carried to every row because the STALE rule needs it: a row whose last-known
+  // content reads as finished must report how old that is instead of the word.
+  const observation = protocol.t3codeObservation;
 
   const architectRows = protocol.identities
     .filter((identity) => identity.role === 'architect')
-    .map((identity) => rowFrom(identity, t3code, machineKey));
+    .map((identity) => rowFrom(identity, t3code, machineKey, observation));
   const architectNames = new Set(architectRows.map((row) => row.name));
 
   const grouped = new Map<string, ThreadRow[]>();
@@ -101,7 +116,7 @@ function buildWorkspace(connection: MachineState, machineKey: string): Workspace
 
   for (const identity of protocol.identities) {
     if (identity.role !== 'builder') continue;
-    const row = rowFrom(identity, t3code, machineKey);
+    const row = rowFrom(identity, t3code, machineKey, observation);
     const parent = identity.spawnedByArchitect;
     if (parent !== undefined && architectNames.has(parent)) {
       grouped.get(parent)!.push(row);
@@ -112,13 +127,14 @@ function buildWorkspace(connection: MachineState, machineKey: string): Workspace
 
   const unmanagedThreads = protocol.identities
     .filter((identity) => identity.role === 'unmanaged')
-    .map((identity) => rowFrom(identity, t3code, machineKey));
+    .map((identity) => rowFrom(identity, t3code, machineKey, observation));
 
   return {
     key: `${machineKey}:${snapshot.workspacePath}`,
     path: snapshot.workspacePath,
     generatedAt: snapshot.generatedAt,
     sessionVisibility: t3code,
+    ...(protocol.t3codeObservation ? { sessionObservation: protocol.t3codeObservation } : {}),
     architects: architectRows.map((architect) => ({
       key: architect.key,
       architect,
