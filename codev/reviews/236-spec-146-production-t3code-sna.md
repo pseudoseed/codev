@@ -131,7 +131,7 @@ Poll but not submit. 403 but not 401. Element but not its CSS rule. Thrown fetch
 401/403 but not 404. Each fix was correct and each was too narrow by exactly one step.
 
 **A second shape, and it is the more dangerous one: the fixture sharing the code's premise.**
-Four separate instances in this one project, which makes it a pattern rather than bad luck — and
+Five separate instances in this one project, which makes it a pattern rather than bad luck — and
 **all four were found by reverting the fix and watching what failed, never by a test going red on
 its own.** That is the whole reason the habit is worth the minutes it costs: a fixture that agrees
 with the bug is, by construction, invisible to the suite it lives in.
@@ -148,8 +148,20 @@ The four:
 4. The different-gate regression test drove a real approval for `plan-approval`, which is not
    valid for that protocol and phase, so the operation settled instantly and the test measured
    nothing.
+5. Three auth tests built human sessions with no machine, and one seeded an operation with no
+   machine — so nothing in the suite ever presented two identities that could disagree, and a
+   session usable from any device looked exactly like one bound to its own.
 
-The first three were invisible to a green suite because the test agreed with the bug.
+Every one of them was invisible to a green suite, because the test agreed with the code.
+
+**The fifth is a different and worse kind, and it is the one worth remembering.** The first four
+were fixtures I wrote, or wrote beside, agreeing with a bug I had just introduced. The fifth
+predated this project entirely: three pre-existing tests built sessions with no machine and one
+seeded an operation with no machine, so the suite never presented two identities that *could*
+disagree. It was not weak at checking the binding — it was **structurally incapable of testing
+it**, and would have stayed that way through any number of careful reviews of its assertions.
+
+A suite can only fail on a distinction its fixtures are able to express.
 
 - `pair revoke` had a passing test in which the capability store's host and the paired device
   were both `'ipad'`. Capabilities key on the *verifying host*, so `revokeMachine('laptop')`
@@ -283,6 +295,54 @@ before the retry lands, so the retry legitimately starts a new one and the test 
 — exactly how the e2e "shows what it is running" case failed earlier here. What makes it a
 recovery rather than a claim of one: the outcome observed is the ORIGINAL operation's, and
 exactly one operation exists for the episode, so the checks did not run twice.
+
+## Two credentials, never compared with each other
+
+The strongest finding in the project, and it needed no bug in either credential.
+
+A human session and a machine credential were both verified, correctly, and **independently**.
+Nothing compared them. So a session opened on one device could be presented alongside another
+device's credential and every check passed — the per-device ownership and revocation model this
+spec exists to build, defeated by presenting two valid things that were never put side by side.
+
+It is the same conflation as an earlier round's, one layer up. Round 2 separated `machine` (the
+verifying host) from `pairedMachine` (the device) because two different things shared one name.
+This was two names for two different things that were never compared at all. **A verification is
+not a check of identity unless something joins the pieces.**
+
+Bound at three points on purpose: at issuance, where the route supplies the authenticated caller's
+own machine rather than a value the client asks for; at the single authentication choke point,
+because a route that forgot would be a hole with no visible cause; and inside `mayRead`
+independently, because it is exported and a rule that holds only because its one caller checks
+first will be wrong the moment a second caller appears.
+
+Refused with 403 rather than 401: the session is real and may be in legitimate use on the other
+device, so what is refused is using it *here*. A 401 sends a client into a re-pair loop that
+cannot fix what is actually wrong.
+
+`mayRead` was the sharp end. Its receipt branch had always required the machine to match; its
+session branch returned true on a session id alone. **The path holding the weaker credential
+carried the stronger check.**
+
+That asymmetry is why this survived six rounds of review. The receipt path was added last, under
+scrutiny, for the hard case — so it got the careful thinking. The session path is what almost
+every caller actually takes, and it was already there. **Scrutiny went where the novelty was, not
+where the traffic is**, which is a bias worth naming because it is invisible from inside a review:
+the new code is the code you are looking at.
+
+And the fixtures hid it, for the fifth time: three tests built sessions with no machine at all, so
+nothing in the suite ever presented two identities that could disagree.
+
+## The panel said "Submitted" before anything was
+
+`onProgress` fires only once the host answers 202, so a null progress is the window covering
+capability issuance, nonce minting and the POST — any of which may be hanging. It rendered
+"Submitted. Waiting for the server to start the work."
+
+A small text defect and the same class as the rest: telling a human that a thing happened when it
+has not, on the one action the panel performs. The `data-state` attribute was changed alongside
+the words, because a test asserting the state would otherwise have gone on agreeing with the claim
+the text used to make.
 
 ## Making one report honest opened a way for another to lie
 

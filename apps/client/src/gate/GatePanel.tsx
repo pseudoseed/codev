@@ -44,13 +44,26 @@ export interface GateApprovalHandle {
 /**
  * What a waiting human is told, from what the server has actually said.
  *
- * The phases of this are three different facts and they are not merged: the
- * submit has been accepted and nothing has started; the work is running and the
- * server has not yet named what; the work is running and these are the checks.
- * A single "Approving…" for all three is the spinner this phase exists to stop.
+ * The phases of this are FOUR different facts and they are not merged: nothing
+ * has been submitted yet; the submit has been accepted and nothing has started;
+ * the work is running and the server has not yet named what; the work is running
+ * and these are the checks. A single "Approving…" for all four is the spinner
+ * this phase exists to stop.
+ *
+ * ## The first one used to claim the second
+ *
+ * `null` means `onProgress` has not fired, and it fires only once the host has
+ * answered 202. So `null` is the window in which the capability is being issued,
+ * the nonce minted and the POST sent — none of which has necessarily happened,
+ * and any of which may be hanging. It read "Submitted. Waiting for the server to
+ * start the work.", which tells the human a thing happened that has not, on the
+ * one action this panel exists to perform.
  */
 function progressWords(progress: GateProgress | null): string {
-  if (!progress) return 'Submitted. Waiting for the server to start the work.';
+  if (!progress) {
+    return 'Requesting authorization and submitting. Nothing has been accepted yet — '
+      + 'if it stops here, the approval was not started.';
+  }
   if (progress.state === 'submitted') {
     return `Accepted as operation ${progress.operationId}. Not started yet.`;
   }
@@ -204,7 +217,13 @@ export function GatePanel({
           </button>
           <span className="gate-note">session {approval.session.sessionId}</span>
           {busy ? (
-            <p className="gate-progress" data-state={progress?.state ?? 'submitted'}>
+            /*
+              * `submitting`, NOT `submitted`. The attribute is the machine-readable
+              * half of the sentence beside it, and spelling the pre-submission
+              * window `submitted` would make a test asserting the state agree with
+              * the claim the text used to make.
+              */
+            <p className="gate-progress" data-state={progress?.state ?? 'submitting'}>
               {progressWords(progress)}
             </p>
           ) : null}

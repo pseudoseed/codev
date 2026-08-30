@@ -57,6 +57,20 @@ interface StoredHumanSession {
   readonly expiresAt: number;
   /** Carried from the token, so an approval can record what authorized it. */
   readonly authority?: string;
+  /**
+   * The PAIRED MACHINE this session was opened from.
+   *
+   * A session is not a free-floating credential: it belongs to one device. The
+   * registry stored no machine, and the machine credential and the session were
+   * verified INDEPENDENTLY of each other — so a session issued on machine A
+   * could be presented alongside machine B's credential and both checks passed.
+   * That defeats the per-device ownership and revocation model this whole spec
+   * builds, by presenting two credentials that were never compared.
+   *
+   * Optional only for sessions minted before this field existed; `recognize`
+   * treats an absent machine as "unbindable" rather than as "matches anything".
+   */
+  readonly machine?: string;
   lastSeenAt: number;
 }
 
@@ -67,6 +81,8 @@ export interface HumanPairingAttestation {
   readonly principalKind: 'human-client' | 'builder' | 'architect';
   readonly pairedAt?: number;
   readonly lifetimeMs?: number;
+  /** The paired machine opening this session, from its machine credential. */
+  readonly machine?: string;
   /**
    * WHAT AUTHORIZED THE TOKEN THIS SESSION WAS PAIRED WITH, verbatim.
    *
@@ -91,7 +107,12 @@ export interface HumanSessionRecognition {
   readonly sessionId?: string;
   /** What the token this session was paired with claimed as its authority. */
   readonly authority?: string;
-  readonly reason?: 'MISSING' | 'MALFORMED' | 'UNKNOWN' | 'EXPIRED' | 'IDLE' | 'INVALID' | 'REVOKED';
+  /** The machine this session was opened from, for callers that must compare it. */
+  readonly machine?: string;
+  readonly reason?:
+    | 'MISSING' | 'MALFORMED' | 'UNKNOWN' | 'EXPIRED' | 'IDLE' | 'INVALID' | 'REVOKED'
+    /** Presented from a different machine than the one it was opened from. */
+    | 'FOREIGN_MACHINE';
 }
 
 function verifier(credential: string): Buffer {
@@ -133,6 +154,7 @@ export class HumanPairedSessionRegistry {
       pairedAt,
       expiresAt,
       ...(attestation.authority ? { authority: attestation.authority } : {}),
+      ...(attestation.machine ? { machine: attestation.machine } : {}),
       lastSeenAt: pairedAt,
     });
     return {
@@ -143,7 +165,15 @@ export class HumanPairedSessionRegistry {
     };
   }
 
-  recognize(presentation: string | undefined): HumanSessionRecognition {
+  /**
+   * Recognise a presented session, and — when a machine is given — require that
+   * it is the machine the session was opened from.
+   *
+   * THE MACHINE ARGUMENT IS THE WHOLE POINT. Without it the caller has verified
+   * two credentials that were never compared with each other, which is not the
+   * same as having verified one device.
+   */
+  recognize(presentation: string | undefined, machine?: string): HumanSessionRecognition {
     if (presentation === undefined || presentation.length === 0) return { paired: false, reason: 'MISSING' };
     const separator = presentation.indexOf('.');
     if (separator <= 0 || separator === presentation.length - 1) return { paired: false, reason: 'MALFORMED' };
@@ -167,8 +197,27 @@ export class HumanPairedSessionRegistry {
     }
     const presented = verifier(credential);
     if (!timingSafeEqual(presented, stored.verifier)) return { paired: false, reason: 'INVALID' };
+    /*
+     * THE SESSION BELONGS TO ONE DEVICE, and the check happens BEFORE
+     * `lastSeenAt` is touched: a request from the wrong machine must not keep a
+     * session alive, or a replaying device could hold someone else's session
+     * open indefinitely by failing this very check.
+     *
+     * A session with no recorded machine predates this field. It is refused
+     * rather than admitted: "I do not know which device this belongs to" is not
+     * "it belongs to this one", and sessions are memory-only, so the entire
+     * population of unbindable sessions dies with the next restart.
+     */
+    if (machine !== undefined && stored.machine !== machine) {
+      return { paired: false, reason: 'FOREIGN_MACHINE' };
+    }
     stored.lastSeenAt = now;
-    return { paired: true, sessionId, ...(stored.authority ? { authority: stored.authority } : {}) };
+    return {
+      paired: true,
+      sessionId,
+      ...(stored.authority ? { authority: stored.authority } : {}),
+      ...(stored.machine ? { machine: stored.machine } : {}),
+    };
   }
 
   revoke(sessionId: string): boolean {
@@ -738,6 +787,14 @@ function handleHumanSessionIssue(
         principalKind: 'human-client',
         lifetimeMs: typeof body.lifetimeMs === 'number' ? body.lifetimeMs : undefined,
         authority: redemption.authority,
+        /*
+         * THE SESSION IS BOUND TO THIS DEVICE AT BIRTH.
+         *
+         * This route is `machine-credential`, so the machine here is the
+         * authenticated caller's own — not a value it asked for. Recording it is
+         * what makes the session presentable from this machine and nowhere else.
+         */
+        machine,
       });
     } catch (error) {
       // The token was spent on a ceremony that did not complete. Put it back
@@ -1588,16 +1645,28 @@ export function handleAgentRoute(
       return true;
 
     case 'session-probe': {
-      // The machine is authenticated; this reports whether a HUMAN session is
-      // also live, which is what a client asks before it tries to approve.
+      /*
+       * The machine is authenticated; this reports whether a HUMAN session is
+       * also live, which is what a client asks before it tries to approve.
+       *
+       * BOUND TO THIS MACHINE HERE TOO. A probe that answers "yes, live" for a
+       * session this machine cannot actually use would send the client into an
+       * approval that fails at the next route, and the reason it failed would be
+       * one this answer had already denied.
+       */
       const header = req.headers[HUMAN_SESSION_HEADER];
-      const recognition = context.humanSessions.recognize(Array.isArray(header) ? header[0] : header);
-      writeJson(res, recognition.paired ? 200 : 401, {
+      const recognition = context.humanSessions.recognize(
+        Array.isArray(header) ? header[0] : header,
+        outcome.machine,
+      );
+      writeJson(res, recognition.paired ? 200 : recognition.reason === 'FOREIGN_MACHINE' ? 403 : 401, {
         signal: recognition.paired
           ? 'HUMAN_SESSION_RECOGNISED'
           : recognition.reason === 'REVOKED'
             ? 'HUMAN_SESSION_REVOKED'
-            : 'HUMAN_SESSION_REQUIRED',
+            : recognition.reason === 'FOREIGN_MACHINE'
+              ? 'HUMAN_SESSION_FOREIGN_MACHINE'
+              : 'HUMAN_SESSION_REQUIRED',
         ...recognition,
       });
       return true;
@@ -1678,6 +1747,7 @@ export function handleAgentRoute(
       const presented = req.headers[HUMAN_SESSION_HEADER];
       const recognition = context.humanSessions.recognize(
         Array.isArray(presented) ? presented[0] : presented,
+        outcome.machine,
       );
       const receiptHeader = req.headers[APPROVAL_RECEIPT_HEADER];
       handleApprovalOperation(res, url, context, {

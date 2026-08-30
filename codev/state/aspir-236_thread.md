@@ -1063,3 +1063,55 @@ assumption are one check.**
 
 The session-manager timeout went to issue #200 rather than this project's Flaky Tests section —
 that issue is this exact failure and already has another builder's night of evidence on it.
+
+## Round 6 — two credentials that were never compared
+
+### A session was not bound to its device
+
+The registry stored no machine. The machine credential and the human session were verified
+**independently**: both valid, neither compared against the other. So a session opened on machine
+A could be presented alongside machine B's credential to issue capabilities, submit approvals or
+poll operations — the per-device ownership and revocation model this whole spec builds, defeated
+without breaking either credential.
+
+It is the **same conflation as round 2's, one layer up.** Round 2 separated `machine` (the
+verifying host) from `pairedMachine` (the device) because they were being treated as one name.
+This is two names for two things that were never put side by side at all.
+
+Verified both halves against the code before changing anything, as instructed: the registry
+genuinely stores no machine, and `mayRead`'s session branch genuinely returned true on a session
+id alone — so the branch with the WEAKER credential (the receipt) carried the stronger check, and
+the operation's own `machine` field was bypassed by the branch most callers take.
+
+Bound at three points, deliberately: at issuance (the route supplies the authenticated caller's
+machine, not a value the client asks for), at the single authentication choke point (a route that
+forgot would be a hole with no visible cause), and inside `mayRead` independently, because it is
+exported and a rule that holds only because its one caller checks first will be wrong when a
+second caller appears.
+
+403, not 401: the session is real and may be in legitimate use on the other device; what is
+refused is using it *from here*. A 401 would send a client into a re-pair loop that cannot fix
+what is wrong.
+
+**And the fixtures hid it, for the fifth time.** Three pre-existing tests built sessions with
+`completePairing({ pairingId, principalKind })` and no machine, and one seeded an operation with
+no machine at all — so nothing in the suite ever presented two identities that could disagree. The
+new test uses two devices, two credentials and one session, and fails with either half of the
+binding removed.
+
+### The panel said "Submitted" before anything was submitted
+
+`onProgress` fires only after the host answers 202, so `progress === null` is the window covering
+capability issuance, nonce minting and the POST — any of which may be hanging. It rendered
+"Submitted. Waiting for the server to start the work."
+
+Told the human a thing happened that had not, on the one action the panel exists to perform. Now
+its own state: `data-state="submitting"` and text saying nothing has been accepted yet and that if
+it stops here the approval was not started. The `data-state` matters as much as the words — a test
+asserting the state would otherwise agree with the claim the text used to make.
+
+### On the lane's own limit
+
+codex declared it could not run tests in its environment and that its findings came from reading
+complete files. Both were real anyway, and I verified each against the code before touching it —
+which is the only reason that declaration is useful rather than a reason to discount the round.

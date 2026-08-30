@@ -242,6 +242,43 @@ describe('while an approval is running', () => {
     approval.release();
   });
 
+  /*
+   * BEFORE THE HOST HAS ANSWERED, THE PANEL MUST NOT SAY IT HAS.
+   *
+   * Clicking Approve sets `busy` immediately, and `onProgress` does not fire
+   * until the host answers 202 — so there is a window covering capability
+   * issuance, nonce minting and the POST, any of which may be hanging. It read
+   * "Submitted. Waiting for the server to start the work.", telling the human a
+   * thing happened that had not, on the one action this panel performs.
+   */
+  it('does not claim the approval was submitted before the host has accepted it', async () => {
+    // A handle that never reports progress and never resolves: exactly the
+    // window between the click and the host's answer.
+    let release: () => void = () => {};
+    const approval: GateApprovalHandle = {
+      session: { sessionId: 's1' },
+      openSession: async () => ({ ok: true, message: '' }),
+      approve: async () => new Promise((resolve) => {
+        release = () => resolve({ ok: true, message: 'approved' });
+      }),
+    };
+    render(
+      <GatePanel status={BLOCKED} projectId="146" approval={approval} onResult={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /approve plan-approval/i }));
+
+    await waitFor(() => {
+      const progress = document.querySelector('.gate-progress')!;
+      expect(progress.textContent, 'the panel claims a submission that has not happened')
+        .not.toMatch(/^Submitted\./);
+      expect(progress.textContent).toContain('Nothing has been accepted yet');
+      // The machine-readable half must not say `submitted` either, or a test
+      // asserting the state would agree with the claim the text used to make.
+      expect(progress.getAttribute('data-state')).toBe('submitting');
+    });
+    release();
+  });
+
   it('distinguishes accepted-not-started from running', async () => {
     const approval = handleThatReports([
       { state: 'submitted', operationId: 'op-3' },

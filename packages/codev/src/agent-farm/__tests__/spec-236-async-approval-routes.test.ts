@@ -534,12 +534,19 @@ describe('what a settled operation reports', () => {
       projectId: '915-delivery',
       gateName: 'pr',
       sessionId: session.sessionId,
+      // 'laptop', THE PAIRED DEVICE — which is what the route records. This
+      // omitted the field, so the seeded record's machine was undefined while a
+      // real one is the device, and the seed stopped resembling the thing it
+      // stood in for the moment ownership started being checked.
+      machine: 'laptop',
     });
     expect(seeded.accepted).toBe(true);
     if (!seeded.accepted) return;
     host.operations.settle(seeded.operation.operationId, {
       state: 'succeeded',
       record: {
+        // The APPROVAL record's machine, which is what porch wrote into
+        // status.yaml — a different field from the operation's owner above.
         machine: 'test-machine',
         sessionId: session.sessionId,
         approvedAt: '2026-08-30T10:00:00Z',

@@ -306,6 +306,33 @@ Stated plainly, because a threat model that only lists wins is a marketing docum
 - **A builder that daemonizes or otherwise sheds its environment** defeats the attribution
   layer. It does not defeat the verifier property, which is the boundary that carries weight.
 
+## A session belongs to one device (spec 236)
+
+The registry stored no machine, and the machine credential and the human session were verified
+**independently of each other**. Both valid, neither compared — so a session opened on one device
+could be presented alongside another device's credential, and every check passed.
+
+That is the per-device ownership and revocation model of this whole document defeated without
+breaking either credential. It is also the same conflation as the `machine` / `pairedMachine` one
+recorded above, one layer up: two names for two different things, treated as interchangeable
+because nothing ever put them side by side.
+
+**What holds now.** A session records the machine it was opened from, and the single
+authentication choke point requires the presented session to be that machine's. Enforced there
+rather than per handler: a route that forgot would be a hole with no visible cause. `mayRead`
+carries the same rule independently, because it is exported and decides who may read an approval's
+outcome — a rule that holds only because its one caller checks first is a rule that will be wrong
+when a second caller appears.
+
+**Refused with 403, not 401.** The session is real and its holder may be using it legitimately on
+the other device; what is refused is using it *from here*. Answering "authenticate" would send a
+client into a re-pair loop that cannot fix what is actually wrong.
+
+**What it does not stop.** A session presented from the right device by something else on that
+device. Sessions are bearer credentials once issued, and a same-uid process can read them — the
+same limit the *Storage* section states for every other secret here. This binds a session to a
+machine, not to a person, and nothing in this document claims otherwise.
+
 ## The approval receipt (spec 236)
 
 Asynchronous approval added a **fourth** bearer secret, and it is listed here because a

@@ -295,7 +295,26 @@ export function mayRead(
   operation: ApprovalOperation,
   caller: { readonly sessionId?: string; readonly machine?: string; readonly receipt?: string },
 ): boolean {
-  if (caller.sessionId !== undefined && operation.sessionId === caller.sessionId) return true;
+  /*
+   * THE SESSION BRANCH CHECKS THE MACHINE TOO, and it did not.
+   *
+   * The receipt branch below has always required the machine to match. The
+   * session branch returned true on a session id alone — so the path with the
+   * WEAKER credential carried the stronger check, and the operation's own
+   * `machine` field was bypassed by the branch most callers take.
+   *
+   * Authentication now binds a session to the machine it was opened from, so
+   * reaching here with a foreign session is no longer possible through the
+   * route. This is the second lock on the same door: `mayRead` is exported and
+   * decides who may read an approval's outcome, and a rule that holds only
+   * because its one caller happens to check first is a rule that will be wrong
+   * the moment a second caller appears.
+   */
+  if (
+    caller.sessionId !== undefined
+    && operation.sessionId === caller.sessionId
+    && (caller.machine === undefined || operation.machine === caller.machine)
+  ) return true;
   return caller.receipt !== undefined
     && caller.receipt.length > 0
     && secretsMatch(caller.receipt, operation.receipt)

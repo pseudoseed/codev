@@ -306,11 +306,18 @@ export function isUpgradeOriginAllowed(req: http.IncomingMessage): boolean {
 }
 
 export interface HumanSessionRecognizer {
-  recognize(presentation: string | undefined): {
+  /**
+   * @param machine The paired machine the request authenticated as. Given here,
+   *   the session must be the one opened from THAT machine — the two credentials
+   *   are compared against each other rather than merely both being valid.
+   */
+  recognize(presentation: string | undefined, machine?: string): {
     readonly paired: boolean;
     readonly sessionId?: string;
     /** What the token that paired this session claimed. Recorded, not verified. */
     readonly authority?: string;
+    /** The machine the session was opened from. */
+    readonly machine?: string;
     readonly reason?: string;
   };
 }
@@ -443,14 +450,41 @@ export function authenticateAgentRequest(
     return { allowed: true, route, machine: machine.machine };
   }
 
-  const recognition = context.humanSessions.recognize(header(req, HUMAN_SESSION_HEADER));
+  /*
+   * THE SESSION MUST BELONG TO THE MACHINE THAT JUST AUTHENTICATED.
+   *
+   * These two credentials used to be verified independently: a valid machine
+   * credential, a valid session, and nothing compared them. So a session opened
+   * on machine A could be replayed alongside machine B's credential to issue
+   * capabilities, submit approvals or poll operations — the per-device ownership
+   * and revocation model of this whole surface, defeated by presenting two
+   * things that were never checked against each other.
+   *
+   * Passing the authenticated machine name is what closes it, and it is passed
+   * HERE, at the single choke point, rather than in each handler: a route that
+   * forgot would be a hole with no visible cause.
+   */
+  const recognition = context.humanSessions.recognize(
+    header(req, HUMAN_SESSION_HEADER),
+    machine.machine,
+  );
   if (!recognition.paired) {
     return {
       allowed: false,
       route,
-      status: 401,
-      signal: recognition.reason === 'REVOKED' ? 'HUMAN_SESSION_REVOKED' : 'HUMAN_SESSION_REQUIRED',
-      message: 'this route requires a paired client session',
+      // A FOREIGN MACHINE IS 403, NOT 401. The session is real and this caller
+      // may hold it legitimately on another device; what is refused is using it
+      // from HERE. Answering "authenticate" would send a client into a re-pair
+      // loop that cannot fix the thing that is actually wrong.
+      status: recognition.reason === 'FOREIGN_MACHINE' ? 403 : 401,
+      signal: recognition.reason === 'REVOKED'
+        ? 'HUMAN_SESSION_REVOKED'
+        : recognition.reason === 'FOREIGN_MACHINE'
+          ? 'HUMAN_SESSION_FOREIGN_MACHINE'
+          : 'HUMAN_SESSION_REQUIRED',
+      message: recognition.reason === 'FOREIGN_MACHINE'
+        ? 'that session was opened from a different machine; open one from this machine instead'
+        : 'this route requires a paired client session',
       reason: recognition.reason,
     };
   }

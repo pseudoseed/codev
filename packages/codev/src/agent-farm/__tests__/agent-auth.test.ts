@@ -512,7 +512,13 @@ describe('pairing tokens', () => {
   it('a store that throws inside an approval body does not become an unhandled rejection', async () => {
     const h = harness();
     const credential = h.machines.issue({ machine: 'laptop' });
-    const session = h.sessions.completePairing({ pairingId: 'p', principalKind: 'human-client' });
+    const session = h.sessions.completePairing({
+      pairingId: 'p', principalKind: 'human-client',
+      // BOUND TO THE MACHINE WHOSE CREDENTIAL THIS TEST PRESENTS. The route
+      // always supplies this from the authenticated caller; a session minted
+      // without it is presentable from nowhere, which is the point.
+      machine: 'laptop',
+    });
     h.approvals.issue = () => { throw new Error('store gone'); };
 
     const out = fakeRes();
@@ -732,7 +738,13 @@ describe('per-machine credentials', () => {
     const h = harness();
     h.machines.issue({ machine: 'ipad' });
     const operator = h.machines.issue({ machine: 'laptop' });
-    const session = h.sessions.completePairing({ pairingId: 'p', principalKind: 'human-client' });
+    const session = h.sessions.completePairing({
+      pairingId: 'p', principalKind: 'human-client',
+      // BOUND TO THE MACHINE WHOSE CREDENTIAL THIS TEST PRESENTS. The route
+      // always supplies this from the authenticated caller; a session minted
+      // without it is presentable from nowhere, which is the point.
+      machine: 'laptop',
+    });
     const headers = {
       [MACHINE_CREDENTIAL_HEADER]: operator.presentation,
       [HUMAN_SESSION_HEADER]: `${session.sessionId}.${session.credential}`,
@@ -777,7 +789,13 @@ describe('per-machine credentials', () => {
     const h = harness();
     h.machines.issue({ machine: 'ipad' });
     const operator = h.machines.issue({ machine: 'laptop' });
-    const session = h.sessions.completePairing({ pairingId: 'p', principalKind: 'human-client' });
+    const session = h.sessions.completePairing({
+      pairingId: 'p', principalKind: 'human-client',
+      // BOUND TO THE MACHINE WHOSE CREDENTIAL THIS TEST PRESENTS. The route
+      // always supplies this from the authenticated caller; a session minted
+      // without it is presentable from nowhere, which is the point.
+      machine: 'laptop',
+    });
     const capability = h.approvals.issue({ sessionId: session.sessionId, machine: 'ipad' });
     expect(h.approvals.verify(capability.presentation, { machine: 'ipad' }).authorized).toBe(true);
 

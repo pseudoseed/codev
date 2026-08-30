@@ -45,7 +45,7 @@ import {
   shutdownAgentRoutes,
 } from '../servers/agent-routes.js';
 import { ApprovalCapabilityStore, ApprovalNonceStore } from '../lib/approval-capability.js';
-import { ApprovalOperationStore } from '../lib/approval-operations.js';
+import { ApprovalOperationStore, mayRead } from '../lib/approval-operations.js';
 import { MachineCredentialStore } from '../lib/machine-credentials.js';
 import { PairingStore } from '../lib/pairing.js';
 import { GLOBAL_SCHEMA } from '../db/schema.js';
@@ -81,6 +81,151 @@ function workspaceWithGate(projectId: string): string {
   return root;
 }
 
+/** A running host with real stores, so credentials are compared as production does. */
+async function liveHost(projectId = '916-receipt') {
+  const workspace = normalizeWorkspacePath(workspaceWithGate(projectId));
+  const stateRoot = tmp();
+  const pairings = new PairingStore({ root: join(stateRoot, 'pairing') });
+  const operations = new ApprovalOperationStore({ root: join(stateRoot, 'approval') });
+  const machines = new MachineCredentialStore({ root: join(stateRoot, 'machines') });
+  const database = new Database(':memory:');
+  database.exec(GLOBAL_SCHEMA);
+  cleanup.push(() => database.close());
+
+  initAgentRoutes({
+    db: () => database,
+    log: () => {},
+    isKnownWorkspace: (candidate) => normalizeWorkspacePath(candidate) === workspace,
+    humanSessions: new HumanPairedSessionRegistry(),
+    // 'tower-host' is the VERIFYING HOST and is deliberately not any device's
+    // name: a fixture that reuses one value cannot tell binding from its absence.
+    approvalCapabilities: new ApprovalCapabilityStore({
+      root: join(stateRoot, 'approval'), machine: 'tower-host',
+    }),
+    approvalNonces: new ApprovalNonceStore({ root: join(stateRoot, 'approval') }),
+    machineCredentials: machines,
+    pairings,
+    approvalOperations: operations,
+  });
+  const server: Server = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (handleAgentRoute(req, res, url)) return;
+    res.writeHead(404).end();
+  });
+  await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
+  cleanup.push(() => server.close());
+  return {
+    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    workspace,
+    encoded: Buffer.from(workspace, 'utf8').toString('base64url'),
+    pairings,
+    operations,
+    machines,
+  };
+}
+
+/**
+ * A human session belongs to ONE device (spec 236, round 6).
+ *
+ * ## What was wrong
+ *
+ * The registry stored no machine, and the machine credential and the human
+ * session were verified INDEPENDENTLY of each other. Two valid credentials, never
+ * compared — so a session opened on one machine could be replayed alongside
+ * another machine's credential to issue capabilities, submit approvals or poll
+ * operations. That is the per-device ownership and revocation model of this whole
+ * spec, defeated without breaking either credential.
+ *
+ * It is the same conflation round 2 removed one layer down, where `machine` (the
+ * verifying host) and `pairedMachine` (the device) had been treated as one name.
+ *
+ * ## Two genuinely different identities, and that is the point
+ *
+ * Every assertion below uses DISTINCT machines with DISTINCT credentials and
+ * DISTINCT sessions. A fixture that reuses one value cannot tell binding from its
+ * absence — which is the mistake this project has now made five times, and the
+ * reason it is called out here rather than left to the reader.
+ */
+describe('a session is bound to the machine it was opened from', () => {
+  it('refuses a session presented with another machine\'s credential', async () => {
+    const host = await liveHost();
+
+    // TWO DEVICES. Two credentials, and a session opened on the first.
+    const laptop = host.machines.issue({ machine: 'laptop' }).presentation;
+    const ipad = host.machines.issue({ machine: 'ipad' }).presentation;
+    const session = await (await fetch(`${host.origin}/api/agent/v1/human-sessions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        [MACHINE_CREDENTIAL_HEADER]: laptop,
+        [PAIRING_TOKEN_HEADER]: host.pairings.issue({ purpose: 'client-session', authority: 't' }).token,
+      },
+      body: '{}',
+    })).json() as { presentation: string; sessionId: string };
+
+    // THE LAPTOP'S SESSION, THE IPAD'S CREDENTIAL. Both are valid; neither was
+    // ever checked against the other.
+    const replayed = await fetch(`${host.origin}/api/agent/v1/approval-capabilities`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        [MACHINE_CREDENTIAL_HEADER]: ipad,
+        [HUMAN_SESSION_HEADER]: session.presentation,
+      },
+      body: JSON.stringify({ principalKind: 'human-client' }),
+    });
+
+    // 403, NOT 401. The session is real and the holder may use it legitimately on
+    // the laptop; what is refused is using it from HERE. Answering "authenticate"
+    // would send a client into a re-pair loop that cannot fix what is wrong.
+    expect(replayed.status, 'a session was accepted from another machine').toBe(403);
+    const body = await replayed.json() as { signal?: string };
+    expect(body.signal).toBe('HUMAN_SESSION_FOREIGN_MACHINE');
+
+    // AND IT STILL WORKS FROM ITS OWN MACHINE, so the binding narrowed the hole
+    // rather than the feature.
+    const proper = await fetch(`${host.origin}/api/agent/v1/approval-capabilities`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        [MACHINE_CREDENTIAL_HEADER]: laptop,
+        [HUMAN_SESSION_HEADER]: session.presentation,
+      },
+      body: JSON.stringify({ principalKind: 'human-client' }),
+    });
+    expect(proper.status).toBe(201);
+  });
+
+  /*
+   * AND THE POLL DOES NOT HAVE ITS OWN WEAKER RULE.
+   *
+   * `mayRead`'s receipt branch always required the machine to match; its SESSION
+   * branch returned true on a session id alone — so the path with the weaker
+   * credential carried the stronger check, and the operation's own `machine`
+   * field was bypassed by the branch most callers take.
+   */
+  it('will not read an operation for a session id alone from another machine', () => {
+    const operation = {
+      operationId: 'op-1',
+      workspacePath: '/w',
+      projectId: '236',
+      gateName: 'pr',
+      sessionId: 'session-1',
+      machine: 'laptop',
+      receipt: 'r-1',
+      owner: { host: 'h', pid: 1 },
+      submittedAt: '2026-08-30T00:00:00Z',
+      state: 'running',
+    } as unknown as Parameters<typeof mayRead>[0];
+
+    expect(mayRead(operation, { sessionId: 'session-1', machine: 'laptop' })).toBe(true);
+    expect(
+      mayRead(operation, { sessionId: 'session-1', machine: 'ipad' }),
+      'a session id alone read an approval owned by another machine',
+    ).toBe(false);
+  });
+});
+
 describe('the receipt never travels in a URL', () => {
   /*
    * THE SOURCE BUILDS NO SUCH URL. Read as text because the defect is a string
@@ -111,38 +256,7 @@ describe('the receipt never travels in a URL', () => {
    * the client half be re-added without a single test going red.
    */
   it('refuses a receipt presented in the query string, and accepts the header', async () => {
-    const workspace = normalizeWorkspacePath(workspaceWithGate('916-receipt'));
-    const stateRoot = tmp();
-    const pairings = new PairingStore({ root: join(stateRoot, 'pairing') });
-    const operations = new ApprovalOperationStore({ root: join(stateRoot, 'approval') });
-    const machines = new MachineCredentialStore({ root: join(stateRoot, 'machines') });
-    const database = new Database(':memory:');
-    database.exec(GLOBAL_SCHEMA);
-    cleanup.push(() => database.close());
-
-    initAgentRoutes({
-      db: () => database,
-      log: () => {},
-      isKnownWorkspace: (candidate) => normalizeWorkspacePath(candidate) === workspace,
-      humanSessions: new HumanPairedSessionRegistry(),
-      approvalCapabilities: new ApprovalCapabilityStore({
-        root: join(stateRoot, 'approval'), machine: 'tower-host',
-      }),
-      approvalNonces: new ApprovalNonceStore({ root: join(stateRoot, 'approval') }),
-      machineCredentials: machines,
-      pairings,
-      approvalOperations: operations,
-    });
-    const server: Server = createServer((req, res) => {
-      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-      if (handleAgentRoute(req, res, url)) return;
-      res.writeHead(404).end();
-    });
-    await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
-    cleanup.push(() => server.close());
-    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const encoded = Buffer.from(workspace, 'utf8').toString('base64url');
-
+    const { origin, workspace, encoded, pairings, operations, machines } = await liveHost();
     const credential = machines.issue({ machine: 'laptop' }).presentation;
     const session = await (await fetch(`${origin}/api/agent/v1/human-sessions`, {
       method: 'POST',
