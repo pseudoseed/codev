@@ -1,0 +1,14 @@
+id: '220'
+title: spec-146-phase-11-codev-client
+protocol: air
+phase: implement
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: pending
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-30T00:32:39.201Z'
+updated_at: '2026-08-30T00:32:39.202Z'
