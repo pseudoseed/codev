@@ -23,32 +23,91 @@
  * treating source-only as safe is exactly the mistake the two-layer design exists
  * to prevent.
  *
+ * ---------------------------------------------------------------------------
+ * Spec 250 — two ranges, two checkouts, two questions.
+ *
+ * "What has upstream done since we pinned it?" and "what have we changed?" are
+ * not the same question, and answering them from one range reports our own
+ * customization as upstream movement. So the mode is mandatory:
+ *
+ *   --upstream-movement   upstreamBase..origin/main, read from the upstream clone
+ *   --fork-drift          upstreamBase..<fork head>, read from the fork checkout
+ *
+ * Invoked with neither, it fails. Invoked with both, it fails. There is no
+ * default, because the wrong default here produces a plausible-looking answer to
+ * a question nobody asked.
+ *
  * Usage:
- *   node classify-churn.mjs [--since <sha>] [--limit N]
+ *   node classify-churn.mjs (--upstream-movement | --fork-drift) [--since <sha>] [--limit N]
+ *
+ * Exit codes: 0 ok (including "nothing to classify"), 1 bad invocation,
+ * 3 "could not determine" — a missing checkout or an unresolvable ref.
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { CHURN_MODES, MISMATCH, UNDETERMINED, churnRange, resolveIdentities } from '../t3-fork/identities.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
 const pin = JSON.parse(readFileSync(join(repoRoot, 'packages', 'types', 'src', 't3', 'pin.json'), 'utf8'));
-const t3Root = process.env.T3CODE_ROOT ?? '/Users/chris/dev/t3code';
+const identities = resolveIdentities(pin);
 
 const args = process.argv.slice(2);
-const sinceIdx = args.indexOf('--since');
-const since = sinceIdx >= 0 ? args[sinceIdx + 1] : '2026-02-07';
-const limitIdx = args.indexOf('--limit');
-const limit = limitIdx >= 0 ? Number(args[limitIdx + 1]) : Infinity;
+
+const selected = Object.keys(CHURN_MODES).filter((m) => args.includes(`--${m}`));
+if (selected.length !== 1) {
+  console.error(
+    `[classify-churn] ${selected.length === 0 ? 'no mode given' : `${selected.length} modes given`}. ` +
+      `Pass exactly one of ${Object.keys(CHURN_MODES).map((m) => `--${m}`).join(' or ')}.\n` +
+      `  --upstream-movement  what pingdotgg/t3code did since ${identities.upstream.commit.slice(0, 12)}\n` +
+      `  --fork-drift         what our private customization changed\n` +
+      `They read different checkouts and mean different things; there is no default.`,
+  );
+  process.exit(MISMATCH);
+}
+
+const range = churnRange(selected[0], identities);
+const t3Root = range.root;
+
+if (!existsSync(t3Root)) {
+  console.error(
+    `[classify-churn] COULD_NOT_TELL: no ${range.identity} checkout at ${t3Root}. ` +
+      `Nothing was classified, and that is not the same as nothing having changed.`,
+  );
+  process.exit(UNDETERMINED);
+}
 
 const git = (...a) => execFileSync('git', ['-C', t3Root, ...a], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
+for (const ref of [range.from, range.to]) {
+  try {
+    git('rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
+  } catch {
+    console.error(
+      `[classify-churn] COULD_NOT_TELL: ${ref} does not resolve in ${t3Root}. ` +
+        `An unreadable ref is "unknown", not "no movement".`,
+    );
+    process.exit(UNDETERMINED);
+  }
+}
+
 const closurePaths = pin.closure.map((f) => `${pin.contractsRoot}/${f}`);
 
-const sinceArg = /^[0-9a-f]{7,40}$/.test(since) ? `${since}..HEAD` : `--since=${since}`;
-const commits = git('log', '--format=%H|%ad|%s', '--date=short', '--reverse', sinceArg, '--', ...closurePaths)
+const sinceIdx = args.indexOf('--since');
+const limitIdx = args.indexOf('--limit');
+const limit = limitIdx >= 0 ? Number(args[limitIdx + 1]) : Infinity;
+
+// `--since` narrows the mode's range; it does not replace it. Overriding the
+// start of an --upstream-movement range is a legitimate thing to want; silently
+// letting it also change WHICH checkout is read is not.
+const from = sinceIdx >= 0 ? args[sinceIdx + 1] : range.from;
+const rangeSpec = `${from}..${range.to}`;
+
+const commits = git('log', '--format=%H|%ad|%s', '--date=short', '--reverse', rangeSpec, '--', ...closurePaths)
   .trim()
   .split('\n')
   .filter(Boolean)
@@ -63,12 +122,22 @@ if (commits.length === 0) {
   // current and nothing new has landed. Exiting non-zero here made the documented
   // refresh procedure's own step 2 fail whenever it had nothing to report, which
   // is "nothing to do" spelled exactly like "something went wrong".
-  console.error('[classify-churn] no commits touch the closure in that range — nothing to classify');
-  console.log(JSON.stringify({ range: since, total: 0, counts: {}, rows: [] }, null, 2));
+  //
+  // The signal names the mode, so "upstream has not moved" and "we have not
+  // customized anything yet" stay two readable answers rather than one blank one.
+  const signal = selected[0] === 'upstream-movement' ? 'NO_UPSTREAM_MOVEMENT' : 'NO_FORK_DRIFT';
+  console.error(`[classify-churn] ${signal}: no commits touch the closure in ${rangeSpec} — nothing to classify`);
+  console.log(JSON.stringify({
+    mode: selected[0], identity: range.identity, root: t3Root, range: rangeSpec,
+    signal, total: 0, counts: {}, rows: [],
+  }, null, 2));
   process.exit(0);
 }
 
-console.error(`[classify-churn] classifying ${commits.length} commits touching the closure...`);
+console.error(
+  `[classify-churn] ${selected[0]}: classifying ${commits.length} commits touching the closure ` +
+    `in ${rangeSpec} (${range.identity} checkout ${t3Root})...`,
+);
 
 /**
  * Emit the closure's consumed schemas at one commit, without touching the
@@ -291,5 +360,8 @@ for (const [index, commit] of commits.entries()) {
 
 const counts = rows.reduce((acc, r) => ({ ...acc, [r.verdict]: (acc[r.verdict] ?? 0) + 1 }), {});
 
-console.log(JSON.stringify({ range: since, total: rows.length, counts, rows }, null, 2));
+console.log(JSON.stringify({
+  mode: selected[0], identity: range.identity, root: t3Root, range: rangeSpec,
+  total: rows.length, counts, rows,
+}, null, 2));
 console.error(`[classify-churn] ${JSON.stringify(counts)}`);

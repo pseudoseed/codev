@@ -48,9 +48,18 @@ to keep, rather than silently performing a cold start under a restart's name.
 Each server lifetime prints **one** pairing token, and a pairing grant is one-time, so a client
 that reconnects after a restart needs the new token `ready` reports.
 
-Environment: `T3CODE_ROOT` (default `/Users/chris/dev/t3code`), `T3_HARNESS_PORT` (default 3799),
-`T3_HARNESS_DIR` (default `tools/t3-server/.runtime`), and required `T3_NODE` (the Node binary used
-for the server).
+Environment: `T3CODE_ROOT` (upstream clone, default `/Users/chris/dev/t3code`),
+`T3CODE_FORK_ROOT` (private fork checkout, default `/Users/chris/dev/t3code-codev`),
+`T3_HARNESS_PORT` (default 3799), `T3_HARNESS_DIR` (default `tools/t3-server/.runtime`), and
+required `T3_NODE` (the Node binary used for the server). `T3_PIN_FILE` overrides which pin is
+asserted against; it exists so the two-identity failure modes can be tested against real
+checkouts, not so anyone runs against a different pin by habit.
+
+**Two identities (spec 250).** `acquire`, `start` and `status` work against the UPSTREAM clone and
+are pinned to `pin.upstreamBase`, never to `pin.commit` — `pin.commit` names the fork head, and
+`acquire` is the one verb here that writes. `verify` asserts both: upstream at `upstreamBase`,
+fork at `commit`, and `merge-base(commit, upstreamBase) == upstreamBase`. Failures name which
+identity failed. See `tools/t3-fork/FORK.md`.
 
 Binds loopback only. Spec 146's Security constraints make loopback the default and exposing an
 interface an explicit act; a test harness never exposes one.
@@ -179,7 +188,9 @@ refused.
 
 CI does not have this checkout. The rule is:
 
-- If `T3CODE_ROOT` resolves and `verify` exits `0`, run the live-server tests.
+- If `T3CODE_ROOT` resolves and the upstream half of `verify` passes, run the live-server tests.
+  The fork suite is gated separately on `T3CODE_FORK_ROOT`, so a machine with only the upstream
+  clone reports one suite run and one suite skipped rather than one green run covering neither.
 - Otherwise **skip them and say so in the run output** — never silently pass. The test in
   `packages/codev/src/__tests__/spec-146-t3-contract.test.ts` follows this: it warns explicitly
   that a missing checkout is "could not check", not "checked and fine".

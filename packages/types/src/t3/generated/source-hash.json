@@ -11,5 +11,24 @@
     "providerInstance.ts": "0a1fea758707473021ff0e340015a464ff1af785a4bb842b8976a574acb0afaf",
     "sourceControl.ts": "e58dc3e8612be6e16bf25d9ee13a9c5d8a02807995f086abe544558544cd7f85",
     "vcs.ts": "41470d7316088e6fd85710df794076bc6311ca851816856c028a24a8cd4e63db"
+  },
+  "upstream": {
+    "commit": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
+    "available": true,
+    "files": {
+      "auth.ts": "b76da11bb49d5dde810b96dcb40bc9c2d208d649e8746382e54e56566e3be6af",
+      "baseSchemas.ts": "70b8e290a3b3c898766eb74dfab5299dbf547a5f0817e180d4ad3463462da719",
+      "environment.ts": "7aef220a852e35cdc6538ba439742d51d51ec27619dddf326764ac789a081a63",
+      "git.ts": "0d95b17b6aba4e808951a94c734c398c877e1a334572db659a815d093b3bdabb",
+      "model.ts": "0749c9085481e3500f156646d4216fb78436764272d97480e059a193fc6982fc",
+      "orchestration.ts": "6a03ed579719c74d35e68ea41e5ecc082d38a129dd3f030306ccd0d4159a7631",
+      "providerInstance.ts": "0a1fea758707473021ff0e340015a464ff1af785a4bb842b8976a574acb0afaf",
+      "sourceControl.ts": "e58dc3e8612be6e16bf25d9ee13a9c5d8a02807995f086abe544558544cd7f85",
+      "vcs.ts": "41470d7316088e6fd85710df794076bc6311ca851816856c028a24a8cd4e63db"
+    }
+  },
+  "forkDrift": {
+    "measured": true,
+    "changedFiles": []
   }
 }

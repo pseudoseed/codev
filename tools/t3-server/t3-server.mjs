@@ -13,7 +13,7 @@
  *
  * Commands:
  *   acquire   clone/fetch the pinned commit into a checkout
- *   verify    assert the checkout, and any running server, match pin.json
+ *   verify    assert both checkouts, and any running server, match pin.json
  *   start     start a server from the pinned checkout on a private data dir
  *   restart   stop and start again, KEEPING the data dir
  *   stop      stop it
@@ -22,6 +22,20 @@
  * Exit codes: 0 ok, 1 mismatch or failure, 3 "could not determine".
  * Three codes, not two, because "I could not tell" must not exit the same way as
  * "verified fine".
+ *
+ * ---------------------------------------------------------------------------
+ * Spec 250 — two identities.
+ *
+ * `acquire`, `start` and `status` are pinned to `upstreamBase`, NOT to
+ * `pin.commit`. `acquire()` runs `checkout --detach` against the upstream clone;
+ * once `pin.commit` names the fork head, leaving that line on `pin.commit` would
+ * write a FORK sha into the read-only upstream clone, from an ordinary test run.
+ * The server this harness starts is the upstream one, because it is what the spec
+ * 146 and 236 evidence reproduces against.
+ *
+ * `verify` is the verb that knows about both: upstream at `upstreamBase`, fork at
+ * `commit`, and `merge-base(commit, upstreamBase) === upstreamBase` so a rebase
+ * that dropped the base cannot pass quietly.
  */
 
 import { execFileSync, spawn } from 'node:child_process';
@@ -31,20 +45,36 @@ import {
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { MISMATCH, OK, UNDETERMINED, resolveIdentities } from '../t3-fork/identities.mjs';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
-const pin = JSON.parse(readFileSync(join(repoRoot, 'packages', 'types', 'src', 't3', 'pin.json'), 'utf8'));
 
-const t3Root = process.env.T3CODE_ROOT ?? '/Users/chris/dev/t3code';
+/**
+ * `T3_PIN_FILE` overrides which pin this run asserts against.
+ *
+ * It exists so the two-identity failure modes can be tested for real. "Fork is
+ * dirty at its pin" and "the fork's merge-base is not upstreamBase" are only
+ * reachable with checkouts that actually sit on the pinned shas, and a test
+ * cannot make a throwaway repository produce t3code's shas. The alternative was
+ * to assert those paths by reading the source, which proves nothing about what
+ * the process does.
+ */
+const pinPath = process.env.T3_PIN_FILE ?? join(repoRoot, 'packages', 'types', 'src', 't3', 'pin.json');
+const pin = JSON.parse(readFileSync(pinPath, 'utf8'));
+
+const { upstream, fork } = resolveIdentities(pin);
+
+/**
+ * The upstream clone. Every verb below except `verify`'s fork half works against
+ * this one, and it is pinned to `upstreamBase` rather than `pin.commit`.
+ */
+const t3Root = upstream.root;
 const runtimeDir = process.env.T3_HARNESS_DIR ?? join(here, '.runtime');
 const pidFile = join(runtimeDir, 'server.pid');
 const portFile = join(runtimeDir, 'server.port');
 const runtimeFile = join(runtimeDir, 'server-runtime.json');
 const port = Number(process.env.T3_HARNESS_PORT ?? 3799);
-
-const OK = 0;
-const MISMATCH = 1;
-const UNDETERMINED = 3;
 
 function say(message) {
   console.error(`[t3-server] ${message}`);
@@ -61,20 +91,31 @@ function gitIn(dir, ...args) {
 
 // ------------------------------------------------------------------ acquire
 
+/**
+ * Acquire the UPSTREAM checkout at `upstreamBase`.
+ *
+ * The commit named here is `upstream.commit`, never `pin.commit`. This function
+ * is the only one in the file that writes to a checkout, `smoke.mjs` and
+ * `live/integration.mjs` both call it, and once the fork diverges `pin.commit`
+ * names a sha that exists only in the fork. Checking that out here would move the
+ * read-only clone off its pin and invalidate every piece of recorded evidence,
+ * silently, from a test run nobody thought was destructive.
+ */
 function acquire() {
+  const wanted = upstream.commit;
   if (!existsSync(t3Root)) {
     die(
       UNDETERMINED,
-      `No checkout at ${t3Root}. Clone it first:\n` +
-        `  git clone ${pin.repo} ${t3Root}\n` +
+      `No upstream checkout at ${t3Root}. Clone it first:\n` +
+        `  git clone ${upstream.repo} ${t3Root}\n` +
         `Then re-run. This harness never clones into a path it did not create.`,
     );
   }
   try {
-    gitIn(t3Root, 'cat-file', '-e', `${pin.commit}^{commit}`);
-    say(`pinned commit ${pin.commit.slice(0, 12)} already present`);
+    gitIn(t3Root, 'cat-file', '-e', `${wanted}^{commit}`);
+    say(`upstream base ${wanted.slice(0, 12)} already present`);
   } catch {
-    say(`fetching ${pin.commit.slice(0, 12)}...`);
+    say(`fetching ${wanted.slice(0, 12)}...`);
     gitIn(t3Root, 'fetch', 'origin');
   }
 
@@ -82,61 +123,138 @@ function acquire() {
   // leaving the tree wherever it already was — so `acquire` reported success
   // without acquiring anything, and only `verify` would have noticed.
   const head = gitIn(t3Root, 'rev-parse', 'HEAD');
-  if (head !== pin.commit) {
+  if (head !== wanted) {
     const dirty = gitIn(t3Root, 'status', '--porcelain');
     if (dirty) {
       die(
         MISMATCH,
-        `Checkout has uncommitted changes; refusing to check out ${pin.commit.slice(0, 12)} over them.\n${dirty}`,
+        `Upstream checkout has uncommitted changes; refusing to check out ${wanted.slice(0, 12)} over them.\n${dirty}`,
       );
     }
-    say(`checking out ${pin.commit.slice(0, 12)} (was ${head.slice(0, 12)})`);
-    gitIn(t3Root, 'checkout', '--detach', pin.commit);
+    say(`checking out ${wanted.slice(0, 12)} (was ${head.slice(0, 12)})`);
+    gitIn(t3Root, 'checkout', '--detach', wanted);
   }
 
-  verify();
+  verifyUpstream();
 }
 
 // ------------------------------------------------------------------ verify
 
-function verify(mismatchSignal = 'CHECKOUT_MISMATCH') {
-  if (!existsSync(t3Root)) {
-    die(UNDETERMINED, `No checkout at ${t3Root}; cannot verify. This is "unknown", not "fine".`);
+/**
+ * Assert one checkout sits clean on the commit its identity pins it to.
+ *
+ * Every failure names WHICH identity failed. With one checkout "CHECKOUT_MISMATCH"
+ * was unambiguous; with two it is a sentence that does not say what to fix.
+ */
+function verifyCheckout(identity, mismatchSignal) {
+  const label = identity.name;
+  if (!existsSync(identity.root)) {
+    die(
+      UNDETERMINED,
+      `NO_${label.toUpperCase()}_CHECKOUT: could not check: nothing at ${identity.root}. ` +
+        `Set ${identity.rootVar} or create the checkout. This is "unknown", not "fine".`,
+    );
   }
 
   let head;
   try {
-    head = gitIn(t3Root, 'rev-parse', 'HEAD');
+    head = gitIn(identity.root, 'rev-parse', 'HEAD');
   } catch (error) {
-    die(UNDETERMINED, `Could not read HEAD of ${t3Root}: ${error.message}`);
+    die(
+      UNDETERMINED,
+      `NO_${label.toUpperCase()}_HEAD: could not check: could not read HEAD of ${identity.root}: ${error.message}`,
+    );
   }
 
-  if (head !== pin.commit) {
+  if (head !== identity.commit) {
     die(
       MISMATCH,
-      `${mismatchSignal}\n` +
-        `  pin.json: ${pin.commit}\n` +
-        `  checkout: ${head}\n` +
+      `${mismatchSignal} (identity: ${label})\n` +
+        `  pin.json: ${identity.commit}\n` +
+        `  ${identity.root}: ${head}\n` +
         `Any phase that tested against this was not testing the pinned contract.`,
     );
   }
 
   let dirty = '';
   try {
-    dirty = gitIn(t3Root, 'status', '--porcelain');
+    dirty = gitIn(identity.root, 'status', '--porcelain');
   } catch {
     /* reported below as undetermined */
   }
   if (dirty) {
     die(
       MISMATCH,
-      `Checkout is at the pinned commit but has uncommitted changes:\n${dirty}\n` +
-        `The clone is meant to be read-only. Results from it are not reproducible.`,
+      `DIRTY_${label.toUpperCase()}_CHECKOUT (identity: ${label})\n` +
+        `${identity.root} is at its pinned commit but has uncommitted changes:\n${dirty}\n` +
+        `Results from it are not reproducible.`,
     );
   }
 
-  say(`verified: ${t3Root} is clean at ${pin.commit.slice(0, 12)} (${pin.commitDate})`);
   return head;
+}
+
+/** The read-only clone of pingdotgg/t3code, pinned at `upstreamBase`. */
+function verifyUpstream(mismatchSignal = 'CHECKOUT_MISMATCH') {
+  const head = verifyCheckout(upstream, mismatchSignal);
+  say(`verified upstream: ${upstream.root} is clean at ${head.slice(0, 12)} (${pin.commitDate})`);
+  return head;
+}
+
+/**
+ * The private customization checkout, pinned at `commit`.
+ *
+ * Beyond "clean at the pin" it asserts the fork still *descends* from
+ * `upstreamBase`. A rebase, a squash, or a fresh branch cut from somewhere else
+ * all leave a fork that is clean at a commit nobody can relate to upstream, and
+ * without this check that state verifies green while every churn range computed
+ * from it is meaningless. An unresolvable merge-base is `3`, not `1`: we could
+ * not tell, which is not the same as "it failed".
+ */
+function verifyFork(mismatchSignal = 'FORK_CHECKOUT_MISMATCH') {
+  const head = verifyCheckout(fork, mismatchSignal);
+
+  let mergeBase;
+  try {
+    mergeBase = gitIn(fork.root, 'merge-base', head, fork.base);
+  } catch (error) {
+    die(
+      UNDETERMINED,
+      `NO_FORK_MERGE_BASE: could not check: could not resolve merge-base of ${head.slice(0, 12)} ` +
+        `and upstreamBase ${fork.base.slice(0, 12)} in ${fork.root}: ${error.message}`,
+    );
+  }
+
+  if (mergeBase !== fork.base) {
+    die(
+      MISMATCH,
+      `FORK_BASE_MISMATCH (identity: fork)\n` +
+        `  upstreamBase:      ${fork.base}\n` +
+        `  merge-base:        ${mergeBase}\n` +
+        `The fork no longer descends from the upstream base it claims. Every fork-drift\n` +
+        `range measured against ${fork.base.slice(0, 12)} would be a diff between unrelated trees.`,
+    );
+  }
+
+  say(
+    `verified fork: ${fork.root} is clean at ${head.slice(0, 12)} on ${fork.base.slice(0, 12)}` +
+      `${head === fork.base ? ' (not yet diverged)' : ''}`,
+  );
+  return head;
+}
+
+/**
+ * Both identities. `start` and `acquire` deliberately verify only upstream.
+ *
+ * The signal is threaded through to both halves. `ready` passes
+ * `CHECKOUT_MOVED_DURING_RUN`, which is a different fact from a checkout that was
+ * wrong before the server started, and dropping it on the way to the fork half
+ * would have made the two indistinguishable.
+ */
+function verify(mismatchSignal) {
+  const upstreamHead = verifyUpstream(mismatchSignal ?? 'CHECKOUT_MISMATCH');
+  const forkHead = verifyFork(mismatchSignal ?? 'FORK_CHECKOUT_MISMATCH');
+  return { upstream: upstreamHead, fork: forkHead };
 }
 
 // ------------------------------------------------------------------ start / stop
@@ -386,7 +504,10 @@ function assertChildSurvived(pid, runtime) {
  * fate.
  */
 function start({ keepData = false } = {}) {
-  verify();
+  // Upstream only. The server this harness starts IS the upstream one, and
+  // requiring a fork checkout to exist before a spec 146 evidence run could start
+  // would couple the older evidence to the newer customization for no reason.
+  verifyUpstream();
   const runtime = serverRuntime();
 
   const existing = readPid();
@@ -653,20 +774,50 @@ function restart() {
   start({ keepData: true });
 }
 
+/**
+ * Report what is running and whether the checkouts sit on their pins.
+ *
+ * `pin` / `checkout` / `matchesPin` keep their spec 146 meaning — the UPSTREAM
+ * checkout against `upstreamBase` — because that is what the recorded evidence
+ * and the running server describe. The fork is reported alongside as its own
+ * object rather than folded into the same three keys, and its absence is
+ * `available: false`, not a mismatch: the fork not being there is a different
+ * fact from the fork being wrong.
+ */
 function status() {
   const pid = readPid();
   if (!existsSync(t3Root)) {
-    console.log(JSON.stringify({ checkout: null, matchesPin: 'unknown', server: null }, null, 2));
+    console.log(JSON.stringify({ checkout: null, matchesPin: 'unknown', fork: null, server: null }, null, 2));
     process.exit(UNDETERMINED);
   }
   const head = gitIn(t3Root, 'rev-parse', 'HEAD');
-  const matches = head === pin.commit;
+  const matches = head === upstream.commit;
+
+  let forkStatus = { root: fork.root, available: false, head: null, matchesPin: 'unknown' };
+  if (existsSync(fork.root)) {
+    try {
+      const forkHead = gitIn(fork.root, 'rev-parse', 'HEAD');
+      forkStatus = {
+        root: fork.root,
+        available: true,
+        head: forkHead,
+        pin: fork.commit,
+        matchesPin: forkHead === fork.commit,
+      };
+    } catch {
+      /* left as available:false / matchesPin:'unknown' — an unreadable HEAD is not a "no" */
+    }
+  }
+
   console.log(
     JSON.stringify(
       {
-        pin: pin.commit,
+        pin: upstream.commit,
         checkout: head,
         matchesPin: matches,
+        upstreamBase: upstream.commit,
+        forkPin: fork.commit,
+        fork: forkStatus,
         server: pid ? { pid, port: Number(readFileSync(portFile, 'utf8').trim()) } : null,
         runtime: existsSync(runtimeFile) ? JSON.parse(readFileSync(runtimeFile, 'utf8')) : null,
       },

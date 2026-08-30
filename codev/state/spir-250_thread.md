@@ -353,3 +353,70 @@ phase 7.** That is an explicit instruction, not a suggestion.
 Nothing has been built yet. No repo created, no code written. Phase 1's first act is
 `gh repo create pseudoseed/t3code --private` — never `gh repo fork`, see the plan's executive
 summary for why the two are not interchangeable.
+
+---
+
+## Phase 1 — Two-identity vendoring harness
+
+### What a human can see or do now that they could not before
+
+**Nothing.** This is infrastructure, exactly as the table above predicts for phase 1. There is a
+private repository that did not exist, and the tooling can now hold two checkouts without
+confusing them. Nothing renders. Phase 7 is still the first phase that puts anything on a screen.
+
+### What landed
+
+`pseudoseed/t3code` created with `gh repo create --private` — **not** `gh repo fork`, because a
+fork inherits the source repository's visibility and cannot be private off a public parent.
+Asserted rather than inferred: `gh repo view` reports `visibility: PRIVATE`, `isFork: false`.
+Branch `codev` at `082e6ea5`, checked out at `/Users/chris/dev/t3code-codev`, `origin` = the
+private repo, `upstream` = `pingdotgg/t3code`. MIT `LICENSE` byte-identical to upstream's.
+
+`/Users/chris/dev/t3code` is untouched: still on branch `main` at `082e6ea5`, clean tree. The
+fork was cloned with `--no-hardlinks` so the two repositories share no object files at all.
+
+New `tools/t3-fork/identities.mjs` holds the mapping once. Every tool asks it rather than
+re-deriving `process.env.T3CODE_ROOT ?? '<literal path>'`, and a test asserts that — the "seven
+readers" table is now executable rather than a paragraph.
+
+### The destructive one, and how it is now tested
+
+`acquire()` does `checkout --detach` against the upstream clone, and `smoke.mjs` and
+`live/integration.mjs` both call it. On `pin.commit` it would have written a fork sha into the
+read-only clone from an ordinary test run. `acquire`, `start` and `status` are now pinned to
+`upstreamBase`; `verify` is the only verb that knows about both.
+
+The test for it does not read the source. It builds a throwaway repo with two commits, points
+`upstreamBase` at the earlier one and `commit` at the later one, runs `acquire`, and asserts
+which sha the tree landed on.
+
+### T3_PIN_FILE
+
+New env override on `t3-server.mjs`. "Fork is dirty at its pin" and "the fork's merge-base is not
+`upstreamBase`" are only reachable with checkouts sitting on the pinned shas, and no test can make
+a throwaway repository produce t3code's shas. The alternative was asserting those paths by reading
+the source, which proves nothing about what the process does.
+
+### Two things the fixtures taught
+
+Two git repos built from identical bytes, message and a fixed author identity in the same second
+produce the **same commit sha**. The "unrelated histories" fixture shared a commit with the tree
+it was supposed to be unrelated to, so it exited 0 where 3 was expected. `makeRepo` now writes
+unique content per repository.
+
+A fork that *lacks* the base commit and a fork that has it but no longer descends from it are two
+different answers: `3` (NO_FORK_MERGE_BASE) and `1` (FORK_BASE_MISMATCH). Both are tested.
+
+### Port 3799 was held by someone else
+
+A `t3 serve` from the main checkout (`--base-dir /Users/chris/dev/codev-1455`, started 13:58) held
+3799, so the first evidence run failed with `EADDRINUSE` reported as "no pairing token". Not killed
+— it is not this session's. The cold-start evidence was re-collected on `T3_HARNESS_PORT=3811`.
+
+### Deferred / notes for later phases
+
+- `source-hash.json` now has an `upstream` section and a `forkDrift` block. Both read as
+  "not yet diverged" because the fork head equals `upstreamBase`. Phase 5 is where they start
+  carrying information.
+- `classify-churn --upstream-movement` reports 3 closure commits between `upstreamBase` and
+  `origin/main`. Upstream has moved; that is a phase-5 decision, not a phase-1 one.

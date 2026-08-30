@@ -31,6 +31,21 @@
  * for three reasons: the pinned clone has no `node_modules` so `effect` would
  * not resolve from it; the staged copy is what gets hashed, so the hash covers
  * exactly what was read; and it keeps the tool from ever writing to the clone.
+ *
+ * WHICH CHECKOUT THIS GENERATES FROM (spec 250)
+ * ---------------------------------------------
+ * The FORK. `pin.commit` keeps its meaning — the commit the artifacts came from —
+ * and from phase 5 that commit lives only in the private customization checkout.
+ * Generating from the upstream clone while asserting `HEAD === pin.commit` would
+ * be unsatisfiable the moment the fork diverges, so the root moves with the
+ * commit rather than the assertion being loosened.
+ *
+ * `source-hash.json` therefore records TWO sections. `files` is the fork closure,
+ * as before, and `upstream` is the same closure hashed at `upstreamBase` from the
+ * upstream clone. Without the second section, "the generated artifacts match the
+ * source they were generated from" is a tautology: it compares the fork to
+ * itself. With it, the fork's divergence from upstream is a fact on disk that a
+ * test can read.
  */
 
 import { createHash } from 'node:crypto';
@@ -38,6 +53,8 @@ import { mkdirSync, readFileSync, writeFileSync, rmSync, cpSync, existsSync } fr
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
+
+import { resolveIdentities } from '../t3-fork/identities.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
@@ -47,22 +64,26 @@ const stagingDir = join(here, '.staging');
 
 const checkOnly = process.argv.includes('--check');
 
-/** Where the pinned t3code checkout lives. Overridable so CI can place it elsewhere. */
-const t3Root = process.env.T3CODE_ROOT ?? '/Users/chris/dev/t3code';
-
 function fail(message) {
   console.error(`[t3-codegen] ${message}`);
   process.exit(1);
 }
 
-// ---------------------------------------------------------------- pin + checkout
+// ---------------------------------------------------------------- pin + checkouts
 
 const pin = JSON.parse(readFileSync(pinPath, 'utf8'));
+const { upstream, fork } = resolveIdentities(pin);
+
+/**
+ * The checkout generation reads. It is the FORK, because `pin.commit` is the fork
+ * head; `T3CODE_FORK_ROOT` overrides it so CI can place it elsewhere.
+ */
+const t3Root = fork.root;
 
 if (!existsSync(t3Root)) {
   fail(
-    `No t3code checkout at ${t3Root}.\n` +
-      `Set T3CODE_ROOT, or clone ${pin.repo} and check out ${pin.commit}.\n` +
+    `No fork checkout at ${t3Root}.\n` +
+      `Set ${fork.rootVar}, or clone ${fork.repo ?? 'the private fork'} and check out ${pin.commit}.\n` +
       `This is a HARD FAILURE, not a skip: generating from a checkout that is not there\n` +
       `would silently emit nothing and read as success.`,
   );
@@ -77,11 +98,30 @@ try {
 
 if (headSha !== pin.commit) {
   fail(
-    `Checkout is at ${headSha} but pin.json says ${pin.commit}.\n` +
+    `Fork checkout is at ${headSha} but pin.json says ${pin.commit}.\n` +
       `Generating against an unpinned tree would produce artifacts nobody can reproduce.\n` +
       `Either check out the pinned commit, or run the refresh procedure in REFRESH.md\n` +
       `to move the pin deliberately.`,
   );
+}
+
+/**
+ * The upstream clone, read only to hash the same closure at `upstreamBase`.
+ *
+ * Its absence does not fail generation: the fork is what the artifacts come from,
+ * and refusing to generate because a second, purely comparative checkout is
+ * missing would make a reference measurement a build dependency. It is recorded
+ * as `available: false` instead, which is spelled differently from "the hashes
+ * matched".
+ */
+const upstreamRoot = upstream.root;
+let upstreamHead = null;
+if (existsSync(upstreamRoot)) {
+  try {
+    upstreamHead = execFileSync('git', ['-C', upstreamRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  } catch {
+    upstreamHead = null;
+  }
 }
 
 // ---------------------------------------------------------------- stage the closure
@@ -124,6 +164,48 @@ for (const file of pin.closure.slice().sort()) {
   const bytes = readFileSync(join(stagingDir, file));
   sourceHash.files[file] = createHash('sha256').update(bytes).digest('hex');
 }
+
+/**
+ * The upstream closure at `upstreamBase`, hashed from the upstream clone.
+ *
+ * `files` above is the fork, and a hash of the fork checked against artifacts
+ * generated from the fork proves only that the generator is deterministic. This
+ * section is the other end of the comparison: it says what upstream's bytes were
+ * at the base we branched from, so fork drift is a subtraction rather than a
+ * claim. `available: false` when the upstream clone is absent or its HEAD has
+ * moved off the base — an unmeasured section must not read as a measured match.
+ */
+sourceHash.upstream = { commit: upstream.commit, available: false, files: {} };
+if (upstreamHead === null) {
+  sourceHash.upstream.reason = `no readable upstream checkout at ${upstreamRoot}`;
+} else if (upstreamHead !== upstream.commit) {
+  sourceHash.upstream.reason =
+    `${upstreamRoot} is at ${upstreamHead}, not upstreamBase ${upstream.commit}; ` +
+    'hashing it would record the wrong tree under the right name';
+} else {
+  const upstreamContracts = join(upstreamRoot, pin.contractsRoot);
+  const missing = pin.closure.filter((file) => !existsSync(join(upstreamContracts, file)));
+  if (missing.length > 0) {
+    sourceHash.upstream.reason = `closure files absent from the upstream checkout: ${missing.join(', ')}`;
+  } else {
+    for (const file of pin.closure.slice().sort()) {
+      const bytes = readFileSync(join(upstreamContracts, file));
+      sourceHash.upstream.files[file] = createHash('sha256').update(bytes).digest('hex');
+    }
+    sourceHash.upstream.available = true;
+  }
+}
+
+/** How many closure files the fork has actually changed. Zero until phase 5. */
+sourceHash.forkDrift = sourceHash.upstream.available
+  ? {
+    measured: true,
+    changedFiles: pin.closure
+      .slice()
+      .sort()
+      .filter((file) => sourceHash.files[file] !== sourceHash.upstream.files[file]),
+  }
+  : { measured: false, reason: sourceHash.upstream.reason };
 
 // ---------------------------------------------------------------- emit schemas
 

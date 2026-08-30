@@ -43,6 +43,18 @@ const readSchemas = () => readJson(join(generated, 'schema.json')).schemas as Re
 const T3_ROOT = process.env.T3CODE_ROOT ?? '';
 const HAS_CHECKOUT = T3_ROOT !== '' && existsSync(join(T3_ROOT, 'packages', 'contracts', 'src'));
 
+/**
+ * Spec 250 adds a second checkout, so `T3CODE_ROOT` alone no longer says which
+ * tree a live assertion is about. `T3_ROOT` keeps its spec 146 meaning — the
+ * UPSTREAM clone at `upstreamBase` — and the fork gets its own variable and its
+ * own gate. Two questions, two skips: a run with only the upstream checkout must
+ * report the fork suite as skipped rather than passing it by comparing upstream
+ * to itself.
+ */
+const T3_FORK_ROOT = process.env.T3CODE_FORK_ROOT ?? '';
+const HAS_FORK_CHECKOUT =
+  T3_FORK_ROOT !== '' && existsSync(join(T3_FORK_ROOT, 'packages', 'contracts', 'src'));
+
 describe('spec 146: packages/types stays dependency-free', () => {
   it('declares no runtime dependencies', () => {
     const pkg = readJson(join(typesRoot, 'package.json'));
@@ -140,11 +152,40 @@ describe('spec 146: the emitter is lossy, and says so', () => {
  * is none, so its absence is legible in the run output instead of disappearing
  * into a green unit run.
  */
-describe.skipIf(!HAS_CHECKOUT)(`spec 146 [live: needs t3code checkout at ${T3_ROOT || '$T3CODE_ROOT (unset)'}]`, () => {
-  it('hashes match the pinned checkout', () => {
+describe.skipIf(!HAS_CHECKOUT)(`spec 146 [live: needs upstream t3code checkout at ${T3_ROOT || '$T3CODE_ROOT (unset)'}]`, () => {
+  /**
+   * Spec 250: this compares the UPSTREAM section against the UPSTREAM clone.
+   *
+   * Before the fork existed, `hashes.files` and this checkout were the same tree,
+   * so one assertion covered both. `hashes.files` is now the fork's closure, and
+   * checking it here would start failing the moment we customize anything — and,
+   * worse, would report our own deliberate change as upstream drift.
+   */
+  it('upstream hashes match the upstream checkout at upstreamBase', () => {
     const pin = readJson(join(t3Root, 'pin.json'));
     const contracts = join(T3_ROOT, pin.contractsRoot);
     const hashes = readJson(join(generated, 'source-hash.json'));
+
+    expect(
+      hashes.upstream?.available,
+      `source-hash.json records no upstream measurement (${hashes.upstream?.reason ?? 'no reason given'}); ` +
+        'regenerate with the upstream clone present rather than treating an unmeasured section as a match',
+    ).toBe(true);
+    expect(hashes.upstream.commit).toBe(pin.upstreamBase);
+
+    for (const [file, expected] of Object.entries<string>(hashes.upstream.files)) {
+      const actual = createHash('sha256').update(readFileSync(join(contracts, file))).digest('hex');
+      expect(actual, `${file} drifted from the recorded upstream hash`).toBe(expected);
+    }
+  });
+});
+
+describe.skipIf(!HAS_FORK_CHECKOUT)(`spec 250 [live: needs fork checkout at ${T3_FORK_ROOT || '$T3CODE_FORK_ROOT (unset)'}]`, () => {
+  it('generated hashes match the fork checkout the artifacts came from', () => {
+    const pin = readJson(join(t3Root, 'pin.json'));
+    const contracts = join(T3_FORK_ROOT, pin.contractsRoot);
+    const hashes = readJson(join(generated, 'source-hash.json'));
+    expect(hashes.commit).toBe(pin.commit);
     for (const [file, expected] of Object.entries<string>(hashes.files)) {
       const actual = createHash('sha256').update(readFileSync(join(contracts, file))).digest('hex');
       expect(actual, `${file} drifted from the pinned hash`).toBe(expected);
@@ -286,7 +327,10 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
       join(repoRoot, 'tools', 't3-codegen', 'classify-churn.mjs'),
       'utf8',
     );
-    const emptyBranch = /no commits touch the closure in that range[\s\S]{0,400}?process\.exit\((\d)\)/.exec(src);
+    // Spec 250 gave the empty result a mode-specific signal, so the message names
+    // the range rather than saying "that range". The property under test is
+    // unchanged: an empty range exits 0.
+    const emptyBranch = /no commits touch the closure in \$\{rangeSpec\}[\s\S]{0,600}?process\.exit\((\d)\)/.exec(src);
     expect(emptyBranch, 'the empty-range branch should still exist').not.toBeNull();
     expect(emptyBranch?.[1], 'an empty range is not a failure').toBe('0');
   });
@@ -294,8 +338,17 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
   it('the harness keeps a third exit code for "could not determine"', () => {
     // 0 verified, 1 mismatch, 3 could-not-determine. Collapsing 3 into either of
     // the others is what makes a missing checkout read as a passing check.
+    //
+    // Spec 250 moved the constants into `tools/t3-fork/identities.mjs` so both
+    // checkout identities spell them the same way. The assertion follows them
+    // there and additionally pins that the harness uses the shared definition
+    // rather than redeclaring its own.
+    const shared = readFileSync(join(repoRoot, 'tools', 't3-fork', 'identities.mjs'), 'utf8');
+    expect(shared).toMatch(/export const UNDETERMINED = 3/);
+    expect(shared).toMatch(/export const MISMATCH = 1/);
+
     const src = readFileSync(join(repoRoot, 'tools', 't3-server', 't3-server.mjs'), 'utf8');
-    expect(src).toMatch(/const UNDETERMINED = 3/);
+    expect(src).toMatch(/UNDETERMINED[\s\S]{0,120}from '\.\.\/t3-fork\/identities\.mjs'/);
     expect(src).toMatch(/die\(\s*UNDETERMINED/);
   });
 
