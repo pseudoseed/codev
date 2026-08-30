@@ -253,6 +253,56 @@ describe('spec 250: classify-churn refuses to guess which question it was asked'
   });
 
   /**
+   * The `--upstream-movement` twin of the zero below. Upstream having moved is
+   * the normal state on this machine, so the named zero is reached with a
+   * throwaway checkout whose `origin/main` sits exactly where the range starts:
+   * a real empty range, not a mocked one.
+   */
+  it('reports zero upstream movement as NO_UPSTREAM_MOVEMENT, exit 0', () => {
+    const repo = makeRepo('churn-nomove');
+    try {
+      gitIn(repo.dir, 'update-ref', 'refs/remotes/origin/main', repo.head);
+      const result = spawnSync(
+        process.execPath, [churn, '--upstream-movement', '--since', repo.head], {
+          encoding: 'utf8',
+          env: { ...process.env, T3CODE_ROOT: repo.dir },
+        },
+      );
+      expect(result.status).toBe(OK);
+      const report = JSON.parse(result.stdout);
+      expect(report.mode).toBe('upstream-movement');
+      expect(report.identity).toBe('upstream');
+      expect(report.total).toBe(0);
+      expect(report.signal).toBe('NO_UPSTREAM_MOVEMENT');
+      expect(result.stderr).toContain('NO_UPSTREAM_MOVEMENT');
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Review finding: the ref guard ran before `--since` was applied, so an
+   * unresolvable `--since` slipped past it and surfaced as a raw git error —
+   * exit 1 doing exit 3's job.
+   */
+  it('exits 3 when --since names a ref that does not resolve', () => {
+    const repo = makeRepo('churn-badsince');
+    try {
+      gitIn(repo.dir, 'update-ref', 'refs/remotes/origin/main', repo.head);
+      const result = spawnSync(
+        process.execPath, [churn, '--upstream-movement', '--since', 'f'.repeat(40)], {
+          encoding: 'utf8',
+          env: { ...process.env, T3CODE_ROOT: repo.dir },
+        },
+      );
+      expect(result.status).toBe(UNDETERMINED);
+      expect(result.stderr).toContain('COULD_NOT_TELL');
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
    * Zero fork drift is a real answer and exits 0 — while the fork head equals
    * `upstreamBase` it is the only correct one. It is spelled `NO_FORK_DRIFT` so
    * it cannot be confused with the tool having failed to look.

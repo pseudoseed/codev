@@ -78,3 +78,33 @@ change. The plan puts it at phase 5, so phases 2 through 4 will run with a fork 
 `pin.commit` and bare `verify` will report `FORK_CHECKOUT_MISMATCH` in that window. That is the
 plan's sequencing, not a phase 1 defect, and the per-identity verbs above mean it no longer blocks
 an upstream server. Flagged to the architect rather than resolved here.
+
+---
+
+# Iteration 2 review responses
+
+Both lanes APPROVE. claude raised two non-blocking notes; opencode raised none.
+
+## claude — `--since` bypassed the ref-resolution guard — ACCEPTED
+
+The guard ran over `range.from` before `--since` replaced it, so an unresolvable `--since` ref
+slipped past and surfaced as a raw git error: exit 1 doing exit 3's job.
+
+**Fixed.** The guard now runs after `from` is computed, over the refs actually used. Tested with a
+throwaway checkout and a `--since` naming a sha that does not exist.
+
+## claude — no direct test for the `NO_UPSTREAM_MOVEMENT` named zero — ACCEPTED
+
+Its `NO_FORK_DRIFT` twin was tested; the upstream one was not, because upstream has genuinely
+moved on this machine (3 closure commits between `upstreamBase` and `origin/main`), so the real
+pair cannot produce the zero.
+
+**Fixed.** The test builds a throwaway checkout whose `refs/remotes/origin/main` sits exactly where
+the range starts. A real empty range, not a mocked one.
+
+## claude — items it could not verify without a shell
+
+`gh repo view pseudoseed/t3code --json visibility,isFork,nameWithOwner,defaultBranchRef` returns
+`{"defaultBranchRef":{"name":"codev"},"isFork":false,"nameWithOwner":"pseudoseed/t3code","visibility":"PRIVATE"}`.
+`pnpm -w test`: 7263 passed, 54 skipped, 0 failed, plus 180 in the v2 suite. Both re-run after
+these two fixes.

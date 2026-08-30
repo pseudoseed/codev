@@ -83,18 +83,6 @@ if (!existsSync(t3Root)) {
 
 const git = (...a) => execFileSync('git', ['-C', t3Root, ...a], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
-for (const ref of [range.from, range.to]) {
-  try {
-    git('rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
-  } catch {
-    console.error(
-      `[classify-churn] COULD_NOT_TELL: ${ref} does not resolve in ${t3Root}. ` +
-        `An unreadable ref is "unknown", not "no movement".`,
-    );
-    process.exit(UNDETERMINED);
-  }
-}
-
 const closurePaths = pin.closure.map((f) => `${pin.contractsRoot}/${f}`);
 
 const sinceIdx = args.indexOf('--since');
@@ -106,6 +94,21 @@ const limit = limitIdx >= 0 ? Number(args[limitIdx + 1]) : Infinity;
 // letting it also change WHICH checkout is read is not.
 const from = sinceIdx >= 0 ? args[sinceIdx + 1] : range.from;
 const rangeSpec = `${from}..${range.to}`;
+
+// Resolved AFTER `--since` is applied, so the guard covers the refs actually
+// used. Checking `range.from` here instead would let an unresolvable `--since`
+// past it and surface as a raw git error, which is exit 1 wearing exit 3's job.
+for (const ref of [from, range.to]) {
+  try {
+    git('rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
+  } catch {
+    console.error(
+      `[classify-churn] COULD_NOT_TELL: ${ref} does not resolve in ${t3Root}. ` +
+        `An unreadable ref is "unknown", not "no movement".`,
+    );
+    process.exit(UNDETERMINED);
+  }
+}
 
 const commits = git('log', '--format=%H|%ad|%s', '--date=short', '--reverse', rangeSpec, '--', ...closurePaths)
   .trim()
