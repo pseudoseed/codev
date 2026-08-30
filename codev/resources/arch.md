@@ -943,6 +943,70 @@ packages/codev/dashboard/
 - Desktop (>768px): Split-pane layout with file browser sidebar
 - Mobile (<768px): Single-pane stacked layout, 40-column terminals
 
+### Thread-Backed Agents (t3code)
+
+A thread-backed agent has no PTY: it is a t3code thread driven by library calls. The pieces
+and where they live:
+
+- **`packages/t3-client`** — the socket and `ResumingSubscription`, which resubscribes across
+  drops with `afterSequence` and classifies what came back rather than assuming continuity.
+- **`packages/porch-driver`** — `DriverThread` (one thread = one builder: worktree, session,
+  turns, phase checks), `TurnTracker` (turn lifetime), `PersistentCursor` (the durable
+  last-applied sequence), `DispatchJournal` (command intents, for replay after a crash).
+- **`packages/codev/src/agent-farm/`** — the production wiring: `thread-backend.ts` connects
+  and registers, `porch-thread-engine.ts` is the `ThreadEngine`, `thread-subscriptions.ts`
+  owns the subscriptions, `thread-runtime.ts` holds the per-workspace registries.
+
+**Everything is keyed by canonical workspace root, in Tower's process.** Tower drains mail for
+every workspace from one process, so the engine, the streamer and the subscription pool are all
+per-workspace maps rather than module singletons — a process-global engine meant workspace B's
+turns ran against workspace A's server, under A's project, silently.
+
+**One socket carries three views.** `connectDispatcher` returns a `dispatcher` (commands), a
+`streamer` (the display subscriber's long stream, with `cancel`), and a `subscriber` (the raw
+promise plus request id, which is what `ResumingSubscription` needs because it opens a new
+stream per attempt). Opening a second connection would spend the bootstrap token, which is
+one-time when pairing-issued.
+
+**Turn lifetime is observed, never inferred.** `TurnTracker` resolves a turn's `running` and
+`settled` only from `thread.session-set` events fed to `observe`. An interrupted turn reports
+status `ready` exactly as a finished one does, so status cannot tell them apart; the
+`activeTurnId` transition non-null → null is the turn's actual lifetime, and it counts only
+after RUNNING was seen (the creation event already carries `activeTurnId: null`).
+
+**Who feeds `observe`.** `ThreadSubscriptionPool` holds one `ResumingSubscription` per adopted
+thread, with the cursor under `<workspace>/.codev/thread-cursors/<threadId>` so a Tower restart
+resumes rather than resubscribes cold. `ThreadAdoptionSweeper` reconciles the adopted set
+against `global.db` every 5s, because `ThreadEngine.attach`'s only other caller is mailbox
+delivery — without it a thread is subscribed only when somebody messages it.
+
+**A cold first subscription is the only one that can lose history**, and this is what makes the
+ordering rules non-obvious. The server's snapshot frame is handed to `onValue` but carries no
+readable events, so a turn dispatched before the first subscription attaches can have its
+`running` transition compacted into it. Every resubscription *after* the first sends
+`afterSequence` and replays. Hence: `create` and `startTurn` await attachment; `attach` (which
+adopts but does not dispatch) does not.
+
+Two subscriptions per watched thread exist today — `T3codeSessionCache` keeps its own display
+stream whose `watching`/`stale` vocabulary is built on a stream that *ends*, which a
+`ResumingSubscription` never does. Folding them is issue #251.
+
+### Verified-Wrong Assumptions: t3code subscriptions
+
+- **"A `gap` from `onResume` means the subscription is up and missed a range."** It means one of
+  two different things. `classifyResume` returns a gap when the server SYNCHRONIZED and declined
+  to resume from the cursor — attached, reconcile. `ResumingSubscription`'s `finally` also
+  reports a gap when the attempt died *before* the server signalled catch-up — never attached,
+  and the next attempt is a fresh cold subscribe. The `synchronized` flag on `onResume`'s info
+  is what separates them; keying on `outcome.kind` conflates them in whichever direction you
+  choose.
+- **"`transport.close()` runs when the subscription stops."** It runs in the `finally` of every
+  attempt. A transport that closes a socket shared with the dispatch path takes that path down
+  mid-turn.
+- **"A registered engine implies a live subscription."** A record and a subscription are
+  different objects with different lifetimes: the pool drops an entry on a non-retryable
+  failure while the engine's record survives.
+
 ### Error Handling and Recovery
 
 Agent Farm includes several mechanisms for handling failures and recovering from error states.
