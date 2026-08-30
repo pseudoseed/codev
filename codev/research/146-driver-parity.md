@@ -253,3 +253,32 @@ truth, which is the only thing that stops it becoming the truth's replacement.
   `gh pr create` and not `gh pr merge`, so the GitHub half of the pr phase is untested here on
   any driver. `gh` is a process porch spawns identically in both the thread and PTY worlds,
   which is a reason to expect it unaffected — not evidence that it was checked.
+
+## These runs are SUPERSEDED as of 2026-08-30 (spec 236)
+
+The recorded live runs no longer describe the code they were taken against, and
+`146-phase10-live-evidence.json` carries the matching `supersededBy` block. Stated
+here as well because the evidence file and the record people read must not
+disagree about whether these runs still stand.
+
+**What changed:** packages/t3-client/src/client.ts gained an optional `onRequestId` callback on `stream()`, so a caller can name the request it opened and cancel it. Spec 236 (#236) needed it: T3codeSessionCache subscribes per thread and had no way to stop a subscription whose reason had gone — `cancel(id)` was public while `stream` minted its id privately, so the only interrupt that could ever fire was the idle timeout's.
+
+**Why that matters to these runs.** They were recorded against a `client.ts` that
+could not expose a stream's request id, so nothing in them exercises the
+cancellation path that now exists. The change is purely additive — a new optional
+parameter, no behaviour altered for any existing caller, and every phase-10
+assertion in `spec-146-phase-10-full-protocol.test.ts` still passes — but this
+guard is content-addressed precisely so that "it is only additive" is not the
+argument that lets a real change through.
+
+**Why they were not re-run.** Regenerating needs a live t3code server, and the
+workspace this was done in has none configured. Producing the evidence on a
+machine that cannot produce it is not available; saying the runs are superseded
+is.
+
+**What still stands, and what does not.** Every finding above about driver parity,
+the `--no-enter` blocker (#240) and the untested GitHub half of the pr phase is
+unaffected: none of it turns on how a stream is cancelled. What no longer stands
+is the claim that these runs describe the *current* `packages/t3-client`. The next
+phase 10 re-run should regenerate them.
+

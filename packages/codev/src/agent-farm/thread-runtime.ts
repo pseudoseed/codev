@@ -190,12 +190,26 @@ export function clearCanonicalWorkspaceKeys(): void {
  * says so at the `token-refused` message). A second connection would spend the
  * credential the first one needs.
  */
+/**
+ * One open stream, and the means to stop it.
+ *
+ * `cancel` IS NOT OPTIONAL POLITENESS. A subscription whose reason has gone —
+ * its thread left `global.db`, its workspace stopped being configured — used to
+ * be forgotten from the cache while the stream itself ran on: the server kept
+ * producing values for nobody, an orphaned stream and its replacement could both
+ * write a recreated entry, and each cycle left another pending request behind.
+ * Forgetting bookkeeping is not stopping work.
+ */
+export interface ThreadStream {
+  /** Resolves when the server ends the stream; rejects when the socket does. */
+  readonly done: Promise<unknown>;
+  /** Interrupt it server-side and stop delivering values. Idempotent. */
+  cancel(): void;
+}
+
 export interface ThreadStreamer {
-  /**
-   * Call a streaming t3code method, invoking `onValue` per streamed value.
-   * Resolves when the server ends the stream; rejects when the socket does.
-   */
-  stream(method: string, payload: unknown, onValue: (value: unknown) => void): Promise<unknown>;
+  /** Call a streaming t3code method, invoking `onValue` per streamed value. */
+  stream(method: string, payload: unknown, onValue: (value: unknown) => void): ThreadStream;
 }
 
 const streamers = new Map<string, ThreadStreamer>();

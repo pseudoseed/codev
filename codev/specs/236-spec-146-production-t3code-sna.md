@@ -341,13 +341,30 @@ operator remedies with one word — the failure this initiative is organised aga
 | `misconfigured` | a `threads` block that is half-written | the provider, from the connector's `misconfigured` |
 | `connecting` | a connect is in flight; nothing observed yet | the provider, from the connector's `connecting` |
 | `cooling-down` | the last connect failed and no retry happens until the window passes; carries when and why | the provider, from the connector's `cooling-down` |
-| `unreachable` | configured and reached for, and not reachable now | the provider, and any host observing unreachability another way |
+| `unreachable` | configured and reached for, and not reachable now | **reserved — not emitted by Tower's provider.** See the note below |
 | `available` | observed within the freshness window; carries `observedAt` | the provider, from a fresh cache entry |
 | `stale` | last observed before the freshness window; carries `observedAt` and the age | the provider, from an aged cache entry |
 
 `connecting` and `cooling-down` must not collapse into `unreachable`: one resolves on its own
 and the other will not until a timer passes, which is the difference between "wait" and "go
 look at your server".
+
+**`unreachable` is reserved, and this is a deliberate revision of the contract rather than a
+narrowing.** `ThreadBackendAvailability` — what the connector answers — has no `unreachable`
+kind: a failed connect becomes `cooling-down`, which carries when, why, and that no retry
+happens until a timer passes, and a connect in flight is `connecting`. There is no third state
+in which Tower knows a server is unreachable and has nothing to add, so a provider that emitted
+`unreachable` would be emitting a *less* informative version of `cooling-down`.
+
+It stays in the vocabulary rather than being deleted, because deleting it collapses
+"unreachable" into "cooling-down" at the type level — the very conflation the eight statuses
+exist to prevent — and the next producer that genuinely observes unreachability would have to
+reintroduce it or lie. `readThreadRegistry` signals `T3CODE_UNREACHABLE` on it and the failure
+matrix carries that row.
+
+**The claim is pinned by a test** that asserts exactly which statuses Tower's provider can emit,
+so the table above and the code cannot drift apart again. Criterion 2 is therefore *eight
+statuses in the vocabulary, seven emitted by this provider*, and both halves are checkable.
 
 #### Decision 1 — staleness policy
 

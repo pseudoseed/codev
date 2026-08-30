@@ -27,6 +27,7 @@ import {
 import { MACHINE_SIGNAL, type MachineCredentialStore } from '../lib/machine-credentials.js';
 import {
   APPROVAL_OPERATION_SIGNAL,
+  mayRead,
   type ApprovalOperationState,
   type ApprovalOperationStore,
 } from '../lib/approval-operations.js';
@@ -1047,7 +1048,15 @@ function handleApprovalSubmit(
       return;
     }
 
-    const submission = operations.submit({ workspacePath, projectId, gateName, sessionId: humanSessionId });
+    const submission = operations.submit({
+      workspacePath,
+      projectId,
+      gateName,
+      sessionId: humanSessionId,
+      // The machine the CAPABILITY was issued for, which is this host's own name
+      // — the same value that ends up in `status.yaml` beside the approval.
+      machine: stored.machine,
+    });
     if (!submission.accepted) {
       // 409, not 400: the request is well formed and would be valid at another
       // moment. A client told "bad request" retries with different input; one
@@ -1056,13 +1065,26 @@ function handleApprovalSubmit(
       return;
     }
 
-    const { operationId } = submission.operation;
+    const { operationId, receipt } = submission.operation;
     // ACCEPTED, not approved. 202 is the whole point of this route: the gate is
     // NOT approved at this moment, and a client that read 200 as done would
     // report an outcome that has not happened.
     writeJson(res, 202, {
       signal: APPROVAL_OPERATION_SIGNAL.APPROVAL_OPERATION_SUBMITTED,
       operationId,
+      /*
+       * RETURNED ONCE, AND IT IS WHAT MAKES THE INTERRUPTED STATE READABLE.
+       *
+       * Human sessions are memory-only, so the restart that resolves an
+       * operation to `interrupted` also destroys the session that submitted it —
+       * and a poll authorised on session identity alone could never succeed
+       * afterwards. The durable record whose whole purpose is surviving that
+       * restart would have been unobservable by the client that needed it.
+       *
+       * Hold it for as long as you care about this approval; present it with the
+       * same machine credential to read the outcome after a restart.
+       */
+      receipt,
       projectId,
       gateName,
       state: 'submitted',
@@ -1310,7 +1332,7 @@ function handleApprovalOperation(
   res: http.ServerResponse,
   url: URL,
   context: AgentRouteContext,
-  humanSessionId: string,
+  caller: { readonly sessionId: string; readonly machine?: string },
 ): void {
   const match = url.pathname.match(/^\/api\/agent\/v1\/workspaces\/([^/]+)\/gates\/approvals\/([^/]+)$/);
   const operationId = match ? decodeURIComponent(match[2]) : '';
@@ -1344,12 +1366,26 @@ function handleApprovalOperation(
     });
     return;
   }
-  // One session must not read another's approval, for the same reason it cannot
-  // spend another's capability.
-  if (operation.sessionId !== humanSessionId) {
+  /*
+   * One session must not read another's approval, for the same reason it cannot
+   * spend another's capability — but session identity ALONE cannot be the rule.
+   *
+   * Sessions are memory-only. The restart that resolves an operation to
+   * `interrupted` destroys the session that submitted it, so a session-only
+   * check would 403 forever on exactly the record that state exists to deliver,
+   * and a fresh pairing would fare no better. The receipt handed back at submit,
+   * presented from the same machine, is the second way in.
+   */
+  if (!mayRead(operation, {
+    sessionId: caller.sessionId,
+    machine: caller.machine,
+    receipt: url.searchParams.get('receipt') ?? undefined,
+  })) {
     writeJson(res, 403, {
       signal: APPROVAL_SIGNAL.APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION,
-      message: 'that approval was submitted by a different human session',
+      message:
+        'that approval was submitted by a different human session. If this host restarted, '
+        + 'present the receipt returned when it was submitted, from the same machine.',
     });
     return;
   }
@@ -1506,7 +1542,10 @@ export function handleAgentRoute(
         writeJson(res, 404, { signal: 'WORKSPACE_NOT_REGISTERED' });
         return true;
       }
-      handleApprovalOperation(res, url, context, outcome.humanSessionId as string);
+      handleApprovalOperation(res, url, context, {
+        sessionId: outcome.humanSessionId as string,
+        machine: outcome.machine,
+      });
       return true;
     }
 

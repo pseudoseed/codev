@@ -758,3 +758,56 @@ since two specs now have one.
 The lesson is the one from phase 6 in a different costume: I fixed the documents the plan listed
 and not the adjacent ones. Grepping for the stale instruction — rather than editing the files I
 had in mind — is what found the last two.
+
+## Post-PR review round — codex REQUEST_CHANGES (3) + my own claude lane (3)
+
+All six verified against the code before acting. Every one was real.
+
+### codex, all three confirmed
+
+1. **`unreachable` was advertised and unreachable.** `ThreadBackendAvailability` has no
+   `unreachable` kind and `snapshot()` contains zero occurrences, so the provider could never
+   emit it while my spec's table said it did. **Did not delete the variant** — that folds
+   "unreachable" into "cooling-down" at the type level, the exact conflation the eight statuses
+   exist to prevent. Revised the contract deliberately: eight in the vocabulary, seven emitted by
+   this provider, `unreachable` reserved for a producer that genuinely observes it. Pinned by a
+   test that drives every connector state and asserts the emittable set, plus a second that reads
+   the connector's own union so a new state cannot fall through unmapped.
+2. **Interrupted operations were unpollable.** Sessions are memory-only; the poll required
+   `operation.sessionId === humanSessionId`. So the restart that creates the `interrupted` record
+   also destroys the only session that could read it — **the durable state whose entire purpose is
+   surviving a restart was unobservable by the client that needed it.** Added `machine` + an
+   unguessable `receipt` returned once at submit; `mayRead()` accepts the submitting session OR
+   the receipt from the same machine. Machine alone would not do: every session on a paired
+   device presents that device's credential.
+3. **`#forget` cancelled nothing, and my test hid it.** The sharpest of the three. `#forget`
+   dropped bookkeeping while the stream ran on, and the test called the fake's `forget()` — a
+   thing production never does — so the test performed the cleanup whose absence was the defect.
+   `T3Client.cancel(id)` was public but `stream()` minted its id privately, so cancellation was
+   unreachable by construction; added an `onRequestId` callback, gave the streamer a
+   `{ done, cancel }` handle, and the fake now removes its sink **only** on `cancel()`. The test
+   asserts `held.cancelled()`, so it fails if production stops cancelling.
+
+### my claude lane, all three confirmed
+
+4. **A test pinned stale documentation.** `agent-auth.test.ts` asserted the runbook says "Today,
+   revoke at the host" and `completePairing` "has no production caller" — both false since phase
+   11 added the human-sessions route. A test whose job was keeping the runbook honest had become
+   the thing keeping it stale: any correct fix reddened it. Now pins the property that still
+   matters.
+5. Runbook still said the human-session route was "not yet reachable by a person".
+6. **I broke the pairing procedure.** My `## Withdraw a device` section landed between "the
+   client exchanges it:" and its redeem block. Removed it; the content belongs in the existing
+   "Revoke one device", which is where it now lives.
+
+### And phase 10's evidence guard caught my t3-client change
+
+Changing `client.ts` reddened `spec-146-phase-10-full-protocol.test.ts`, which content-hashes the
+files its recorded live runs describe. Re-running needs a live t3code server this workspace has
+none configured for, so I took the guard's documented second path: `supersededBy` in the evidence
+JSON **and** a matching note in `146-driver-parity.md`, naming the same change. The guard requires
+both or stays red, which is the right shape — setting the hatch costs the same as writing the
+truth. Recorded that the change is purely additive *and* that "only additive" is exactly the
+argument a content-addressed guard exists to refuse.
+
+Suites: 7126 server, 265 client, 0 failing. Not pushed — architect asked me to hold.

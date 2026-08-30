@@ -145,6 +145,27 @@ export interface ApprovalOperation {
   readonly gateName: string;
   /** The human session that submitted it. Never the capability's secret. */
   readonly sessionId: string;
+  /**
+   * The machine the approving capability was issued for.
+   *
+   * Persisted because the SESSION IS NOT. Human sessions live in memory and die
+   * with the process, so after the restart that resolves an operation to
+   * `interrupted`, its `sessionId` names a session that can never authenticate
+   * again — and the record whose entire purpose is surviving that restart became
+   * unreadable by the client that needed it. The machine survives; a receipt
+   * makes it sufficient without making it shared.
+   */
+  readonly machine: string;
+  /**
+   * An unguessable receipt, returned once at submit.
+   *
+   * THE SECOND HALF OF POST-RESTART READABILITY, and the reason machine
+   * ownership alone is not the rule: every session on a paired machine presents
+   * the same machine credential, so machine-only would let any of them read any
+   * approval submitted from that device. The receipt is what the submitting
+   * client holds, so it reads its own and no others.
+   */
+  readonly receipt: string;
   readonly owner: OperationOwner;
   readonly submittedAt: string;
   state: ApprovalOperationState;
@@ -220,6 +241,36 @@ const TERMINAL: ReadonlySet<ApprovalOperationState> = new Set([
 
 export function isTerminal(state: ApprovalOperationState): boolean {
   return TERMINAL.has(state);
+}
+
+/**
+ * May this caller read this operation?
+ *
+ * TWO WAYS IN, and the second exists because the first cannot survive a restart.
+ *
+ * 1. **The submitting session**, while it is still alive. The ordinary case.
+ * 2. **The same machine, presenting the receipt** it was handed at submit. This
+ *    is what makes an `interrupted` record readable at all: the restart that
+ *    creates that state also destroys every human session, so rule 1 can never
+ *    match afterwards and the durable outcome would be unobservable by the only
+ *    client that needs it.
+ *
+ * Machine ownership alone would NOT do: every session on a paired device
+ * presents that device's credential, so it would expose one person's approvals
+ * to another session on the same machine. The receipt is the part only the
+ * submitter holds, and the machine check is what stops a receipt being useful
+ * from somewhere else.
+ */
+export function mayRead(
+  operation: ApprovalOperation,
+  caller: { readonly sessionId?: string; readonly machine?: string; readonly receipt?: string },
+): boolean {
+  if (caller.sessionId !== undefined && operation.sessionId === caller.sessionId) return true;
+  return caller.receipt !== undefined
+    && caller.receipt.length > 0
+    && operation.receipt === caller.receipt
+    && caller.machine !== undefined
+    && operation.machine === caller.machine;
 }
 
 export interface ApprovalOperationStoreOptions {
@@ -324,6 +375,7 @@ export class ApprovalOperationStore {
     readonly projectId: string;
     readonly gateName: string;
     readonly sessionId: string;
+    readonly machine: string;
     readonly maxConcurrent?: number;
   }): { readonly accepted: true; readonly operation: ApprovalOperation }
     | { readonly accepted: false; readonly code: ApprovalOperationSignal; readonly message: string } {
@@ -363,6 +415,8 @@ export class ApprovalOperationStore {
         projectId: input.projectId,
         gateName: input.gateName,
         sessionId: input.sessionId,
+        machine: input.machine,
+        receipt: randomUUID(),
         owner: this.#owner,
         submittedAt: new Date(this.#now()).toISOString(),
         state: 'submitted',

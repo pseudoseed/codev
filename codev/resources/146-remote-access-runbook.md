@@ -42,32 +42,14 @@ token.
 That prints a token of the form `<pairingId>.<secret>`, valid for **10 minutes**
 and redeemable **once**. Run it in a terminal you are looking at; do not redirect
 it to a file and do not pass it as an argument to anything — argv is world-readable
-through `ps` and lands in shell history. Then on the device, the client exchanges
-it:
+through `ps` and lands in shell history.
 
 > This used to say there was no `afx` subcommand and showed a direct
 > `new PairingStore().issue()` call. That call now **throws**: `purpose` and
 > `authority` are both required. The runbook is the operator surface, so it says
 > what an operator runs.
 
-## Withdraw a device
-
-```bash
-afx pair list                 # what is outstanding, and which machines are paired
-afx pair revoke <machine>     # withdraw its credential AND its approval capabilities
-```
-
-`revoke` writes the stores directly, so it works **holding nothing** and with
-Tower stopped — which is when you most want it. Over HTTP the revoke routes are
-`human-session`, which includes `machine-credential`, so revoking there required
-already holding the credential being withdrawn; that is why the CLI exists. The
-trade this makes is recorded in `146-approval-threat-model.md` under *Who can
-revoke, and the trade that decides it* — it is an availability trade, not a
-confidentiality one, and it is stated as a trade.
-
-Revocation is a tombstone: that machine's every request then fails closed with
-`MACHINE_CREDENTIAL_REVOKED`, no other machine is touched, and the old secret can
-never be revived. Re-pair with `afx pair issue` if it was a mistake.
+Then on the device, the client exchanges it:
 
 ```
 POST /api/agent/v1/pairing/redeem
@@ -214,12 +196,33 @@ lsof -nP -iTCP:4100 -sTCP:LISTEN   # want 127.0.0.1:4100, not *:4100
 
 Revocation is per machine and does not disturb any other.
 
-**Today, revoke at the host.** The HTTP route below needs a human-paired session,
-and nothing mints one yet — `completePairing` has no production caller, because
-phase 6 left pairing completion an internal seam and the browser client that
-performs it arrives in a later phase. So the route exists, is authenticated, and
-is not yet reachable by a person. Saying otherwise here would be a runbook step
-that cannot be followed.
+```bash
+afx pair list                 # what is outstanding, and which machines are paired
+afx pair revoke <machine>     # withdraw its credential AND its approval capabilities
+```
+
+**This is the command to use**, and it works **holding nothing** and with Tower
+stopped — which is when you most want it. It writes both stores directly: the
+machine credential and that machine's approval capabilities, because revoking
+only the first would leave a withdrawn device still able to present a live
+capability to `porch approve`.
+
+The HTTP route below is `human-session`, and `human-session` includes
+`machine-credential` — so revoking there requires already holding the credential
+you are withdrawing. That is why the CLI exists, and the trade it makes is
+recorded in `146-approval-threat-model.md` under *Who can revoke, and the trade
+that decides it*: an availability trade, not a confidentiality one, stated as a
+trade.
+
+> This section used to say **"Today, revoke at the host"** because
+> `completePairing` had no production caller and the HTTP route was unreachable
+> by a person. Both facts changed: phase 11 added `POST /api/agent/v1/human-sessions`
+> as that caller, and spec 236 added `afx pair`. The route is reachable now; it is
+> simply not the one to reach for at a terminal.
+
+Revocation is a tombstone: that machine's every request then fails closed with
+`MACHINE_CREDENTIAL_REVOKED`, no other machine is touched, and the old secret can
+never be revived. Re-pair with `afx pair issue` if it was a mistake.
 
 ```bash
 node --input-type=module -e "

@@ -348,8 +348,20 @@ export class T3Client {
     payload: unknown,
     onValue: (value: unknown) => void,
     timeoutMs?: number,
+    /**
+     * The request id, handed back the moment it is minted.
+     *
+     * WITHOUT THIS, `cancel` IS UNREACHABLE FOR A STREAM. `cancel(id)` is public
+     * and `stream` mints its id privately, so a caller holding a long-lived
+     * subscription had no way to name it — the only interrupt that could ever
+     * fire was the idle timeout's. A subscriber that stops caring then leaves the
+     * server producing values for nobody, which is the state this class's own
+     * comment at the top calls out as the thing not to do.
+     */
+    onRequestId?: (id: number) => void,
   ): Promise<unknown> {
     const id = this.#nextId++;
+    onRequestId?.(id);
     // IDLE, not total. A stream's timeout counts silence, not duration.
     //
     // This was a total-duration timeout, so a healthy subscription under

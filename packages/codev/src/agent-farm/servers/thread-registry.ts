@@ -87,6 +87,28 @@ export interface T3codeObservation {
  * `not-provided` is a host that wires no provider at all. It is NOT the same as
  * `not-configured`, which is a host that asked and found this workspace names no
  * t3code server.
+ *
+ * ## `unreachable` is RESERVED, not emitted by Tower's provider
+ *
+ * Stated here because a status a consumer is told to expect and no producer can
+ * emit is worse than one that does not exist: it invites a branch nothing will
+ * ever take, and a reader who sees it in the union assumes somebody sends it.
+ *
+ * `ThreadBackendAvailability` — what Tower's connector actually answers — has no
+ * `unreachable` kind. A failed connect becomes `cooling-down`, which is strictly
+ * MORE informative: it carries when the failure was, why, and that no retry
+ * happens until a timer passes. A connect in flight is `connecting`. There is no
+ * third state where Tower knows the server is unreachable and has nothing to add.
+ *
+ * It is kept rather than deleted, deliberately. Deleting it would fold
+ * "unreachable" into "cooling-down" at the type level, and the next producer that
+ * genuinely observes unreachability — a host watching a socket it did not open,
+ * a future connector that reports a hard refusal separately from a backoff —
+ * would have to reintroduce it or lie. `readThreadRegistry` signals
+ * `T3CODE_UNREACHABLE` on it, and `agent-failure-matrix` carries that row.
+ *
+ * `spec-236-t3code-session-cache.test.ts` pins the set Tower's provider can
+ * actually emit, so this paragraph cannot quietly stop being true.
  */
 export type T3codeThreadSnapshot =
   | { readonly status: 'not-provided' }

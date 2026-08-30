@@ -395,7 +395,20 @@ async function pollApproval(
     return refusal(submitted, 'the server did not accept the approval');
   }
 
-  const url = api(config, `/workspaces/${workspace}/gates/approvals/${encodeURIComponent(operationId)}`);
+  /*
+   * THE RECEIPT IS CARRIED ON EVERY POLL, and it is what makes an interrupted
+   * approval readable at all.
+   *
+   * Human sessions live in the host's memory, so the restart that resolves an
+   * operation to `interrupted` destroys the session that submitted it. A poll
+   * authorised on session identity alone would 403 forever on exactly the record
+   * that state exists to deliver. The receipt, presented from the same machine,
+   * is the second way in — so this client keeps polling across a host restart
+   * instead of losing the answer it was waiting for.
+   */
+  const receipt = text(submitted.body, 'receipt');
+  const query = receipt ? `?receipt=${encodeURIComponent(receipt)}` : '';
+  const url = api(config, `/workspaces/${workspace}/gates/approvals/${encodeURIComponent(operationId)}${query}`);
   const deadline = Date.now() + POLL_LIMIT_MS;
   while (Date.now() < deadline) {
     /*

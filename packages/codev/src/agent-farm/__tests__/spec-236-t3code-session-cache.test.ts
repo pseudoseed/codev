@@ -18,9 +18,10 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { GLOBAL_SCHEMA } from '../db/schema.js';
 import { applyFrame, T3codeSessionCache } from '../servers/t3code-session-cache.js';
@@ -67,21 +68,48 @@ function seededDb(workspace: string, threadIds: readonly string[]): Database.Dat
   return db;
 }
 
-/** A stream the test drives: it hands back the `onValue` sink and never settles. */
+/**
+ * A stream the test drives: it hands back the `onValue` sink and never settles.
+ *
+ * ## `cancel` REMOVES THE SINK, AND THE TEST NEVER DOES
+ *
+ * This used to expose a `forget(threadId)` that the tests called by hand to make
+ * a re-subscribe observable — **a thing production never does.** So the tests
+ * passed while `#forget` cancelled nothing: the test performed the cleanup whose
+ * absence was the defect, and hid it perfectly.
+ *
+ * Now the fake behaves like the real one: only `cancel()` removes the sink, and
+ * only production calls `cancel()`. If `#forget` stops cancelling, the sink stays
+ * and the re-subscribe assertions fail — which is what a test of cancellation
+ * has to be.
+ */
 function heldStream() {
   const sinks = new Map<string, (value: unknown) => void>();
   const settle = new Map<string, () => void>();
+  const cancelled: string[] = [];
   const stream = (_method: string, payload: unknown, onValue: (value: unknown) => void) => {
     const threadId = (payload as { threadId: string }).threadId;
     sinks.set(threadId, onValue);
-    return new Promise<unknown>((resolve) => settle.set(threadId, () => resolve(undefined)));
+    const done = new Promise<unknown>((resolve) => settle.set(threadId, () => resolve(undefined)));
+    return {
+      done,
+      cancel: () => {
+        // Idempotent, like the real one, and it stops delivery — a cancelled
+        // stream that kept calling `onValue` would let an orphan write a
+        // recreated entry, which is half of what cancellation is for.
+        if (!sinks.has(threadId)) return;
+        cancelled.push(threadId);
+        sinks.delete(threadId);
+        settle.delete(threadId);
+      },
+    };
   };
   return {
     stream,
     emit(threadId: string, frame: unknown) { sinks.get(threadId)?.(frame); },
     end(threadId: string) { settle.get(threadId)?.(); },
-    /** Drop the record of a subscription, so a re-subscribe is observable. */
-    forget(threadId: string) { sinks.delete(threadId); settle.delete(threadId); },
+    /** Which threads production actually cancelled, in order. */
+    cancelled() { return [...cancelled]; },
     subscribed() { return [...sinks.keys()].sort(); },
   };
 }
@@ -574,7 +602,9 @@ describe('a subscription does not outlive its reason', () => {
 
     db.prepare('DELETE FROM builders WHERE thread_id = ?').run('th-1');
     cache.sweep();
-    held.forget('th-1');
+    // NOT `held.forget(...)`. The sweep must have cancelled it, and the sink is
+    // gone only because production did that — which is the whole assertion.
+    expect(held.cancelled()).toEqual(['th-1']);
     expect(held.subscribed()).toEqual([]);
 
     db.prepare(`
@@ -597,10 +627,15 @@ describe('a subscription does not outlive its reason', () => {
       streamerFor: () => ({ stream: held.stream }),
     });
     cache.sweep();
-    held.forget('th-1');
+    expect(held.subscribed()).toEqual(['th-1']);
 
     availability = { kind: 'not-configured' };
     cache.sweep();
+    // A workspace that stops being configured cancels its streams, rather than
+    // leaving the server producing values for a workspace nobody is reading.
+    expect(held.cancelled()).toEqual(['th-1']);
+    expect(held.subscribed()).toEqual([]);
+
     availability = { kind: 'ready' };
     cache.sweep();
     expect(held.subscribed()).toEqual(['th-1']);
@@ -732,5 +767,100 @@ describe('through buildAgentProtocolSnapshot, as the route builds it', () => {
     // NOT `not-provided`: a provider is wired and it answered. The two are
     // different facts and this is the seam where they used to be one.
     expect(payload.protocol.t3code).toBe('not-configured');
+  });
+});
+
+/**
+ * WHICH STATUSES THIS PROVIDER CAN ACTUALLY EMIT (Spec 236, phase 2, revised).
+ *
+ * The spec's status table promised eight and the provider could reach seven:
+ * `ThreadBackendAvailability` has no `unreachable` kind, so a failed connect
+ * becomes `cooling-down` and there is no path to `unreachable` at all. A status
+ * a consumer is told to expect and no producer can emit is worse than one that
+ * does not exist — it invites a branch nothing will ever take.
+ *
+ * The contract was revised deliberately rather than the variant deleted: deleting
+ * it folds "unreachable" into "cooling-down" at the type level, which is the
+ * conflation the eight statuses exist to prevent, and the registry still signals
+ * `T3CODE_UNREACHABLE` on it for a producer that genuinely observes it.
+ *
+ * This test is what stops the table and the code drifting apart again. It is
+ * exhaustive over the connector's OWN union, so a new connector state that this
+ * provider forgets to map fails here rather than reaching a client as something
+ * misleading.
+ */
+describe('the statuses Tower\'s provider can emit', () => {
+  const CONNECTOR_STATES: ThreadBackendAvailability[] = [
+    { kind: 'ready' },
+    { kind: 'connecting' },
+    { kind: 'cooling-down', since: 1_700_000_000_000, message: 'ECONNREFUSED' },
+    { kind: 'not-configured' },
+    { kind: 'misconfigured', message: 'serverUrl without bootstrapToken' },
+  ];
+
+  it('emits seven of the eight, and never `unreachable`', async () => {
+    const emitted = new Set<string>();
+    for (const availability of CONNECTOR_STATES) {
+      for (const threads of [[] as string[], ['th-1']]) {
+        for (const observe of [false, true]) {
+          const workspace = tmp();
+          const db = seededDb(workspace, threads);
+          const held = heldStream();
+          let clock = 1_000;
+          const cache = cacheFor({
+            db, workspace, stream: held.stream, availability, now: () => clock, freshForMs: 60_000,
+          });
+          cache.sweep();
+          if (observe && threads.length > 0) held.emit('th-1', snapshotFrame());
+          emitted.add(cache.snapshot(workspace).status);
+          // And again once the content has aged, which is the only path to `stale`.
+          if (observe && threads.length > 0) {
+            held.end('th-1');
+            // The drop is recorded in a `.then`, so the ageing this asserts only
+            // starts after a microtask. Reading the snapshot synchronously here
+            // would sample the entry while it still counts as watched.
+            await Promise.resolve();
+            await Promise.resolve();
+            clock += 120_000;
+            emitted.add(cache.snapshot(workspace).status);
+          }
+          db.close();
+          dbs.splice(dbs.indexOf(db), 1);
+        }
+      }
+    }
+    // A workspace the maintainer has never reached is the eighth path.
+    emitted.add(cacheFor({ db: seededDb(tmp(), []), workspace: '/x' }).snapshot('/never-swept').status);
+
+    expect([...emitted].sort()).toEqual([
+      'available', 'connecting', 'cooling-down', 'misconfigured', 'not-configured', 'stale',
+    ]);
+    // The two the provider cannot produce, for two different reasons:
+    // `unreachable` has no connector state behind it, and `not-provided` is what
+    // a host that wires NO provider reports — this one is the provider.
+    expect(emitted.has('unreachable')).toBe(false);
+    expect(emitted.has('not-provided')).toBe(false);
+  });
+
+  /*
+   * The connector's union is the input side of the same claim. If a state is
+   * added there, this fails and whoever added it has to decide what the provider
+   * says — rather than it silently falling through to `connecting`.
+   */
+  it('is exhaustive over the connector states that exist', () => {
+    const source = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '..', 'thread-backend.ts'),
+      'utf8',
+    );
+    // Ends at the blank line after the union, NOT at the first `;` — the members
+    // carry their own semicolons (`{ kind: 'cooling-down'; since: number; … }`),
+    // so slicing there read three of the five kinds and the test would have
+    // "passed" over a list it could not see.
+    const from = source.indexOf('export type ThreadBackendAvailability');
+    const union = source.slice(from, source.indexOf('\n\n', from));
+    const kinds = [...union.matchAll(/kind: '([a-z-]+)'/g)].map((m) => m[1]).sort();
+    expect(kinds.length, 'the connector union could not be read; this test has gone blind')
+      .toBeGreaterThan(0);
+    expect(kinds).toEqual([...CONNECTOR_STATES.map((s) => s.kind)].sort());
   });
 });

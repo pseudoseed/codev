@@ -21,6 +21,7 @@ import {
   setThreadEngine,
   setThreadStreamer,
   tryGetThreadEngine,
+  type ThreadStream,
 } from './thread-runtime.js';
 import { logger } from './utils/logger.js';
 import { loadConfig } from '../lib/config.js';
@@ -207,7 +208,7 @@ async function connectDispatcher(
    * command. One socket rather than two, because opening a second would spend
    * the bootstrap token — see `token-refused` below for why that is one-time.
    */
-  streamer: { stream: (m: string, p: unknown, onValue: (v: unknown) => void) => Promise<unknown> };
+  streamer: { stream: (m: string, p: unknown, onValue: (v: unknown) => void) => ThreadStream };
   accessToken: string;
   /**
    * Hang up. Every path that abandons this connection before an engine owns it must
@@ -299,8 +300,37 @@ async function connectDispatcher(
   return {
     dispatcher: { call: (method: string, payload: unknown) => client.call(method, payload) },
     streamer: {
-      stream: (method: string, payload: unknown, onValue: (value: unknown) => void) =>
-        client.stream(method, payload, onValue),
+      /*
+       * The request id is captured as it is minted so `cancel` can name THIS
+       * stream. `T3Client.cancel` has always been public; `stream` minted its id
+       * privately, so a long-lived subscription had no way to be stopped and the
+       * only interrupt that could fire was the idle timeout's.
+       *
+       * `cancel` is idempotent and safe before the id arrives (it cannot, in
+       * practice — `onRequestId` fires synchronously inside `stream` — but a
+       * guard costs nothing and an ordering assumption written as a guarantee is
+       * how this repository has been bitten before).
+       */
+      stream: (method: string, payload: unknown, onValue: (value: unknown) => void): ThreadStream => {
+        let requestId: number | undefined;
+        let cancelled = false;
+        const done = client.stream(method, payload, (value) => {
+          if (!cancelled) onValue(value);
+        }, undefined, (id) => { requestId = id; });
+        return {
+          done,
+          cancel: () => {
+            if (cancelled) return;
+            cancelled = true;
+            if (requestId === undefined) return;
+            try {
+              client.cancel(requestId);
+            } catch {
+              /* the socket is already gone; there is nothing to interrupt through */
+            }
+          },
+        };
+      },
     },
     accessToken: access.access_token,
     close: () => {

@@ -48,7 +48,11 @@
  */
 
 import type Database from 'better-sqlite3';
-import { canonicalWorkspaceKey, tryGetThreadStreamer } from '../thread-runtime.js';
+import {
+  canonicalWorkspaceKey,
+  tryGetThreadStreamer,
+  type ThreadStream,
+} from '../thread-runtime.js';
 import { requestThreadBackend, type ThreadBackendAvailability } from '../thread-backend.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 import type {
@@ -152,16 +156,16 @@ export interface T3codeSessionCacheOptions {
   readonly discardAfterMs?: number;
   readonly sweepMs?: number;
   /** Injected for tests; production reads the real registry. */
-  readonly streamerFor?: (workspaceRoot: string) => { stream: ThreadStream } | undefined;
+  readonly streamerFor?: (workspaceRoot: string) => { stream: StreamFn } | undefined;
   /** Injected for tests; production asks the real connector. */
   readonly availabilityFor?: (workspaceRoot: string) => ThreadBackendAvailability;
 }
 
-type ThreadStream = (
+type StreamFn = (
   method: string,
   payload: unknown,
   onValue: (value: unknown) => void,
-) => Promise<unknown>;
+) => ThreadStream;
 
 /**
  * Is this thread settled, from the two fields t3code uses to say so?
@@ -281,7 +285,16 @@ export function applyFrame(
  */
 export class T3codeSessionCache {
   readonly #caches = new Map<string, WorkspaceCache>();
-  readonly #subscribed = new Set<string>();
+  /**
+   * The OPEN STREAMS, not merely the fact that one was opened.
+   *
+   * This was a `Set<string>` of keys, so forgetting a subscription forgot the
+   * bookkeeping and left the stream running: the server kept producing values
+   * for nobody, an orphaned stream and its replacement could both write a
+   * recreated entry, and each cycle leaked a pending request. A set of names
+   * cannot cancel anything.
+   */
+  readonly #subscribed = new Map<string, ThreadStream>();
   readonly #now: () => number;
   readonly #freshForMs: number;
   readonly #discardAfterMs: number;
@@ -511,7 +524,11 @@ export class T3codeSessionCache {
    */
   #forget(key: string, cache: WorkspaceCache, threadId: string): void {
     cache.threads.delete(threadId);
-    this.#subscribed.delete(subscriptionKeyFor(key, threadId));
+    const subscriptionKey = subscriptionKeyFor(key, threadId);
+    // CANCEL, then forget. The other order would drop the only reference to the
+    // handle and leave the stream running with nothing able to stop it.
+    this.#subscribed.get(subscriptionKey)?.cancel();
+    this.#subscribed.delete(subscriptionKey);
   }
 
   /** Every workspace `global.db` knows about. Same query shape the routes use. */
@@ -571,10 +588,9 @@ export class T3codeSessionCache {
    * block. When it ends, for any reason, the entry stops being watched and starts
    * ageing, and the next pass re-subscribes if the backend is ready again.
    */
-  #ensureSubscribed(key: string, threadId: string, stream: ThreadStream): void {
+  #ensureSubscribed(key: string, threadId: string, stream: StreamFn): void {
     const subscriptionKey = subscriptionKeyFor(key, threadId);
     if (this.#subscribed.has(subscriptionKey)) return;
-    this.#subscribed.add(subscriptionKey);
 
     const settle = (reason: string): void => {
       this.#subscribed.delete(subscriptionKey);
@@ -599,9 +615,9 @@ export class T3codeSessionCache {
     // `stream` must not escape the maintenance pass and stop the interval — and
     // it buys it without making "subscribed" true one turn of the event loop
     // after the pass that decided it.
-    let pending: Promise<unknown>;
+    let opened: ThreadStream;
     try {
-      pending = stream(SUBSCRIBE_THREAD, { threadId }, (value) => {
+      opened = stream(SUBSCRIBE_THREAD, { threadId }, (value) => {
         const entry = this.#caches.get(key)?.threads.get(threadId);
         if (!entry) return;
         // LIVENESS, NOT CHANGE. Every frame — including one that carries no
@@ -618,7 +634,10 @@ export class T3codeSessionCache {
       settle(error instanceof Error ? error.message : String(error));
       return;
     }
-    void pending.then(
+    // Registered only once the stream is actually open, so a `stream` that threw
+    // never leaves a handle behind that `cancel` would call into.
+    this.#subscribed.set(subscriptionKey, opened);
+    void opened.done.then(
       () => settle('the server ended the stream'),
       (error: unknown) => settle(error instanceof Error ? error.message : String(error)),
     );
