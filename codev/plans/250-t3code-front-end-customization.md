@@ -88,6 +88,25 @@ approach 1 is rejected and stays rejected:
   **review aid** — so a reviewer of the Codev PR can read the six changes without cloning the
   fork. It is never the mechanism by which the fork is built or rebased.
 
+### The browser harness lives in this repository, not the fork
+
+Criteria 1, 2, 3, 5, 5b and 7 are all "verified in t3code's own web app", and 5 and 5b are
+measurements — pane boxes in CSS px, computed font size — that only a real browser produces.
+
+**t3code has no browser test tooling at all.** Verified rather than assumed: no `playwright`
+anywhere in its `package.json` files, and `apps/web`'s entire test script is
+`vp test run --passWithNoTests --project unit` with `@effect/vitest` as its only test dependency.
+The first draft of this plan named Playwright verification in three phases without checking that.
+
+This repository already has `@playwright/test ^1.58.0` in `packages/codev`, `apps/client`,
+`apps/v2` and `packages/artifact-canvas`. So the measurement harness lives **here**, driving the
+fork's dev server over HTTP, rather than being added to the fork. Two reasons, in order: it keeps
+the fork diff narrow, which the spec names as the mitigation for unmergeability; and the criteria
+belong to Codev, so the tests that close them belong in Codev's tree where they run in Codev's CI.
+
+The cost is that these tests need a running fork — `pnpm dev:web` plus a server and a seeded
+project — so they are gated on that being up and **report a skip as a skip**, never as a pass.
+
 ### Phase-to-criterion map
 
 | Phase | Success criteria it closes |
@@ -684,7 +703,10 @@ This repository:
 - Unit: one architect / three builders; two architects; mixed `role: null`; orphan; a builder
   whose parent is in another project (which phase 3 refuses at write time, so this asserts the
   renderer does not invent a fallback for a state that cannot exist).
-- Playwright: the three-level tree in the running web app, per `codev/resources/testing-guide.md`.
+- Playwright, **from this repository against the running fork**: the three-level tree in the web
+  app, per `codev/resources/testing-guide.md`. Harness at
+  `packages/codev/src/__tests__/e2e/spec-250-hierarchy.spec.ts`. Gated on a reachable fork dev
+  server; an unreachable one is reported as a skip, never as a pass.
 - Visual: compare the rendered sidebar against t3code's existing sidebar, since a green test
   suite cannot detect a design that lost its chrome.
 
@@ -732,7 +754,8 @@ This repository:
 
 - Unit: gate present with request, gate present without request, no gate, gate cleared.
 - Unit: one to five choices; a choice with no consequence; no recommendation.
-- Playwright: drive a real builder to `plan-approval` and read the panel.
+- Playwright, from this repository: drive a real builder to `plan-approval` and read the panel.
+  Same gating rule — a skip is reported as a skip.
 
 ### Phase 9: Builder tiling
 
@@ -750,6 +773,10 @@ In `/Users/chris/dev/t3code-codev`:
 - `apps/web/src/codev/BuilderGrid.tsx`, `apps/web/src/codev/BuilderPane.tsx` — new.
 - `apps/web/src/routes/…` — a route that hosts the grid.
 - `apps/web/src/codev/layout.test.ts` — new.
+
+This repository:
+- `packages/codev/src/__tests__/e2e/spec-250-tiling.spec.ts` — new. The browser measurement, here
+  rather than in the fork, because the fork has no Playwright and the criteria are Codev's.
 This repository:
 - `tools/t3-fork/FORK.md` — the phase's fork commit logged; this phase's only artifact here.
 
@@ -783,8 +810,13 @@ This repository:
 
 - Unit: `columnsFor` across 1..8 panes at 1440, 1920 and 700, including the 7-at-1920 case as its
   own named test.
-- Playwright: measure pane boxes and computed font size at 1440x900 with six panes; at 1920 with
-  seven; at 390px for overflow.
+- Playwright, from this repository at
+  `packages/codev/src/__tests__/e2e/spec-250-tiling.spec.ts`: measure pane bounding boxes and
+  computed font size at 1440x900 with six panes; at 1920 with seven; at 390px for overflow. These
+  are the numbers criteria 5 and 5b name, and a unit test on `columnsFor` cannot produce them —
+  it proves the arithmetic, not that the rendered pane is 340px wide inside t3code's chrome.
+- The seeded fixture is part of the deliverable: six builder threads with roles and parents, so
+  the measurement runs against a real tree rather than a mocked grid.
 - Visual: the grid beside the `apps/client` grid, to catch content that was dropped rather than
   laid out.
 
@@ -995,6 +1027,8 @@ This repository:
 | **Our columns are invisible in upstream's migration history**, the accepted cost of staying out of the registry | Certain | Low | A named start-up log signal (`CODEV_SCHEMA_GUARD_APPLIED` / `_NOOP`) makes the fact observable rather than only inferrable from the schema |
 | The fork becomes unmergeable | Medium | High | Keep the diff narrow: two record fields, one gate block, one scope, sidebar, tiling, proxy. No refactors of upstream code |
 | Upstream security fix reaches us late — we now fork a server that executes shell commands | Medium | High | Criterion 9's cadence gets an owner and a maximum interval after the first rebase is measured |
+| **t3code has no browser test tooling**, yet six criteria say "verified in t3code's own web app" and two are browser measurements | Was High | High | The Playwright harness lives in this repository (which already has `@playwright/test`) and drives the fork's dev server; the fork gains no test dependency and its diff stays narrow |
+| Browser tests are gated on a running fork, so they can silently not run | Medium | High | A skip is reported as a skip and never counted as a pass — the same rule the spec-146 live suite already follows |
 | Building and testing the fork is a large `pnpm` install on Node ^24.13.1, and the upstream clone currently has **no `node_modules` at all** — verified, not assumed | High | Medium | Fork install is done once in phase 1, before any phase depends on it; the Node advisory already recorded in the harness stands. Per-phase fork test runs are scoped to affected packages, with one full run at phase 11 |
 | **Phase 1 breaks a passing test by design** — editing `t3-server.mjs` invalidates the cold-start evidence `spec-146-t3-contract.test.ts:254` guards | Certain | Low | Re-collecting the evidence against a live pinned server is a planned phase-1 step, not a surprise. The assertion is not loosened |
 | **Phase 5 breaks another** — `:231` asserts `evidence.pinnedCommit === pin.commit`, and `pin.commit` becomes the fork head | Certain | Medium | Re-scoped to `upstreamBase`, because the evidence describes the upstream harness. Re-collecting against the fork would quietly change what it is evidence of |
@@ -1048,6 +1082,14 @@ verified against source before being acted on:
 | Phase 6's new project-map module would be dead code | `thread-backend.ts:442-450` already resolves projects by canonical workspace key; `:785-818` creates them | Confirmed. Phase 6 now extends `ensureThreadBackendReady` instead |
 | Persistence work named too few modules | All four exist: `Services/ProjectionThreads.ts`, `Layers/ProjectionThreads.ts`, `Layers/ProjectionPipeline.ts`, `Layers/ProjectionSnapshotQuery.ts` | Confirmed. Named in phases 2 and 4, with start-up layer ordering asserted |
 | Proxy has no upstream-target trust boundary — SSRF | — | Accepted. Server-held origin allowlist selected by id; absolute URLs refused, redirects not followed |
+
+**A second finding of my own: three phases planned tests with a tool the fork does not have.**
+Phases 7, 8 and 9 named Playwright verification. t3code has no `playwright` in any
+`package.json`, and `apps/web`'s whole test script is `vp test run --passWithNoTests --project
+unit` on `@effect/vitest`. Criteria 5 and 5b are browser *measurements* — pane boxes in CSS px,
+computed font size — so this was not a detail. The harness moved into this repository, which
+already carries `@playwright/test ^1.58.0`, and drives the fork's dev server instead; the fork
+gains no test dependency.
 
 **A third finding of my own, while verifying the above.** Phase 10 and the spec's Security section
 both claimed `connect-src 'self'` "stays closed". Verified in the fork's tree: t3code sets

@@ -188,3 +188,21 @@ The same-origin design is unchanged and still right; the guarantee is structural
 The test now records every request the page makes under Playwright instead of parsing a header.
 Adding a page-level CSP is recorded as a follow-up, explicitly not done: it changes how every
 t3code page loads, far wider than the spec's "keep the diff narrow" constraint.
+
+## My own finding: three phases planned tests with a tool the fork does not have
+
+Phases 7, 8 and 9 all said "verified under Playwright". t3code has no `playwright` in any
+`package.json`, and `apps/web`'s entire test script is
+`vp test run --passWithNoTests --project unit` with `@effect/vitest` as its only test dependency.
+Criteria 5 and 5b are browser measurements — pane bounding boxes in CSS px, computed font size —
+so a vitest unit test cannot close them; it proves the arithmetic in `columnsFor`, not that the
+rendered pane is 340px wide inside t3code's chrome.
+
+Resolved by putting the harness in **this** repository, which already has
+`@playwright/test ^1.58.0` in `packages/codev`, `apps/client`, `apps/v2` and
+`packages/artifact-canvas`, driving the fork's dev server over HTTP. Two reasons in order: it
+keeps the fork diff narrow, which the spec names as its unmergeability mitigation, and the
+criteria are Codev's so the tests that close them belong in Codev's CI.
+
+Cost recorded: those tests need a running fork, so they are gated, and a skip is reported as a
+skip rather than counted as a pass.
