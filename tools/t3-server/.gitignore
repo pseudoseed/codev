@@ -4,4 +4,10 @@
 # signing keys, a state database, and a log containing pairing tokens and
 # WebSocket tickets. An earlier commit swept the whole directory in via
 # `git add tools/t3-server/` and tracked all of it. Review caught it.
-.runtime/
+#
+# The glob is `.runtime*/`, not `.runtime/`. Spec 146 Phase 10 runs several
+# servers at once — one per driver, plus the 24-hour gate — and `T3_HARNESS_DIR`
+# gives each its own directory: `.runtime-claude-1h`, `.runtime-gate-24h`. Those
+# hold the same signing keys and the same tokens, and the narrower pattern
+# covered none of them.
+.runtime*/
