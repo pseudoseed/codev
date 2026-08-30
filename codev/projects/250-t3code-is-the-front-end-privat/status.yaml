@@ -16,6 +16,47 @@ gates:
   plan-approval:
     status: pending
     requested_at: '2026-08-30T20:06:28.609Z'
+    request:
+      question: >-
+        Approve the 11-phase plan for spec 250, which now deviates from the spec in three places you have ruled on or
+        been told about?
+      choices:
+        - label: Approve as written
+          consequence: >-
+            Phase 1 begins: gh repo fork pingdotgg/t3code creates a PUBLIC fork under pseudoseed, clones it to
+            /Users/chris/dev/t3code-codev, adds upstreamBase to pin.json, rewires verify/acquire/start/status to two
+            identities, splits classify-churn into two ranges, and re-collects the spec-146 cold-start evidence. That
+            fork creation is outward-facing and not quietly undoable.
+          recommended: true
+        - label: Approve, but I create the fork myself first
+          consequence: >-
+            Same plan, but phase 1 waits until you have run gh repo fork and told me the fork exists. Removes the only
+            outward-facing act from my hands; costs a round trip.
+        - label: Send back for changes
+          consequence: >-
+            Name what to change. The plan has had three review lanes and two rounds of my own verification, so a fourth
+            pass has diminishing returns unless you disagree with a specific decision.
+      terminalExcerpt: |-
+        RUNNING CHECKS...
+          plan_exists OK
+          has_phases_json OK
+          min_two_phases OK (11 phases)
+
+        Reviews: claude REQUEST_CHANGES, codex REQUEST_CHANGES, opencode REQUEST_CHANGES
+        All findings accepted; nothing in the disagree column.
+
+        Three deviations from the spec as written:
+        1. Migration mechanism - you already ruled on this; spec risk row amended.
+        2. Spec Security section asserts connect-src 'self' stays closed. t3code sets
+           CSP on .svg responses only (http.ts:51,62); there is no page-level CSP.
+           You said you are fixing the Security section.
+        3. Spec test scenarios imply browser verification in t3code. t3code has no
+           Playwright; apps/web is vitest-only. Harness moved into this repo.
+
+        Most damaging finding caught: acquire() checks pin.commit out into the
+        read-only upstream clone (t3-server.mjs:94), called from smoke.mjs:156 and
+        live/integration.mjs:196, so it would have fired from an ordinary test run
+        once pin.commit named the fork.
   pr:
     status: pending
   verify-approval:
@@ -24,4 +65,4 @@ iteration: 1
 build_complete: true
 history: []
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-30T20:06:28.610Z'
+updated_at: '2026-08-30T20:06:48.080Z'
