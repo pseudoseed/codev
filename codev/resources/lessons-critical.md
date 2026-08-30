@@ -12,8 +12,8 @@ MAINTAIN polices the cap and keeps the map in sync with lessons-learned.md's sec
 - "I could not tell" must never be spelled the same way as "no". A truncation, an unreachable API, and a server too old to answer each need their own signal and must emit nothing else — a partial or empty answer reads as a complete, negative one.
 - Single source of truth beats distributed state — consolidate duplicates rather than syncing them.
 - After any rename or framework change, grep the whole repo across BOTH codev/ and codev-skeleton/ before claiming "all fixed."
-- When stuck (2 failed hypotheses or ~30 min), get an outside model's perspective instead of guessing.
-- When guessing fails, build a minimal repro — captured raw data beats speculation.
+- When stuck (2 failed hypotheses or ~30 min), get an outside model's perspective and build a minimal repro — captured raw data beats guessing.
+- A test that constructs the collaborator itself proves the collaborator works, never that production constructs it — assert the wiring against the production source too.
 - "Who calls this in production?" grep before changing a long-lived API — vestigial code survives.
 - Verify reviewer/plan claims against the actual file before acting — summaries are evidence, not ground truth.
 
