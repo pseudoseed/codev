@@ -355,3 +355,75 @@ agreeing with the bug it named; and twice, my own reports — "a re-run was clea
 after one clean run, and a green suite quoted for files it could not see.
 
 The pattern is not something that happened to earlier phases.
+
+## Slices 7 and 8: review rounds 5 and 6
+
+### The regression I introduced fixing a bug
+
+Round 4's fix made codev-agent treat any `StatePushFailed` as "approved but not
+pushed". `approve()` writes three times *before* the gate write, so a push
+failure at any of them reported a completed approval that never happened and
+told the human not to retry.
+
+Round 4's bug made someone re-approve. This one sends them away believing a gate
+is approved that is not. Same class, opposite sign, larger blast radius — and I
+built it while fixing the milder direction.
+
+Round 6 then found the same shape one layer in: `writeState` runs before
+`git add`, so a **commit** failure also leaves the approved gate on disk while
+the report describes a refusal.
+
+Two members of a class found in consecutive rounds is a signal about the class,
+not about the members. So the third fix is a **backstop**: any unexpected throw
+after the gate write reads `status.yaml` and reports what it finds. The member
+nobody has named yet is covered.
+
+### Untestable where the harness goes
+
+`writeStateAndCommit` skips git entirely under `VITEST`, so no test in the server
+suite can make a push or a commit fail. That is the third time in this phase a
+gap sat exactly where the harness does not go.
+
+Two answers, both used: a structural test that reads `approve()`'s source and
+permits exactly two raw writes — the wrapper's own and the gate write — and a
+Playwright e2e with a real failing `pre-commit` hook, because the e2e host is a
+child process with no `VITEST` set. Finding the one place in the repo that can
+produce the failure beat mocking the thing under test.
+
+### A test shape that generalises
+
+My first version of the structural test sliced `approve()`'s body at the
+`gate-approved` literal and counted raw writes before it — and the gate write's
+own call sits before that literal, so the gate write counted as a violation of
+itself.
+
+A positional check that has to be right about ordering to be right about safety
+will be wrong again. Rewritten to assert what each call **is**: exactly two raw
+writes are permitted, identified by what they contain.
+
+### The criterion I nearly redefined
+
+Round 3's ruling was to narrow criterion 9b in the PR body and README. codex was
+right that this does not hold — the spec and phase plan are human-approved
+sources of truth for acceptance criteria, and PR prose does not amend them. The
+architect corrected their own ruling and 9b is unmet.
+
+A criterion quietly redefined to match what was built is the thing this phase is
+about, and it nearly happened in the phase's own artifacts, with the architect's
+approval and my execution. Neither of us caught it; a review lane did.
+
+### Where the debt lives
+
+#228 owns the unmet criteria and the pairing gap, because phase 12's approved
+plan mentions none of them and neither of us gets to add scope to a
+human-approved plan at 3am. The chain is: plan stays as approved, issue carries
+the debt, spawn carries the issue.
+
+### The count
+
+Thirteen blockers across six rounds. The recurring shape was a claim that outran
+what had been established, and it appeared in the code, in the comments, in the
+threat model, in the approved spec, in a test that agreed with the bug it named,
+in my own reports twice, and once in a ruling. It was never a property of the
+earlier phases; it is a property of how confident a thing sounds relative to what
+was actually checked.
