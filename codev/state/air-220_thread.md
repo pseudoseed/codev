@@ -228,3 +228,65 @@ settles it either.
 Correcting my own earlier report: I called them flaky after one clean re-run.
 Two consecutive full runs showed the same 9. One clean run is not evidence of
 flakiness; it is one clean run.
+
+## Slice 5: review round 3
+
+### The security one, and why it could not be fixed the way it was framed
+
+`PairingStore.issue()` needed nothing but write access to the store. A builder
+runs as the operator, so it can mint a token, redeem it, hold a session, and
+approve its own gate through the advertised path. The threat model said a builder
+was stopped by *having no paired session*. It was not.
+
+The architect offered two ways out — real out-of-band authority, or stop claiming
+human presence — and said the first was better. **I could not build the first
+honestly.** On a single-uid host every channel available to the operator is
+available to a builder: a file, a TTY, a spawned process, an env var. Inventing a
+mechanism that *looks* like authority would have been a second false guarantee on
+top of the first, and harder to see.
+
+So: enforce what can be enforced, record the rest.
+
+- `purpose` is **enforced** — a token minted to pair a device cannot open a
+  session, and the reverse. That also closes the round-1 item about one token
+  serving two ceremonies with nothing binding it. A token refused for the wrong
+  purpose is *not* consumed, or anything reaching one route could destroy tokens
+  minted for the other.
+- `authority` is required at mint and carried verbatim through token → session →
+  capability → `status.yaml`. `authorization: 'capability'` now says in its own
+  doc that it means verified *credential*, never verified *human*.
+
+The residual is pinned by a test that completes the ceremony as a builder would
+and asserts the recorded authority reads `a builder minted this for itself`. A
+future phase that adds real authority fails it — which is the point of putting it
+there rather than only in prose.
+
+### Criterion 9b, narrowed
+
+Approving runs porch's phase checks, which for an AIR `implement` phase are the
+repository's build and test suite. The architect's own ruling against a timeout
+still holds — a client that gives up does not stop porch — so refusing before
+starting is right, and the consequence is that the client cannot approve an
+ordinary gate. Narrowed rather than dropped or quietly ticked, with the async
+approval named for phase 12. Both branches tested; neither ticked on the other's
+evidence.
+
+### The backoff that never reset
+
+`state.status === 'live'` after `openOnce` returned, and `openOnce` always sets
+`disconnected` before returning. Unreachable, so the delay only grew. Keys off
+whether the attempt received a snapshot now.
+
+### Two things worth keeping
+
+The e2e log now shows `afx send` refusing inside the harness — "global.db not
+found … Refusing to send with an unverified identity". That is round 1's
+`CODEV_AGENT_FARM_DIR` scoping working: a snapshot host's approvals cannot reach
+the real Tower. A side effect that proves itself is worth more than the comment
+that claims it.
+
+Three of the six blockers across rounds 2 and 3 were the same shape as the
+finding this PR set out to record: `towerKey` on a production type nobody had
+followed to the browser, a validator guarding only the envelope, and a threat
+model asserting a property its code never had. The pattern is not something that
+happened to earlier phases.
