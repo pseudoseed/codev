@@ -16,7 +16,7 @@ record of what changed when two more were asked to do the same thing.
 
 **Codex was quota-exhausted for the whole of this phase**, with a reset roughly sixteen hours
 out. Phase 9 hit the same wall and answered it the same way: the criteria here are claims about
-*threads* — that one spawns on a worktree, survives a subscriber restart, and resumes after an
+*threads* — that one spawns on a worktree, survives a porch restart, and resumes after an
 idle gate — and nothing in any of them is specific to a provider.
 
 That makes the substitution stronger than the deliverable asked for, not weaker. The deliverable
@@ -151,7 +151,20 @@ its comment cites.
 
 **No code change.** The existing guard covers it; recording it is the point.
 
-### 4. Worktree setup files differ by driver, and both were laid down correctly
+### 4. Recovery from a restart is identical, and it is a real restart
+
+`air-235-resubscribe.mjs` is a second process that shares nothing with the runner — no
+`DriverThread`, no `TurnTracker`, no waiter promises, no journal instance. It is handed a URL, a
+token, a thread id and the **path to a cursor file**, and works out where to resume by reading
+it. Both drivers behave the same: the completion event emitted while nothing was subscribed comes
+back in the catch-up replay rather than live after the synchronization marker, which is the
+distinction the criterion turns on.
+
+The first version of this step rebuilt the subscription inside the same process, and review was
+right that it demonstrated stream reconnection rather than recovery. Recorded here because the
+correction changed what the evidence means, not just how it was gathered.
+
+### 5. Worktree setup files differ by driver, and both were laid down correctly
 
 `planWorktreeSetup` writes per-driver files into the worktree. Under `opencode` that is
 `opencode.json`. Under `claudeAgent` it is the write-guard's `.claude/settings.local.json` when
@@ -177,7 +190,7 @@ Worth stating, because each was suspected and tested rather than assumed:
   answered in 7 seconds and `opencode models` in 0.9 seconds throughout the period when every
   t3code opencode turn was being refused. The constraint was never the provider.
 - **The protocol itself.** Spawn, the three phases, the checks between turns, the
-  `afterSequence` replay after a subscriber restart, the idle gate, and the merge behave the
+  `afterSequence` replay after porch is restarted as a fresh process, the idle gate, and the merge behave the
   same on both. No step needed a per-driver branch, so `packages/porch-driver/src/drivers/`
   — which the plan listed for "per-driver quirks, if any are found" — **was not created**. There
   were none to put in it.
