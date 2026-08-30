@@ -206,3 +206,37 @@ criteria are Codev's so the tests that close them belong in Codev's CI.
 
 Cost recorded: those tests need a running fork, so they are gated, and a skip is reported as a
 skip rather than counted as a pass.
+
+## The opencode lane: my diagnosis was wrong, and so was my evidence
+
+Correcting the record rather than leaving it. I reported five runs "exiting 0 with no verdict" and
+the architect filed #261 on that framing.
+
+**Every one of those runs was `consult ... 2>&1 | tail -15`.** In a pipeline the reported exit
+code is the *last* command's, so "exit code 0" was always `tail`'s. Run clean, with stdout and
+stderr redirected to files instead of piped, the same command returns **exit code 1**.
+
+So the lane was hard-failing loudly the whole time, exactly as designed — its own docs say missing
+CLI, unknown model, non-zero exit and empty output all throw (`commands/consult/index.ts:1693`,
+and #20 records why: porch counts a lane that produced nothing as an approval). The silent-lane
+story was an artifact of how I invoked it.
+
+The real cause is in the stderr I had been discarding:
+`permission requested: external_directory (/Users/chris/dev/t3code/*); auto-rejecting`.
+
+Also corrected: **porch does not invoke consult.** `porch next 250` emits a task whose text is
+"Run: consult -m opencode ..." and I execute it — porch is a pure planner. So the "porch spawns
+the child without your env var" theory describes a mechanism that does not exist here, and
+exporting the variable before `porch next` changed nothing (verified: porch re-issued the
+identical task).
+
+What remains real: `runOpencodeConsultation` sets `OPENCODE_PERMISSION` unconditionally at
+`index.ts:1806` — `{...process.env, OPENCODE_PERMISSION: JSON.stringify(OPENCODE_READ_ONLY_PERMISSION)}`
+— and `OPENCODE_READ_ONLY_PERMISSION` (`:1647`) covers only `edit`, `write`, `patch` and `bash`.
+`external_directory` is not in it, so it falls back to opencode's default of ask, which
+auto-rejects when non-interactive. Any review whose subject lives outside the workspace loses this
+lane. That is the genuine #261, and it is narrower than what I first reported.
+
+`process.env` is spread first, so `OPENCODE_CONFIG_CONTENT` does reach the child — which is why my
+run 3 read external files successfully. Why run 3 still produced no file is the open question the
+clean re-run is answering now.
