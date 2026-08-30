@@ -232,10 +232,43 @@ function serverRuntime() {
  * Ownership is proven from the command line: it must be a t3 serve for OUR data
  * directory. Anything we cannot prove is ours is reported and left alone.
  */
+/**
+ * Can this harness PROVE the process is its own pinned server?
+ *
+ * This decides what gets a SIGTERM, so the claim it makes has to be the claim it
+ * performs. It used to be `cmd.includes(runtimeDir)` under a docblock promising "a
+ * `t3 serve` for OUR data directory" — and a substring of a path is not that. Anything
+ * whose argv merely mentions the directory satisfied it: `tail -f
+ * <runtimeDir>/server.log`, an editor opened on the log, a `grep` over the tree. Each
+ * would then have taken the group signal. Round 3 established that liveness is not
+ * ownership; a substring is not ownership either, and the docblock asserted the stronger
+ * thing.
+ *
+ * What is actually checked now, on both processes the harness creates — the `npm exec`
+ * wrapper and the `node .../t3` grandchild that holds the port:
+ *
+ *   npm exec t3@0.0.36 serve --host 127.0.0.1 --port 3801 --base-dir <dataDir> <checkout>
+ *   node .../node_modules/.bin/t3 serve --host 127.0.0.1 --port 3801 --base-dir <dataDir> <checkout>
+ *
+ * - a bare `serve` argument, and
+ * - `--base-dir <dataDir>` (or `--base-dir=<dataDir>`) as an actual argument pair, not a
+ *   path appearing anywhere in the line.
+ *
+ * Both, because either alone is satisfiable by something that is not our server. This is
+ * still an argv heuristic and not a kernel-level proof of parentage — but it is the claim
+ * the docblock makes, which the substring was not.
+ */
 function ownsProcess(pid) {
   try {
-    const cmd = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' });
-    return cmd.includes(runtimeDir) || cmd.includes(join(runtimeDir, 'data'));
+    const cmd = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim();
+    if (!cmd) return false;
+    const dataDir = join(runtimeDir, 'data');
+    const args = cmd.split(/\s+/);
+    const serves = args.includes('serve');
+    // The pair form and the `=` form, both as whole arguments.
+    const boundToOurData = args.some((arg, i) =>
+      (arg === '--base-dir' && args[i + 1] === dataDir) || arg === `--base-dir=${dataDir}`);
+    return serves && boundToOurData;
   } catch {
     return false; // cannot read it, cannot claim it
   }

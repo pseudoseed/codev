@@ -32,7 +32,12 @@ import {
   tryGetThreadEngine,
   createMemoryThreadEngine,
 } from '../thread-runtime.js';
-import { activeProjectForWorkspace, ensureThreadBackendReady } from '../thread-backend.js';
+import {
+  activeProjectForWorkspace,
+  clearThreadBackendFailures,
+  ensureThreadBackendReady,
+  requestThreadBackend,
+} from '../thread-backend.js';
 
 interface Fake {
   readonly url: string;
@@ -368,5 +373,136 @@ describe('a socket that closes DURING initialisation registers nothing', () => {
     // the bound existed.
     expect(elapsed).toBeLessThan(5_000);
     expect(elapsed).toBeGreaterThanOrEqual(400);
+  }, 20_000);
+});
+
+/**
+ * Round 5. Tower's mailbox drainer awaits agents sequentially, and a connect is bounded
+ * at 15 s per stage by design — so awaiting one on that path stalled delivery for every
+ * agent in every workspace, INCLUDING PTY-ONLY ONES THAT NEVER OPTED IN. An opt-in
+ * feature is not opt-in if declining it still costs you your mail.
+ *
+ * `requestThreadBackend` is the answer and it is synchronous by construction: there is no
+ * promise on the delivery path to await.
+ */
+describe('the drain tick never waits for a connect', () => {
+  let fake: Fake | undefined;
+
+  afterEach(async () => {
+    clearThreadEngines();
+    clearThreadBackendFailures();
+    setSpawnThreadFactory(undefined);
+    if (fake) await fake.close();
+    fake = undefined;
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a workspace with no server named costs the caller nothing and starts nothing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'air-219-nothreads-'));
+    dirs.push(dir);
+    const started = Date.now();
+    expect(requestThreadBackend(dir)).toEqual({ kind: 'not-configured' });
+    expect(Date.now() - started).toBeLessThan(100);
+  });
+
+  it('returns `connecting` immediately and is ready by a later call, never blocking', async () => {
+    const roots: string[] = [];
+    fake = await fakeT3(() => roots.map((root, i) => ({ id: `p-${i}`, workspaceRoot: root })));
+    const a = workspaceAt(fake.url);
+    roots.push(a);
+
+    const started = Date.now();
+    expect(requestThreadBackend(a)).toEqual({ kind: 'connecting' });
+    // The whole point: a real connect is happening and this call did not wait for it.
+    expect(Date.now() - started).toBeLessThan(100);
+    // A second call while it is in flight also does not wait, and does not start a second.
+    expect(requestThreadBackend(a)).toEqual({ kind: 'connecting' });
+
+    expect(await until(() => requestThreadBackend(a).kind === 'ready')).toBe(true);
+    expect(fake.tokenExchanges()).toBe(1);
+  });
+
+  /**
+   * Tower ticks every 1.5 s. Without a cooldown, a workspace whose server is down re-ran
+   * the whole connect on every tick — a full bootstrap-token exchange each time, against
+   * a credential this module's own docs say may be one-time. The retry loop would spend
+   * the thing it needs to retry with.
+   */
+  it('a failed connect is not retried on the next tick, and says why', async () => {
+    // Port 1: refuses immediately, so the failure is fast and unambiguous.
+    const dir = mkdtempSync(join(tmpdir(), 'air-219-down-'));
+    dirs.push(dir);
+    mkdirSync(join(dir, '.codev'), { recursive: true });
+    writeFileSync(
+      join(dir, '.codev', 'config.json'),
+      JSON.stringify({ threads: { serverUrl: 'http://127.0.0.1:1', bootstrapToken: 'seed' } }),
+    );
+
+    expect(requestThreadBackend(dir)).toEqual({ kind: 'connecting' });
+    expect(await until(() => requestThreadBackend(dir).kind === 'cooling-down')).toBe(true);
+
+    const cooling = requestThreadBackend(dir);
+    expect(cooling.kind).toBe('cooling-down');
+    expect(cooling.kind === 'cooling-down' && cooling.message).toMatch(/could not be reached/);
+
+    // Ten more ticks' worth: still cooling, still no new attempt.
+    for (let i = 0; i < 10; i += 1) expect(requestThreadBackend(dir).kind).toBe('cooling-down');
+
+    // And the window is a window, not a permanent stop.
+    const later = Date.now() + 61_000;
+    expect(requestThreadBackend(dir, later).kind).toBe('connecting');
+  }, 20_000);
+
+  /**
+   * A bound that does not cancel is not a bound. The upgrade timeout rejected and walked
+   * away, leaving a live socket past the advertised deadline — and Tower retries, so it
+   * accumulated one orphan per attempt.
+   */
+  it('the upgrade bound closes the socket it gave up on', async () => {
+    const http = await import('node:http');
+    const heldSockets: Array<{ destroy(): void }> = [];
+    let upgrades = 0;
+    let closes = 0;
+    const server = http.createServer((req, res) => {
+      if (req.url?.startsWith('/oauth/token')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ access_token: 'a', token_type: 'Bearer', expires_in: 3600 }));
+        return;
+      }
+      if (req.url?.startsWith('/api/auth/websocket-ticket')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ticket: 't', expires_in: 60 }));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    // Accept the upgrade and never complete it. Without an `upgrade` listener node
+    // destroys the socket, which is a different state — so hold it deliberately.
+    // `end`, not `close`: the client hanging up half-closes the connection, and the
+    // server side stays writable until it ends too. `end` is the FIN — the observable
+    // fact that the client let go — and `close` would never fire here no matter what
+    // the client did.
+    server.on('upgrade', (_req, socket) => {
+      upgrades += 1;
+      socket.resume();
+      socket.on('end', () => { closes += 1; });
+      heldSockets.push(socket);
+    });
+    await new Promise<void>((res) => server.listen(0, '127.0.0.1', () => res()));
+    const { port } = server.address() as { port: number };
+    const dir = workspaceAt(`http://127.0.0.1:${port}`);
+
+    try {
+      await expect(ensureThreadBackendReady(dir, { upgradeTimeoutMs: 400 }))
+        .rejects.toThrow(/never completed the WebSocket upgrade/);
+      expect(upgrades).toBe(1);
+      // The client hung up. Without the close, this socket outlives the bound that was
+      // supposed to end it, and every retry adds another.
+      expect(await until(() => closes === 1, 5_000)).toBe(true);
+    } finally {
+      for (const s of heldSockets) { try { s.destroy(); } catch { /* gone */ } }
+      await new Promise<void>((res) => server.close(() => res()));
+    }
   }, 20_000);
 });

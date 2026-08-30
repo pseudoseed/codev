@@ -38,7 +38,7 @@ import {
 import { getGlobalDb } from '../db/index.js';
 import { getArchitectByName, getBuilder } from '../state.js';
 import { deliverThreadTurn, getThreadEngine } from '../thread-runtime.js';
-import { ensureThreadBackendReady } from '../thread-backend.js';
+import { requestThreadBackend, type ThreadBackendAvailability } from '../thread-backend.js';
 import { formatBuilderMessage } from '../utils/message-format.js';
 import { supersede as supersedeMailbox, dismissHeldWithKey, NOTICE_SUPERSEDE_PREFIX } from '../db/mailbox.js';
 import path from 'node:path';
@@ -445,9 +445,14 @@ async function deliverToThread(
   // Refused rather than approximated. The row stays held and stays visible in `afx inbox`,
   // which is the outcome `--no-enter` asks for, minus the composer.
   if (noEnter) {
+    // The row does NOT stay held — the delivery path ends it terminally, because a hold
+    // that can never clear raises a starvation notice with no remedy. This comment said
+    // "stays held" while the caller dismissed it: one rule, two files, and one of them
+    // wrong is how the next reader is misled.
     log('ERROR', `[mailbox] ${where}: refusing a --no-enter message. A thread has no composer — `
       + `thread.turn.start is the submit — so delivering it would RUN a message that was sent to `
-      + `sit and wait for a human. The row stays held rather than being executed.`);
+      + `sit and wait for a human. This is the backstop; the delivery path ends such a row `
+      + `terminally rather than holding it.`);
     return false;
   }
   if (!context) {
@@ -456,19 +461,20 @@ async function deliverToThread(
       + `not a statement about the thread or the server.`);
     return false;
   }
-  try {
-    const state = await ensureThreadBackendReady(context.workspaceRoot);
-
-    if (state === 'not-configured') {
-      log('ERROR', `[mailbox] ${where}: the row for ${context.agent} is thread-backed, but `
-        + `${context.workspaceRoot} names no t3code server. A thread-backed row in a workspace with no `
-        + `server configured is a contradiction — the row, or the config, is wrong.`);
-      return false;
-    }
-  } catch (err) {
-    log('ERROR', `[mailbox] ${where}: could not register a thread engine in this process — `
-      + `${err instanceof Error ? err.message : String(err)}. The server was named and could not be `
-      + `used; nothing was delivered and the row stays held.`);
+  // NOTHING HERE AWAITS A CONNECT.
+  //
+  // Tower's drainer awaits agents sequentially, so an `await ensureThreadBackendReady(...)`
+  // on this path stalled delivery for every agent in every workspace — including PTY-only
+  // ones that never opted into threads — for as long as one workspace's connect took. The
+  // bound that makes the connect safe is exactly what makes the stall long. So the connect
+  // is started in the background and this returns; the row is held, and the next tick
+  // (1.5 s later) finds the engine ready.
+  const availability = requestThreadBackend(context.workspaceRoot);
+  if (availability.kind !== 'ready') {
+    log(
+      availability.kind === 'connecting' ? 'INFO' : 'ERROR',
+      threadBackendNotReady(where, context, availability),
+    );
     return false;
   }
   try {
@@ -496,6 +502,40 @@ async function deliverToThread(
       + `${err instanceof Error ? err.message : String(err)}. The thread was reached and the message `
       + `was not accepted.`);
     return false;
+  }
+}
+
+/**
+ * Why this delivery did not happen yet, in the caller's terms.
+ *
+ * Four states, four sentences, and only one of them is a bug in this repo. They were one
+ * `return false` before, and an operator could not tell "connecting, try again in a
+ * second" from "your server has been down for a minute" from "this row should not be
+ * thread-backed at all".
+ */
+function threadBackendNotReady(
+  where: string,
+  context: ThreadDeliveryContext,
+  availability: Exclude<ThreadBackendAvailability, { kind: 'ready' }>,
+): string {
+  const preamble = `[mailbox] ${where}: not delivered to ${context.agent}`;
+  switch (availability.kind) {
+    case 'connecting':
+      return `${preamble} — the thread backend for ${context.workspaceRoot} is still connecting. `
+        + `The row stays held and the next drain retries it; this is ordinary, not a fault.`;
+    case 'cooling-down':
+      return `${preamble} — the last connect to the t3code server for ${context.workspaceRoot} failed `
+        + `${Math.round((Date.now() - availability.since) / 1000)}s ago and is not retried yet: `
+        + `${availability.message}. Retrying every tick would re-exchange a bootstrap token that may `
+        + `be one-time.`;
+    case 'misconfigured':
+      return `${preamble} — the "threads" config for ${context.workspaceRoot} is incomplete, so nothing `
+        + `was attempted: ${availability.message}.`;
+    case 'not-configured':
+    default:
+      return `${preamble} — the row is thread-backed, but ${context.workspaceRoot} names no t3code `
+        + `server. A thread-backed row in a workspace with no server configured is a contradiction — `
+        + `the row, or the config, is wrong.`;
   }
 }
 

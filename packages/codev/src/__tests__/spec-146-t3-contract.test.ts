@@ -424,6 +424,57 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
    * it. `restart` then started a second server on a port whose state was unknown —
    * "I could not tell" spelled as "no", in the harness written to refuse that.
    */
+  /**
+   * Issue #219 round 5. `ownsProcess` promised "a `t3 serve` for OUR data directory" and
+   * performed `cmd.includes(runtimeDir)`. A substring of a path is not that: `tail -f
+   * <runtimeDir>/server.log` satisfies it, and so does an editor with the path in its
+   * argv — and that process then takes the group SIGTERM.
+   *
+   * Round 3 established that liveness is not ownership. The fix chosen was a substring,
+   * which is not ownership either, and the docblock asserted the stronger claim. Same
+   * shape as the close-handler comment last round, in the one function whose entire job
+   * is deciding what to kill.
+   */
+  it('refuses a live process whose argv merely mentions the runtime directory', () => {
+    const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
+    const runtimeDir = mkdtempSync(join(tmpdir(), 't3-argv-'));
+    const logPath = join(runtimeDir, 'server.log');
+    writeFileSync(logPath, '');
+    // A real process holding the runtime path in its command line — the exact shape a
+    // human tailing the harness log produces.
+    const bystander = spawn('tail', ['-f', logPath], { stdio: 'ignore', detached: true });
+    try {
+      expect(bystander.pid).toBeDefined();
+      writeFileSync(join(runtimeDir, 'server.pid'), String(bystander.pid));
+
+      const stopped = spawnSync(process.execPath, [harness, 'stop'], {
+        encoding: 'utf8',
+        env: { ...process.env, T3_HARNESS_DIR: runtimeDir, T3_HARNESS_PORT: '3896' },
+      });
+
+      expect(stopped.stderr).toContain(`REFUSING to signal pid ${bystander.pid}`);
+      expect(() => process.kill(bystander.pid!, 0)).not.toThrow();
+    } finally {
+      try { process.kill(bystander.pid!, 'SIGKILL'); } catch { /* already gone */ }
+      rmSync(runtimeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('the ownership check requires a `serve` bound to our data dir, both as real arguments', () => {
+    // The two shapes the harness actually creates, from `ps -o command=`:
+    //   npm exec t3@0.0.36 serve --host … --base-dir <dataDir> <checkout>
+    //   node …/node_modules/.bin/t3 serve --host … --base-dir <dataDir> <checkout>
+    // Both must be claimed, or `stop` stops recognising its own server — a refusal that
+    // leaves a live server behind is its own failure.
+    const src = readFileSync(join(repoRoot, 'tools', 't3-server', 't3-server.mjs'), 'utf8');
+    expect(src).toContain("args.includes('serve')");
+    expect(src).toContain("arg === '--base-dir' && args[i + 1] === dataDir");
+    // Whole arguments, not a path found anywhere in the line. The behavioural proof is
+    // the bystander test above; this pins the two halves so neither can be dropped
+    // without the other being noticed.
+    expect(src).toContain("const args = cmd.split(");
+  });
+
   it('treats an lsof that cannot answer as unknown, not as a free port', () => {
     const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
     const emptyPath = mkdtempSync(join(tmpdir(), 't3-nolsof-'));

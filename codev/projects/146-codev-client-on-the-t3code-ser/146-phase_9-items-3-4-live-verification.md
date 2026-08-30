@@ -326,6 +326,66 @@ real checked negative. `restart` refuses with `PORT_STATE_UNKNOWN` rather than s
 server against a port whose state is unknown. The mutation check produces the confident negative
 the fix removes.
 
+## Review round 5 — an opt-in feature was charging everyone
+
+Round 4's four are fixed. These are what moving the connect into Tower's tick cost.
+
+### The connect stalled mail for every workspace, including PTY-only ones
+
+Tower's drainer awaits agents sequentially, and `deliverToThread` awaited
+`ensureThreadBackendReady`. A connect is bounded by design — 15 s per stage, up to 30 s across a
+token exchange, a ticket and an upgrade — so one workspace's connect stalled delivery for **every
+agent in every workspace, including PTY-only ones that never opted into threads**. The bound that
+makes the connect safe is exactly what makes the stall long. An opt-in feature is not opt-in if
+declining it still costs you your mail.
+
+The tick no longer awaits a connect. `requestThreadBackend` is synchronous by construction: it
+answers `ready`, `connecting`, `cooling-down`, `misconfigured` or `not-configured`, starts the
+connect in the background when there is one to start, and returns. The row is held, and the next
+tick — 1.5 s later — finds the engine ready. A workspace that names no server reads its config
+from disk and costs the tick nothing.
+
+The CLI keeps the awaited `ensureThreadBackendReady`: one workspace, one process, and a spawn that
+returned before its server was reachable would be lying.
+
+### A failed connect retried every 1.5 seconds, spending a one-time credential
+
+There was no backoff, so a workspace whose server was down re-ran the whole connect on every tick
+— a full bootstrap-token exchange each time, against a credential this module's own documentation
+says may be one-time. The retry loop would spend the thing it needs to retry with. Sixty-second
+cooldown now, reported as its own state with the failure that caused it, and cleared on success.
+
+### The upgrade bound did not cancel the connection
+
+It rejected and walked away, leaving the socket alive: a server that accepts the TCP connection and
+holds the upgrade open kept a live connection past the advertised deadline, and Tower retries — so
+it accumulated one orphan per attempt, each holding a descriptor. A bound that does not cancel is
+not a bound. The socket is closed on the timeout and on the error path, from one `abandon` that
+also clears the timer, so there is a single place where the handshake stops mattering.
+
+### `ownsProcess` claimed a proof it did not perform
+
+Its docblock promised "a `t3 serve` for OUR data directory". The code was
+`cmd.includes(runtimeDir)`. A substring of a path is not that: `tail -f
+<runtimeDir>/server.log` satisfies it, and so does an editor with the path in its argv — and that
+process then takes the group SIGTERM.
+
+Round 3 established that liveness is not ownership. The fix chosen was a substring, which is not
+ownership either, and the docblock asserted the stronger claim — the same shape as the
+close-handler comment the round before, in the one function whose entire job is deciding what to
+kill.
+
+It now requires a bare `serve` argument **and** `--base-dir <dataDir>` as a real argument pair,
+checked against both processes the harness creates (the `npm exec` wrapper and the `node .../t3`
+grandchild that holds the port). Still an argv heuristic rather than a proof of parentage — but it
+is the claim the docblock makes, which the substring was not. The test is a live `tail -f` on the
+runtime log.
+
+### One comment, corrected
+
+`deliverToThread`'s `--no-enter` log said "the row stays held". The caller dismisses it. One rule
+in two files with one of them wrong is how the next reader is misled.
+
 ## Recorded, not fixed
 
 - **An architect's `attach` passes no harness or model**, so it depends on the engine's
@@ -340,6 +400,11 @@ the fix removes.
   It is the bug the engine map just fixed, one door down. Unreachable today — `chooseSpawnPath`'s
   only consumer is the CLI, which is one workspace per process — so it is recorded rather than
   fixed, and the factory at least closes over the workspace it was installed for.
+
+All of the above, plus `afx interrupt` and `afx cleanup` on the thread path, are filed as **#227**.
+The mailbox-vocabulary work — every non-delivered status reported as held/`no-live-pty`, and
+`dismiss()` now carrying system refusals as well as operator ones — is **#226**, which wants the
+same migration as **#223**: one migration on the user-global database, not two.
 
 ## What is still NOT met, stated rather than left to be discovered
 
@@ -366,19 +431,19 @@ made about either.
 | File | Tests |
 |---|---|
 | `spec-146-phase-9-live-architect-thread.test.ts` | 2 — the live run above, and the companion that names the exact reason it could not check. Its post-restart turn is delivered by a **real child process** through `makeDeliveryPorts().writeMessage`, against the built `dist` |
-| `spec-146-phase-9-thread-delivery-states.test.ts` | 9 — delivery from a process holding no engine, the four failure sentences, a fifth test comparing them against each other, and the `--no-enter` refusal with its control |
-| `spec-146-phase-9-engine-per-workspace.test.ts` | 10 — the keyed registry with no fallback in either direction, two workspaces in one process against a real fake t3code server, concurrent init counted at the server, socket-close eviction with its reconnect, a close DURING initialisation with its reconnect, and the project lookup's bound |
+| `spec-146-phase-9-thread-delivery-states.test.ts` | 11 — delivery from a process holding no engine, six not-delivered states compared against each other, the connect that is never awaited, the backoff state, and the `--no-enter` refusal with its control |
+| `spec-146-phase-9-engine-per-workspace.test.ts` | 14 — the keyed registry with no fallback in either direction, two workspaces in one process against a real fake t3code server, concurrent init counted at the server, socket-close eviction with its reconnect, a close DURING initialisation with its reconnect, the project lookup's bound, the non-blocking request, the failed-connect cooldown, and the upgrade bound closing the socket it gave up on |
 | `send-delivery.test.ts` | +2 — a `--no-enter` row to a thread-backed agent ends terminally rather than starving, with a PTY control showing the flag itself is unchanged |
 | `spec-146-phase-9-thread-backend.test.ts` | +6 — the project lookup's three answers, driven against a real HTTP server, and the symlink-normalised match |
 | `spec-146-phase-9-architect-thread-resume.test.ts` | 9 — the branch normalisation, `attach` vs `create`, idempotence, the unattached-thread message, and `DriverThread.attach` |
 | `spec-146-phase-9-add-architect-thread-path.test.ts` | 6 — the backend is registered before the engine is read; the collision refusal; auto-numbering; unconfigured still uses Tower; unreachable propagates |
-| `spec-146-t3-contract.test.ts` | +3 — `restart` is distinct from a cold start and refuses to fake one; `stop` refuses to signal a live pid it cannot prove it owns, asserted against a real bystander process; an `lsof` that cannot answer is `PORT_STATE_UNKNOWN` rather than a free port; the live opt-in check now covers both live files rather than one |
+| `spec-146-t3-contract.test.ts` | +5 — `restart` is distinct from a cold start and refuses to fake one; `stop` refuses to signal a live pid it cannot prove it owns, and refuses a live `tail -f` whose argv merely mentions the runtime directory; an `lsof` that cannot answer is `PORT_STATE_UNKNOWN` rather than a free port; the live opt-in check now covers both live files rather than one |
 
 Mutation-checked: reverting the branch normalisation fails the item-3 payload test; removing the
 `ensureThreadBackendReady` call fails two of the three add-architect tests; replacing `restart`
 with `stop` + `start` fails the live test.
 
-Full suite green with these changes: `347 passed | 3 skipped` files, `6843 passed | 52 skipped`
+Full suite green with these changes: `347 passed | 3 skipped` files, `6851 passed | 52 skipped`
 tests, plus the v2 suite's `180 passed`. Run with `env -u CODEV_WORKTREE_ROOT -u CODEV_BUILDER_ID
 -u CODEV_ARCHITECT_NAME`, the workaround #189 still requires.
 

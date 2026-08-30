@@ -213,13 +213,43 @@ async function connectDispatcher(
   // a spawn hangs forever having reported nothing — the one failure this whole connect path was
   // rewritten to make impossible, in the code that rewrote it.
   await new Promise<void>((res, rej) => {
-    const timer = setTimeout(
-      () => rej(new SocketUpgradeTimeout(config.serverUrl, upgradeTimeoutMs)),
-      upgradeTimeoutMs,
-    );
-    socket.addEventListener('open', () => { clearTimeout(timer); res(); }, { once: true });
-    socket.addEventListener('error', () => {
+    // A bound that does not CANCEL is not a bound, it is a lie with a timer on it.
+    //
+    // This rejected and walked away, leaving the socket alive: a server that accepts the
+    // TCP connection and holds the upgrade open kept a live connection past the advertised
+    // deadline, and Tower — which retries — accumulated one orphan per attempt, each still
+    // holding a file descriptor and each still able to fire events into a closure nobody
+    // was reading. The whole point of the bound is that nothing survives it.
+    //
+    // `abandon` runs on every exit from this promise, including the successful one, so
+    // there is one place where the handshake listeners stop mattering.
+    let settled = false;
+    const abandon = (closeSocket: boolean) => {
+      settled = true;
       clearTimeout(timer);
+      if (closeSocket) {
+        try {
+          socket.close();
+        } catch {
+          /* already closing, or a ctor whose close throws after an aborted handshake */
+        }
+      }
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      abandon(true);
+      rej(new SocketUpgradeTimeout(config.serverUrl, upgradeTimeoutMs));
+    }, upgradeTimeoutMs);
+    socket.addEventListener('open', () => {
+      if (settled) return;
+      abandon(false);
+      res();
+    }, { once: true });
+    socket.addEventListener('error', () => {
+      if (settled) return;
+      // Closed here too: an errored socket is not necessarily a closed one, and the
+      // caller is about to stop referencing it.
+      abandon(true);
       rej(new Error(`t3code socket error connecting to ${config.serverUrl}`));
     }, { once: true });
   });
@@ -368,6 +398,96 @@ export async function ensureThreadBackendReady(
 /** One in-flight `ensureThreadBackendReady` per canonical workspace root. */
 const pendingInit = new Map<string, Promise<'not-configured' | 'already-installed' | 'installed'>>();
 
+/**
+ * How long a workspace whose connect just failed is left alone.
+ *
+ * Tower's drain tick runs every 1.5 s. Without this, a workspace whose server is down
+ * re-ran the whole connect on every tick — and that means a full bootstrap-token
+ * exchange every 1.5 s, against a credential this module's own documentation says may
+ * be one-time. The retry loop would spend the thing it needs to retry with.
+ */
+const FAILED_CONNECT_COOLDOWN_MS = 60_000;
+
+/** When each workspace's last connect attempt failed, and why. */
+const lastFailure = new Map<string, { at: number; message: string }>();
+
+/**
+ * What a caller that MUST NOT BLOCK can know about a workspace's thread backend.
+ *
+ * `ready` is the only one that means "deliver now". The rest are all "not yet", and they
+ * are kept apart because they lead somewhere different: `connecting` will resolve on its
+ * own, `cooling-down` will not until the window passes, and `not-configured` never will.
+ */
+export type ThreadBackendAvailability =
+  | { readonly kind: 'ready' }
+  | { readonly kind: 'connecting' }
+  | { readonly kind: 'cooling-down'; readonly since: number; readonly message: string }
+  | { readonly kind: 'not-configured' }
+  | { readonly kind: 'misconfigured'; readonly message: string };
+
+/**
+ * Is this workspace's engine ready, and if not, get one on the way — WITHOUT WAITING.
+ *
+ * WHY THIS EXISTS SEPARATELY FROM `ensureThreadBackendReady`.
+ *
+ * Tower's mailbox drainer awaits agents sequentially. Putting an `await
+ * ensureThreadBackendReady(...)` on that path meant one workspace's connect — bounded, by
+ * design, at 15 s and up to 30 s across a token exchange, a ticket and an upgrade — stalled
+ * delivery for EVERY agent in EVERY workspace, including PTY-only ones that never opted
+ * into threads. An opt-in feature is not opt-in if declining it still costs you the
+ * delivery of your mail.
+ *
+ * So the tick never awaits a connect. It asks this, acts on the answer, and moves on; the
+ * connect happens in the background and the next tick, 1.5 s later, finds it ready. The
+ * row is held in the meantime, which is what held is for.
+ *
+ * The CLI keeps `ensureThreadBackendReady` and its await: one workspace, one process, and
+ * a spawn that returns before its server is reachable would be lying.
+ */
+export function requestThreadBackend(
+  workspaceRoot: string,
+  now: number = Date.now(),
+): ThreadBackendAvailability {
+  const key = canonicalWorkspaceKey(workspaceRoot);
+  if (tryGetThreadEngine(key)) return { kind: 'ready' };
+  if (pendingInit.has(key)) return { kind: 'connecting' };
+
+  const failure = lastFailure.get(key);
+  if (failure && now - failure.at < FAILED_CONNECT_COOLDOWN_MS) {
+    return { kind: 'cooling-down', since: failure.at, message: failure.message };
+  }
+
+  // Read the config synchronously — files, no network — so a workspace with no server
+  // named costs the tick nothing and starts nothing.
+  let config;
+  try {
+    config = readThreadBackendConfig(resolve(workspaceRoot));
+  } catch (err) {
+    // Half-configured is a mistake, not a decision to stay on PTY, and it is not a
+    // connect failure either — no cooldown, because nothing was attempted.
+    return { kind: 'misconfigured', message: err instanceof Error ? err.message : String(err) };
+  }
+  if (!config) return { kind: 'not-configured' };
+
+  void ensureThreadBackendReady(workspaceRoot).then(
+    () => {
+      lastFailure.delete(key);
+    },
+    (err: unknown) => {
+      lastFailure.set(key, {
+        at: Date.now(),
+        message: err instanceof Error ? err.message : String(err),
+      });
+    },
+  );
+  return { kind: 'connecting' };
+}
+
+/** Forget every recorded connect failure. For a test's teardown, not for production. */
+export function clearThreadBackendFailures(): void {
+  lastFailure.clear();
+}
+
 async function initialiseThreadBackend(
   workspaceRoot: string,
   key: string,
@@ -511,6 +631,7 @@ async function initialiseThreadBackend(
     throw closedDuringInit(config.serverUrl, config.workspaceRoot);
   }
   installThreadSpawnFactory(key);
+  lastFailure.delete(key);
   return 'installed';
 }
 

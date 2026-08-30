@@ -309,9 +309,12 @@ describe('Spec 146 Phase 9 — #179 items 3 and 4 against the pinned server', ()
           delivery.written,
           `item 4: a process that did not create the thread could not deliver to it — ${delivery.logs.join(' | ')}`,
         ).toBe(true);
-        // Silence is the thing that was wrong before, so assert it: a delivery that
-        // succeeded must not also have logged one of the four failure sentences.
-        expect(delivery.logs, 'item 4: delivery reported success and logged a failure').toEqual([]);
+        // Silence about FAILURES, specifically. A not-yet-connected workspace logs at INFO
+        // on its first tick, which is ordinary; an ERROR alongside a success is not.
+        expect(
+          delivery.logs.filter((line) => line.startsWith('ERROR') || line.startsWith('THREW')),
+          'item 4: delivery reported success and logged a failure',
+        ).toEqual([]);
         if (!(await waitForFile(recall, 300_000))) {
           throw new Error(
             'COULD_NOT_TELL: SECOND_TURN_TIMEOUT — the post-restart turn never produced a file, so '

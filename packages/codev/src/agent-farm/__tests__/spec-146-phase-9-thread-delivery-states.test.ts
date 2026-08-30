@@ -22,13 +22,13 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const ensureThreadBackendReady = vi.fn();
+const requestThreadBackend = vi.fn();
 const deliverThreadTurn = vi.fn();
 const attach = vi.fn();
 const getThreadEngine = vi.fn();
 
 vi.mock('../thread-backend.js', () => ({
-  ensureThreadBackendReady: (...args: unknown[]) => ensureThreadBackendReady(...args),
+  requestThreadBackend: (...args: unknown[]) => requestThreadBackend(...args),
 }));
 
 vi.mock('../thread-runtime.js', async (importOriginal) => {
@@ -64,7 +64,7 @@ describe('thread delivery registers an engine and adopts the thread', () => {
     getThreadEngine.mockReturnValue({ attach });
     attach.mockResolvedValue({});
     deliverThreadTurn.mockResolvedValue(undefined);
-    ensureThreadBackendReady.mockResolvedValue('installed');
+    requestThreadBackend.mockReturnValue({ kind: 'ready' });
   });
 
   it('delivers from a process holding no engine, and says nothing while doing it', async () => {
@@ -74,7 +74,7 @@ describe('thread delivery registers an engine and adopts the thread', () => {
 
     // Both, in this order. Without the first, Tower has no engine; without the
     // second, the engine has never heard of the thread.
-    expect(ensureThreadBackendReady).toHaveBeenCalledWith('/ws');
+    expect(requestThreadBackend).toHaveBeenCalledWith('/ws');
     expect(attach).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'thr-1', worktreePath: '/ws', branch: '', builderId: 'architect-main' }),
     );
@@ -86,7 +86,7 @@ describe('thread delivery registers an engine and adopts the thread', () => {
   });
 
   it('a thread-backed row in an unconfigured workspace names the contradiction', async () => {
-    ensureThreadBackendReady.mockResolvedValue('not-configured');
+    requestThreadBackend.mockReturnValue({ kind: 'not-configured' });
     const { logs, run } = deliver(threadDeliverySession('thr-1', CONTEXT));
 
     await expect(run()).resolves.toBe(false);
@@ -95,15 +95,61 @@ describe('thread delivery registers an engine and adopts the thread', () => {
     expect(deliverThreadTurn).not.toHaveBeenCalled();
   });
 
-  it('an unreachable server is not spelled like a refused turn', async () => {
-    ensureThreadBackendReady.mockRejectedValue(new Error('ECONNREFUSED'));
+  /**
+   * Round 5. Tower's drainer awaits agents sequentially, so awaiting a connect here
+   * stalled delivery for every agent in every workspace — including PTY-only ones that
+   * never opted into threads. The bound that makes the connect safe is exactly what makes
+   * the stall long.
+   *
+   * `requestThreadBackend` is synchronous by construction, which is the fix: there is no
+   * promise on this path to await. The assertion is that a not-ready workspace costs the
+   * tick nothing and is not an alarm.
+   */
+  it('a connect in progress holds the row without waiting for it, and is not an error', async () => {
+    requestThreadBackend.mockReturnValue({ kind: 'connecting' });
+    const logs: string[] = [];
+    const levels: string[] = [];
+    const ports = makeDeliveryPorts((level, message) => {
+      levels.push(level);
+      logs.push(message);
+    });
+
+    const started = Date.now();
+    await expect(ports.writeMessage(threadDeliverySession('thr-1', CONTEXT), 'hello', false))
+      .resolves.toBe(false);
+
+    expect(Date.now() - started).toBeLessThan(200);
+    expect(logs.join('\n')).toContain('still connecting');
+    // Ordinary, not a fault: an ERROR here would alarm on every tick of a normal startup.
+    expect(levels).toEqual(['INFO']);
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it('a workspace in connect backoff says so, and says why it is not retrying', async () => {
+    requestThreadBackend.mockReturnValue({
+      kind: 'cooling-down',
+      since: Date.now() - 5_000,
+      message: 'could not be reached: ECONNREFUSED',
+    });
     const { logs, run } = deliver(threadDeliverySession('thr-1', CONTEXT));
 
     await expect(run()).resolves.toBe(false);
 
-    expect(logs.join('\n')).toContain('could not register a thread engine in this process');
-    expect(logs.join('\n')).not.toContain('refused the turn');
+    expect(logs.join('\n')).toContain('ECONNREFUSED');
+    expect(logs.join('\n')).toContain('bootstrap token that may be one-time');
+    // Distinct from "still connecting": one resolves on its own, the other does not.
+    expect(logs.join('\n')).not.toContain('still connecting');
     expect(attach).not.toHaveBeenCalled();
+  });
+
+  it('a half-configured workspace is a mistake, not a connect failure', async () => {
+    requestThreadBackend.mockReturnValue({ kind: 'misconfigured', message: 'serverUrl=set, bootstrapToken=missing' });
+    const { logs, run } = deliver(threadDeliverySession('thr-1', CONTEXT));
+
+    await expect(run()).resolves.toBe(false);
+
+    expect(logs.join('\n')).toContain('incomplete');
+    expect(logs.join('\n')).toContain('nothing was attempted');
   });
 
   it('a thread this process cannot adopt is not reported as a missing thread', async () => {
@@ -147,10 +193,14 @@ describe('thread delivery registers an engine and adopts the thread', () => {
     // Not delivered, and not by accident of some earlier failure: nothing was even
     // attempted, so there is no path by which the turn could have started.
     expect(deliverThreadTurn).not.toHaveBeenCalled();
-    expect(ensureThreadBackendReady).not.toHaveBeenCalled();
+    expect(requestThreadBackend).not.toHaveBeenCalled();
     expect(attach).not.toHaveBeenCalled();
     expect(logs.join('\n')).toContain('refusing a --no-enter message');
     expect(logs.join('\n')).toContain('has no composer');
+    // The comment and the log must agree with what the caller actually does, which is
+    // to end the row rather than hold it.
+    expect(logs.join('\n')).toContain('terminally rather than holding it');
+    expect(logs.join('\n')).not.toContain('row stays held rather than being executed');
   });
 
   it('an ordinary message is unaffected by that refusal', async () => {
@@ -166,40 +216,41 @@ describe('thread delivery registers an engine and adopts the thread', () => {
     await expect(run()).resolves.toBe(false);
 
     expect(logs.join('\n')).toContain('carries no thread context');
-    expect(ensureThreadBackendReady).not.toHaveBeenCalled();
+    expect(requestThreadBackend).not.toHaveBeenCalled();
   });
 
   /**
-   * Four failures, four sentences, and the point is that they differ. Four tests
-   * each asserting their own string would not prove that — this compares them.
+   * The failure sentences differ from each other. Tests each asserting their own string
+   * would not prove that — this compares them.
    */
-  it('no two failure states share a message', async () => {
+  it('no two not-delivered states share a message', async () => {
     const messages: string[] = [];
+    const capture = async (arrange: () => void) => {
+      vi.clearAllMocks();
+      getThreadEngine.mockReturnValue({ attach });
+      attach.mockResolvedValue({});
+      deliverThreadTurn.mockResolvedValue(undefined);
+      requestThreadBackend.mockReturnValue({ kind: 'ready' });
+      arrange();
+      // Every level, not only ERROR: `connecting` logs at INFO precisely because it is
+      // ordinary, and it still has to be distinguishable from the rest.
+      const lines: string[] = [];
+      const ports = makeDeliveryPorts((_level, message) => lines.push(message));
+      await ports.writeMessage(threadDeliverySession('thr-1', CONTEXT), 'hello', false);
+      messages.push(lines.join());
+    };
 
-    ensureThreadBackendReady.mockResolvedValue('not-configured');
-    let d = deliver(threadDeliverySession('thr-1', CONTEXT));
-    await d.run();
-    messages.push(d.logs.join());
+    await capture(() => requestThreadBackend.mockReturnValue({ kind: 'not-configured' }));
+    await capture(() => requestThreadBackend.mockReturnValue({ kind: 'connecting' }));
+    await capture(() =>
+      requestThreadBackend.mockReturnValue({ kind: 'cooling-down', since: Date.now() - 1000, message: 'down' }));
+    await capture(() =>
+      requestThreadBackend.mockReturnValue({ kind: 'misconfigured', message: 'half' }));
+    await capture(() => attach.mockRejectedValue(new Error('nope')));
+    await capture(() => deliverThreadTurn.mockRejectedValue(new Error('nope')));
 
-    ensureThreadBackendReady.mockRejectedValue(new Error('ECONNREFUSED'));
-    d = deliver(threadDeliverySession('thr-1', CONTEXT));
-    await d.run();
-    messages.push(d.logs.join());
-
-    ensureThreadBackendReady.mockResolvedValue('installed');
-    attach.mockRejectedValue(new Error('nope'));
-    d = deliver(threadDeliverySession('thr-1', CONTEXT));
-    await d.run();
-    messages.push(d.logs.join());
-
-    attach.mockResolvedValue({});
-    deliverThreadTurn.mockRejectedValue(new Error('nope'));
-    d = deliver(threadDeliverySession('thr-1', CONTEXT));
-    await d.run();
-    messages.push(d.logs.join());
-
-    expect(messages).toHaveLength(4);
-    expect(new Set(messages).size).toBe(4);
+    expect(messages).toHaveLength(6);
+    expect(new Set(messages).size).toBe(6);
     for (const message of messages) expect(message).not.toBe('');
   });
 });

@@ -31,8 +31,10 @@ const { threadDeliverySession } = await import(
 );
 
 const logs = [];
+// Every level. Since #219 round 5 a not-yet-connected workspace logs at INFO — ordinary,
+// not a fault — and a run that fails for that reason has to be able to say so.
 const ports = makeDeliveryPorts((level, message) => {
-  if (level === 'ERROR' || level === 'WARN') logs.push(`${level}: ${message}`);
+  logs.push(`${level}: ${message}`);
 });
 
 const session = threadDeliverySession(process.env.AIR219_THREAD_ID, {
@@ -42,11 +44,23 @@ const session = threadDeliverySession(process.env.AIR219_THREAD_ID, {
   agent: process.env.AIR219_AGENT,
 });
 
+// TICKS, not one call. `writeMessage` no longer waits for a connect — Tower's drainer
+// awaits agents sequentially, so waiting there stalled delivery for every agent in every
+// workspace, including PTY-only ones. The connect happens in the background and the NEXT
+// tick finds it ready, which is what this loop reproduces: the same 1.5 s cadence Tower
+// uses, bounded.
+//
+// A single call returning false is therefore not a failure here; it is the first tick.
 let written = false;
-try {
-  written = await ports.writeMessage(session, process.env.AIR219_MESSAGE, false);
-} catch (err) {
-  logs.push(`THREW: ${err instanceof Error ? err.message : String(err)}`);
+const deadline = Date.now() + 120_000;
+while (!written && Date.now() < deadline) {
+  try {
+    written = await ports.writeMessage(session, process.env.AIR219_MESSAGE, false);
+  } catch (err) {
+    logs.push(`THREW: ${err instanceof Error ? err.message : String(err)}`);
+    break;
+  }
+  if (!written) await new Promise((r) => setTimeout(r, 1500));
 }
 
 console.log(JSON.stringify({ written, logs }));

@@ -167,3 +167,31 @@ Both went independently to the same two lines. Four fixed, four mutation checks 
 Recorded: `installThreadSpawnFactory` writes a process-global from Tower's process — the bug
 the engine map just fixed, one door down, unreachable today because `chooseSpawnPath`'s only
 consumer is CLI-only.
+
+## Review round 6 — architect drew a scope line
+
+"Blocking means Tower-wide, destructive, or user-visibly false. Everything else goes to an
+issue, including findings I agree with." Four blockers, one comment; the rest filed.
+
+1. **An opt-in feature stalled mail for every workspace.** Tower's drainer awaits agents
+   sequentially and `deliverToThread` awaited the connect, so one workspace's bounded connect
+   stalled delivery for every agent everywhere, PTY-only included. `requestThreadBackend` is
+   synchronous by construction; the connect runs in the background and the next tick finds it
+   ready.
+2. **No backoff.** A workspace whose server was down re-exchanged a possibly-one-time
+   bootstrap token every 1.5 s. 60 s cooldown, reported as its own state.
+3. **The upgrade bound did not cancel.** It rejected and left the socket alive, so Tower
+   accumulated one orphan per retry. Closed on timeout and on error, from one `abandon`.
+4. **`ownsProcess` claimed a proof it did not perform** — docblock said "a t3 serve for OUR
+   data dir", code was `cmd.includes(runtimeDir)`, which `tail -f <runtimeDir>/server.log`
+   satisfies. Now requires a bare `serve` AND `--base-dir <dataDir>` as real argument pairs,
+   verified against both processes the harness creates. Tested with a live `tail -f`.
+
+Comment corrected: `deliverToThread` said "the row stays held" while the caller dismisses it.
+
+Filed: **#226** (mailbox reason/dismissal vocabulary — same migration as #223, one not two),
+**#227** (process-global spawn factory in Tower, interrupt/cleanup still broken, architect
+attach harness/model, second auth path).
+
+The live child fixture now TICKS at Tower's 1.5 s cadence instead of calling once — a single
+`false` is the first tick now, not a failure.
