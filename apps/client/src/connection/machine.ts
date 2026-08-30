@@ -222,7 +222,14 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
     };
   }
 
-  async function openOnce(): Promise<'failed-closed' | 'retry'> {
+  /**
+   * `retry-after-progress` means this attempt received at least one valid
+   * snapshot before it ended. The caller resets its backoff on that and only
+   * that.
+   */
+  async function openOnce(): Promise<'failed-closed' | 'retry' | 'retry-after-progress'> {
+    let progressed = false;
+    const again = (): 'retry' | 'retry-after-progress' => (progressed ? 'retry-after-progress' : 'retry');
     // One controller per attempt, so the silence watchdog can end THIS read
     // without ending the link. Aborting the outer one would stop retrying.
     const attempt = new AbortController();
@@ -241,7 +248,7 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
       release();
       if (stopped) return 'failed-closed';
       drop('transport', `the server could not be reached: ${(error as Error).message}`);
-      return 'retry';
+      return again();
     }
     if (stopped) { release(); return 'failed-closed'; }
 
@@ -260,7 +267,7 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
       void response.body?.cancel().catch(() => {});
       if (refused.retry) {
         drop(refused.why, refused.message, refused.signal);
-        return 'retry';
+        return again();
       }
       failClosed(refused.why, refused.message, refused.signal);
       return 'failed-closed';
@@ -302,7 +309,7 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
           finish();
           if (stopped) return 'failed-closed';
           drop('transport', silence());
-          return 'retry';
+          return again();
         }
         if (step.done) break;
         if (stopped) { finish(); return 'failed-closed'; }
@@ -347,8 +354,9 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
           // A payload this build cannot read is NOT an empty workspace.
           finish();
           drop('protocol', 'the server sent a snapshot this client does not understand');
-          return 'retry';
+          return again();
         }
+        progressed = true;
         emit({
           status: 'live',
           why: null,
@@ -362,21 +370,34 @@ export function connectMachine(config: MachineConfig, deps: MachineDeps): Machin
       finish();
       if (stopped) return 'failed-closed';
       drop('transport', `the stream ended: ${(error as Error).message}`);
-      return 'retry';
+      return again();
     }
     finish();
     if (stopped) return 'failed-closed';
     drop('transport', 'the server closed the stream');
-    return 'retry';
+    return again();
   }
 
   async function run(): Promise<void> {
     let attempt = 0;
     while (!stopped) {
+      /*
+       * THE RESET KEYS OFF WHAT THE ATTEMPT ACHIEVED, NOT OFF THE STATUS.
+       *
+       * It used to test `state.status === 'live'` after `openOnce` returned —
+       * and `openOnce` always sets the status to `disconnected` before it
+       * returns, so the test was never true and the delay only ever grew. A
+       * machine that blipped a few times over an afternoon ended up waiting the
+       * maximum before every reconnect, for no reason connected to its health.
+       *
+       * "Did this attempt receive a valid snapshot" is the fact worth keying on:
+       * a connection that worked and then dropped is a different thing from one
+       * that never worked.
+       */
       const outcome = await openOnce();
       if (outcome === 'failed-closed' || stopped) return;
       const delay = backoff[Math.min(attempt, backoff.length - 1)];
-      attempt = state.status === 'live' ? 0 : attempt + 1;
+      attempt = outcome === 'retry-after-progress' ? 0 : attempt + 1;
       await sleep(delay, controller.signal);
     }
   }

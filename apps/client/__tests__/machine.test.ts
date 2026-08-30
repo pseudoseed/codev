@@ -366,3 +366,58 @@ describe('a server that says it could not read some state', () => {
     expect(recovered.signal).toBeNull();
   });
 });
+
+describe('reconnect backoff', () => {
+  /*
+   * THE RESET WAS UNREACHABLE. It tested `state.status === 'live'` after
+   * `openOnce` returned, and `openOnce` always sets the status to `disconnected`
+   * before returning — so the delay only ever grew, and a machine that blipped a
+   * few times over an afternoon waited the maximum before every reconnect.
+   */
+  it('resets after an attempt that received a snapshot, and grows after ones that did not', async () => {
+    const delays: number[] = [];
+    let attemptNo = 0;
+    // Attempts 1 and 2 fail outright; 3 delivers a snapshot then ends; 4 and 5
+    // fail again. The delay after 3 must be the first step, not the third.
+    const fetchImpl = (async () => {
+      attemptNo += 1;
+      if (attemptNo === 3) {
+        return new Response(sseBody([frame('protocol-state', { snapshot: SNAPSHOT })]), { status: 200 });
+      }
+      throw new Error('ECONNREFUSED');
+    }) as unknown as typeof globalThis.fetch;
+
+    const link = connectMachine(config, {
+      fetch: fetchImpl,
+      onState: () => {},
+      backoffMs: [1, 2, 4, 8],
+      sleep: async (ms) => {
+        delays.push(ms);
+        if (delays.length >= 5) await new Promise(() => {});
+      },
+    });
+    await vi.waitFor(() => expect(delays.length).toBeGreaterThanOrEqual(5));
+    link.stop();
+
+    // attempts 1,2 fail → 1, 2; attempt 3 progressed → 4 then RESET;
+    // attempts 4,5 fail → 1, 2.
+    expect(delays.slice(0, 5)).toEqual([1, 2, 4, 1, 2]);
+  });
+
+  it('does not reset on an attempt that never got a snapshot', async () => {
+    const delays: number[] = [];
+    const fetchImpl = (async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof globalThis.fetch;
+    const link = connectMachine(config, {
+      fetch: fetchImpl,
+      onState: () => {},
+      backoffMs: [1, 2, 4, 8],
+      sleep: async (ms) => {
+        delays.push(ms);
+        if (delays.length >= 4) await new Promise(() => {});
+      },
+    });
+    await vi.waitFor(() => expect(delays.length).toBeGreaterThanOrEqual(4));
+    link.stop();
+    expect(delays.slice(0, 4)).toEqual([1, 2, 4, 8]);
+  });
+});

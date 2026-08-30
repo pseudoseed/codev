@@ -46,6 +46,11 @@ const id = flag('id', 'local');
  * The client does not need it. `isRequestAllowed` exempts `/api/agent/v1/*` from
  * the shared key exactly so a paired device can reach the surface holding only
  * what pairing gave it.
+ *
+ * NOTE ON WHAT MINTING PROVES: nothing about human presence. This script can mint
+ * a token because it can write the pairing store, and so can every agent running
+ * as this user. The `authority` string it records says only that this script
+ * minted it. See `pairing.ts` `issue()`.
  */
 const keyPath = join(homedir(), '.agent-farm', 'local-key');
 if (!existsSync(keyPath)) {
@@ -61,7 +66,11 @@ const towerKey = readFileSync(keyPath, 'utf8').trim();
  */
 const token = execFileSync(process.execPath, ['--import', 'tsx', '-e', `
   import { PairingStore } from ${JSON.stringify(join(REPO_ROOT, 'packages/codev/src/agent-farm/lib/pairing.ts'))};
-  process.stdout.write(new PairingStore().issue({ ttlMs: 5 * 60_000 }).token);
+  process.stdout.write(new PairingStore().issue({
+    ttlMs: 5 * 60_000,
+    purpose: 'machine-credential',
+    authority: 'apps/client scripts/pair-dev.mjs, run by whoever ran this script',
+  }).token);
 `], { cwd: join(REPO_ROOT, 'packages', 'codev'), encoding: 'utf8' }).trim();
 
 const response = await fetch(`${origin}/api/agent/v1/pairing/redeem`, {

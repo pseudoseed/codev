@@ -118,6 +118,47 @@ because approving removes the gate and unmounts the panel holding the message.
 
 Open it and look at it before calling a change to this app done.
 
+## Known gap: approving a gate whose phase has checks
+
+The client can approve a gate **only when the phase's checks are disabled or
+absent.** With checks enabled — which is every real project — the route answers
+`PHASE_CHECKS_REQUIRED` and names them, and the operator approves from the CLI.
+
+Not an oversight and not fixable with a timeout. Approving runs porch's phase
+checks, which for an AIR `implement` phase are the repository's build and test
+suite: minutes of work on an open HTTP request. A client that gives up does not
+stop porch, so a timeout would abandon a call that goes on to approve the gate
+anyway — reporting one outcome while another happened, which is the defect this
+whole client is built against. Refusing before starting is bounded by
+construction and says what is needed.
+
+The durable fix is an asynchronous approval — submit, poll, report — and it
+belongs with phase 12's static mount rather than here.
+
+Spec 146 criterion 9b is therefore **narrowed**: a real gate is approved from the
+client, end to end, with session id, machine, authority and timestamp in
+`status.yaml`, on a project whose phase checks do not run. Both branches are
+tested — `two-machines.spec.ts` covers the approval and the refusal.
+
+## What a paired session proves
+
+It establishes a live per-machine credential, plus possession of a fresh
+single-use token minted on that host for that ceremony. All of that is real,
+scoped and revocable, and revoking a machine closes its subtree immediately.
+
+**It does not establish that a human was present.** Minting a pairing token needs
+only write access to the pairing store, and every agent on this host runs as the
+same user — so a builder can mint one, redeem it, and approve its own gate
+through the advertised path. The threat model used to claim otherwise; it was
+wrong, and a documented gap beats a guarantee that was never there.
+
+What the system does instead is record. Each mint names an `authority` — the
+minter's own account of what authorized it — and that string travels to the
+session, to the capability, and into `status.yaml` beside the approval. A reader
+sees the claim an approval was made under rather than a verification nobody
+performed. Tokens are also bound to one ceremony, so a token minted to pair a
+device cannot open a session.
+
 ## Known gap: session state
 
 `t3codeSnapshot` is not wired in `tower-server.ts`, so every snapshot from a real

@@ -119,10 +119,12 @@ export const AGENT_ROUTES: readonly AgentRoute[] = [
     probe: `${AGENT_ROUTE_PREFIX}/human-sessions`,
     authentication: 'machine-credential-and-pairing-token',
     rationale:
-      'Spec 146 Phase 11: the route by which a browser becomes a human-paired session. '
+      'Spec 146 Phase 11: the route by which a client becomes a paired session. '
       + 'Phase 6 built the session and phase 7 the table; neither wired a caller, so until '
       + 'this existed no client could ever hold one and criterion 9b was unreachable. '
-      + 'Costs a fresh pairing token, so holding the machine credential is not enough.',
+      + 'Costs a fresh single-use token on top of the machine credential, which makes each '
+      + 'session a distinct recorded act. It does NOT establish human presence: minting a '
+      + 'token needs only write access to the pairing store, which every same-uid agent has.',
   },
   {
     id: 'gate-approve',
@@ -251,6 +253,8 @@ export interface HumanSessionRecognizer {
   recognize(presentation: string | undefined): {
     readonly paired: boolean;
     readonly sessionId?: string;
+    /** What the token that paired this session claimed. Recorded, not verified. */
+    readonly authority?: string;
     readonly reason?: string;
   };
 }
@@ -267,6 +271,14 @@ export type AgentAuthOutcome =
       /** Present for every mode except pairing, which has no machine yet. */
       readonly machine?: string;
       readonly humanSessionId?: string;
+      /**
+       * What the token that paired that session claimed as its authority.
+       *
+       * Carried, never interpreted. This host cannot verify a human was present
+       * — a same-uid process can mint its own pairing token — so an approval
+       * records the claim it was made under.
+       */
+      readonly humanSessionAuthority?: string;
     }
   | {
       readonly allowed: false;
@@ -300,20 +312,21 @@ export function authenticateAgentRequest(
     };
   }
 
-  // A MODE THAT NEEDS BOTH, AND THE REASON IT HAS TO.
+  // A MODE THAT NEEDS BOTH, AND WHAT IT DOES AND DOES NOT BUY.
   //
-  // Human-session issuance cannot rest on the machine credential alone. That
-  // credential is a file a same-uid process reads, so a builder holding it could
-  // mint itself the "human" session that gates approvals — and the whole
-  // argument for why a declared principal is only defence in depth is that a
-  // builder "has no human-paired session". Issue one against the machine
-  // credential and that argument collapses.
+  // Session issuance does not rest on the machine credential alone: that
+  // credential is a file, so a machine's credential leaking would otherwise also
+  // mean unlimited sessions. Requiring a fresh single-use token as well binds
+  // each session to one deliberate pairing act and makes sessions countable.
   //
-  // The pairing token is the one secret in this system a human physically moves.
-  // Single-use, minutes-long, issued out of band. Requiring it here is what makes
-  // "a human is present" a fact rather than a claim. The machine credential is
-  // still required alongside it, so a revoked machine cannot mint a session even
-  // holding a live token.
+  // IT DOES NOT ESTABLISH HUMAN PRESENCE, and an earlier version of this comment
+  // claimed it did. Minting a token requires only write access to the pairing
+  // store, which every agent on this host has, so a builder can mint one and
+  // redeem it here. What the token buys is that the mint is a distinct, recorded
+  // act carrying a stated `authority` — provenance, not proof.
+  //
+  // The machine credential is still required alongside it, so a revoked machine
+  // cannot open a session even holding a live token.
   if (route.authentication === 'machine-credential-and-pairing-token') {
     const machine = context.machineCredentials.verify(header(req, MACHINE_CREDENTIAL_HEADER));
     if (!machine.authorized) {
@@ -381,7 +394,7 @@ export function authenticateAgentRequest(
       route,
       status: 401,
       signal: recognition.reason === 'REVOKED' ? 'HUMAN_SESSION_REVOKED' : 'HUMAN_SESSION_REQUIRED',
-      message: 'this route requires a human-paired session',
+      message: 'this route requires a paired client session',
       reason: recognition.reason,
     };
   }
@@ -390,6 +403,7 @@ export function authenticateAgentRequest(
     route,
     machine: machine.machine,
     humanSessionId: recognition.sessionId,
+    humanSessionAuthority: recognition.authority,
   };
 }
 

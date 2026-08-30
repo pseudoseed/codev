@@ -5,12 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <!--
       This client holds credentials for N machines, so an XSS here is credential
-      theft, not defacement. No inline script, no eval, and connections only to
-      this origin and loopback codev-agents. `connect-src` is widened at build
-      time when a deployment fronts remote machines; it is never `*`.
-    -->
-    <!--
-      This client holds credentials for N machines, so an XSS here is credential
       theft rather than defacement. No inline script, no eval, and no remote
       origin: every machine is reached through a same-origin path prefix, which
       is why `connect-src` is `'self'` and never `*`.
@@ -23,8 +17,8 @@
       `frame-ancestors` is NOT here: a <meta> CSP silently ignores it, and a
       directive that does nothing is worse than an absent one because it reads
       as protection. It is sent as a response header instead — by the dev server
-      in `vite.config.ts`, and it must be sent by whatever serves the built
-      bundle.
+      in `vite.config.ts` and by `scripts/serve.mjs` for the built bundle, and
+      whatever else serves this bundle must send it too.
     -->
     <meta
       http-equiv="Content-Security-Policy"

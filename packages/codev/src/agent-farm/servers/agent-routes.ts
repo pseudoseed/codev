@@ -45,6 +45,8 @@ interface StoredHumanSession {
   readonly verifier: Buffer;
   readonly pairedAt: number;
   readonly expiresAt: number;
+  /** Carried from the token, so an approval can record what authorized it. */
+  readonly authority?: string;
   lastSeenAt: number;
 }
 
@@ -55,10 +57,20 @@ export interface HumanPairingAttestation {
   readonly principalKind: 'human-client' | 'builder' | 'architect';
   readonly pairedAt?: number;
   readonly lifetimeMs?: number;
+  /**
+   * WHAT AUTHORIZED THE TOKEN THIS SESSION WAS PAIRED WITH, verbatim.
+   *
+   * Recorded and never interpreted. This host cannot verify a human was present
+   * — a same-uid process can mint its own token — so the chain carries the
+   * minter's own account instead of an assertion nothing established.
+   */
+  readonly authority?: string;
 }
 
 export interface IssuedHumanSession {
   readonly sessionId: string;
+  /** The authority recorded on the token this session was paired with. */
+  readonly authority?: string;
   /** Returned once to the human client; codev-agent retains only its hash. */
   readonly credential: string;
   readonly expiresAt: string;
@@ -67,6 +79,8 @@ export interface IssuedHumanSession {
 export interface HumanSessionRecognition {
   readonly paired: boolean;
   readonly sessionId?: string;
+  /** What the token this session was paired with claimed as its authority. */
+  readonly authority?: string;
   readonly reason?: 'MISSING' | 'MALFORMED' | 'UNKNOWN' | 'EXPIRED' | 'IDLE' | 'INVALID' | 'REVOKED';
 }
 
@@ -108,9 +122,15 @@ export class HumanPairedSessionRegistry {
       verifier: verifier(credential),
       pairedAt,
       expiresAt,
+      ...(attestation.authority ? { authority: attestation.authority } : {}),
       lastSeenAt: pairedAt,
     });
-    return { sessionId, credential, expiresAt: new Date(expiresAt).toISOString() };
+    return {
+      sessionId,
+      credential,
+      expiresAt: new Date(expiresAt).toISOString(),
+      ...(attestation.authority ? { authority: attestation.authority } : {}),
+    };
   }
 
   recognize(presentation: string | undefined): HumanSessionRecognition {
@@ -138,7 +158,7 @@ export class HumanPairedSessionRegistry {
     const presented = verifier(credential);
     if (!timingSafeEqual(presented, stored.verifier)) return { paired: false, reason: 'INVALID' };
     stored.lastSeenAt = now;
-    return { paired: true, sessionId };
+    return { paired: true, sessionId, ...(stored.authority ? { authority: stored.authority } : {}) };
   }
 
   revoke(sessionId: string): boolean {
@@ -348,9 +368,22 @@ function guardRouteFailure(
  * The declared-principal refusal below is DEFENCE IN DEPTH, not identification.
  * Over loopback TCP the peer process is not attributable: `remoteAddress` is
  * 127.0.0.1 for a builder, an architect and a browser alike, and there is no
- * peer-credential mechanism for TCP on macOS. A builder that declares itself a
- * human client is not caught here. What stops it is that it has no human-paired
- * session, and that what the host stores is a verifier it cannot present.
+ * peer-credential mechanism for TCP on macOS.
+ *
+ * A BUILDER THAT DECLARES ITSELF A HUMAN CLIENT IS NOT CAUGHT HERE, AND NOTHING
+ * ELSE CATCHES IT EITHER. An earlier version of this comment said what stopped
+ * it was having no paired session. That was false: minting a pairing token needs
+ * only write access to the pairing store, and a builder runs as the same user,
+ * so it can mint one, redeem it, and hold a session this surface treats exactly
+ * like a browser's.
+ *
+ * What the system actually provides is scoping, revocation and provenance:
+ * per-machine credentials that can be withdrawn one at a time, single-use nonces
+ * bound to one gate, and an `authority` string recorded from the token through
+ * the session and the capability into `status.yaml`. It does not provide proof
+ * that a person was present, and no comment here should imply otherwise —
+ * asserting a property the code does not have is worse than naming the gap,
+ * because the next person builds on it.
  */
 function handleApprovalRoute(
   req: http.IncomingMessage,
@@ -358,6 +391,7 @@ function handleApprovalRoute(
   url: URL,
   context: AgentRouteContext,
   humanSessionId: string,
+  humanSessionAuthority: string | undefined,
 ): void {
   if (req.method === 'POST' && url.pathname === `${AGENT_ROUTE_PREFIX}/approval-capabilities`) {
     void readJsonBody(req).then((body) => {
@@ -390,7 +424,7 @@ function handleApprovalRoute(
         return;
       }
       const outcome = issueApprovalCapability(context.approvalCapabilities, {
-        humanSession: { paired: true, sessionId: humanSessionId },
+        humanSession: { paired: true, sessionId: humanSessionId, authority: humanSessionAuthority },
         declaredPrincipal: typeof body.principalKind === 'string' ? body.principalKind : undefined,
         machine: declaredMachine,
         lifetimeMs: typeof body.lifetimeMs === 'number' ? body.lifetimeMs : undefined,
@@ -486,7 +520,7 @@ function handlePairingRedeem(
     }
     let redemption;
     try {
-      redemption = context.pairings.redeem(token, { machine });
+      redemption = context.pairings.redeem(token, { machine, purpose: 'machine-credential' });
     } catch (error) {
       // An unparseable store is "I could not tell", not "no such token".
       context.log('ERROR', `pairing store unreadable: ${(error as Error).message}`);
@@ -585,7 +619,7 @@ function writeRefusal(res: http.ServerResponse, outcome: AgentAuthOutcome): void
 }
 
 /**
- * Turn a fresh pairing token into a human-paired session.
+ * Turn a fresh pairing token into a paired client session.
  *
  * THE PATH PHASE 6 BUILT AND NOTHING COULD REACH. `completePairing` had no
  * caller outside its own file, so no browser could ever hold a session, so the
@@ -594,10 +628,27 @@ function writeRefusal(res: http.ServerResponse, outcome: AgentAuthOutcome): void
  * the fix; the other half is the end-to-end test that drives a request through
  * it, in `agent-approval-path.test.ts`.
  *
+ * ## WHAT THIS SESSION IS, AND WHAT IT IS NOT
+ *
+ * It establishes: a live machine credential, plus possession of a fresh
+ * single-use token minted on this host for this ceremony. All three are real and
+ * all three are revocable.
+ *
+ * It does NOT establish that a human was present. Minting a token needs only
+ * write access to the pairing store, and every builder on this host runs as the
+ * same user — so a builder can mint one, redeem it here, and hold a session. The
+ * threat model used to say a builder was stopped by having no session; it was
+ * not, and asserting a property the code does not have is worse than naming the
+ * gap, because the next person builds on it.
+ *
+ * What the system does instead is RECORD: the token's stated authority travels
+ * to this session, to any capability it issues, and into `status.yaml` beside
+ * the approval, so a reader can see what was actually claimed.
+ *
  * The token is spent HERE and not in the auth layer, for the same reason machine
  * redemption spends it here: the auth layer does not yet know what it is being
  * spent on, and a token consumed for a request that then fails is a token the
- * human has to mint again.
+ * operator has to mint again.
  */
 function handleHumanSessionIssue(
   req: http.IncomingMessage,
@@ -614,7 +665,7 @@ function handleHumanSessionIssue(
     }
     let redemption;
     try {
-      redemption = context.pairings.redeem(token, { machine });
+      redemption = context.pairings.redeem(token, { machine, purpose: 'client-session' });
     } catch (error) {
       context.log('ERROR', `pairing store unreadable: ${(error as Error).message}`);
       writeJson(res, 503, {
@@ -633,6 +684,7 @@ function handleHumanSessionIssue(
         pairingId: redemption.pairingId,
         principalKind: 'human-client',
         lifetimeMs: typeof body.lifetimeMs === 'number' ? body.lifetimeMs : undefined,
+        authority: redemption.authority,
       });
     } catch (error) {
       // The token was spent on a ceremony that did not complete. Put it back
@@ -863,7 +915,11 @@ export function handleAgentRoute(
     case 'approval-capability-issue':
     case 'approval-nonce-mint':
     case 'approval-capability-revoke-machine':
-      handleApprovalRoute(req, res, url, context, outcome.humanSessionId as string);
+      handleApprovalRoute(
+        req, res, url, context,
+        outcome.humanSessionId as string,
+        outcome.humanSessionAuthority,
+      );
       return true;
 
     case 'gate-approve': {

@@ -47,6 +47,14 @@ import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..');
 
+/**
+ * Every mint names its ceremony and what authorized it. The store cannot verify
+ * a human was present — a same-uid process can mint its own token — so it
+ * records the claim, and these mint as what they are: a test harness.
+ */
+const MACHINE_MINT = { purpose: 'machine-credential' as const, authority: 'test harness' };
+const SESSION_MINT = { purpose: 'client-session' as const, authority: 'test harness' };
+
 const cleanup: Array<() => void> = [];
 afterEach(() => {
   shutdownAgentRoutes();
@@ -98,6 +106,7 @@ function workspaceWithRequestedGate(
 
 interface Host {
   readonly origin: string;
+  readonly stateRoot: string;
   readonly pairings: PairingStore;
   readonly machines: MachineCredentialStore;
   readonly capabilities: ApprovalCapabilityStore;
@@ -136,6 +145,7 @@ async function startHost(workspacePath: string): Promise<Host> {
 
   return {
     origin: `http://127.0.0.1:${port}`,
+    stateRoot,
     pairings,
     machines,
     capabilities,
@@ -159,7 +169,7 @@ describe('a client can get from nothing to an approved gate', () => {
     const host = await startHost(workspace);
 
     // 1. PAIR THE MACHINE. The one route reachable with no credential at all.
-    const machineToken = host.pairings.issue().token;
+    const machineToken = host.pairings.issue(MACHINE_MINT).token;
     const paired = await post(`${host.origin}/api/agent/v1/pairing/redeem`,
       { [PAIRING_TOKEN_HEADER]: machineToken }, { machine: 'laptop' });
     expect(paired.status).toBe(201);
@@ -175,7 +185,7 @@ describe('a client can get from nothing to an approved gate', () => {
 
     // 3. BECOME A HUMAN SESSION. Costs a second, fresh pairing token — a builder
     //    that read the machine credential off disk still cannot mint one.
-    const humanToken = host.pairings.issue().token;
+    const humanToken = host.pairings.issue(SESSION_MINT).token;
     const session = await post(`${host.origin}/api/agent/v1/human-sessions`, {
       [MACHINE_CREDENTIAL_HEADER]: credential,
       [PAIRING_TOKEN_HEADER]: humanToken,
@@ -242,10 +252,10 @@ describe('a client can get from nothing to an approved gate', () => {
   it('refuses at issuance to mint a capability for another machine', async () => {
     const host = await startHost(workspaceWithRequestedGate('985', 'pr'));
     const credential: string = (await post(`${host.origin}/api/agent/v1/pairing/redeem`,
-      { [PAIRING_TOKEN_HEADER]: host.pairings.issue().token }, { machine: 'laptop' })).body.credential;
+      { [PAIRING_TOKEN_HEADER]: host.pairings.issue(MACHINE_MINT).token }, { machine: 'laptop' })).body.credential;
     const session = (await post(`${host.origin}/api/agent/v1/human-sessions`, {
       [MACHINE_CREDENTIAL_HEADER]: credential,
-      [PAIRING_TOKEN_HEADER]: host.pairings.issue().token,
+      [PAIRING_TOKEN_HEADER]: host.pairings.issue(SESSION_MINT).token,
     }, {})).body;
 
     const refused = await post(`${host.origin}/api/agent/v1/approval-capabilities`, {
@@ -274,10 +284,10 @@ describe('a client can get from nothing to an approved gate', () => {
     const workspace = workspaceWithRequestedGate('986', 'pr', { checksPass: false });
     const host = await startHost(workspace);
     const credential: string = (await post(`${host.origin}/api/agent/v1/pairing/redeem`,
-      { [PAIRING_TOKEN_HEADER]: host.pairings.issue().token }, { machine: 'laptop' })).body.credential;
+      { [PAIRING_TOKEN_HEADER]: host.pairings.issue(MACHINE_MINT).token }, { machine: 'laptop' })).body.credential;
     const session = (await post(`${host.origin}/api/agent/v1/human-sessions`, {
       [MACHINE_CREDENTIAL_HEADER]: credential,
-      [PAIRING_TOKEN_HEADER]: host.pairings.issue().token,
+      [PAIRING_TOKEN_HEADER]: host.pairings.issue(SESSION_MINT).token,
     }, {})).body;
     const authed = {
       [MACHINE_CREDENTIAL_HEADER]: credential,
@@ -310,7 +320,7 @@ describe('a client can get from nothing to an approved gate', () => {
     const workspace = workspaceWithRequestedGate('981', 'pr');
     const host = await startHost(workspace);
     const credential: string = (await post(`${host.origin}/api/agent/v1/pairing/redeem`,
-      { [PAIRING_TOKEN_HEADER]: host.pairings.issue().token }, { machine: 'laptop' })).body.credential;
+      { [PAIRING_TOKEN_HEADER]: host.pairings.issue(MACHINE_MINT).token }, { machine: 'laptop' })).body.credential;
 
     const refused = await post(
       `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approve`,
@@ -328,7 +338,7 @@ describe('a client can get from nothing to an approved gate', () => {
   it('will not mint a human session for a machine credential alone', async () => {
     const host = await startHost(workspaceWithRequestedGate('982', 'pr'));
     const credential: string = (await post(`${host.origin}/api/agent/v1/pairing/redeem`,
-      { [PAIRING_TOKEN_HEADER]: host.pairings.issue().token }, { machine: 'laptop' })).body.credential;
+      { [PAIRING_TOKEN_HEADER]: host.pairings.issue(MACHINE_MINT).token }, { machine: 'laptop' })).body.credential;
 
     const refused = await post(`${host.origin}/api/agent/v1/human-sessions`,
       { [MACHINE_CREDENTIAL_HEADER]: credential }, {});
@@ -339,8 +349,8 @@ describe('a client can get from nothing to an approved gate', () => {
   it('spends the pairing token, so a session cannot be minted twice from one', async () => {
     const host = await startHost(workspaceWithRequestedGate('983', 'pr'));
     const credential: string = (await post(`${host.origin}/api/agent/v1/pairing/redeem`,
-      { [PAIRING_TOKEN_HEADER]: host.pairings.issue().token }, { machine: 'laptop' })).body.credential;
-    const token = host.pairings.issue().token;
+      { [PAIRING_TOKEN_HEADER]: host.pairings.issue(MACHINE_MINT).token }, { machine: 'laptop' })).body.credential;
+    const token = host.pairings.issue(SESSION_MINT).token;
     const headers = { [MACHINE_CREDENTIAL_HEADER]: credential, [PAIRING_TOKEN_HEADER]: token };
 
     expect((await post(`${host.origin}/api/agent/v1/human-sessions`, headers, {})).status).toBe(201);
@@ -352,15 +362,15 @@ describe('a client can get from nothing to an approved gate', () => {
     const workspace = workspaceWithRequestedGate('984', 'pr');
     const host = await startHost(workspace);
     const credential: string = (await post(`${host.origin}/api/agent/v1/pairing/redeem`,
-      { [PAIRING_TOKEN_HEADER]: host.pairings.issue().token }, { machine: 'laptop' })).body.credential;
+      { [PAIRING_TOKEN_HEADER]: host.pairings.issue(MACHINE_MINT).token }, { machine: 'laptop' })).body.credential;
 
     const sessionA = (await post(`${host.origin}/api/agent/v1/human-sessions`, {
       [MACHINE_CREDENTIAL_HEADER]: credential,
-      [PAIRING_TOKEN_HEADER]: host.pairings.issue().token,
+      [PAIRING_TOKEN_HEADER]: host.pairings.issue(SESSION_MINT).token,
     }, {})).body;
     const sessionB = (await post(`${host.origin}/api/agent/v1/human-sessions`, {
       [MACHINE_CREDENTIAL_HEADER]: credential,
-      [PAIRING_TOKEN_HEADER]: host.pairings.issue().token,
+      [PAIRING_TOKEN_HEADER]: host.pairings.issue(SESSION_MINT).token,
     }, {})).body;
 
     const capability = (await post(`${host.origin}/api/agent/v1/approval-capabilities`, {
@@ -379,5 +389,139 @@ describe('a client can get from nothing to an approved gate', () => {
       readFileSync(join(workspace, 'codev', 'projects', '984', 'status.yaml'), 'utf8'),
     ) as any;
     expect(state.gates.pr.status).toBe('pending');
+  });
+});
+
+/**
+ * WHAT A PAIRED SESSION PROVES, AND WHAT IT DOES NOT.
+ *
+ * The threat model used to say a builder declaring itself a human client was
+ * stopped by having no paired session. It was not. Minting a pairing token needs
+ * only write access to the pairing store, and every agent on this host runs as
+ * the same user — so a builder can mint one, redeem it, and approve its own gate
+ * through the advertised path.
+ *
+ * That residual is not closed here and cannot be closed on a single-uid host by
+ * anything in this file. What IS enforced is scoping, single use, ceremony
+ * binding, and provenance — and these tests pin each of those, plus the residual
+ * itself, so nobody rediscovers it as a surprise.
+ */
+describe('what a paired session establishes', () => {
+  it('records the minter\'s stated authority all the way into status.yaml', async () => {
+    const workspace = workspaceWithRequestedGate('987', 'pr');
+    const host = await startHost(workspace);
+    const credential: string = (await post(`${host.origin}/api/agent/v1/pairing/redeem`,
+      { [PAIRING_TOKEN_HEADER]: host.pairings.issue(MACHINE_MINT).token },
+      { machine: 'laptop' })).body.credential;
+
+    const session = (await post(`${host.origin}/api/agent/v1/human-sessions`, {
+      [MACHINE_CREDENTIAL_HEADER]: credential,
+      [PAIRING_TOKEN_HEADER]: host.pairings.issue({
+        purpose: 'client-session',
+        authority: 'operator at the keyboard, per the runbook',
+      }).token,
+    }, {})).body;
+
+    const authed = {
+      [MACHINE_CREDENTIAL_HEADER]: credential,
+      [HUMAN_SESSION_HEADER]: session.presentation,
+    };
+    const capability = (await post(`${host.origin}/api/agent/v1/approval-capabilities`, authed,
+      { principalKind: 'human-client' })).body;
+    const nonce = (await post(`${host.origin}/api/agent/v1/approval-nonces`, authed,
+      { projectId: '987', gateName: 'pr', capabilityId: capability.capabilityId })).body;
+
+    const approved = await post(
+      `${host.origin}/api/agent/v1/workspaces/${host.encodedWorkspace}/gates/approve`,
+      authed,
+      { projectId: '987', gateName: 'pr', capability: capability.presentation, nonce: nonce.nonce },
+    );
+    expect(approved.status).toBe(200);
+
+    const state = yaml.load(
+      readFileSync(join(workspace, 'codev', 'projects', '987', 'status.yaml'), 'utf8'),
+    ) as any;
+    // The claim the approval was made under, verbatim — not a verification.
+    expect(state.gates.pr.approval.authority).toBe('operator at the keyboard, per the runbook');
+  });
+
+  /* Enforced: a token minted to pair a device cannot open a session. */
+  it('refuses a machine-credential token presented to the session route', async () => {
+    const host = await startHost(workspaceWithRequestedGate('988', 'pr'));
+    const credential: string = (await post(`${host.origin}/api/agent/v1/pairing/redeem`,
+      { [PAIRING_TOKEN_HEADER]: host.pairings.issue(MACHINE_MINT).token },
+      { machine: 'laptop' })).body.credential;
+
+    const wrong = await post(`${host.origin}/api/agent/v1/human-sessions`, {
+      [MACHINE_CREDENTIAL_HEADER]: credential,
+      [PAIRING_TOKEN_HEADER]: host.pairings.issue(MACHINE_MINT).token,
+    }, {});
+    expect(wrong.status).toBe(401);
+    expect(wrong.body.signal).toBe('PAIRING_TOKEN_WRONG_PURPOSE');
+  });
+
+  /* And the reverse, so the binding is not one-directional by accident. */
+  it('refuses a session token presented to the pairing route', async () => {
+    const host = await startHost(workspaceWithRequestedGate('989', 'pr'));
+    const wrong = await post(`${host.origin}/api/agent/v1/pairing/redeem`,
+      { [PAIRING_TOKEN_HEADER]: host.pairings.issue(SESSION_MINT).token },
+      { machine: 'laptop' });
+    expect(wrong.status).toBe(401);
+    expect(wrong.body.signal).toBe('PAIRING_TOKEN_WRONG_PURPOSE');
+  });
+
+  /* A token presented to the wrong route is not spent — it is still good for its own. */
+  it('does not consume a token it refused for the wrong purpose', async () => {
+    const host = await startHost(workspaceWithRequestedGate('990', 'pr'));
+    const token = host.pairings.issue(MACHINE_MINT).token;
+    expect((await post(`${host.origin}/api/agent/v1/human-sessions`, {
+      [MACHINE_CREDENTIAL_HEADER]: 'nope.nope',
+      [PAIRING_TOKEN_HEADER]: token,
+    }, {})).status).toBe(401);
+    const paired = await post(`${host.origin}/api/agent/v1/pairing/redeem`,
+      { [PAIRING_TOKEN_HEADER]: token }, { machine: 'laptop' });
+    expect(paired.status).toBe(201);
+  });
+
+  it('will not mint a token that names no authority', () => {
+    const host = new PairingStore({ root: tmp() });
+    expect(() => host.issue({ purpose: 'client-session', authority: '  ' }))
+      .toThrow(/PAIRING_AUTHORITY_REQUIRED/);
+  });
+
+  /*
+   * THE RESIDUAL, PINNED. This asserts the gap is real rather than pretending it
+   * is closed: anything that can write the pairing store can complete the whole
+   * ceremony. If a future phase adds real out-of-band authority, this test fails
+   * and is the right place to record what changed.
+   */
+  it('lets anything with filesystem access complete the ceremony — the stated residual', async () => {
+    const workspace = workspaceWithRequestedGate('991', 'pr');
+    const host = await startHost(workspace);
+    const credential: string = (await post(`${host.origin}/api/agent/v1/pairing/redeem`,
+      { [PAIRING_TOKEN_HEADER]: host.pairings.issue(MACHINE_MINT).token },
+      { machine: 'laptop' })).body.credential;
+
+    // A same-uid process constructing the store directly, exactly as a builder could.
+    const asAnAgent = new PairingStore({ root: `${host.stateRoot}/pairing` }).issue({
+      purpose: 'client-session',
+      authority: 'a builder minted this for itself',
+    });
+    const session = await post(`${host.origin}/api/agent/v1/human-sessions`, {
+      [MACHINE_CREDENTIAL_HEADER]: credential,
+      [PAIRING_TOKEN_HEADER]: asAnAgent.token,
+    }, {});
+    expect(session.status).toBe(201);
+
+    // It succeeds — and the record says under what claim, which is the whole
+    // mitigation available on a single-uid host.
+    const recognized = await fetch(`${host.origin}/api/agent/v1/session`, {
+      headers: {
+        [MACHINE_CREDENTIAL_HEADER]: credential,
+        [HUMAN_SESSION_HEADER]: session.body.presentation,
+      },
+    });
+    expect(recognized.status).toBe(200);
+    expect((await recognized.json() as any).authority).toBe('a builder minted this for itself');
   });
 });

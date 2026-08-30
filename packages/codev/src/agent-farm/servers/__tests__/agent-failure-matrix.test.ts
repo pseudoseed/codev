@@ -218,6 +218,11 @@ describe('failure matrix signals are distinct', () => {
       HUMAN_SESSION_REQUEST_MALFORMED: '400 for an unreadable body; malformed request',
       HUMAN_SESSION_REFUSED: 'completePairing rejected the attestation; a refusal, not a failure',
       GATE_APPROVED: 'the SUCCESS case of a gate approval',
+      // Phase 11 round 3. Both answer "your request was wrong", not "a service
+      // failed": one token presented to the wrong ceremony, one mint that named
+      // no authority.
+      PAIRING_TOKEN_WRONG_PURPOSE: 'a token minted for the other ceremony; a caller error',
+      PAIRING_AUTHORITY_REQUIRED: 'argument validation thrown by issue()',
       // Stream event types, not signal codes. STATE_STREAM_WATCH_FAILED is both —
       // it carries a signal whose code equals the event type.
       PROTOCOL_STATE_SNAPSHOT: 'stream event type, not a failure signal',
