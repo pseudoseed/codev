@@ -225,3 +225,24 @@ docblock no longer claims a proof. I have no counter-case; filed on #227.
 `7baa2474c` touched ONLY `mailbox-wiring.ts` (+8/−6, net +2, hunk at line 442), so the route
 finding is against unmoved code and stands; `resolveLiveSessionForAgent` at ~117 did not move
 either. My comment-only push landed as the lanes started — that ambiguity is mine.
+
+## Review round 8 (codex round 7: one blocker; claude round 7: cosmetics only)
+
+**The blocker: a message could run twice.** `dispatchCommand` leaves an unanswered command
+pending on purpose — a lost acknowledgement is not a "no". The mailbox held the row, a later
+tick re-submitted, and `startTurn` mints a fresh commandId per call, so t3code (which
+collapses by commandId) saw two commands and ran the turn twice. Round 6's in-flight guard
+does not cover it: it holds while the promise is UNSETTLED, and an ambiguous rejection
+settles it.
+
+Fixed by replaying the pending intent under its ORIGINAL id, matched on thread + exact
+message text (the journal on disk is the only record that survives a Tower restart).
+`recoverPendingCommands` existed, was tested, and had NO production caller — issue 222's
+pattern again. This is the caller it never had.
+
+A refusal is settled and is deliberately NOT replayed; that has its own test.
+
+Also: single-sourced the --no-enter rule into `servers/thread-no-enter.ts` with a guard test
+that fails if any of the three sites restates it (third time that duplication bit here);
+reattached two docblocks that came adrift when new functions were inserted above them; and
+removed the stray blank lines.

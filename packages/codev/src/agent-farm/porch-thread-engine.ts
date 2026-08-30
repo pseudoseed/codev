@@ -19,6 +19,7 @@
 import { DriverThread } from '@cluesmith/porch-driver/thread';
 import {
   DispatchJournal,
+  recoverPendingCommands,
   type CommandDispatcher,
 } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
@@ -185,6 +186,38 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
       };
       records.set(thread.threadId, record);
       return record;
+    },
+
+    /**
+     * Replay this thread's unanswered turn under its original command id.
+     *
+     * The journal is the durable record — an in-process map does not survive the Tower
+     * restart this is most likely to follow — so the pending intent is found by thread and
+     * exact message text rather than by anything held in memory.
+     *
+     * `recoverPendingCommands` does the replay, and this is the production caller it never
+     * had: the function existed, was tested, and nothing outside tests ever ran it. It
+     * replays EVERY pending command, which is right — all of them are equally ambiguous,
+     * and every one of them is collapsed by the server if it already landed.
+     */
+    async recoverTurn(threadId: string, text: string) {
+      const mine = options.journal.pending().find((intent) => {
+        if (intent.type !== 'thread.turn.start') return false;
+        const command = intent.command as { threadId?: unknown; message?: { text?: unknown } };
+        return command.threadId === threadId && command.message?.text === text;
+      });
+      if (!mine) return 'none';
+      const replayed = await recoverPendingCommands(options.dispatcher, options.journal);
+      // Only if OUR intent was among the ids it actually replayed.
+      //
+      // Being precise about why, because the obvious reason is wrong: a replay that fails
+      // makes `recoverPendingCommands` THROW, and that throw propagates out of here — so
+      // it is not the case that a normal return can silently have skipped ours for that
+      // reason. What this does catch is the intent being settled by something else between
+      // the `pending()` read above and the one inside the replay, after which this call
+      // re-dispatched nothing of ours. Reporting `recovered` there would mark a message
+      // delivered that nothing re-sent, and the caller would never try again.
+      return replayed.includes(mine.commandId) ? 'recovered' : 'none';
     },
 
     async startTurn(threadId, text) {

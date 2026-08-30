@@ -446,6 +446,52 @@ not-writable PTY entry is not a live PTY and does not displace the thread.
 reads reached the **real user-global database** — a route test's answer depended on what happened
 to be registered on the machine running it. Both now point at the in-memory test DB.
 
+## Review round 7 — a message could run twice
+
+### The idempotency hole
+
+`dispatchCommand` leaves an **unanswered** command pending on purpose: a dead socket or a timed-out
+request does not say whether the server applied it, and journalling that as failed would spell "I
+could not tell" exactly like "no". So a turn whose acknowledgement was lost is still, as far as
+anyone knows, running.
+
+The mailbox then held the row, a later tick submitted the same message, and `startTurn` mints a
+**fresh `commandId`** per call — so t3code, which collapses duplicates by `commandId`, saw two
+different commands and ran the turn twice. For a builder that is two PRs, or the same destructive
+instruction carried out twice.
+
+Round 6's in-flight guard does not cover it. That guard prevents a retry while the original
+promise is *unsettled*; an ambiguous rejection settles it and the guard opens.
+
+Delivery now replays the pending intent under its **original** id rather than issuing a new one.
+The match is on the thread and the exact message text, because the journal on disk is the only
+record of the attempt that survives a Tower restart — an in-process map does not.
+
+**`recoverPendingCommands` existed, was tested, and nothing in production called it.** The
+recovery mechanism for this bug was already in the tree and had never run. This is the caller it
+never had, and it replays every pending command, which is right: all of them are equally
+ambiguous, and every one is collapsed by the server if it already landed.
+
+A refusal is **not** ambiguous — the server answered, and answered no — so it is not replayed, and
+a fresh submit after one is correct. That distinction has its own test, because without it the fix
+would replay decisions that were already made.
+
+### One rule, one encoding
+
+The `--no-enter`-on-a-thread rule is enforced at three points, which is correct. It was *stated*
+at three points, which is not — and that duplication had already gone stale twice in this issue,
+in the same pair of files. `servers/thread-no-enter.ts` now owns the condition and the words, and
+`spec-146-phase-9-no-enter-rule.test.ts` fails if any site restates them instead of importing
+them. Mutation-checked by hardcoding the sentence at one site.
+
+### Two docblocks that came adrift
+
+Inserting `refusedReasonFor` and `deliverToThread` left `handleInboxList`'s and
+`makeDeliveryPorts`' docblocks sitting above the new functions — both then documented the wrong
+thing and both real functions were undocumented. The same comment-lies pattern as the close
+handler and `ownsProcess`, in its most mundane form: **inserting a function is enough to cause
+it.** Both reattached.
+
 ## Recorded, not fixed
 
 - **An architect's `attach` passes no harness or model**, so it depends on the engine's
@@ -505,7 +551,7 @@ Mutation-checked: reverting the branch normalisation fails the item-3 payload te
 `ensureThreadBackendReady` call fails two of the three add-architect tests; replacing `restart`
 with `stop` + `start` fails the live test.
 
-Full suite green with these changes: `347 passed | 3 skipped` files, `6860 passed | 52 skipped`
+Full suite green with these changes: `348 passed | 3 skipped` files, `6873 passed | 52 skipped`
 tests, plus the v2 suite's `180 passed`. Run with `env -u CODEV_WORKTREE_ROOT -u CODEV_BUILDER_ID
 -u CODEV_ARCHITECT_NAME`, the workaround #189 still requires.
 

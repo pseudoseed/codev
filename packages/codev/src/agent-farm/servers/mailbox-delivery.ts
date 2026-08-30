@@ -44,6 +44,11 @@ import type { DbMailbox, MailboxReason } from '../db/types.js';
 import type { GateProfile, GateVerdict } from './render-gate.js';
 import { KeyedSerializer } from './write-queue.js';
 import { heldRecoveryAction, type HeldRecoveryAction } from './mailbox-hold-policy.js';
+import {
+  threadCanHonourNoEnter,
+  THREAD_HAS_NO_COMPOSER,
+  THREAD_NO_ENTER_REMEDY,
+} from './thread-no-enter.js';
 
 /**
  * The structural view of a live PTY session the delivery path needs. `PtySession`
@@ -506,14 +511,13 @@ export async function deliverAgentMail(
     // So it ends here, once, loudly, and with everything a sender needs to re-send it
     // by another route. `dismissed` is the terminal state that preserves the row and its
     // reason for audit; the alternative was leaving it eligible forever.
-    if (current.no_enter === 1) {
+    if (!threadCanHonourNoEnter(current.no_enter === 1)) {
       ports.log(
         `[mailbox] TERMINAL: message ${row.id} from ${current.from_agent ?? 'unknown'} to ${toAgent} `
         + `@ ${path.basename(workspacePath)} was sent --no-enter, and ${toAgent} is thread-backed. `
-        + `A thread has no composer — thread.turn.start is the submit — so this can never be `
-        + `delivered as "wait for a human", and delivering it any other way would RUN it. `
+        + `${THREAD_HAS_NO_COMPOSER} `
         + `Dismissed rather than held: no retry can change this, and holding it would raise a `
-        + `starvation notice with no remedy. Re-send without --no-enter if it should run.`,
+        + `starvation notice with no remedy. ${THREAD_NO_ENTER_REMEDY}`,
       );
       dismiss(db, row.id, ports.now());
       ports.onHeldStateChange();

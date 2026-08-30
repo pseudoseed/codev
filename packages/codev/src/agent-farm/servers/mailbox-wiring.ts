@@ -39,6 +39,11 @@ import { getGlobalDb } from '../db/index.js';
 import { getArchitectByName, getBuilder } from '../state.js';
 import { deliverThreadTurn, getThreadEngine } from '../thread-runtime.js';
 import { requestThreadBackend, type ThreadBackendAvailability } from '../thread-backend.js';
+import {
+  threadCanHonourNoEnter,
+  THREAD_HAS_NO_COMPOSER,
+  THREAD_NO_ENTER_REMEDY,
+} from './thread-no-enter.js';
 import { formatBuilderMessage } from '../utils/message-format.js';
 import { supersede as supersedeMailbox, dismissHeldWithKey, NOTICE_SUPERSEDE_PREFIX } from '../db/mailbox.js';
 import path from 'node:path';
@@ -431,12 +436,6 @@ function broadcastDelivered(frame: DeliveredBroadcast): void {
 }
 
 /**
- * Build the {@link DeliveryPorts} bound to the live Tower. Cheap (closures over
- * module singletons), so `handleSend` may construct one per request and the
- * drainer one at boot; the shared state that matters (the per-agent write
- * serializer) lives in `mailbox-delivery.ts`, not here.
- */
-/**
  * Deliver one message as a turn on a t3code thread, from Tower's process.
  *
  * WHY THIS IS MORE THAN `deliverThreadTurn` (issue #219)
@@ -486,11 +485,10 @@ async function deliverToThread(
   // Both of these sentences said "the row stays held" until round 5, while the caller
   // dismissed it. One rule in two places with one of them wrong is how the next reader is
   // misled — which is the whole reason it was worth correcting.
-  if (noEnter) {
-    log('ERROR', `[mailbox] ${where}: refusing a --no-enter message. A thread has no composer — `
-      + `thread.turn.start is the submit — so delivering it would RUN a message that was sent to `
-      + `sit and wait for a human. This is the backstop; the delivery path ends such a row `
-      + `terminally rather than holding it.`);
+  if (!threadCanHonourNoEnter(noEnter)) {
+    log('ERROR', `[mailbox] ${where}: refusing a --no-enter message. ${THREAD_HAS_NO_COMPOSER} `
+      + `This is the backstop; the delivery path ends such a row terminally rather than holding `
+      + `it. ${THREAD_NO_ENTER_REMEDY}`);
     return false;
   }
   if (!context) {
@@ -533,7 +531,17 @@ async function deliverToThread(
     return false;
   }
   try {
-    await deliverThreadTurn(threadId, msg, context.workspaceRoot);
+    const outcome = await deliverThreadTurn(threadId, msg, context.workspaceRoot);
+    if (outcome === 'recovered') {
+      // Not a new turn. A previous attempt's acknowledgement was lost, the intent was
+      // still pending in the journal, and it has now been re-dispatched under its
+      // ORIGINAL command id — so the server holds it exactly once. Reporting this as
+      // anything other than delivered would send the next tick to submit it again, which
+      // is the duplicate this whole path exists to prevent.
+      log('WARN', `[mailbox] ${where}: a previous submission for ${context.agent} was never `
+        + `acknowledged, so it was REPLAYED under its original command id rather than re-sent. `
+        + `The server collapses it by that id, so the message ran once, not twice.`);
+    }
     return true;
   } catch (err) {
     log('ERROR', `[mailbox] ${where}: the server refused the turn — `
@@ -577,6 +585,12 @@ function threadBackendNotReady(
   }
 }
 
+/**
+ * Build the {@link DeliveryPorts} bound to the live Tower. Cheap (closures over
+ * module singletons), so `handleSend` may construct one per request and the
+ * drainer one at boot; the shared state that matters (the per-agent write
+ * serializer) lives in `mailbox-delivery.ts`, not here.
+ */
 export function makeDeliveryPorts(log: LogFn): DeliveryPorts {
   return {
     getSessionForAgent: (ws, agent) => resolveLiveSessionForAgent(ws, agent, log),

@@ -59,6 +59,34 @@ export interface ThreadEngine {
    */
   attach(input: AttachThreadInput): Promise<ThreadRecord>;
   startTurn(threadId: string, text: string): Promise<void>;
+  /**
+   * Replay an unanswered turn for this thread under ITS ORIGINAL command id, instead of
+   * issuing a new one.
+   *
+   * WHY A RETRY CANNOT JUST RE-SUBMIT.
+   *
+   * `dispatchCommand` deliberately leaves an UNANSWERED command pending: a dead socket or
+   * a timed-out request does not say whether the server applied it, and recording that as
+   * failed would spell "I could not tell" exactly like "no". So a turn whose
+   * acknowledgement was lost is still, as far as anyone knows, running.
+   *
+   * A caller that then submits the same message again gets a FRESH `commandId`
+   * (`startTurn` mints one per call), and t3code — which collapses duplicates by
+   * `commandId` — sees two different commands and runs the turn TWICE. For a builder that
+   * is two PRs, or the same destructive instruction carried out twice.
+   *
+   * Replaying under the original id is what makes it safe: the server returns the
+   * original receipt if it already applied it, and applies it once if it did not.
+   *
+   * Matched on the thread and the exact message text, because the journal on disk is the
+   * only record of the attempt that survives a Tower restart — the in-process map does
+   * not.
+   *
+   * Three answers, and `none` is not `recovered`: `none` means there is nothing pending
+   * that could be this message, so a fresh submit is safe. A caller must not read it as
+   * "the replay failed".
+   */
+  recoverTurn(threadId: string, text: string): Promise<'recovered' | 'none'>;
   interrupt(threadId: string): Promise<{ activeTurnId: null }>;
   worktreePath(threadId: string): string | undefined;
   removeWorktree(threadId: string, opts?: { force?: boolean }): Promise<'removed' | 'refused-unmerged'>;
@@ -181,6 +209,11 @@ export function createMemoryThreadEngine(): ThreadEngine {
       if (!record) throw new Error(`Unknown thread ${threadId}`);
       record.activeTurnId = `turn-${threadId}`;
     },
+    // No journal, so nothing is ever ambiguous here: this engine's turns settle in
+    // memory. `none` is the truthful answer, not a stub.
+    async recoverTurn() {
+      return 'none';
+    },
     async interrupt(threadId) {
       const record = threads.get(threadId);
       if (!record) throw new Error(`Unknown thread ${threadId}`);
@@ -213,12 +246,25 @@ export function installThreadSpawnFactory(workspaceRoot?: string): void {
   setSpawnThreadFactory(async (input) => getThreadEngine(workspaceRoot).create(input));
 }
 
+/**
+ * Deliver one message as a turn, replaying an unanswered attempt rather than repeating it.
+ *
+ * The recovery check comes FIRST and it is the whole point. A previous attempt whose
+ * acknowledgement was lost is still pending in the journal; submitting again would mint a
+ * new `commandId` and t3code, which collapses by `commandId`, would run the turn twice.
+ *
+ * `recovered` means the original intent was re-dispatched under its original id and the
+ * server has it exactly once. Nothing further is sent.
+ */
 export async function deliverThreadTurn(
   threadId: string,
   text: string,
   workspaceRoot?: string,
-): Promise<void> {
-  await getThreadEngine(workspaceRoot).startTurn(threadId, text);
+): Promise<'delivered' | 'recovered'> {
+  const engine = getThreadEngine(workspaceRoot);
+  if ((await engine.recoverTurn(threadId, text)) === 'recovered') return 'recovered';
+  await engine.startTurn(threadId, text);
+  return 'delivered';
 }
 
 export async function interruptThread(

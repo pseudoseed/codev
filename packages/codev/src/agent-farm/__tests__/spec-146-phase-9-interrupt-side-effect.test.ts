@@ -78,6 +78,13 @@ function createProcessThreadEngine(): ThreadEngine & { exited(threadId: string):
       return record;
     },
 
+    // #219 round 7: this engine's turns are child processes with no dispatch journal, so
+    // nothing here is ever ambiguous. `none` is the truthful answer, not a stub — and the
+    // interface requires it so a double cannot quietly omit it (see #210).
+    async recoverTurn() {
+      return 'none';
+    },
+
     async startTurn(threadId, text) {
       const record = records.get(threadId);
       if (!record) throw new Error(`Unknown thread ${threadId}`);

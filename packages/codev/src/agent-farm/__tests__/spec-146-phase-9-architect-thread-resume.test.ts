@@ -21,7 +21,7 @@ import { DispatchJournal } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
 import { DriverThread } from '@cluesmith/porch-driver/thread';
 import { createPorchThreadEngine } from './helpers/porch-thread-engine.js';
-import { createMemoryThreadEngine } from '../thread-runtime.js';
+import { createMemoryThreadEngine, deliverThreadTurn, setThreadEngine, clearThreadEngines } from '../thread-runtime.js';
 
 function recordingDispatcher() {
   const calls: Array<{ method: string; payload: unknown }> = [];
@@ -271,6 +271,207 @@ describe('DriverThread.attach', () => {
         ),
       ).toThrow(/retired/i);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Issue #219 round 7 — a message could run TWICE.
+ *
+ * `dispatchCommand` deliberately leaves an UNANSWERED command pending: a dead socket or a
+ * timed-out request does not say whether the server applied it, and journalling that as
+ * failed would spell "I could not tell" exactly like "no". So a turn whose acknowledgement
+ * was lost is still, as far as anyone knows, running.
+ *
+ * The mailbox then held the row and a later tick submitted the same message again — and
+ * `startTurn` mints a FRESH `commandId` per call, so t3code, which collapses duplicates by
+ * `commandId`, saw two different commands and ran the turn twice. For a builder that is two
+ * PRs, or the same destructive instruction carried out twice.
+ *
+ * The in-flight guard from round 6 does not cover this: it prevents a retry while the
+ * original promise is UNSETTLED, and an ambiguous rejection settles it.
+ *
+ * `recoverPendingCommands` — which existed, was tested, and had no production caller — is
+ * the fix, and this is what gives it one.
+ */
+describe('an unacknowledged turn is replayed, not repeated', () => {
+  function ambiguousThenRecording() {
+    const calls: Array<Record<string, unknown>> = [];
+    let failNext = true;
+    return {
+      calls,
+      allowNext() { failNext = false; },
+      async call(_method: string, payload: unknown) {
+        calls.push(payload as Record<string, unknown>);
+        if (failNext) {
+          // The server APPLIED it and the client heard nothing. Not an `RpcFailureError`,
+          // so `isServerRefusal` is false and the intent stays pending — which is the
+          // correct, deliberate behaviour this test is built on top of.
+          const err = new Error('socket closed before the reply arrived');
+          err.name = 'NotConnectedError';
+          throw err;
+        }
+        return {};
+      },
+    };
+  }
+
+  it('a later tick replays the ORIGINAL command id instead of minting a new one', async () => {
+    const { dir, worktreePath } = scratch();
+    try {
+      const dispatcher = ambiguousThenRecording();
+      const engine = engineOn(dispatcher as never, dir);
+      await engine.attach({ threadId: 'thr-1', worktreePath, branch: '', builderId: 'air-219' });
+      setThreadEngine(engine, dir);
+
+      // Tick 1: the turn is applied by the server and the acknowledgement is lost.
+      await expect(deliverThreadTurn('thr-1', 'DO THE THING', dir)).rejects.toThrow(/socket closed/);
+
+      const first = dispatcher.calls.filter((c) => c.type === 'thread.turn.start');
+      expect(first).toHaveLength(1);
+      const originalId = first[0].commandId as string;
+
+      // Tick 2: the row is still held, so the mailbox tries again.
+      dispatcher.allowNext();
+      await expect(deliverThreadTurn('thr-1', 'DO THE THING', dir)).resolves.toBe('recovered');
+
+      const starts = dispatcher.calls.filter((c) => c.type === 'thread.turn.start');
+      expect(starts).toHaveLength(2);
+      // THE assertion. Two dispatches, ONE command id — so t3code, which keys its receipt
+      // on `commandId`, has exactly one turn. A fresh id here is the duplicate.
+      expect(starts[1].commandId).toBe(originalId);
+      expect(new Set(starts.map((c) => c.commandId)).size).toBe(1);
+    } finally {
+      clearThreadEngines();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a third tick after a successful replay issues nothing further', async () => {
+    const { dir, worktreePath } = scratch();
+    try {
+      const dispatcher = ambiguousThenRecording();
+      const engine = engineOn(dispatcher as never, dir);
+      await engine.attach({ threadId: 'thr-1', worktreePath, branch: '', builderId: 'air-219' });
+      setThreadEngine(engine, dir);
+
+      await expect(deliverThreadTurn('thr-1', 'DO THE THING', dir)).rejects.toThrow();
+      dispatcher.allowNext();
+      await deliverThreadTurn('thr-1', 'DO THE THING', dir);
+      const afterReplay = dispatcher.calls.length;
+
+      // The replay journalled an outcome, so nothing is pending any more — and this call
+      // is a genuinely new send rather than a recovery.
+      await expect(deliverThreadTurn('thr-1', 'DO THE THING', dir)).resolves.toBe('delivered');
+      expect(dispatcher.calls.length).toBe(afterReplay + 1);
+    } finally {
+      clearThreadEngines();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * A refusal is settled: the server answered, and answered no. Replaying it would repeat
+   * a decision that was already made, so it must NOT be recovered — a fresh submit is the
+   * correct behaviour, and the two must not be confused.
+   */
+  it('a refused turn is not treated as ambiguous', async () => {
+    const { dir, worktreePath } = scratch();
+    try {
+      const calls: Array<Record<string, unknown>> = [];
+      let refuse = true;
+      const dispatcher = {
+        calls,
+        async call(_m: string, payload: unknown) {
+          calls.push(payload as Record<string, unknown>);
+          if (refuse) {
+            const err = new Error('the server said no');
+            err.name = 'RpcFailureError';
+            throw err;
+          }
+          return {};
+        },
+      };
+      const engine = engineOn(dispatcher as never, dir);
+      await engine.attach({ threadId: 'thr-1', worktreePath, branch: '', builderId: 'air-219' });
+      setThreadEngine(engine, dir);
+
+      await expect(deliverThreadTurn('thr-1', 'DO THE THING', dir)).rejects.toThrow(/said no/);
+      refuse = false;
+      await expect(deliverThreadTurn('thr-1', 'DO THE THING', dir)).resolves.toBe('delivered');
+
+      const starts = calls.filter((c) => c.type === 'thread.turn.start');
+      expect(starts).toHaveLength(2);
+      // Two distinct ids, deliberately: the first was refused and settled, so the second
+      // is a new intent rather than a replay of a decided one.
+      expect(new Set(starts.map((c) => c.commandId)).size).toBe(2);
+    } finally {
+      clearThreadEngines();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The guard that says `recovered` only when OUR id was among the ids actually replayed.
+   *
+   * A failed replay THROWS out of `recoverTurn`, so that is not how a normal return can
+   * skip ours. What can is the intent being settled by something else between the
+   * `pending()` read and the replay's own — modelled here with a journal whose second read
+   * no longer lists it. Reporting `recovered` then would mark a message delivered that
+   * nothing re-sent, and nothing would ever try again.
+   */
+  it('does not claim recovery when the replay did not include our intent', async () => {
+    const { dir, worktreePath } = scratch();
+    try {
+      const dispatcher = ambiguousThenRecording();
+      const journal = new DispatchJournal(join(dir, 'commands.jsonl'));
+      let reads = 0;
+      const vanishing = Object.create(journal) as DispatchJournal;
+      Object.defineProperty(vanishing, 'pending', {
+        value: () => {
+          reads += 1;
+          // First read: our intent is there, so `recoverTurn` decides to replay. Second
+          // read (inside the replay): something else settled it, so nothing of ours goes.
+          return reads === 1 ? journal.pending() : [];
+        },
+      });
+      const engine = createPorchThreadEngine({
+        dispatcher: dispatcher as never,
+        journal: vanishing,
+        tracker: new TurnTracker(),
+        projectId: 'p1',
+        workspaceRoot: dir,
+        defaultHarness: 'codex',
+        defaultModel: 'gpt-5.6-luna',
+      });
+      await engine.attach({ threadId: 'thr-1', worktreePath, branch: '', builderId: 'air-219' });
+
+      await expect(engine.recoverTurn('thr-1', 'DO THE THING')).resolves.toBe('none');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a different message on the same thread is not mistaken for the pending one', async () => {
+    const { dir, worktreePath } = scratch();
+    try {
+      const dispatcher = ambiguousThenRecording();
+      const engine = engineOn(dispatcher as never, dir);
+      await engine.attach({ threadId: 'thr-1', worktreePath, branch: '', builderId: 'air-219' });
+      setThreadEngine(engine, dir);
+
+      await expect(deliverThreadTurn('thr-1', 'FIRST MESSAGE', dir)).rejects.toThrow();
+      dispatcher.allowNext();
+
+      // A genuinely different message must be sent, not collapsed into the pending one.
+      await expect(deliverThreadTurn('thr-1', 'SECOND MESSAGE', dir)).resolves.toBe('delivered');
+      const starts = dispatcher.calls.filter((c) => c.type === 'thread.turn.start');
+      const texts = starts.map((c) => ((c.message as { text?: string } | undefined)?.text));
+      expect(texts).toContain('FIRST MESSAGE');
+      expect(texts).toContain('SECOND MESSAGE');
+    } finally {
+      clearThreadEngines();
       rmSync(dir, { recursive: true, force: true });
     }
   });

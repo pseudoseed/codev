@@ -371,8 +371,6 @@ export async function activeProjectForWorkspace(
   return { kind: 'found', projectId: match.id };
 }
 
-
-
 /**
  * Register the production thread engine and spawn factory if this workspace is
  * configured for thread-backed spawns.

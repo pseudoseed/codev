@@ -117,6 +117,11 @@ import {
 import { getProcessStartTime } from '../../terminal/session-manager.js';
 import type { CronTask } from './tower-cron.js';
 import {
+  threadCanHonourNoEnter,
+  THREAD_HAS_NO_COMPOSER,
+  THREAD_NO_ENTER_REMEDY,
+} from './thread-no-enter.js';
+import {
   getWorkspaceTerminals,
   getTerminalManager,
   getWorkspaceTerminalsEntry,
@@ -2281,6 +2286,22 @@ async function handleSend(
 }
 
 /**
+ * Why a row the delivery path ended was ended, for the sender.
+ *
+ * The mailbox has one terminal non-delivered state (`dismissed`) and it now carries two
+ * meanings — a human ran `afx inbox dismiss`, and the system refused the message. They
+ * are not distinguishable on the row, which is #226's migration. What IS knowable here
+ * is the one case the system produces today, so it is named specifically and everything
+ * else falls back to a sentence that does not claim more than it knows.
+ */
+function refusedReasonFor(stored: { no_enter?: number } | null | undefined): string {
+  if (!threadCanHonourNoEnter(stored?.no_enter === 1)) {
+    return `the recipient is thread-backed. ${THREAD_HAS_NO_COMPOSER} ${THREAD_NO_ENTER_REMEDY}`;
+  }
+  return 'the delivery path ended this message; it was not delivered and no retry is pending.';
+}
+
+/**
  * GET /api/inbox — list held (undelivered) mailbox rows for a workspace. Backs the
  * workspace-scoped `afx inbox` (Spec 1313 decision 8): `?workspace=<path>` selects the
  * workspace (the CLI passes the current one by default); the path is normalized to the
@@ -2291,24 +2312,6 @@ async function handleSend(
  * the message BODY is deliberately never surfaced here (it travels only over the live
  * terminal stream on delivery). `escalated` is normalized from SQLite's 0/1 to a bool.
  */
-/**
- * Why a row the delivery path ended was ended, for the sender.
- *
- * The mailbox has one terminal non-delivered state (`dismissed`) and it now carries two
- * meanings — a human ran `afx inbox dismiss`, and the system refused the message. They
- * are not distinguishable on the row, which is #226's migration. What IS knowable here
- * is the one case the system produces today, so it is named specifically and everything
- * else falls back to a sentence that does not claim more than it knows.
- */
-function refusedReasonFor(stored: { no_enter?: number } | null | undefined): string {
-  if (stored?.no_enter === 1) {
-    return 'the recipient is thread-backed and a thread has no composer, so a --no-enter message '
-      + 'cannot be left to wait for a human — delivering it would run it. Re-send without '
-      + '--no-enter if it should run.';
-  }
-  return 'the delivery path ended this message; it was not delivered and no retry is pending.';
-}
-
 function handleInboxList(res: http.ServerResponse, url: URL): void {
   const rawWorkspace = url.searchParams.get('workspace');
   // Normalize to the stored realpath key (mailbox workspace_path is normalized at
