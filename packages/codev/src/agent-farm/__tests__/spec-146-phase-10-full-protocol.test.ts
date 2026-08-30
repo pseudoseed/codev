@@ -138,7 +138,7 @@ describe('Spec 146 Phase 10 — the recorded full-protocol runs', () => {
     }
   });
 
-  it('records the start of the 24-hour gate Phase 13 depends on', () => {
+  it('records the start of the 24-hour gate a later phase depends on', () => {
     const { longGate } = loadEvidence();
     expect(longGate.gateSeconds, 'the long gate is not 24 hours').toBe(86_400);
     expect(Number.isNaN(new Date(longGate.startedAt).getTime()), 'the long gate has no start time').toBe(false);
@@ -152,8 +152,16 @@ describe('Spec 146 Phase 10 — the recorded full-protocol runs', () => {
   it('names every driver it ran in the parity record', () => {
     const parity = readFileSync(parityPath, 'utf8');
     for (const run of loadEvidence().runs) {
-      expect(parity, `146-driver-parity.md does not mention the ${run.harness} run`).toContain(run.harness);
-      expect(parity).toContain(run.model);
+      // The generated ROW, not a bare mention. "claude" appears a dozen times in
+      // that document in prose; a `toContain('claude')` would pass on a parity
+      // record that had lost the claude run entirely, which is the one thing
+      // this assertion exists to catch.
+      expect(
+        parity,
+        `146-driver-parity.md has no results row for ${run.harness}/${run.model}`,
+      ).toContain(`\`${run.harness}\` / \`${run.model}\``);
+      expect(parity, `146-driver-parity.md does not name the ${run.driverKind} driver kind`)
+        .toContain(run.driverKind);
     }
   });
 
