@@ -162,7 +162,10 @@ export async function launchSpawnedBuilder(opts: {
   // received `prompt: undefined`, never began a turn, and produced a thread that exists
   // and has been told nothing — a spawn that looks successful and did not spawn anything.
   if (opts.workspaceRoot) await ensureThreadBackendReady(opts.workspaceRoot);
-  const pathKind = chooseSpawnPath(opts.existing ?? undefined);
+  // Named, so the keyed factory map is asked about THIS workspace. Unnamed it asks about
+  // the unkeyed slot, which is how the unit tests drive an injected factory with no server
+  // — and which never sees a real workspace's factory, deliberately (issue #227 item 1).
+  const pathKind = chooseSpawnPath(opts.existing ?? undefined, opts.workspaceRoot);
   if (pathKind === 'thread') {
     const threadId = opts.existing?.threadId ?? await allocateSpawnThread({
       builderId: opts.builderId,
@@ -174,7 +177,7 @@ export async function launchSpawnedBuilder(opts: {
       launchScript: opts.launchScript,
       roleContent: opts.roleContent,
       roleFilePath: opts.roleFilePath,
-    });
+    }, opts.workspaceRoot);
     return { threadId };
   }
   return opts.startPty();

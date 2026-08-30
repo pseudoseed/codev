@@ -19,10 +19,12 @@ import { createPorchThreadEngine } from './porch-thread-engine.js';
 import { createThreadSubscriptionPool, type ThreadSubscriber } from './thread-subscriptions.js';
 import {
   canonicalWorkspaceKey,
+  getThreadEngine,
   installThreadSpawnFactory,
   setThreadEngine,
   setThreadStreamer,
   tryGetThreadEngine,
+  type ThreadEngine,
   type ThreadStream,
 } from './thread-runtime.js';
 import { logger } from './utils/logger.js';
@@ -301,7 +303,12 @@ async function connectDispatcher(
   // finds no engine and connects again, with a fresh credential exchange. Reconnecting
   // from in here would need a credential this closure does not have.
   socket.addEventListener('close', () => {
-    logger.warn(`t3code socket to ${config.serverUrl} closed; dropping the engine for ${config.workspaceRoot}`);
+    // A hang-up WE asked for is not a warning. `closeThreadBackend` marks the workspace
+    // first, so the deliberate close on a one-shot command's exit stops reporting itself as
+    // a server that went away — which is a different event, and the one this line is for.
+    if (!isHangingUp(config.workspaceRoot)) {
+      logger.warn(`t3code socket to ${config.serverUrl} closed; dropping the engine for ${config.workspaceRoot}`);
+    }
     onClosed();
   });
   const client = new T3Client({
@@ -400,17 +407,22 @@ export async function activeProjectForWorkspace(
 ): Promise<ProjectLookup> {
   let body: unknown;
   try {
-    // Bounded, for the same reason the WebSocket upgrade is. A server that accepts the
-    // connection and never answers left this await unsettled forever, and it sits
-    // between a completed handshake and a registered engine — so the whole of
-    // `ensureThreadBackendReady` hung, having reported nothing. An unbounded wait is
-    // not "slow"; it never ends.
+    // Through the client, not a second hand-built request (issue #227 item 4).
     //
-    // The signal covers the body read as well as the headers, so a response that starts
-    // and stalls is bounded too.
-    const response = await fetch(`${serverUrl.replace(/\/+$/, '')}/api/orchestration/shell`, {
-      headers: { authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(timeoutMs),
+    // This was a bare `fetch` with its own `authorization: Bearer` header and its own base
+    // URL normalisation, one import away from the module that owns every other request to
+    // this server. One request is a small duplication and it still had a consequence: it
+    // skipped `assertTransportSafe`, so it was the one call here willing to put a bearer
+    // token on a plaintext connection to a non-loopback host.
+    //
+    // Still bounded, for the same reason the WebSocket upgrade is. A server that accepts
+    // the connection and never answers left this await unsettled forever, and it sits
+    // between a completed handshake and a registered engine — so the whole of
+    // `ensureThreadBackendReady` hung, having reported nothing. An unbounded wait is not
+    // "slow"; it never ends.
+    const auth = await import('@cluesmith/t3-client/auth');
+    const response = await auth.authorizedGet(serverUrl, '/api/orchestration/shell', accessToken, {
+      timeoutMs,
     });
     if (!response.ok) {
       return { kind: 'unknown', detail: `GET /api/orchestration/shell answered ${response.status}` };
@@ -678,6 +690,9 @@ async function initialiseThreadBackend(
   const upgradeTimeoutMs = options.upgradeTimeoutMs ?? DEFAULT_SOCKET_UPGRADE_TIMEOUT_MS;
   const config = readThreadBackendConfig(resolve(workspaceRoot));
   if (!config) return 'not-configured';
+  // Connecting again ends any deliberate hang-up: from here a close is the server's doing
+  // and must be reported.
+  deliberate.delete(key);
 
   /**
    * Whether this socket has closed, and the engine it is behind once there is one.
@@ -894,8 +909,122 @@ async function initialiseThreadBackend(
     throw closedDuringInit(config.serverUrl, config.workspaceRoot);
   }
   installThreadSpawnFactory(key);
+  // Remembered so a one-shot command can hang up when it is done — see
+  // `closeThreadBackend`. Registered alongside the engine and dropped with it.
+  //
+  // `abandonConnection`, NOT `connection.close`. Since #241 this socket also owns a
+  // subscription pool, and `abandonConnection` stops it BEFORE closing — for the reason
+  // stated there: closing the socket out from under a running `ResumingSubscription`
+  // leaves it retrying, and its retry loop opens a stream on a client whose socket is
+  // shut. A deliberate hang-up is the same situation as an abandon and takes the same
+  // order. Closing the raw socket instead left the pool to be stopped by the socket's
+  // `close` EVENT, which is asynchronous — so a caller that hangs up and keeps running
+  // had a live pool against a dead socket in between.
+  hangUp.set(key, abandonConnection);
   lastFailure.delete(key);
   return 'installed';
+}
+
+/**
+ * A per-workspace socket closer, for callers that finish and want to exit.
+ *
+ * Recorded only on the successful path: every other exit from `initialiseThreadBackend`
+ * hangs up before it returns, so there is nothing left to close.
+ */
+const hangUp = new Map<string, () => void>();
+
+/**
+ * Hang up this workspace's t3code connection and drop what was registered on it.
+ *
+ * WHY A ONE-SHOT COMMAND NEEDS THIS. An open WebSocket is a live handle, so Node's event
+ * loop does not drain while it exists. Tower wants exactly that — it holds its connection
+ * for as long as it runs. `afx interrupt` and `afx cleanup` do not: they do their work and
+ * are expected to exit.
+ *
+ * Measured, not predicted. The first live run of `afx interrupt` against a real server
+ * printed `Interrupt sent to thread <id>` and then never returned; the harness killed it at
+ * its timeout and it exited 143. The interrupt had ALREADY landed — so the command was
+ * simultaneously working and, from any operator's point of view, hung. That is the exact
+ * gap between "the call site is spelled right" and "the command works" that item 2 is about,
+ * and only running it could have shown it.
+ *
+ * Idempotent, and a no-op for a workspace that never connected: a command that took the PTY
+ * path must be able to call it without asking whether it needs to.
+ *
+ * WHAT IT TEARS DOWN, since #241 gave the socket a subscription pool: the registered engine,
+ * the streamer, and — through `abandonConnection` — the pool, in that order, before the
+ * socket goes. A pool outliving its socket is the dead-engine bug one layer out: every
+ * `ResumingSubscription` in it keeps retrying against a client that is shut.
+ */
+export function closeThreadBackend(workspaceRoot: string): void {
+  const key = canonicalWorkspaceKey(workspaceRoot);
+  const close = hangUp.get(key);
+  hangUp.delete(key);
+  // Dropped whether or not there was a socket to close: leaving an engine registered on a
+  // connection nobody holds is the dead-engine state this module works to avoid.
+  setThreadEngine(undefined, key);
+  setThreadStreamer(undefined, key);
+  if (!close) return;
+  deliberate.add(key);
+  close();
+}
+
+/**
+ * Workspaces whose socket is closing because we asked it to.
+ *
+ * CLEARED ON THE NEXT CONNECT, not on a timer. The socket's `close` event is asynchronous,
+ * and a `setTimeout(..., 0)` fired BEFORE it — so the flag was gone by the time the handler
+ * read it and the spurious warning came out anyway, which is how this comment came to be
+ * written twice. A workspace stops "hanging up" when it connects again; that is the event
+ * that actually ends the state, so it is the one that clears it.
+ */
+const deliberate = new Set<string>();
+
+function isHangingUp(workspaceRoot: string): boolean {
+  return deliberate.has(canonicalWorkspaceKey(workspaceRoot));
+}
+
+/**
+ * Make a thread this process did not create reachable from this process (issue #227 item 2).
+ *
+ * `afx interrupt` and `afx cleanup` are fresh processes. Nothing has registered an engine in
+ * them, so `getThreadEngine` threw — and since #221 it threw about the right workspace, with
+ * a message that named the limitation. Honest, and still not working.
+ *
+ * The delivery path in `mailbox-wiring.ts` already showed the shape, because Tower is a
+ * fresh process for exactly the same reason: register the backend HERE, `attach` the thread
+ * from the row that recorded it, then act. This is that shape, in one place, so a third
+ * command does not get a third copy of it.
+ *
+ * The worktree and branch are NOT derivable from a thread id, which is why they are
+ * parameters: the caller holds the row. An architect's worktree is the workspace root and
+ * its branch is `''` — the shape `createArchitectThread` writes.
+ *
+ * `ensureThreadBackendReady` throws when a server IS configured and cannot be reached, and
+ * returns `not-configured` when none is named. The second is a contradiction for a
+ * thread-backed row, and `getThreadEngine` is what says so — it is left to say it rather
+ * than pre-empted here, because its message already distinguishes the two causes.
+ */
+export async function adoptThreadInThisProcess(input: {
+  readonly threadId: string;
+  readonly workspaceRoot: string;
+  readonly worktreePath: string;
+  readonly branch: string;
+  readonly builderId: string;
+  readonly harnessName?: string;
+  readonly model?: string;
+}): Promise<ThreadEngine> {
+  await ensureThreadBackendReady(input.workspaceRoot);
+  const engine = getThreadEngine(input.workspaceRoot);
+  await engine.attach({
+    threadId: input.threadId,
+    worktreePath: input.worktreePath,
+    branch: input.branch,
+    builderId: input.builderId,
+    harnessName: input.harnessName,
+    model: input.model,
+  });
+  return engine;
 }
 
 /** The socket went away between the handshake and registration. */

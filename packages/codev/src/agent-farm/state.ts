@@ -131,8 +131,8 @@ export function setArchitect(workspacePath: string, architect: ArchitectState | 
   } else {
     const written = architectWriteValues(architect);
     db.prepare(`
-      INSERT OR REPLACE INTO architect (workspace_path, id, pid, port, cmd, started_at, terminal_id, session_id, thread_id)
-      VALUES (@workspacePath, 'main', @pid, @port, @cmd, @startedAt, @terminalId, @sessionId, @threadId)
+      INSERT OR REPLACE INTO architect (workspace_path, id, pid, port, cmd, started_at, terminal_id, session_id, thread_id, harness, model)
+      VALUES (@workspacePath, 'main', @pid, @port, @cmd, @startedAt, @terminalId, @sessionId, @threadId, @harness, @model)
     `).run({
       workspacePath: ws,
       pid: written.pid,
@@ -142,6 +142,10 @@ export function setArchitect(workspacePath: string, architect: ArchitectState | 
       terminalId: written.terminalId,
       sessionId: architect.sessionId ?? null,
       threadId: written.threadId,
+      // #227 item 3. NULL means "not recorded", which is what a PTY-backed architect is:
+      // it has no thread, so there is no pair to pin.
+      harness: architect.harness ?? null,
+      model: architect.model ?? null,
     });
   }
 }
@@ -165,8 +169,8 @@ export function setArchitectByName(workspacePath: string, name: string, architec
 
   const written = architectWriteValues(architect);
   db.prepare(`
-    INSERT OR REPLACE INTO architect (workspace_path, id, pid, port, cmd, started_at, terminal_id, session_id, thread_id)
-    VALUES (@workspacePath, @name, @pid, @port, @cmd, @startedAt, @terminalId, @sessionId, @threadId)
+    INSERT OR REPLACE INTO architect (workspace_path, id, pid, port, cmd, started_at, terminal_id, session_id, thread_id, harness, model)
+    VALUES (@workspacePath, @name, @pid, @port, @cmd, @startedAt, @terminalId, @sessionId, @threadId, @harness, @model)
   `).run({
     workspacePath: ws,
     name,
@@ -177,6 +181,10 @@ export function setArchitectByName(workspacePath: string, name: string, architec
     terminalId: written.terminalId,
     sessionId: architect.sessionId ?? null,
     threadId: written.threadId,
+    // #227 item 3. NULL means "not recorded", which is what a PTY-backed architect is:
+    // it has no thread, so there is no pair to pin.
+    harness: architect.harness ?? null,
+    model: architect.model ?? null,
   });
 }
 

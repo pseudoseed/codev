@@ -221,7 +221,7 @@ describe('Spec 146 Phase 9 — production spawn wiring (#179 item 2)', () => {
 
   afterEach(() => {
     setThreadEngine(undefined);
-    setSpawnThreadFactory(undefined);
+    setSpawnThreadFactory(undefined, undefined);
     if (dir) rmSync(dir, { recursive: true, force: true });
     dir = undefined;
   });
@@ -238,7 +238,7 @@ describe('Spec 146 Phase 9 — production spawn wiring (#179 item 2)', () => {
   it('a workspace with no t3code server configured stays on the PTY path', async () => {
     const root = workspace();
     await expect(ensureThreadBackendReady(root)).resolves.toBe('not-configured');
-    expect(chooseSpawnPath()).toBe('pty');
+    expect(chooseSpawnPath(undefined, undefined)).toBe('pty');
   });
 
   it('a config with no threads block is not configured', () => {
@@ -470,7 +470,7 @@ describe('Spec 146 Phase 9 — a refused credential is not an unreachable server
 
   afterEach(async () => {
     setThreadEngine(undefined);
-    setSpawnThreadFactory(undefined);
+    setSpawnThreadFactory(undefined, undefined);
     if (server) await new Promise<void>((res) => server!.close(() => res()));
     server = undefined;
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -532,7 +532,7 @@ describe('Spec 146 Phase 9 — four connect failures, four sentences (iter 3 fix
 
   afterEach(async () => {
     setThreadEngine(undefined);
-    setSpawnThreadFactory(undefined);
+    setSpawnThreadFactory(undefined, undefined);
     for (const s of heldSockets.splice(0)) { try { s.destroy(); } catch { /* already gone */ } }
     if (server) await new Promise<void>((res) => server!.close(() => res()));
     server = undefined;

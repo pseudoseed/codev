@@ -52,6 +52,13 @@ export interface ArchitectState {
   // resumes its prior conversation on restart. Agent-neutral (Claude uses a UUID;
   // other agents may use their own scheme). Undefined until first stored.
   sessionId?: string;
+  // Issue #227 item 3: the (harness, model) this architect's THREAD was created with,
+  // recorded the way `Builder` records its own. `attach` reads them so a resumed thread
+  // keeps the pair it was created with, instead of picking up whatever `threads.model`
+  // in `.codev/config.json` says at attach time. Undefined for a PTY-backed architect,
+  // which has no thread to attach, and for rows written before this existed.
+  harness?: string;
+  model?: string;
 }
 
 export interface DashboardState {

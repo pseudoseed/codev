@@ -140,7 +140,7 @@ async function until(predicate: () => boolean, ms = 5_000): Promise<boolean> {
 describe('the engine registry is keyed by workspace', () => {
   afterEach(() => {
     clearThreadEngines();
-    setSpawnThreadFactory(undefined);
+    setSpawnThreadFactory(undefined, undefined);
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
@@ -214,7 +214,7 @@ describe('Tower serves two workspaces from one process', () => {
 
   afterEach(async () => {
     clearThreadEngines();
-    setSpawnThreadFactory(undefined);
+    setSpawnThreadFactory(undefined, undefined);
     if (fake) await fake.close();
     fake = undefined;
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -326,7 +326,7 @@ describe('a socket that closes DURING initialisation registers nothing', () => {
 
   afterEach(async () => {
     clearThreadEngines();
-    setSpawnThreadFactory(undefined);
+    setSpawnThreadFactory(undefined, undefined);
     if (fake) await fake.close();
     fake = undefined;
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -420,7 +420,7 @@ describe('the drain tick never waits for a connect', () => {
   afterEach(async () => {
     clearThreadEngines();
     clearThreadBackendFailures();
-    setSpawnThreadFactory(undefined);
+    setSpawnThreadFactory(undefined, undefined);
     if (fake) await fake.close();
     fake = undefined;
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });

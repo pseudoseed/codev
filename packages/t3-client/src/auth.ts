@@ -138,6 +138,38 @@ export async function issueWebSocketTicket(
 }
 
 /**
+ * A GET against a t3code HTTP endpoint, carrying an access token.
+ *
+ * WHY THIS IS IN THE CLIENT (issue #227 item 4). Codev had one bare `fetch` with a
+ * hand-built `authorization: Bearer` header, in `thread-backend.ts`, sitting next to the
+ * module that owns every other request to this server. It worked, and it is one request —
+ * but the knowledge of how this server is addressed then lived in two places, and only one
+ * of them was kept honest by the rest of the auth flow.
+ *
+ * Concretely, the copy skipped `assertTransportSafe`: it would have sent a bearer token
+ * over plaintext to a non-loopback host, which every other call here refuses. That is what
+ * a second addressing path costs, and it was already being paid.
+ *
+ * RETURNS THE RESPONSE, not parsed JSON. The one caller distinguishes "the server answered
+ * no" from "the request could not be made" from "the answer was not the shape expected",
+ * and collapsing a non-2xx into a throw here would spell the first like the second.
+ */
+export async function authorizedGet(
+  baseUrl: string,
+  path: string,
+  accessToken: string,
+  options: { readonly timeoutMs?: number } = {},
+): Promise<Response> {
+  assertTransportSafe(baseUrl);
+  // The signal covers the body read as well as the headers, so a response that starts and
+  // stalls is bounded too. Unbounded is not "slow": the await never settles.
+  return fetch(`${baseUrl.replace(/\/+$/, '')}${path}`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(options.timeoutMs ?? 15_000),
+  });
+}
+
+/**
  * The WebSocket URL for a ticket.
  *
  * `ws:` is only produced for loopback; anything else gets `wss:`, matching
