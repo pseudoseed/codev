@@ -20,6 +20,8 @@ import {
   MailboxDrainer,
   agentKey,
   threadDeliverySession,
+  clearThreadSubmissions,
+  hasThreadSubmissionInFlight,
   type DeliveryPorts,
   type DeliverySession,
   type DeliveredBroadcast,
@@ -78,6 +80,12 @@ interface Harness {
   setProfile(p: GateProfile | null): void;
   setVerdict(v: GateVerdict): void;
   setClassify(fn: ((session: DeliverySession, p: GateProfile) => Promise<GateVerdict>) | null): void;
+  /**
+   * Replace the `writeMessage` port outright, so a test can hand back a promise that
+   * never settles — the unresponsive-but-connected thread server. `writeResult` covers
+   * the boolean cases; this covers the timing ones.
+   */
+  setWriteMessage(fn: (() => Promise<boolean>) | null): void;
   now: number;
   /**
    * Result the fake `writeMessage` port returns (Spec 1313 silent-loss test). Default true
@@ -92,6 +100,7 @@ function harness(): Harness {
   let profile: GateProfile | null = PROFILE;
   let verdict: GateVerdict = CLEAN;
   let classifyOverride: ((session: DeliverySession, p: GateProfile) => Promise<GateVerdict>) | null = null;
+  let writeOverride: (() => Promise<boolean>) | null = null;
   const broadcasts: DeliveredBroadcast[] = [];
   const writes: Array<{ formattedMessage: string; noEnter: boolean }> = [];
   const logs: string[] = [];
@@ -116,6 +125,9 @@ function harness(): Harness {
     setClassify: (fn) => {
       classifyOverride = fn;
     },
+    setWriteMessage: (fn) => {
+      writeOverride = fn;
+    },
     ports: {
       getSessionForAgent: (_ws, agent) => sessions.get(agent) ?? null,
       resolveProfile: () => profile,
@@ -123,6 +135,7 @@ function harness(): Harness {
         classifyOverride ? classifyOverride(session, p) : Promise.resolve(verdict),
       writeMessage: (_s, formattedMessage, noEnter) => {
         writes.push({ formattedMessage, noEnter });
+        if (writeOverride) return writeOverride();
         return h.writeResult;
       },
       broadcast: (f) => broadcasts.push(f),
@@ -145,8 +158,13 @@ describe('deliverAgentMail (Spec 1313, Phase 4)', () => {
   beforeEach(() => {
     db = new Database(':memory:');
     db.exec(GLOBAL_SCHEMA);
+    // Thread submissions outlive a tick by design, so they outlive a test too.
+    clearThreadSubmissions();
   });
-  afterEach(() => db.close());
+  afterEach(() => {
+    clearThreadSubmissions();
+    db.close();
+  });
 
   function enqueue(overrides: Partial<mailbox.EnqueueInput> = {}, now = 1000) {
     return mailbox.enqueue(
@@ -176,9 +194,143 @@ describe('deliverAgentMail (Spec 1313, Phase 4)', () => {
     const row = enqueue();
     const out = await deliverAgentMail(h.ports, db, '/ws/a', 'spir-1');
 
-    expect(out.delivered).toEqual([row.id]);
+    // Since #219 round 6 the submission is NOT awaited by the tick — a
+    // `thread.turn.start` is bounded at 30 s by the RPC client, and the drainer walks
+    // agents sequentially, so awaiting it stalled every other workspace. The call
+    // returns before the row settles, and the row settles a turn of the loop later.
+    expect(out).toEqual({ delivered: [], reason: null });
     expect(h.writes).toEqual([{ formattedMessage: '[from architect] hi', noEnter: false }]);
+    await new Promise((r) => setTimeout(r, 10));
     expect(mailbox.getById(db, row.id)?.status).toBe('delivered');
+  });
+
+  /**
+   * Issue #219 round 4. `--no-enter` means "put this in the composer and leave it for a
+   * human". A thread has no composer — `thread.turn.start` IS the submit — so the row
+   * can never be delivered as sent, and delivering it any other way would RUN a message
+   * that was meant to wait.
+   *
+   * Refusing it is right, and holding the refusal was wrong: a retryable hold is retried
+   * every drain tick, re-logs each time, and eventually raises a starvation notice to a
+   * human WITH NO REMEDY THAT APPLIES — no action of theirs can give a thread a composer.
+   * That is #190, a notice promising something unreachable.
+   *
+   * So it is terminal, once, and loud.
+   */
+  it('a --no-enter message to a thread-backed agent ends terminally instead of starving', async () => {
+    const h = harness();
+    h.setSession('spir-1', threadDeliverySession('thr-1'));
+    h.setProfile(null);
+    const row = enqueue({ noEnter: true });
+
+    const out = await deliverAgentMail(h.ports, db, '/ws/a', 'spir-1');
+
+    // Not held — a held row is one the drainer will come back to, and coming back cannot
+    // help. `reason: null` is what keeps it out of `findStarvingAgents`.
+    expect(out).toEqual({ delivered: [], reason: null });
+    expect(mailbox.getById(db, row.id)?.status).toBe('dismissed');
+    // And nothing was written: the whole point is that it must not run.
+    expect(h.writes).toHaveLength(0);
+    // Said once, with what a sender needs to act.
+    expect(h.logs.join('\n')).toContain('TERMINAL');
+    expect(h.logs.join('\n')).toContain('--no-enter');
+    expect(h.logs.join('\n')).toContain('Re-send without --no-enter');
+  });
+
+  it('a --no-enter message to a PTY-backed agent is unaffected — it still goes to the composer', async () => {
+    // The control. Without it, the assertion above would hold just as well if `--no-enter`
+    // had been broken everywhere rather than terminated on the one transport that cannot
+    // honour it.
+    const h = harness();
+    h.setSession('spir-1', fakeSession());
+    const row = enqueue({ noEnter: true });
+
+    const out = await deliverAgentMail(h.ports, db, '/ws/a', 'spir-1');
+
+    expect(out.delivered).toEqual([row.id]);
+    expect(h.writes).toEqual([{ formattedMessage: '[from architect] hi', noEnter: true }]);
+    expect(mailbox.getById(db, row.id)?.status).toBe('delivered');
+  });
+
+  /**
+   * Issue #219 round 6. `MailboxDrainer.tick` walks agents SEQUENTIALLY, and a thread
+   * submission is `thread.turn.start` over RPC — bounded at 30 s by the client, not by
+   * anything in this file. Awaiting it stalled delivery for every agent in every
+   * workspace, PTY-only ones included, on a server that had connected fine and then went
+   * quiet.
+   *
+   * Moving the CONNECT off the tick fixed one path to that stall. This is the other one,
+   * and it is the one that survives a healthy connect.
+   */
+  it('a hung thread submission does not delay a PTY agent behind it', async () => {
+    const h = harness();
+    // Never resolves: the unresponsive-but-connected server.
+    h.setWriteMessage(() => new Promise<boolean>(() => {}));
+    h.setSession('spir-1', threadDeliverySession('thr-1'));
+    h.setProfile(null);
+    enqueue({ toAgent: 'spir-1' });
+
+    const started = Date.now();
+    const threadOutcome = await deliverAgentMail(h.ports, db, '/ws/a', 'spir-1');
+    const threadElapsed = Date.now() - started;
+
+    // The tick got its turn back. Nothing is refused, so nothing is written as a reason.
+    expect(threadOutcome).toEqual({ delivered: [], reason: null });
+    expect(threadElapsed).toBeLessThan(200);
+    expect(hasThreadSubmissionInFlight('/ws/a', 'spir-1')).toBe(true);
+
+    // And the next agent in the same pass delivers normally.
+    h.setWriteMessage(null);
+    h.setProfile(PROFILE);
+    h.setSession('spir-2', fakeSession());
+    const ptyRow = enqueue({ toAgent: 'spir-2' });
+    const ptyStarted = Date.now();
+    const ptyOutcome = await deliverAgentMail(h.ports, db, '/ws/a', 'spir-2');
+
+    expect(ptyOutcome.delivered).toEqual([ptyRow.id]);
+    expect(Date.now() - ptyStarted).toBeLessThan(200);
+  });
+
+  /**
+   * The row is still held while the submission runs, so the next tick would pick it up
+   * and submit it AGAIN — one message, several turns. The guard is what makes not
+   * awaiting safe.
+   */
+  it('a second tick does not re-submit a message whose turn is still in flight', async () => {
+    const h = harness();
+    let submissions = 0;
+    h.setWriteMessage(() => {
+      submissions += 1;
+      return new Promise<boolean>(() => {});
+    });
+    h.setSession('spir-1', threadDeliverySession('thr-1'));
+    h.setProfile(null);
+    enqueue();
+
+    await deliverAgentMail(h.ports, db, '/ws/a', 'spir-1');
+    await deliverAgentMail(h.ports, db, '/ws/a', 'spir-1');
+    await deliverAgentMail(h.ports, db, '/ws/a', 'spir-1');
+
+    expect(submissions).toBe(1);
+  });
+
+  it('the row delivers once the submission settles, without another tick submitting it', async () => {
+    const h = harness();
+    let resolveWrite: ((ok: boolean) => void) | null = null;
+    h.setWriteMessage(() => new Promise<boolean>((res) => { resolveWrite = res; }));
+    h.setSession('spir-1', threadDeliverySession('thr-1'));
+    h.setProfile(null);
+    const row = enqueue();
+
+    await deliverAgentMail(h.ports, db, '/ws/a', 'spir-1');
+    expect(mailbox.getById(db, row.id)?.status).toBe('held');
+
+    resolveWrite!(true);
+    // Let the submission's continuation run.
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mailbox.getById(db, row.id)?.status).toBe('delivered');
+    expect(hasThreadSubmissionInFlight('/ws/a', 'spir-1')).toBe(false);
   });
 
   it('clean gate → delivers the oldest held message, marks it delivered, broadcasts', async () => {
@@ -425,8 +577,13 @@ describe('deliverAgentMailSerialized — concurrent-send serialization (Spec 131
   beforeEach(() => {
     db = new Database(':memory:');
     db.exec(GLOBAL_SCHEMA);
+    // Thread submissions outlive a tick by design, so they outlive a test too.
+    clearThreadSubmissions();
   });
-  afterEach(() => db.close());
+  afterEach(() => {
+    clearThreadSubmissions();
+    db.close();
+  });
 
   it('two concurrent deliveries to one agent each write exactly one message, in order — no blob, no double-write', async () => {
     const h = harness();
@@ -464,8 +621,13 @@ describe('MailboxDrainer (Spec 1313, Phase 4)', () => {
   beforeEach(() => {
     db = new Database(':memory:');
     db.exec(GLOBAL_SCHEMA);
+    // Thread submissions outlive a tick by design, so they outlive a test too.
+    clearThreadSubmissions();
   });
-  afterEach(() => db.close());
+  afterEach(() => {
+    clearThreadSubmissions();
+    db.close();
+  });
 
   it('tick drains a clean agent and holds a busy agent, tracking the not-clean streak', async () => {
     const h = harness();
@@ -532,8 +694,13 @@ describe('MailboxDrainer verdict memo (Spec 1313 render-gate follow-up)', () => 
   beforeEach(() => {
     db = new Database(':memory:');
     db.exec(GLOBAL_SCHEMA);
+    // Thread submissions outlive a tick by design, so they outlive a test too.
+    clearThreadSubmissions();
   });
-  afterEach(() => db.close());
+  afterEach(() => {
+    clearThreadSubmissions();
+    db.close();
+  });
 
   const held = (toAgent: string, body = 'hi', now = 1000) =>
     mailbox.enqueue(db, { workspacePath: '/ws', toAgent, body, formattedMessage: body }, now);
@@ -734,8 +901,13 @@ describe('MailboxDrainer.scheduleDrain — fast delivery triggers (Spec 1313, Ph
   beforeEach(() => {
     db = new Database(':memory:');
     db.exec(GLOBAL_SCHEMA);
+    // Thread submissions outlive a tick by design, so they outlive a test too.
+    clearThreadSubmissions();
   });
-  afterEach(() => db.close());
+  afterEach(() => {
+    clearThreadSubmissions();
+    db.close();
+  });
 
   const enqueue = (formattedMessage = 'M') =>
     mailbox.enqueue(
@@ -835,8 +1007,13 @@ describe('MailboxDrainer escalation + liveness telemetry (Spec 1313, Phase 7)', 
   beforeEach(() => {
     db = new Database(':memory:');
     db.exec(GLOBAL_SCHEMA);
+    // Thread submissions outlive a tick by design, so they outlive a test too.
+    clearThreadSubmissions();
   });
-  afterEach(() => db.close());
+  afterEach(() => {
+    clearThreadSubmissions();
+    db.close();
+  });
 
   const enqueue = (overrides: Partial<mailbox.EnqueueInput> = {}, now = 1000) =>
     mailbox.enqueue(
@@ -945,8 +1122,13 @@ describe('MailboxDrainer durable --delay (Spec 1313 round 3, change 1)', () => {
   beforeEach(() => {
     db = new Database(':memory:');
     db.exec(GLOBAL_SCHEMA);
+    // Thread submissions outlive a tick by design, so they outlive a test too.
+    clearThreadSubmissions();
   });
-  afterEach(() => db.close());
+  afterEach(() => {
+    clearThreadSubmissions();
+    db.close();
+  });
 
   const enqueue = (overrides: Partial<mailbox.EnqueueInput> = {}, now = 1000) =>
     mailbox.enqueue(
@@ -1022,8 +1204,13 @@ describe('MailboxDrainer owner starvation notice (Spec 1313 round 3, change 3)',
   beforeEach(() => {
     db = new Database(':memory:');
     db.exec(GLOBAL_SCHEMA);
+    // Thread submissions outlive a tick by design, so they outlive a test too.
+    clearThreadSubmissions();
   });
-  afterEach(() => db.close());
+  afterEach(() => {
+    clearThreadSubmissions();
+    db.close();
+  });
 
   const enqueue = (overrides: Partial<mailbox.EnqueueInput> = {}, now = 1000) =>
     mailbox.enqueue(

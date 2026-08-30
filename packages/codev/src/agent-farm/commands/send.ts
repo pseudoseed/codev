@@ -341,6 +341,12 @@ async function sendToAll(
       // delivery that has not happened.
       if (result.scheduled) {
         results.scheduled.push(builder.id);
+      } else if (result.refused) {
+        // Checked BEFORE held and before the delivered fallthrough. A refusal reported
+        // as held promises a retry that will never come; reported as neither, the
+        // `else` below would call it delivered.
+        logger.error(`Refused for ${builder.id}: ${result.refusedReason ?? 'no reason given'}`);
+        results.failed.push(builder.id);
       } else if (result.held) {
         results.held.push({ id: builder.id, reason: result.reason, mailboxId: result.mailboxId });
       } else {
@@ -483,6 +489,14 @@ export async function send(options: SendOptions): Promise<void> {
             `${result.mailboxId ? ` — mailbox id ${result.mailboxId}` : ''}`,
         );
         logger.info('Persisted and durable across a Tower restart; delivers onto a clear prompt when due. Inspect/cancel: afx inbox.');
+      } else if (result.refused) {
+        // Before `held` and before the delivered fallthrough. `held` promises "it
+        // delivers automatically when the prompt is clear", which is false here, and the
+        // final `else` would print "Message delivered" for a message that never will be.
+        fatal(
+          `Message REFUSED for ${result.resolvedTo ?? target}: ${result.refusedReason ?? 'no reason given'}` +
+            `${result.mailboxId ? ` (mailbox id ${result.mailboxId})` : ''}`,
+        );
       } else if (result.held) {
         logger.info(
           `Message held for ${result.resolvedTo ?? target} (${result.reason ?? 'pending'})` +

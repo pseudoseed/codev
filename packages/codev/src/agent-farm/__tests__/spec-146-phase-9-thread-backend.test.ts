@@ -17,6 +17,7 @@ import { join, resolve } from 'node:path';
 import { chooseSpawnPath, setSpawnThreadFactory } from '../db/thread-identity.js';
 import { setThreadEngine, createMemoryThreadEngine } from '../thread-runtime.js';
 import {
+  activeProjectForWorkspace,
   ensureThreadBackendReady,
   readThreadBackendConfig,
   webSocketCtor,
@@ -319,9 +320,30 @@ describe('Spec 146 Phase 9 — production spawn wiring (#179 item 2)', () => {
     await expect(ensureThreadBackendReady(root)).rejects.toThrow(/could not be reached/);
   });
 
-  it('an already-registered engine is left alone', async () => {
-    setThreadEngine(createMemoryThreadEngine());
-    await expect(ensureThreadBackendReady(workspace())).resolves.toBe('already-installed');
+  it('an engine already registered FOR THIS WORKSPACE is left alone', async () => {
+    const root = workspace();
+    setThreadEngine(createMemoryThreadEngine(), root);
+    await expect(ensureThreadBackendReady(root)).resolves.toBe('already-installed');
+  });
+
+  /**
+   * #219 round 3. This check read an unkeyed slot, so in Tower — one process, every
+   * workspace in `global.db` — the first thread-configured workspace to connect made
+   * every later one return `already-installed` and then use its socket and its project.
+   */
+  it('an engine registered for ANOTHER workspace does not count as installed here', async () => {
+    // Its own directory rather than a second `workspace()` call: that helper reassigns
+    // the shared `dir` the teardown removes, so the first one would be left behind.
+    const other = mkdtempSync(join(tmpdir(), 'phase9-other-'));
+    try {
+      setThreadEngine(createMemoryThreadEngine(), other);
+      // A second workspace, with no `threads` block of its own: the honest answer is
+      // "not configured", never "already installed".
+      await expect(ensureThreadBackendReady(workspace({}))).resolves.toBe('not-configured');
+    } finally {
+      setThreadEngine(undefined, other);
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 
   it('launchSpawnedBuilder forwards the mission to the factory, not only to the PTY closure', async () => {
@@ -639,5 +661,127 @@ describe('Spec 146 Phase 9 — four connect failures, four sentences (iter 3 fix
       expect(Object.values(sig).filter(Boolean)).toHaveLength(1);
     }
     expect(signatures[0]).not.toEqual(signatures[1]);
+  });
+});
+
+/**
+ * Issue #219 — `project.create` is not idempotent, and the second `afx` process paid
+ * for it.
+ *
+ * t3code refuses a second active project for a workspace root
+ * (`requireActiveProjectWorkspaceRootAbsent`). `ensureThreadBackendReady` created one
+ * unconditionally, so it worked in the FIRST process to run against a workspace and
+ * failed in every one after — and every `afx` invocation is a fresh process. It
+ * surfaced as "the server was named and could not be used", which sends a reader to
+ * check a healthy server.
+ *
+ * These drive the lookup against a real HTTP server rather than a mocked `fetch`,
+ * because the thing under test is what a response actually looks like.
+ */
+describe('Spec 146 Phase 9 — the existing project is found, not re-created (#219)', () => {
+  let server: import('node:http').Server | undefined;
+
+  afterEach(async () => {
+    if (server) await new Promise<void>((res) => server!.close(() => res()));
+    server = undefined;
+  });
+
+  async function serve(handler: (req: unknown, res: {
+    statusCode: number;
+    setHeader(k: string, v: string): void;
+    end(body?: string): void;
+  }) => void): Promise<string> {
+    const http = await import('node:http');
+    server = http.createServer(handler as never);
+    await new Promise<void>((res) => server!.listen(0, '127.0.0.1', () => res()));
+    const address = server!.address() as { port: number };
+    return `http://127.0.0.1:${address.port}`;
+  }
+
+  it('finds the project t3code already holds for this workspace root', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'air-219-lookup-'));
+    try {
+      const base = await serve((_req, res) => {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          projects: [
+            { id: 'other', workspaceRoot: '/somewhere/else' },
+            { id: 'p-existing', workspaceRoot: root },
+          ],
+          threads: [],
+        }));
+      });
+      expect(await activeProjectForWorkspace(base, 'tok', root))
+        .toEqual({ kind: 'found', projectId: 'p-existing' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * `/var` and `/private/var` are the same directory on macOS, and `mkdtempSync`
+   * hands out the first while `realpath` gives the second. A string compare calls
+   * them different and answers `none` for a project that exists — straight back into
+   * the invariant this lookup exists to avoid.
+   */
+  it('matches a workspace root that differs only by symlink resolution', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'air-219-symlink-'));
+    try {
+      const { realpathSync } = await import('node:fs');
+      const resolved = realpathSync(root);
+      // Only meaningful when the platform actually resolves it differently.
+      const stored = resolved === root ? root : resolved;
+      const base = await serve((_req, res) => {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ projects: [{ id: 'p1', workspaceRoot: stored }], threads: [] }));
+      });
+      expect(await activeProjectForWorkspace(base, 'tok', root))
+        .toEqual({ kind: 'found', projectId: 'p1' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('answers `none` when the server holds no project for that root', async () => {
+    const base = await serve((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ projects: [{ id: 'p1', workspaceRoot: '/elsewhere' }], threads: [] }));
+    });
+    expect(await activeProjectForWorkspace(base, 'tok', '/nothing/here')).toEqual({ kind: 'none' });
+  });
+
+  /**
+   * The third answer, and the reason there are three. `unknown` leads the caller to a
+   * different move than `none` does — on `none` it creates a project, which is exactly
+   * what fails when the truth was "I could not tell".
+   */
+  it('a refused lookup is `unknown`, never `none`', async () => {
+    const base = await serve((_req, res) => {
+      res.statusCode = 503;
+      res.end('nope');
+    });
+    const lookup = await activeProjectForWorkspace(base, 'tok', '/ws');
+    expect(lookup.kind).toBe('unknown');
+    expect(lookup.kind === 'unknown' && lookup.detail).toContain('503');
+  });
+
+  it('an unreachable server is `unknown`, never `none`', async () => {
+    // Port 1 on loopback: nothing listens, and connecting fails immediately.
+    const lookup = await activeProjectForWorkspace('http://127.0.0.1:1', 'tok', '/ws');
+    expect(lookup.kind).toBe('unknown');
+  });
+
+  it('a response with no projects array is `unknown`, never `none`', async () => {
+    const base = await serve((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ threads: [] }));
+    });
+    const lookup = await activeProjectForWorkspace(base, 'tok', '/ws');
+    expect(lookup.kind).toBe('unknown');
+    expect(lookup.kind === 'unknown' && lookup.detail).toContain('no projects array');
   });
 });

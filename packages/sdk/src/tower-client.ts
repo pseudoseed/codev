@@ -842,6 +842,19 @@ export class TowerClient {
      */
     delivered?: boolean;
     held?: boolean;
+    /**
+     * The message will NEVER be delivered, and no retry is pending.
+     *
+     * Distinct from `held`, which promises a later attempt, and from `delivered`. The
+     * route reported a refusal as `held` with `no-live-pty` — telling the sender to wait
+     * for a retry that could not happen, and handing back a mailbox id that lists
+     * nowhere. `refusedReason` is a sentence for a human, not a `MailboxReason`.
+     *
+     * Absent on older Tower binaries, where the old (wrong) `held` answer still arrives —
+     * so a caller must check this BEFORE falling through to "delivered".
+     */
+    refused?: boolean;
+    refusedReason?: string;
     reason?: string;
     mailboxId?: string;
     /**
@@ -865,6 +878,8 @@ export class TowerClient {
       deferred?: boolean;
       delivered?: boolean;
       held?: boolean;
+      refused?: boolean;
+      refusedReason?: string;
       reason?: string | null;
       mailboxId?: string;
       notBefore?: number;
@@ -902,6 +917,8 @@ export class TowerClient {
       deferred: result.data!.deferred === true,
       delivered: result.data!.delivered,
       held: result.data!.held,
+      refused: result.data!.refused,
+      refusedReason: result.data!.refusedReason,
       reason: result.data!.reason ?? undefined,
       mailboxId: result.data!.mailboxId,
       notBefore: result.data!.notBefore,

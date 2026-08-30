@@ -547,7 +547,10 @@ export async function cleanupThreadBackedBuilder(
   const config = getConfig();
   const merged = builder.worktree ? await isWorktreeMerged(config.workspaceRoot, builder.worktree) : false;
   if (!merged && !force) return 'refused-unmerged';
-  const result = await getThreadEngine().removeWorktree(builder.threadId, { force: !!force });
+  // For this workspace: the engine map is keyed, and an engine registered for another
+  // workspace holds another server. (This command still registers none of its own — see
+  // the note in `porch-thread-engine.ts` — so this throws rather than reaching the wrong one.)
+  const result = await getThreadEngine(config.workspaceRoot).removeWorktree(builder.threadId, { force: !!force });
   if (result === 'refused-unmerged') return result;
   removeBuilder(builder.id, config.workspaceRoot);
   return 'removed';

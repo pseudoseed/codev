@@ -15,7 +15,12 @@ import { join, resolve } from 'node:path';
 import { DispatchJournal } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
 import { createPorchThreadEngine } from './porch-thread-engine.js';
-import { installThreadSpawnFactory, setThreadEngine, tryGetThreadEngine } from './thread-runtime.js';
+import {
+  canonicalWorkspaceKey,
+  installThreadSpawnFactory,
+  setThreadEngine,
+  tryGetThreadEngine,
+} from './thread-runtime.js';
 import { logger } from './utils/logger.js';
 import { loadConfig } from '../lib/config.js';
 
@@ -183,11 +188,26 @@ export function classifyConnectFailure(err: unknown): ConnectFailure {
   return 'unreachable';
 }
 
-/** Open an authenticated t3code WebSocket and wrap it as a porch-driver dispatcher. */
+/**
+ * Open an authenticated t3code WebSocket and wrap it as a porch-driver dispatcher.
+ *
+ * The access token comes back with it because the project lookup below needs one:
+ * exchanging the bootstrap token a second time would fail, and does not merely cost
+ * a round trip — a pairing grant is one-time.
+ */
 async function connectDispatcher(
   config: ThreadBackendConfig,
   upgradeTimeoutMs: number,
-): Promise<{ call: (m: string, p: unknown) => Promise<unknown> }> {
+  onClosed: () => void,
+): Promise<{
+  dispatcher: { call: (m: string, p: unknown) => Promise<unknown> };
+  accessToken: string;
+  /**
+   * Hang up. Every path that abandons this connection before an engine owns it must
+   * call this — see the note in `initialiseThreadBackend`.
+   */
+  close: () => void;
+}> {
   const { T3Client } = await import('@cluesmith/t3-client/client');
   const auth = await import('@cluesmith/t3-client/auth');
   const access = await auth.exchangeBootstrapToken(config.serverUrl, config.bootstrapToken, {
@@ -201,13 +221,43 @@ async function connectDispatcher(
   // a spawn hangs forever having reported nothing — the one failure this whole connect path was
   // rewritten to make impossible, in the code that rewrote it.
   await new Promise<void>((res, rej) => {
-    const timer = setTimeout(
-      () => rej(new SocketUpgradeTimeout(config.serverUrl, upgradeTimeoutMs)),
-      upgradeTimeoutMs,
-    );
-    socket.addEventListener('open', () => { clearTimeout(timer); res(); }, { once: true });
-    socket.addEventListener('error', () => {
+    // A bound that does not CANCEL is not a bound, it is a lie with a timer on it.
+    //
+    // This rejected and walked away, leaving the socket alive: a server that accepts the
+    // TCP connection and holds the upgrade open kept a live connection past the advertised
+    // deadline, and Tower — which retries — accumulated one orphan per attempt, each still
+    // holding a file descriptor and each still able to fire events into a closure nobody
+    // was reading. The whole point of the bound is that nothing survives it.
+    //
+    // `abandon` runs on every exit from this promise, including the successful one, so
+    // there is one place where the handshake listeners stop mattering.
+    let settled = false;
+    const abandon = (closeSocket: boolean) => {
+      settled = true;
       clearTimeout(timer);
+      if (closeSocket) {
+        try {
+          socket.close();
+        } catch {
+          /* already closing, or a ctor whose close throws after an aborted handshake */
+        }
+      }
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      abandon(true);
+      rej(new SocketUpgradeTimeout(config.serverUrl, upgradeTimeoutMs));
+    }, upgradeTimeoutMs);
+    socket.addEventListener('open', () => {
+      if (settled) return;
+      abandon(false);
+      res();
+    }, { once: true });
+    socket.addEventListener('error', () => {
+      if (settled) return;
+      // Closed here too: an errored socket is not necessarily a closed one, and the
+      // caller is about to stop referencing it.
+      abandon(true);
       rej(new Error(`t3code socket error connecting to ${config.serverUrl}`));
     }, { once: true });
   });
@@ -215,6 +265,20 @@ async function connectDispatcher(
   // listener left and a later failure vanishes. This one is durable and outlives the handshake.
   socket.addEventListener('error', () => {
     logger.warn(`t3code socket error after connecting to ${config.serverUrl}`);
+  });
+  // A dead socket must not stay registered as a live engine.
+  //
+  // In the CLI this could not matter: the process exits. Tower holds its engine for as
+  // long as it runs, and THIS PR proves the t3code server can be restarted — after which
+  // every delivery through the stale engine fails, forever, until Tower is restarted.
+  // Warning about it was all the old listener did.
+  //
+  // Eviction, not reconnection: the next `ensureThreadBackendReady` for this workspace
+  // finds no engine and connects again, with a fresh credential exchange. Reconnecting
+  // from in here would need a credential this closure does not have.
+  socket.addEventListener('close', () => {
+    logger.warn(`t3code socket to ${config.serverUrl} closed; dropping the engine for ${config.workspaceRoot}`);
+    onClosed();
   });
   const client = new T3Client({
     send: (d: string) => socket.send(d),
@@ -225,7 +289,86 @@ async function connectDispatcher(
       return socket.readyState;
     },
   });
-  return { call: (method: string, payload: unknown) => client.call(method, payload) };
+  return {
+    dispatcher: { call: (method: string, payload: unknown) => client.call(method, payload) },
+    accessToken: access.access_token,
+    close: () => {
+      try {
+        socket.close();
+      } catch {
+        /* already closing */
+      }
+    },
+  };
+}
+
+/**
+ * Which project t3code already holds for this workspace root, if any.
+ *
+ * `project.create` is NOT idempotent: t3code refuses a second active project for a
+ * workspace root (`requireActiveProjectWorkspaceRootAbsent`). `ensureThreadBackendReady`
+ * created one unconditionally, so it worked in the first process to run against a
+ * workspace and failed in every one after it — and every `afx` invocation is a fresh
+ * process. The failure arrived as "the server was named and could not be used", which
+ * sends a reader to check the server.
+ *
+ * Read over HTTP rather than through `orchestration.subscribeShell`: the subscription
+ * never exits, so taking one snapshot from it would leave a live subscription behind
+ * for the life of the process.
+ *
+ * THREE ANSWERS, NOT TWO. `unknown` is not `none`: a lookup that could not be performed
+ * must not be spelled like a workspace with no project, because the caller's next move
+ * on `none` is to create one — which is exactly what fails.
+ */
+export type ProjectLookup =
+  | { readonly kind: 'found'; readonly projectId: string }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'unknown'; readonly detail: string };
+
+export async function activeProjectForWorkspace(
+  serverUrl: string,
+  accessToken: string,
+  workspaceRoot: string,
+  timeoutMs: number = DEFAULT_SOCKET_UPGRADE_TIMEOUT_MS,
+): Promise<ProjectLookup> {
+  let body: unknown;
+  try {
+    // Bounded, for the same reason the WebSocket upgrade is. A server that accepts the
+    // connection and never answers left this await unsettled forever, and it sits
+    // between a completed handshake and a registered engine — so the whole of
+    // `ensureThreadBackendReady` hung, having reported nothing. An unbounded wait is
+    // not "slow"; it never ends.
+    //
+    // The signal covers the body read as well as the headers, so a response that starts
+    // and stalls is bounded too.
+    const response = await fetch(`${serverUrl.replace(/\/+$/, '')}/api/orchestration/shell`, {
+      headers: { authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) {
+      return { kind: 'unknown', detail: `GET /api/orchestration/shell answered ${response.status}` };
+    }
+    body = await response.json();
+  } catch (err) {
+    return { kind: 'unknown', detail: err instanceof Error ? err.message : String(err) };
+  }
+  const projects = (body as { projects?: ReadonlyArray<{ id?: unknown; workspaceRoot?: unknown }> }).projects;
+  if (!Array.isArray(projects)) {
+    return { kind: 'unknown', detail: 'the shell snapshot carried no projects array' };
+  }
+  // t3code compares normalised paths, and so does this. `/var` and `/private/var`
+  // are the same directory on macOS and a string compare calls them different, which
+  // would report `none` for a project that exists — the answer that leads straight
+  // back into the invariant this lookup exists to avoid.
+  // The same canonicalisation the engine map keys on, not a second copy of the rule:
+  // two spellings of one workspace here would answer `none` for a project that exists.
+  const target = canonicalWorkspaceKey(workspaceRoot);
+  const match = projects.find(
+    (project) =>
+      typeof project.workspaceRoot === 'string' && canonicalWorkspaceKey(project.workspaceRoot) === target,
+  );
+  if (!match || typeof match.id !== 'string') return { kind: 'none' };
+  return { kind: 'found', projectId: match.id };
 }
 
 /**
@@ -244,14 +387,165 @@ export async function ensureThreadBackendReady(
   workspaceRoot: string,
   options: { readonly upgradeTimeoutMs?: number } = {},
 ): Promise<'not-configured' | 'already-installed' | 'installed'> {
+  const key = canonicalWorkspaceKey(workspaceRoot);
+  // The engine is looked up for THE REQUESTED workspace. This read used to be
+  // unkeyed, so in Tower — one process, every workspace — the first thread-configured
+  // workspace to connect made every later one return `already-installed` and then use
+  // its socket, its projectId and its journal.
+  if (tryGetThreadEngine(workspaceRoot)) return 'already-installed';
+  // Concurrent first deliveries for one workspace raced the registration: both saw no
+  // engine, both connected, and the second overwrote the first — leaving an orphaned
+  // socket and, worse, two projects racing `project.create` for the same root. One
+  // in-flight initialisation per workspace, shared by everyone who asks for it.
+  const inFlight = pendingInit.get(key);
+  if (inFlight) return await inFlight;
+  const started = initialiseThreadBackend(workspaceRoot, key, options);
+  pendingInit.set(key, started);
+  try {
+    return await started;
+  } finally {
+    pendingInit.delete(key);
+  }
+}
+
+/** One in-flight `ensureThreadBackendReady` per canonical workspace root. */
+const pendingInit = new Map<string, Promise<'not-configured' | 'already-installed' | 'installed'>>();
+
+/**
+ * How long a workspace whose connect just failed is left alone.
+ *
+ * Tower's drain tick runs every 1.5 s. Without this, a workspace whose server is down
+ * re-ran the whole connect on every tick — and that means a full bootstrap-token
+ * exchange every 1.5 s, against a credential this module's own documentation says may
+ * be one-time. The retry loop would spend the thing it needs to retry with.
+ */
+const FAILED_CONNECT_COOLDOWN_MS = 60_000;
+
+/** When each workspace's last connect attempt failed, and why. */
+const lastFailure = new Map<string, { at: number; message: string }>();
+
+/**
+ * What a caller that MUST NOT BLOCK can know about a workspace's thread backend.
+ *
+ * `ready` is the only one that means "deliver now". The rest are all "not yet", and they
+ * are kept apart because they lead somewhere different: `connecting` will resolve on its
+ * own, `cooling-down` will not until the window passes, and `not-configured` never will.
+ */
+export type ThreadBackendAvailability =
+  | { readonly kind: 'ready' }
+  | { readonly kind: 'connecting' }
+  | { readonly kind: 'cooling-down'; readonly since: number; readonly message: string }
+  | { readonly kind: 'not-configured' }
+  | { readonly kind: 'misconfigured'; readonly message: string };
+
+/**
+ * Is this workspace's engine ready, and if not, get one on the way — WITHOUT WAITING.
+ *
+ * WHY THIS EXISTS SEPARATELY FROM `ensureThreadBackendReady`.
+ *
+ * Tower's mailbox drainer awaits agents sequentially. Putting an `await
+ * ensureThreadBackendReady(...)` on that path meant one workspace's connect — bounded, by
+ * design, at 15 s and up to 30 s across a token exchange, a ticket and an upgrade — stalled
+ * delivery for EVERY agent in EVERY workspace, including PTY-only ones that never opted
+ * into threads. An opt-in feature is not opt-in if declining it still costs you the
+ * delivery of your mail.
+ *
+ * So the tick never awaits a connect. It asks this, acts on the answer, and moves on; the
+ * connect happens in the background and the next tick, 1.5 s later, finds it ready. The
+ * row is held in the meantime, which is what held is for.
+ *
+ * The CLI keeps `ensureThreadBackendReady` and its await: one workspace, one process, and
+ * a spawn that returns before its server is reachable would be lying.
+ */
+export function requestThreadBackend(
+  workspaceRoot: string,
+  now: number = Date.now(),
+): ThreadBackendAvailability {
+  const key = canonicalWorkspaceKey(workspaceRoot);
+  if (tryGetThreadEngine(key)) return { kind: 'ready' };
+  if (pendingInit.has(key)) return { kind: 'connecting' };
+
+  const failure = lastFailure.get(key);
+  if (failure && now - failure.at < FAILED_CONNECT_COOLDOWN_MS) {
+    return { kind: 'cooling-down', since: failure.at, message: failure.message };
+  }
+
+  // Read the config synchronously — files, no network — so a workspace with no server
+  // named costs the tick nothing and starts nothing.
+  let config;
+  try {
+    config = readThreadBackendConfig(resolve(workspaceRoot));
+  } catch (err) {
+    // Half-configured is a mistake, not a decision to stay on PTY, and it is not a
+    // connect failure either — no cooldown, because nothing was attempted.
+    return { kind: 'misconfigured', message: err instanceof Error ? err.message : String(err) };
+  }
+  if (!config) return { kind: 'not-configured' };
+
+  void ensureThreadBackendReady(workspaceRoot).then(
+    () => {
+      lastFailure.delete(key);
+    },
+    (err: unknown) => {
+      lastFailure.set(key, {
+        at: Date.now(),
+        message: err instanceof Error ? err.message : String(err),
+      });
+    },
+  );
+  return { kind: 'connecting' };
+}
+
+/** Forget every recorded connect failure. For a test's teardown, not for production. */
+export function clearThreadBackendFailures(): void {
+  lastFailure.clear();
+}
+
+async function initialiseThreadBackend(
+  workspaceRoot: string,
+  key: string,
+  options: { readonly upgradeTimeoutMs?: number },
+): Promise<'not-configured' | 'already-installed' | 'installed'> {
   const upgradeTimeoutMs = options.upgradeTimeoutMs ?? DEFAULT_SOCKET_UPGRADE_TIMEOUT_MS;
-  if (tryGetThreadEngine()) return 'already-installed';
   const config = readThreadBackendConfig(resolve(workspaceRoot));
   if (!config) return 'not-configured';
 
-  let dispatcher;
+  /**
+   * Whether this socket has closed, and the engine it is behind once there is one.
+   *
+   * WHAT MAKES THE EVICTION CORRECT, rather than an assertion that it is.
+   *
+   * An earlier version of this said the close handler "can only fire after this
+   * function has finished registering it". That was not true and, once written as a
+   * guarantee, it stopped being checked. The socket is OPEN while the HTTP project
+   * lookup below runs, so it can close in that window — and then `registered` was
+   * still `undefined`, `tryGetThreadEngine(key)` was also `undefined`, the guard
+   * compared `undefined === undefined`, evicted nothing, and initialisation went on to
+   * register an engine backed by an already-closed socket. No further close would ever
+   * fire, because it had already fired. That is the dead-engine bug this handler exists
+   * to prevent, in a narrower window.
+   *
+   * So there are two facts, not one:
+   *
+   * - `closed` is monotonic and set the moment the socket goes, whether or not an
+   *   engine exists yet. It is checked BEFORE and AFTER registration, so the window
+   *   between the check and the write is closed by the second check rather than by an
+   *   argument about ordering.
+   * - `registered` is what this function put in the map. The handler evicts only when
+   *   the map still holds THAT object, so a close arriving late cannot drop the engine
+   *   a later reconnect installed.
+   */
+  let closed = false;
+  let registered: ReturnType<typeof createPorchThreadEngine> | undefined;
+
+  let connection;
   try {
-    dispatcher = await connectDispatcher(config, upgradeTimeoutMs);
+    connection = await connectDispatcher(config, upgradeTimeoutMs, () => {
+      closed = true;
+      if (registered !== undefined && tryGetThreadEngine(key) === registered) {
+        setThreadEngine(undefined, key);
+      }
+    });
   } catch (err) {
     // Four ways this fails, four sentences. They were previously two, and one of those two was
     // wrong for half the cases it covered. A caller who cannot tell "the network is down" from
@@ -286,11 +580,74 @@ export async function ensureThreadBackendReady(
 
   const { createProject } = await import('@cluesmith/porch-driver/thread');
   const journal = new DispatchJournal(join(config.workspaceRoot, '.codev', 'commands.jsonl'));
-  const projectId = await createProject(dispatcher, journal, {
-    title: `codev:${config.workspaceRoot}`,
-    workspaceRoot: config.workspaceRoot,
-  });
-  setThreadEngine(createPorchThreadEngine({
+  const { dispatcher, accessToken } = connection;
+
+  /**
+   * Nothing owns this socket until an engine is registered on it.
+   *
+   * The upgrade timeout closes the socket it gave up on, but a connection that upgraded
+   * SUCCESSFULLY and then failed here — the project lookup, or `project.create` — was
+   * simply dropped: the reference went out of scope and the socket stayed open. The 60 s
+   * cooldown then retries, and Tower accumulates one live connection per attempt, each
+   * holding a descriptor and a server-side session.
+   *
+   * So every exit from here that is not "an engine now owns it" hangs up first. The
+   * successful path deliberately does not: the engine holds the socket for its lifetime,
+   * and its own `close` handler evicts it.
+   */
+  const abandonConnection = (): void => {
+    connection.close();
+  };
+
+  const lookup = await activeProjectForWorkspace(
+    config.serverUrl,
+    accessToken,
+    config.workspaceRoot,
+    upgradeTimeoutMs,
+  );
+  let projectId: string;
+  if (lookup.kind === 'found') {
+    projectId = lookup.projectId;
+  } else {
+    try {
+      projectId = await createProject(dispatcher, journal, {
+        title: `codev:${config.workspaceRoot}`,
+        workspaceRoot: config.workspaceRoot,
+      });
+    } catch (err) {
+      // Either this process lost a race with another one, or the lookup could not
+      // be performed and there was a project all along. Re-read once before giving
+      // up, and if that still cannot answer, say which of the two happened rather
+      // than reporting a server fault.
+      const retry = await activeProjectForWorkspace(
+        config.serverUrl,
+        accessToken,
+        config.workspaceRoot,
+        upgradeTimeoutMs,
+      );
+      if (retry.kind === 'found') {
+        projectId = retry.projectId;
+      } else {
+        abandonConnection();
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Could not resolve a t3code project for ${config.workspaceRoot}. Creating one failed (${detail}), `
+          + (lookup.kind === 'unknown'
+            ? `and the existing-project lookup could not be performed (${lookup.detail}), so whether one already `
+              + `exists is unknown.`
+            : `and no existing project for that workspace root was found, so this is not a duplicate.`),
+          { cause: err },
+        );
+      }
+    }
+  }
+  // Before. The socket was open across the project lookup above, so by here it may
+  // already be gone — and registering then would install an engine nothing can revive.
+  if (closed) {
+    abandonConnection();
+    throw closedDuringInit(config.serverUrl, config.workspaceRoot);
+  }
+  registered = createPorchThreadEngine({
     dispatcher,
     journal,
     tracker: new TurnTracker(),
@@ -298,7 +655,28 @@ export async function ensureThreadBackendReady(
     workspaceRoot: config.workspaceRoot,
     defaultHarness: config.defaultHarness,
     defaultModel: config.defaultModel,
-  }));
-  installThreadSpawnFactory();
+  });
+  setThreadEngine(registered, key);
+  // And after, because the close could have landed between the check above and this
+  // write. The handler evicts when it can see `registered`; this covers the case where
+  // it could not. Both are cheap, and only one of them has to be right.
+  if (closed) {
+    setThreadEngine(undefined, key);
+    registered = undefined;
+    abandonConnection();
+    throw closedDuringInit(config.serverUrl, config.workspaceRoot);
+  }
+  installThreadSpawnFactory(key);
+  lastFailure.delete(key);
   return 'installed';
+}
+
+/** The socket went away between the handshake and registration. */
+function closedDuringInit(serverUrl: string, workspaceRoot: string): Error {
+  return new Error(
+    `The t3code socket to ${serverUrl} closed while the thread backend for ${workspaceRoot} was still `
+    + `initialising, so no engine was registered. Nothing is stale and nothing was half-installed — `
+    + `the next call connects again. This is not "the server refused" and not "the server is `
+    + `unreachable": it answered, and then went.`,
+  );
 }

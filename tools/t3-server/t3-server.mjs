@@ -15,6 +15,7 @@
  *   acquire   clone/fetch the pinned commit into a checkout
  *   verify    assert the checkout, and any running server, match pin.json
  *   start     start a server from the pinned checkout on a private data dir
+ *   restart   stop and start again, KEEPING the data dir
  *   stop      stop it
  *   status    report what is running and whether it matches the pin
  *
@@ -231,29 +232,85 @@ function serverRuntime() {
  * Ownership is proven from the command line: it must be a t3 serve for OUR data
  * directory. Anything we cannot prove is ours is reported and left alone.
  */
+/**
+ * Can this harness PROVE the process is its own pinned server?
+ *
+ * This decides what gets a SIGTERM, so the claim it makes has to be the claim it
+ * performs. It used to be `cmd.includes(runtimeDir)` under a docblock promising "a
+ * `t3 serve` for OUR data directory" — and a substring of a path is not that. Anything
+ * whose argv merely mentions the directory satisfied it: `tail -f
+ * <runtimeDir>/server.log`, an editor opened on the log, a `grep` over the tree. Each
+ * would then have taken the group signal. Round 3 established that liveness is not
+ * ownership; a substring is not ownership either, and the docblock asserted the stronger
+ * thing.
+ *
+ * What is actually checked now, on both processes the harness creates — the `npm exec`
+ * wrapper and the `node .../t3` grandchild that holds the port:
+ *
+ *   npm exec t3@0.0.36 serve --host 127.0.0.1 --port 3801 --base-dir <dataDir> <checkout>
+ *   node .../node_modules/.bin/t3 serve --host 127.0.0.1 --port 3801 --base-dir <dataDir> <checkout>
+ *
+ * - a bare `serve` argument, and
+ * - `--base-dir <dataDir>` (or `--base-dir=<dataDir>`) as an actual argument pair, not a
+ *   path appearing anywhere in the line.
+ *
+ * Both, because either alone is satisfiable by something that is not our server. This is
+ * still an argv heuristic and not a kernel-level proof of parentage — but it is the claim
+ * the docblock makes, which the substring was not.
+ */
 function ownsProcess(pid) {
   try {
-    const cmd = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' });
-    return cmd.includes(runtimeDir) || cmd.includes(join(runtimeDir, 'data'));
+    const cmd = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim();
+    if (!cmd) return false;
+    const dataDir = join(runtimeDir, 'data');
+    const args = cmd.split(/\s+/);
+    const serves = args.includes('serve');
+    // The pair form and the `=` form, both as whole arguments.
+    const boundToOurData = args.some((arg, i) =>
+      (arg === '--base-dir' && args[i + 1] === dataDir) || arg === `--base-dir=${dataDir}`);
+    return serves && boundToOurData;
   } catch {
     return false; // cannot read it, cannot claim it
   }
 }
 
-/** PIDs listening on our port that we can prove belong to this harness. */
+/**
+ * PIDs listening on our port that we can prove belong to this harness.
+ *
+ * THREE ANSWERS, because `lsof` exits non-zero for two different reasons and only one
+ * of them means "nothing is listening". It also exits 1 when it is missing, refused, or
+ * cannot read a proc table — and that was folded into an empty result, so a tool that
+ * could not answer read as a port that is free. `restart` then started a second server
+ * on a port the first may still hold, which is the "I could not tell" spelled as "no"
+ * that this whole harness exists to refuse.
+ *
+ * `known` is false only when the tool itself failed. An empty listing with `known: true`
+ * is a real, checked, negative answer.
+ */
 function ownedPortHolders() {
   let holders = [];
   try {
     holders = execFileSync('lsof', ['-t', `-iTCP:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' })
       .split('\n').map((l) => Number(l.trim())).filter((n) => Number.isInteger(n) && n > 0);
-  } catch {
-    return { ours: [], foreign: [] };
+  } catch (err) {
+    // `lsof` exits 1 with EMPTY output when nothing matches — the ordinary case — and
+    // exits 1 with something on stderr, or fails to spawn at all, when it could not look.
+    const spawnFailed = err && (err.code === 'ENOENT' || err.code === 'EACCES');
+    const said = String(err?.stderr ?? '').trim();
+    if (spawnFailed || said !== '') return { ours: [], foreign: [], known: false, why: said || String(err?.code ?? err) };
+    return { ours: [], foreign: [], known: true };
   }
   const ours = holders.filter(ownsProcess);
   const foreign = holders.filter((p) => !ours.includes(p));
-  return { ours, foreign };
+  return { ours, foreign, known: true };
 }
 
+/**
+ * The pid in the pid file, if a process with that id is alive.
+ *
+ * LIVENESS ONLY. `process.kill(pid, 0)` says a process exists, not that it is ours,
+ * and pids are reused. Use {@link readOwnedPid} before signalling.
+ */
 function readPid() {
   if (!existsSync(pidFile)) return null;
   const pid = Number(readFileSync(pidFile, 'utf8').trim());
@@ -264,6 +321,25 @@ function readPid() {
   } catch {
     return null;
   }
+}
+
+/**
+ * The pid in the pid file, if it is alive AND this harness can prove it owns it.
+ *
+ * `stop` signalled whatever `readPid` returned, and `readPid` proves liveness rather
+ * than ownership. A stale pid file whose pid has been reused by something unrelated
+ * passes that check, and `stop` then sends SIGTERM to that process GROUP — killing
+ * someone else's work on the strength of a number in a file this harness wrote
+ * earlier. `ownsProcess` already exists for the port sweep, which refuses to kill what
+ * it cannot prove it owns; the pid path is the one place that rule was not applied.
+ *
+ * Returns `{ pid, owned }` so a caller can tell "nothing there" from "something there
+ * that is not mine" — those are different facts and only the second is worth saying.
+ */
+function readOwnedPid() {
+  const pid = readPid();
+  if (pid === null) return { pid: null, owned: false };
+  return { pid, owned: ownsProcess(pid) };
 }
 
 /**
@@ -297,7 +373,19 @@ function assertChildSurvived(pid, runtime) {
   }
 }
 
-function start() {
+/**
+ * Start the pinned server.
+ *
+ * `keepData` is the whole difference between a cold start and a restart, and it
+ * defaults to false because every existing caller wants a cold one: the phase-1
+ * cold-start evidence is only evidence if the database is empty each time.
+ *
+ * A restart passes `true`, because a server that comes back with an erased
+ * database is not the same server. Testing "does a thread survive a restart"
+ * against a wiped data dir measures the wipe, and reports it as the thread's
+ * fate.
+ */
+function start({ keepData = false } = {}) {
   verify();
   const runtime = serverRuntime();
 
@@ -306,10 +394,20 @@ function start() {
 
   mkdirSync(runtimeDir, { recursive: true });
   const dataDir = join(runtimeDir, 'data');
-  rmSync(dataDir, { recursive: true, force: true });
+  if (keepData) {
+    // Refuse rather than quietly cold-start. "There was nothing to preserve" and
+    // "the state was preserved" must not exit the same way — a restart that
+    // silently began from an empty database is exactly the false negative this
+    // flag exists to prevent.
+    if (!existsSync(dataDir)) {
+      die(UNDETERMINED, `NO_DATA_TO_KEEP: could not check: ${dataDir} does not exist, so there is no server state to preserve. This would have been a cold start wearing a restart's name.`);
+    }
+  } else {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
   mkdirSync(dataDir, { recursive: true });
 
-  say(`starting on 127.0.0.1:${port} with data dir ${dataDir}`);
+  say(`starting on 127.0.0.1:${port} with data dir ${dataDir}${keepData ? ' (preserved)' : ''}`);
 
   const log = join(runtimeDir, 'server.log');
   // 0600: the server prints a pairing token on stdout and this file receives it
@@ -426,8 +524,19 @@ async function ready() {
 
 function stop() {
   rmSync(runtimeFile, { force: true });
-  const pid = readPid();
-  if (!pid) {
+  const { pid, owned } = readOwnedPid();
+  if (pid !== null && !owned) {
+    // The file names a live process this harness cannot claim. Signalling it is the
+    // one irreversible thing `stop` can do wrong, and a reused pid is exactly how it
+    // would happen. Drop the stale file, say so, and fall through to the port sweep —
+    // which refuses foreign holders by the same rule.
+    say(
+      `REFUSING to signal pid ${pid} from ${pidFile}: it is alive but not ours (a reused pid, or a ` +
+        `stale file). Removing the stale pid file; the port sweep below still applies.`,
+    );
+    rmSync(pidFile, { force: true });
+  }
+  if (!pid || !owned) {
     // Still sweep the port: a previous run may have left a listener with no
     // matching pid file, and reporting "nothing running" while a server holds
     // the port is the same lie as a check that passes without looking.
@@ -442,7 +551,8 @@ function stop() {
           `  T3_HARNESS_PORT to a free port. This harness does not kill what it cannot prove it owns.`,
       );
     }
-    say(ours.length > 0 ? `no pid file, but released port ${port} (pids ${ours.join(', ')})` : 'nothing running');
+    const pidNote = pid === null ? 'no pid file' : `pid ${pid} not ours`;
+    say(ours.length > 0 ? `${pidNote}, but released port ${port} (pids ${ours.join(', ')})` : 'nothing running');
     return;
   }
   try {
@@ -466,6 +576,81 @@ function stop() {
   if (foreign.length > 0) say(`left pid(s) ${foreign.join(', ')} on port ${port} alone: not ours`);
 
   say(`stopped pid ${pid}`);
+}
+
+/**
+ * Restart the running server without erasing its state.
+ *
+ * `stop` then `start` is not this: `start` wipes the data dir, so the pair is a
+ * cold start with a restart's shape. Spec 146 phase 9's item 4 — "an architect
+ * thread survives a server restart" — cannot be evaluated against that at all,
+ * because the thread is deleted by the harness rather than by anything the
+ * criterion is about.
+ */
+function restart() {
+  // A running server, first. `stop` leaves the data dir in place, so a data dir is
+  // NOT evidence that anything is running — `stop` then `restart` would have
+  // succeeded with no server having been replaced, and reported a restart that did
+  // not happen. What item 4 asks about is a process being replaced, and that has to
+  // be true before this exits 0.
+  const { pid, owned } = readOwnedPid();
+  const holders = ownedPortHolders();
+  if (!holders.known) {
+    die(
+      UNDETERMINED,
+      `PORT_STATE_UNKNOWN: could not check: lsof could not report who holds port ${port} ` +
+        `(${holders.why}). Whether a server is running there is unknown, and a restart must not ` +
+        `begin from a guess.`,
+    );
+  }
+  if ((!pid || !owned) && holders.ours.length === 0) {
+    die(
+      UNDETERMINED,
+      `NOT_RUNNING: could not check: no harness server this process owns is running on port ${port}` +
+        (pid !== null && !owned ? ` (pid ${pid} in ${pidFile} is alive but not ours)` : '') +
+        (holders.foreign.length > 0
+          ? `; pid(s) ${holders.foreign.join(', ')} hold it and are not ours.`
+          : '.') +
+        `\n  A restart of nothing is not a restart. Use \`start\` for a cold one.`,
+    );
+  }
+
+  const dataDir = join(runtimeDir, 'data');
+  if (!existsSync(dataDir)) {
+    die(UNDETERMINED, `NO_DATA_TO_KEEP: could not check: ${dataDir} does not exist, so there is no server state to preserve.`);
+  }
+
+  stop();
+
+  // `stop` signals; it does not wait. Starting before the old listener lets go
+  // gives `start` a port already bound, and that failure has nothing to do with
+  // the restart.
+  const deadline = Date.now() + 30_000;
+  let last = ownedPortHolders();
+  while (Date.now() < deadline) {
+    last = ownedPortHolders();
+    if (last.known && last.ours.length === 0) break;
+    execFileSync('sleep', ['0.25']);
+  }
+  if (!last.known) {
+    // The tool failing to answer is not a negative answer. Proceeding here would start
+    // a second server against a port whose state is unknown.
+    die(
+      UNDETERMINED,
+      `PORT_STATE_UNKNOWN: could not check: lsof could not report who holds port ${port} ` +
+        `(${last.why}). Whether the old server let go is unknown, and an unknown is not a release.`,
+    );
+  }
+  if (last.ours.length > 0) {
+    die(
+      UNDETERMINED,
+      `PORT_NOT_RELEASED: could not check: pid(s) ${last.ours.join(', ')} still hold port ${port} ` +
+        `30s after stop. The old server was not replaced, and starting on top of it would test the ` +
+        `wrong process.`,
+    );
+  }
+
+  start({ keepData: true });
 }
 
 function status() {
@@ -497,11 +682,12 @@ switch (command) {
   case 'acquire': acquire(); break;
   case 'verify': verify(); break;
   case 'start': start(); break;
+  case 'restart': restart(); break;
   case 'ready': await ready(); break;
   case 'stop': stop(); break;
   case 'status': status(); break;
   case 'runtime': console.log(JSON.stringify(serverRuntime(), null, 2)); break;
   default:
-    console.error('usage: t3-server.mjs <acquire|verify|start|ready|stop|status|runtime>');
+    console.error('usage: t3-server.mjs <acquire|verify|start|restart|ready|stop|status|runtime>');
     process.exit(UNDETERMINED);
 }

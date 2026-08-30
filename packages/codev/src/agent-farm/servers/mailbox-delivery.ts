@@ -30,6 +30,7 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 import {
   findHeldForAgent,
+  dismiss,
   getById,
   listHeld,
   markDelivered,
@@ -43,6 +44,11 @@ import type { DbMailbox, MailboxReason } from '../db/types.js';
 import type { GateProfile, GateVerdict } from './render-gate.js';
 import { KeyedSerializer } from './write-queue.js';
 import { heldRecoveryAction, type HeldRecoveryAction } from './mailbox-hold-policy.js';
+import {
+  threadCanHonourNoEnter,
+  THREAD_HAS_NO_COMPOSER,
+  THREAD_NO_ENTER_REMEDY,
+} from './thread-no-enter.js';
 
 /**
  * The structural view of a live PTY session the delivery path needs. `PtySession`
@@ -83,22 +89,52 @@ export interface DeliverySession {
    * The delivery path skips the render gate and writes via `thread.turn.start`.
    */
   readonly threadId?: string;
+  /**
+   * What the delivering process needs to reach that thread (issue #219).
+   *
+   * A thread id alone is not enough. The engine keeps threads in process-local
+   * maps, and Tower — which is where mailbox delivery runs — is not the process
+   * that created them. It must register an engine and ADOPT the thread before a
+   * turn can be started on it, and neither is derivable from the id: the
+   * worktree and branch come from the row that recorded them at spawn.
+   *
+   * Carried on the session because that is where `getSessionForAgent` already
+   * holds the workspace and the row; `writeMessage` receives only the session.
+   */
+  readonly threadContext?: ThreadDeliveryContext;
+}
+
+/** What a delivering process needs to adopt a thread it did not create. */
+export interface ThreadDeliveryContext {
+  readonly workspaceRoot: string;
+  /** An architect's is the workspace root; a builder's is its worktree. */
+  readonly worktreePath: string;
+  /** An architect has none, and says so with `''`. */
+  readonly branch: string;
+  /** The agent the row addresses — the engine's `builderId`. */
+  readonly agent: string;
+  readonly harness?: string;
+  readonly model?: string;
 }
 
 export function isThreadDeliverySession(session: DeliverySession): boolean {
   return typeof session.threadId === 'string' && session.threadId.length > 0;
 }
 
-export function threadDeliverySession(threadId: string): DeliverySession {
+export function threadDeliverySession(
+  threadId: string,
+  context?: ThreadDeliveryContext,
+): DeliverySession {
   return {
     bytesWritten: 0,
     info: { cols: 0, rows: 0 },
     command: '',
     launchArgs: [],
-    cwd: '',
+    cwd: context?.workspaceRoot ?? '',
     writable: true,
     write: () => true,
     threadId,
+    threadContext: context,
   };
 }
 
@@ -137,7 +173,20 @@ export interface DeliveryPorts {
    * holds the row (`no-live-pty`) instead of falsely reporting delivery (Spec 1313
    * integration review — the silent-loss finding).
    */
-  writeMessage(session: DeliverySession, formattedMessage: string, noEnter: boolean): boolean | Promise<boolean>;
+  writeMessage(
+    session: DeliverySession,
+    formattedMessage: string,
+    noEnter: boolean,
+    /**
+     * The mailbox row this write is for.
+     *
+     * Carried so a thread transport can recognise its OWN previous, unacknowledged
+     * attempt after a Tower restart. It cannot be recovered from the message text: two
+     * identical messages to one agent are ordinary, and matching on text let a stale
+     * intent answer for the current one. The PTY path ignores it.
+     */
+    rowId?: string,
+  ): boolean | Promise<boolean>;
   /** Emit the delivered-message broadcast frame. */
   broadcast(frame: DeliveredBroadcast): void;
   /**
@@ -460,21 +509,100 @@ export async function deliverAgentMail(
       ports.onHeldStateChange();
       return { delivered: [], reason: null };
     }
-    let written = false;
-    try {
-      written = await ports.writeMessage(session, current.formatted_message, current.no_enter === 1);
-    } catch {
-      written = false;
-    }
-    if (!written) return hold('no-live-pty');
-    if (!markDelivered(db, row.id, ports.now())) {
+    // A `--no-enter` row can NEVER be delivered to a thread, and holding it is worse
+    // than refusing it.
+    //
+    // `--no-enter` means "put this in the composer and leave it for a human". A thread
+    // has no composer: `thread.turn.start` IS the submit. `writeMessage` refuses it —
+    // correctly, because submitting a message sent to sit would run it. But a refusal
+    // that holds under a retryable reason is retried on every drain tick, re-logs at
+    // ERROR each time, and eventually raises a STARVATION NOTICE: a message to a human
+    // saying mail is stuck, with no remedy that applies, because no action of theirs
+    // can give a thread a composer. That is #190 — a notice promising something
+    // unreachable.
+    //
+    // So it ends here, once, loudly, and with everything a sender needs to re-send it
+    // by another route. `dismissed` is the terminal state that preserves the row and its
+    // reason for audit; the alternative was leaving it eligible forever.
+    if (!threadCanHonourNoEnter(current.no_enter === 1)) {
+      ports.log(
+        `[mailbox] TERMINAL: message ${row.id} from ${current.from_agent ?? 'unknown'} to ${toAgent} `
+        + `@ ${path.basename(workspacePath)} was sent --no-enter, and ${toAgent} is thread-backed. `
+        + `${THREAD_HAS_NO_COMPOSER} `
+        + `Dismissed rather than held: no retry can change this, and holding it would raise a `
+        + `starvation notice with no remedy. ${THREAD_NO_ENTER_REMEDY}`,
+      );
+      dismiss(db, row.id, ports.now());
       ports.onHeldStateChange();
       return { delivered: [], reason: null };
     }
-    ports.broadcast(broadcastForRow(current, ports.now()));
-    ports.onHeldStateChange();
-    ports.log(`[mailbox] delivered ${row.id} → ${toAgent} @ ${path.basename(workspacePath)} (thread)`);
-    return { delivered: [row.id], reason: null };
+    // THE TICK DOES NOT AWAIT THE SUBMISSION.
+    //
+    // `MailboxDrainer.tick` walks agents sequentially, and a thread submission is
+    // `thread.turn.start` over RPC — bounded at 30 s by the client, not by anything here.
+    // Awaiting it stalled delivery for EVERY agent in EVERY workspace, PTY-only ones
+    // included, on a server that had connected fine and then went quiet. Moving the
+    // CONNECT off the tick fixed one path to that stall; this is the other one, and it is
+    // the one that survives a healthy connect.
+    //
+    // So the submission runs out of band and the tick moves on. The row stays held until
+    // the submission says otherwise, which is what held is for.
+    //
+    // WHY AN IN-FLIGHT GUARD AND NOT JUST FIRE-AND-FORGET: the row is still held, so the
+    // next tick 1.5 s later would pick it up and submit it AGAIN. One message, several
+    // turns. The guard is per agent, and it is the reason this is safe to not await.
+    const inFlightKey = agentKey(workspacePath, toAgent);
+    if (threadSubmissions.has(inFlightKey)) {
+      // Pending, not stuck: nothing is refused, so no reason is written. Inventing one
+      // here would be another word for a state that already has a true one.
+      return { delivered: [], reason: null };
+    }
+    const submission = (async () => {
+      let written = false;
+      try {
+        written = await ports.writeMessage(session, current.formatted_message, current.no_enter === 1, row.id);
+      } catch {
+        written = false;
+      }
+      if (!written) {
+        // NO REASON IS WRITTEN, and that is the honest answer rather than a missing one.
+        //
+        // `MailboxReason` is `busy | no-profile | no-live-pty` — three words about a PTY,
+        // pinned by a CHECK constraint on the mailbox table. Not one of them describes any
+        // state a thread transport can be in: there is no profile, no prompt to be busy,
+        // and no PTY to be missing. Writing `no-live-pty` here put a PTY diagnosis on a
+        // healthy thread-backed agent and the route then repeated it to the sender.
+        //
+        // So the row stays held with no reason, `afx send` renders that as "pending", and
+        // the four states this actually distinguishes are named in the log by
+        // `deliverToThread`. The missing word is #226's migration; inventing the nearest
+        // wrong one until then is what this used to do.
+        return;
+      }
+      if (!markDelivered(db, row.id, ports.now())) {
+        ports.onHeldStateChange();
+        return;
+      }
+      ports.broadcast(broadcastForRow(current, ports.now()));
+      ports.onHeldStateChange();
+      ports.log(`[mailbox] delivered ${row.id} → ${toAgent} @ ${path.basename(workspacePath)} (thread)`);
+    })();
+    // Every outcome swallowed, and the key cleared either way. This promise is never
+    // awaited by anyone, so a rejection escaping it would reach the tower-server's
+    // `unhandledRejection` handler and exit(1) — taking Tower and every terminal with it.
+    threadSubmissions.set(
+      inFlightKey,
+      submission.then(
+        () => { threadSubmissions.delete(inFlightKey); },
+        (err: unknown) => {
+          threadSubmissions.delete(inFlightKey);
+          ports.log(`[mailbox] thread submission for ${toAgent} @ ${path.basename(workspacePath)} threw: ${String(err)}`);
+        },
+      ),
+    );
+    // Held, unchanged, and the next tick either finds it delivered or finds the
+    // submission still running.
+    return { delivered: [], reason: null };
   }
 
   const profile = ports.resolveProfile(session);
@@ -615,6 +743,27 @@ export async function deliverAgentMail(
  * fully written its text + Enter (see {@link KeyedSerializer}).
  */
 const deliverySerializer = new KeyedSerializer();
+
+/**
+ * Thread submissions the tick started and did not wait for, keyed by agent.
+ *
+ * One entry means "a `thread.turn.start` for this agent is in flight". It exists so the
+ * next tick does not submit the same held row a second time — the row is still held while
+ * the first submission runs, and without this guard 1.5 s later it would be sent again.
+ *
+ * Cleared on settle, whichever way it settles.
+ */
+const threadSubmissions = new Map<string, Promise<void>>();
+
+/** Drop every in-flight marker. For a test's teardown, not for production. */
+export function clearThreadSubmissions(): void {
+  threadSubmissions.clear();
+}
+
+/** Whether a thread submission is currently in flight for this agent. */
+export function hasThreadSubmissionInFlight(workspacePath: string, toAgent: string): boolean {
+  return threadSubmissions.has(agentKey(workspacePath, toAgent));
+}
 
 /**
  * {@link deliverAgentMail}, serialized per agent through the shared
@@ -800,6 +949,22 @@ export class MailboxDrainer {
       for (const key of this.recoveryState.keys()) {
         if (!agents.has(key)) this.recoveryState.delete(key);
       }
+      // NOTHING ON THIS LOOP MAY BE AWAITED THAT WAITS ON A NETWORK, A DISK, OR A
+      // PROVIDER.
+      //
+      // This walks every agent in every workspace SEQUENTIALLY, so anything slow here is
+      // slow for all of them — including PTY-only workspaces that opted into none of it.
+      // Issue #219 removed three such things in three separate rounds, each found only
+      // after it had been added: a t3code connect (bounded at 15 s per stage, which is
+      // what made the stall long), a `thread.turn.start` (bounded at 30 s by the RPC
+      // client), and a `realpathSync` on every engine lookup.
+      //
+      // The shapes that are safe here: a map lookup, a synchronous DB read, a config read
+      // from disk when nothing else will do. The shape that is not: an await whose
+      // duration is set by something outside this process. Start that work in the
+      // background, hold the row, and let a later tick find it done — the row is held for
+      // exactly this, and `requestThreadBackend` is synchronous by construction so that
+      // this rule cannot be broken by forgetting it.
       for (const [key, { workspacePath, toAgent }] of agents) {
         if (this.generation !== gen) return; // stop() ran mid-tick → bail before more work
         // Isolate each agent's pass (CMAP round 3 — Claude): a throw from classify/writeMessage/DB
