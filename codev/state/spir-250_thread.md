@@ -68,3 +68,23 @@ silently dropped from the round.
 
 Both producers confirmed alive before waiting: `consult -m claude` (pid 34003) and
 `consult -m opencode` → `opencode run -m xai/grok-4.6` (pids 38846/38936).
+
+### Fix for the opencode lane
+
+Root cause found rather than worked around: opencode auto-rejects `external_directory`
+permission requests, and the plan cites `/Users/chris/dev/t3code` throughout, so the reviewer
+died mid-run on the first read outside the worktree — twice, both times exiting 0 with no file.
+
+`opencode run --auto` exists but the consult lane does not pass it. `OPENCODE_CONFIG_CONTENT`
+does the same job scoped to a single invocation, verified directly:
+
+    OPENCODE_CONFIG_CONTENT='{"permission":{"external_directory":"allow"}}' \
+      opencode run -m xai/grok-4.6 -- 'Read /Users/chris/dev/t3code/package.json ...'
+    → pnpm@11.10.0
+
+Stated plainly: `external_directory: allow` grants *any* external directory for that process, not
+just the t3code clone. Acceptable for a read-only review lane on this machine; it is not a narrow
+grant and is not described as one. No global config was edited.
+
+Worth raising with the architect separately: the consult opencode lane exiting 0 with no verdict
+after a permission rejection is a lane bug, not a spec-250 problem. Two runs, same shape.
