@@ -362,3 +362,28 @@ The token-leak assertion walks every file under the scratch root rather than che
 variable, because the leak this guards against is the one nobody remembered to redact.
 
 Suite: 7003 passing, 0 failing.
+
+### Phase 3 iteration 1 — APPROVE + COMMENT
+
+opencode APPROVE, claude COMMENT. No blockers; I took five of the six notes.
+
+The one that matters is claude's: **`pairRevoke` could report a failure for something that had
+already succeeded.** The credential tombstone is written first, then the approval capability
+store is read — so an unreadable approval store threw straight out with nothing printed. The
+operator saw "the command failed" for a revocation that HAD happened, and a re-run then answered
+"nothing live to revoke", which reads as "it was never paired". That is reporting one outcome
+while another occurred, in the command written to fix exactly that asymmetry. It now prints what
+did happen first and raises `PAIR_REVOKE_PARTIAL` naming which half failed.
+
+Also fixed: my corruption `it.each` had **one row whose second element was never used** — a table
+shaped like coverage that covered one case; four subcommand/store pairs are now exercised. Added
+a test that drives the default root through `CODEV_AGENT_FARM_DIR`, since every other test injects
+a path and a rename of a default subdirectory would leave them green and production wrong.
+`stores()` uses `path.join`. `--ttl-minutes abc` is refused by name instead of surfacing the
+store's `PAIRING_TTL_INVALID`. The leak assertion now checks the secret is absent from every
+output line except the token line, rather than matching a shape.
+
+Deferred with agreement: the new `PAIR_*` codes are not in the failure-matrix collector's scanned
+file list. Criterion 19 is assigned to phases 4 and 7, and claude said to track it there.
+
+Suite: 7008 passing, 0 failing.

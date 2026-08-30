@@ -43,6 +43,7 @@
  */
 
 import { userInfo } from 'node:os';
+import { join } from 'node:path';
 import { MachineCredentialStore, type StoredMachineCredential } from '../lib/machine-credentials.js';
 import {
   PairingStore,
@@ -70,9 +71,9 @@ export interface PairCommandOptions {
 function stores(options: PairCommandOptions) {
   const root = options.root;
   return {
-    pairings: new PairingStore(root ? { root: `${root}/pairing` } : {}),
-    machines: new MachineCredentialStore(root ? { root: `${root}/machines` } : {}),
-    capabilities: new ApprovalCapabilityStore(root ? { root: `${root}/approval` } : {}),
+    pairings: new PairingStore(root ? { root: join(root, 'pairing') } : {}),
+    machines: new MachineCredentialStore(root ? { root: join(root, 'machines') } : {}),
+    capabilities: new ApprovalCapabilityStore(root ? { root: join(root, 'approval') } : {}),
   };
 }
 
@@ -184,6 +185,17 @@ export function pairIssue(input: PairIssueInput, options: PairCommandOptions = {
     );
   }
   const authority = input.authority?.trim() ?? defaultAuthority();
+
+  // `parseInt('abc')` is NaN, which reaches the store and surfaces as
+  // PAIRING_TTL_INVALID — a code about the store for a typo in an argument.
+  // Refused here, where the operator can see what they typed.
+  if (input.ttlMinutes !== undefined && (!Number.isFinite(input.ttlMinutes) || input.ttlMinutes <= 0)) {
+    throw new PairCommandError(
+      'PAIR_TTL_INVALID',
+      `--ttl-minutes must be a positive number of minutes; got "${String(input.ttlMinutes)}". `
+      + 'The default is 10 and the maximum is 60.',
+    );
+  }
 
   const { pairings } = stores(options);
   const issued = readStore('pairing', () => pairings.issue({
@@ -307,10 +319,41 @@ export function pairRevoke(machine: string, options: PairCommandOptions = {}): P
     throw new PairCommandError('PAIR_MACHINE_REQUIRED', 'name the machine to revoke.');
   }
   const { machines, capabilities } = stores(options);
-  const credentialRevoked = readStore('machine credential', () => machines.revoke(name));
-  const approvalCapabilitiesRevoked = readStore('approval capability', () => capabilities.revokeMachine(name));
-
   const write = out(options);
+
+  const credentialRevoked = readStore('machine credential', () => machines.revoke(name));
+
+  /*
+   * THE CREDENTIAL IS ALREADY REVOKED BY THIS POINT, AND THAT CHANGES WHAT A
+   * FAILURE HERE MAY SAY.
+   *
+   * The two stores are revoked in sequence, so an unreadable approval store used
+   * to throw straight out of this function — the operator saw a failure for a
+   * revocation that HAD happened, and a re-run then answered "nothing live to
+   * revoke", which reads as "it was never paired". One outcome reported while
+   * another occurred, which is the failure this whole spec is organised against.
+   *
+   * So what did happen is printed FIRST, and only then is the half that failed
+   * raised, saying which half it was.
+   */
+  let approvalCapabilitiesRevoked: number;
+  try {
+    approvalCapabilitiesRevoked = readStore('approval capability', () => capabilities.revokeMachine(name));
+  } catch (error) {
+    write(`machine    ${name}`);
+    write(`credential ${credentialRevoked ? 'revoked' : 'nothing live to revoke'}`);
+    write('approvals  NOT WITHDRAWN — the approval capability store could not be read');
+    write('');
+    write('The credential half is done and will not need repeating. The approval half is');
+    write('not: that machine may still hold a live capability. Fix the store and run this');
+    write('again — revoking twice is safe and reports the credential as already withdrawn.');
+    throw new PairCommandError(
+      'PAIR_REVOKE_PARTIAL',
+      `${name}'s credential was revoked, but its approval capabilities were NOT: `
+      + `${(error as Error).message}`,
+    );
+  }
+
   write(`machine    ${name}`);
   write(`credential ${credentialRevoked ? 'revoked' : 'nothing live to revoke'}`);
   write(`approvals  ${approvalCapabilitiesRevoked} capability record(s) revoked`);

@@ -146,6 +146,45 @@ describe('afx pair issue', () => {
     for (const file of walk(root)) {
       expect(readFileSync(file, 'utf8'), `${file} contains the token secret`).not.toContain(secret);
     }
+
+    // And the secret appears on the token line and NOWHERE ELSE in the output —
+    // asserted over the rest of the stream rather than by matching a shape, so a
+    // future line that echoed it back would fail here.
+    const elsewhere = printed.lines.filter((line) => line !== token).join('\n');
+    expect(elsewhere).not.toContain(secret);
+  });
+
+  /*
+   * THE DEFAULT ROOT IS EXERCISED, not just the injected one. Every other test
+   * hands `stores()` a scratch path, so a change to a default subdirectory name
+   * would leave them all green while production wrote somewhere else.
+   */
+  it('honours CODEV_AGENT_FARM_DIR when no root is injected', () => {
+    const root = scratch();
+    const previous = process.env.CODEV_AGENT_FARM_DIR;
+    process.env.CODEV_AGENT_FARM_DIR = root;
+    try {
+      pairIssue({ purpose: 'client-session' }, { write: () => {} });
+      // Read back through a store pointed at the SAME subdirectory the command
+      // chose, so the two agree about where the pairing store lives.
+      expect(new PairingStore({ root: join(root, 'pairing') }).records()).toHaveLength(1);
+    } finally {
+      if (previous === undefined) delete process.env.CODEV_AGENT_FARM_DIR;
+      else process.env.CODEV_AGENT_FARM_DIR = previous;
+    }
+  });
+
+  it('refuses a --ttl-minutes that is not a number, naming the argument', () => {
+    const root = scratch();
+    // `parseInt('abc')` is NaN and used to reach the store, which answered
+    // PAIRING_TTL_INVALID — a code about the store, for a typo in an argument.
+    try {
+      pairIssue({ purpose: 'client-session', ttlMinutes: Number.NaN }, { root, write: () => {} });
+      expect.unreachable('a non-numeric ttl must be refused');
+    } catch (error) {
+      expect((error as PairCommandError).code).toBe('PAIR_TTL_INVALID');
+      expect((error as Error).message).toContain('--ttl-minutes');
+    }
   });
 });
 
@@ -322,19 +361,79 @@ describe('a store that will not parse is its own answer', () => {
    * different remedies, and reporting the first as the second is the failure this
    * whole spec is organised against.
    */
-  it.each([
-    ['pairing', () => pairList],
-  ])('reports %s corruption rather than emptiness', (_name) => {
-    const root = scratch();
+  function corruptPairingStore(root: string): void {
     mkdirSync(join(root, 'pairing'), { recursive: true });
     writeFileSync(join(root, 'pairing', 'tokens.json'), '{ not json');
+  }
+
+  function expectUnreadable(run: () => void, what: string): void {
     try {
-      pairList({ root, write: () => {} });
-      expect.unreachable('an unparseable store must not read as empty');
+      run();
+      expect.unreachable(`${what}: an unparseable store must not read as empty`);
     } catch (error) {
-      expect((error as PairCommandError).code).toBe('PAIR_STORE_UNREADABLE');
+      expect((error as PairCommandError).code, what).toBe('PAIR_STORE_UNREADABLE');
       expect((error as Error).message).toContain('not "nothing is there"');
     }
+  }
+
+  /*
+   * EVERY SUBCOMMAND, not one. The first version of this was an `it.each` with a
+   * single row whose second element was never used — a table shaped like coverage
+   * that covered one case. `issue` and `list` both read the pairing store, and
+   * either reporting an empty one is the same wrong answer.
+   */
+  it('reports a corrupt pairing store from list rather than emptiness', () => {
+    const root = scratch();
+    corruptPairingStore(root);
+    expectUnreadable(() => pairList({ root, write: () => {} }), 'list');
+  });
+
+  it('reports a corrupt pairing store from issue rather than minting into it', () => {
+    const root = scratch();
+    corruptPairingStore(root);
+    expectUnreadable(
+      () => pairIssue({ purpose: 'client-session' }, { root, write: () => {} }),
+      'issue',
+    );
+  });
+
+  it('reports a corrupt machine store from list rather than "no machines"', () => {
+    const root = scratch();
+    const machines = new MachineCredentialStore({ root: join(root, 'machines') });
+    machines.issue({ machine: 'ipad' });
+    const file = readdirSync(join(root, 'machines')).find((entry) => entry.endsWith('.json'))!;
+    writeFileSync(join(root, 'machines', file), '{ not json');
+    expectUnreadable(() => pairList({ root, write: () => {} }), 'list');
+  });
+
+  /*
+   * THE PARTIAL-FAILURE CASE, which is the one that can report an outcome that
+   * did not happen. The credential is revoked BEFORE the approval store is
+   * touched, so a failure there used to throw with nothing printed — the operator
+   * saw "the command failed" for a revocation that had succeeded, and a re-run
+   * answered "nothing live to revoke", which reads as "never paired".
+   */
+  it('says what DID happen when only the approval half fails', () => {
+    const root = scratch();
+    new MachineCredentialStore({ root: join(root, 'machines') }).issue({ machine: 'ipad' });
+    mkdirSync(join(root, 'approval'), { recursive: true });
+    writeFileSync(join(root, 'approval', 'capabilities.json'), '{ not json');
+
+    const printed = capture();
+    try {
+      pairRevoke('ipad', { root, write: printed.write });
+      expect.unreachable('an unreadable approval store must be raised, not swallowed');
+    } catch (error) {
+      expect((error as PairCommandError).code).toBe('PAIR_REVOKE_PARTIAL');
+      expect((error as Error).message).toContain('credential was revoked');
+    }
+    // The operator is told the credential half is done, so a re-run's "nothing
+    // live to revoke" cannot be misread as "it was never paired".
+    expect(printed.text()).toContain('credential revoked');
+    expect(printed.text()).toContain('NOT WITHDRAWN');
+    // And it really is revoked, which is why saying otherwise would be false.
+    expect(new MachineCredentialStore({ root: join(root, 'machines') }).records()[0].revokedAt)
+      .toBeDefined();
   });
 
   it('reports a corrupt machine store from revoke rather than "no such machine"', () => {
