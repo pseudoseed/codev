@@ -299,6 +299,33 @@ before the retry lands, so the retry legitimately starts a new one and the test 
 recovery rather than a claim of one: the outcome observed is the ORIGINAL operation's, and
 exactly one operation exists for the episode, so the checks did not run twice.
 
+## Change the type and let the compiler enumerate the callers
+
+The fourth fail-open was not reasoned out. It was found by making `machine` a **required**
+parameter and reading the three errors that appeared.
+
+**Those errors were the evidence, not the consequence.** `AgentAuthOutcome.machine` and
+`verify().machine` are both typed `string | undefined`, so the optional parameter had been
+silently accepting exactly the values that cannot be bound — and each error named a caller that
+had been relying on it.
+
+The stronger half is exhaustiveness. The four fail-opens in this project were found by two review
+lanes, one instruction from the architect, and one grep. **Not one of those methods enumerates.**
+They sample: a lane reads what it reads, a grep matches the shapes you thought to write, and an
+instruction points at the instance in view. A type change asks every call site at once and returns
+the complete list — and cannot miss one.
+
+That also explains why this took nine rounds to finish. The defect was a property of a *construct*
+that appears everywhere, and it was being sampled one instance at a time. **Each fix looked
+complete because, for its instance, it was.**
+
+So: when a value must be present for a rule to hold, express that in the type rather than in a
+check. A check tests one call site. A type interrogates all of them.
+
+The corollary is why a sentinel was used where a value can genuinely be absent: a conditional
+would have restored the shape the type had just removed. Four fail-opens, all conditionals, is a
+fact about the construct rather than four separate lapses of attention.
+
 ## Absent read as permitted, four times
 
 The single most repeated defect in this project, and it took four instances before it was named as
@@ -581,6 +608,21 @@ Measured at `fs.readFileSync` rather than asserted: 12 reads per workspace per m
 the test failing at 12 when the cache is disabled. The known limit is stated in the code: identical
 size *and* identical mtime read as unchanged, which every mtime cache carries and which the
 alternative is the read it exists to avoid.
+
+## Which lane did not see the final head
+
+**Codex did not review `5de421de0`.** It was out of quota for round 9 ("You've hit your usage
+limit").
+
+Codex ran eight rounds on this PR and produced findings in every one of them, including all three
+fail-opens, the session/machine binding hole, the receipt in the query string, and the
+different-gate false success. Its absence on the final head is a real gap in the evidence behind
+this work, not a formality: **the lane that found the most here did not see the last change.**
+
+Round 9 was also short a second verdict. The opencode lane reviewed, dispatched two sub-agents,
+reported both complete, and emitted no verdict line — its fourth such failure, logged on #248. So
+a 16,401-line PR was approved on **one** real verdict rather than three, and that is recorded here
+rather than implied away.
 
 ## Flaky Tests
 
