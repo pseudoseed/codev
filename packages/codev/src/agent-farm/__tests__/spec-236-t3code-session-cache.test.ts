@@ -24,6 +24,14 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { GLOBAL_SCHEMA } from '../db/schema.js';
 import { applyFrame, T3codeSessionCache } from '../servers/t3code-session-cache.js';
+import {
+  buildAgentProtocolSnapshot,
+  HumanPairedSessionRegistry,
+  type AgentRouteContext,
+} from '../servers/agent-routes.js';
+import { ApprovalCapabilityStore, ApprovalNonceStore } from '../lib/approval-capability.js';
+import { MachineCredentialStore } from '../lib/machine-credentials.js';
+import { PairingStore } from '../lib/pairing.js';
 import { clearThreadEngines } from '../thread-runtime.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 import type { LiveThreadSession } from '../servers/thread-registry.js';
@@ -376,6 +384,92 @@ describe('observedAt tracks subscription liveness, not event arrival', () => {
   });
 });
 
+describe('a status is never claimed that was not established', () => {
+  /*
+   * BOTH OF THESE SHIPPED IN THE FIRST CUT AND BOTH WERE FOUND BY REVIEW. They
+   * are the same defect from two directions: a word that asserts more than the
+   * process actually knows.
+   */
+
+  it('does not call a thread available before any frame has arrived', () => {
+    const workspace = tmp();
+    const held = heldStream();
+    const cache = cacheFor({ db: seededDb(workspace, ['th-1']), workspace, stream: held.stream });
+    cache.sweep();
+    // The subscription is open and has delivered nothing. Publishing the entry
+    // here reported `available` with an age of ~0 for a thread whose state
+    // nothing had seen — a claim to have observed something unobserved.
+    expect(cache.snapshot(workspace)).toEqual({ status: 'connecting' });
+
+    held.emit('th-1', snapshotFrame());
+    expect(cache.snapshot(workspace).status).toBe('available');
+  });
+
+  it('does not age a subscription that ended without ever delivering a frame', async () => {
+    const workspace = tmp();
+    const held = heldStream();
+    let clock = 1_000;
+    const cache = cacheFor({
+      db: seededDb(workspace, ['th-1']), workspace, stream: held.stream, now: () => clock,
+    });
+    cache.sweep();
+    held.end('th-1');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    clock += 10 * 60_000;
+    // Not `stale`: there is nothing to be stale. Stamping a time on the drop
+    // would turn "never seen" into "seen just now, then lost".
+    expect(cache.snapshot(workspace)).toEqual({ status: 'connecting' });
+  });
+
+  /*
+   * THE STATE EVERY REAL WORKSPACE IS IN. No row in `global.db` carries a
+   * `thread_id`, so a connected, healthy, correctly configured Tower reported
+   * "still connecting to t3code" for as long as it ran — the connector's word for
+   * a connect in flight, said after the connector had already answered `ready`.
+   */
+  it('reports a ready backend with no threads as available and empty, not connecting', () => {
+    const workspace = tmp();
+    const cache = cacheFor({ db: seededDb(workspace, []), workspace, stream: heldStream().stream });
+    cache.sweep();
+    const snapshot = cache.snapshot(workspace);
+    expect(snapshot.status).toBe('available');
+    expect(snapshot.status === 'available' && snapshot.threads).toEqual([]);
+  });
+
+  it('keeps connecting for a ready backend whose threads have not answered yet', () => {
+    const workspace = tmp();
+    const cache = cacheFor({ db: seededDb(workspace, ['th-1']), workspace, stream: heldStream().stream });
+    cache.sweep();
+    // Distinct from the case above: subscriptions ARE open and have not answered,
+    // which resolves on its own. "Nothing to watch" never will.
+    expect(cache.snapshot(workspace)).toEqual({ status: 'connecting' });
+  });
+});
+
+describe('against the real connector, not an injected one', () => {
+  /*
+   * Every other test here injects `availabilityFor`, which proves nothing about
+   * what `requestThreadBackend` does. The plan's deliverable is that a workspace
+   * with no `threads` block causes NO CONNECTION ATTEMPT — asserted by observing
+   * that none was attempted, not by observing the status alone.
+   */
+  it('starts nothing for a workspace with no threads configuration', () => {
+    const workspace = tmp();
+    const db = seededDb(workspace, ['th-1']);
+    const streamerFor = vi.fn(() => undefined);
+    const cache = new T3codeSessionCache({ db: () => db, log: () => {}, streamerFor });
+    cache.sweep();
+
+    // The real `requestThreadBackend` read the real (absent) config and answered
+    // `not-configured`, so the maintainer never reached the streamer at all — no
+    // subscription, no connect, and no cooldown entry to heal later.
+    expect(cache.snapshot(workspace)).toEqual({ status: 'not-configured' });
+    expect(streamerFor).not.toHaveBeenCalled();
+  });
+});
+
 describe('the thread set is re-read, not read once', () => {
   /*
    * A maintainer that reads `global.db` once at boot goes permanently blind to
@@ -426,5 +520,80 @@ describe('the thread set is re-read, not read once', () => {
     const cache = cacheFor({ db, workspace, stream: held.stream });
     cache.sweep();
     expect(held.subscribed()).toEqual(['th-architect', 'th-builder']);
+  });
+});
+
+/**
+ * THE WIRED-UP QUESTION, which is the one this initiative keeps getting wrong.
+ *
+ * Every test above drives the cache directly. This one drives what a client
+ * actually receives: the cache installed as `AgentRouteContext.t3codeSnapshot`,
+ * read through `buildAgentProtocolSnapshot`, exactly as the route does.
+ */
+describe('through buildAgentProtocolSnapshot, as the route builds it', () => {
+  function contextFor(db: Database.Database, cache: T3codeSessionCache, root: string): AgentRouteContext {
+    return {
+      db: () => db,
+      log: () => {},
+      isKnownWorkspace: () => true,
+      humanSessions: new HumanPairedSessionRegistry(),
+      approvalCapabilities: new ApprovalCapabilityStore({ root: join(root, 'approval'), machine: 'test' }),
+      approvalNonces: new ApprovalNonceStore({ root: join(root, 'approval') }),
+      machineCredentials: new MachineCredentialStore({ root: join(root, 'machines') }),
+      pairings: new PairingStore({ root: join(root, 'pairing') }),
+      t3codeSnapshot: (workspacePath) => cache.snapshot(workspacePath),
+    };
+  }
+
+  it('publishes an observed session on the row that carries the thread', () => {
+    const workspace = tmp();
+    const db = seededDb(workspace, ['th-1']);
+    const held = heldStream();
+    const cache = cacheFor({ db, workspace, stream: held.stream });
+    cache.sweep();
+    held.emit('th-1', snapshotFrame({ settledAt: '2026-08-30T10:00:00Z' }));
+
+    const { payload } = buildAgentProtocolSnapshot(contextFor(db, cache, tmp()), workspace);
+    expect(payload.protocol.t3code).toBe('available');
+    expect(payload.protocol.t3codeObservation?.ageMs).toBe(0);
+    const row = payload.protocol.identities.find((identity) => identity.threadId === 'th-1');
+    expect(row?.session).toEqual({ status: 'running', settled: true });
+  });
+
+  /*
+   * THE BOUND ON CRITERION 3, ASSERTED RATHER THAN DESCRIBED. Wiring the provider
+   * does not give a terminal-backed row a session, because such a row has no
+   * thread for one to attach to — and every real row in `global.db` is
+   * terminal-backed today. What the wiring buys is that this is now SAYABLE:
+   * `available` at the machine, no session on the row.
+   */
+  it('gives a terminal-backed row no session even when t3code is observed', () => {
+    const workspace = tmp();
+    const db = seededDb(workspace, ['th-1']);
+    db.prepare(`
+      INSERT INTO builders (workspace_path, id, name, worktree, branch, terminal_id, spawned_by_architect)
+      VALUES (?, 'builder-pty', 'builder-pty', ?, 'builder/pty', 'term-pty', 'main')
+    `).run(workspace, join(workspace, '.builders', 'pty'));
+    const held = heldStream();
+    const cache = cacheFor({ db, workspace, stream: held.stream });
+    cache.sweep();
+    held.emit('th-1', snapshotFrame());
+
+    const { payload } = buildAgentProtocolSnapshot(contextFor(db, cache, tmp()), workspace);
+    expect(payload.protocol.t3code).toBe('available');
+    const terminalRow = payload.protocol.identities.find((identity) => identity.roleId === 'builder-pty');
+    expect(terminalRow?.backing).toBe('terminal');
+    expect(terminalRow?.session).toBeUndefined();
+  });
+
+  it('publishes not-configured through the route for a workspace naming no server', () => {
+    const workspace = tmp();
+    const db = seededDb(workspace, []);
+    const cache = new T3codeSessionCache({ db: () => db, log: () => {} });
+    cache.sweep();
+    const { payload } = buildAgentProtocolSnapshot(contextFor(db, cache, tmp()), workspace);
+    // NOT `not-provided`: a provider is wired and it answered. The two are
+    // different facts and this is the seam where they used to be one.
+    expect(payload.protocol.t3code).toBe('not-configured');
   });
 });

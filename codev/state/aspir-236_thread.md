@@ -252,3 +252,40 @@ is a distinction nothing benefits from; a try/catch buys the same protection aga
 synchronous throw escaping the maintenance pass.
 
 Suite: 6967 passing, 0 failing. Client 205 passing.
+
+### Phase 2 iteration 1 — consultation
+
+Both lanes REQUEST_CHANGES, both HIGH, and they found the same two bugs independently. Both were
+real and both were the same defect from two directions: **a status word that asserted more than
+the process knew**.
+
+1. **An unobserved thread published as `available`.** The sweep created the cache entry when it
+   opened the subscription, seeded `observedAt` with the creation time, and `#observed` then read
+   that placeholder as an observation moments old. So between opening a subscription and the
+   first frame, the machine claimed to have observed a thread nothing had seen. `observedAt` is
+   now `undefined` until a frame lands, and an entry with none is not published. Also fixed the
+   drop path: a subscription that ended without ever delivering must not stamp a time, or "never
+   seen" becomes "seen just now, then lost".
+
+2. **A ready backend with no threads reported `connecting` forever.** This is the state *every
+   real workspace is in* — no row in `global.db` carries a `thread_id` — so a connected, healthy,
+   correctly configured Tower would have said "still connecting to t3code" for as long as it ran.
+   Saying the connector's word for a connect in flight after the connector has already answered
+   `ready` is exactly the collapse the eight-status set exists to prevent. Connected-with-nothing-
+   to-watch is now `available` with an empty thread list, and each row says why it has no session.
+
+   Keying that on `cache.threads.size` was my first fix and it was wrong: the map loses an entry
+   when its content is discarded for age, so a workspace that HAS a thread would have reported
+   having none — turning a discarded observation into an assertion that there is nothing to
+   observe. Keyed on the thread-id count from the sweep instead. The discard test caught it.
+
+Also added the two tests the plan named and I had skipped: the no-config case driven against the
+**real** `requestThreadBackend` (every other test injects `availabilityFor`, which proves nothing
+about it), and the integration through `buildAgentProtocolSnapshot` — which is the one that asks
+what a client actually receives, and which both lanes noted would have caught both bugs.
+
+Clarified the README: Tower emits seven of the eight statuses; `unreachable` is not one of them,
+because a failed connect becomes `cooling-down`, which says more. It stays in the vocabulary for
+a host that observes unreachability another way.
+
+Suite after fixes: 6975 passing, 0 failing.

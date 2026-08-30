@@ -212,13 +212,31 @@ how old that is. The read path performs no I/O.
 
 **What a row can now say, and what it still cannot.**
 
-`t3code` carries eight statuses rather than three, so a machine distinguishes
-*never asked* (`not-provided`) from *no server configured here*
-(`not-configured`), *half-configured* (`misconfigured`), *connecting*,
-*cooling-down* after a failed connect, *unreachable*, *observed*
-(`available`) and *observed but no longer watched* (`stale`). `stale` carries an
-age, and a row whose last-known content read as finished reports the age instead
-of `SETTLED` — "it had finished when I last looked" is not "it has finished".
+`t3code` carries eight statuses rather than three. Tower's provider emits seven
+of them:
+
+| Status | Means |
+|---|---|
+| `not-configured` | this workspace names no t3code server |
+| `misconfigured` | the `threads` block is half-written; carries which part |
+| `connecting` | a connect or a subscription is in flight and will resolve itself |
+| `cooling-down` | the last connect failed; carries when and why, and it will not retry until a timer passes |
+| `available` | observed — including "connected, and there is nothing here to watch" |
+| `stale` | observed, and no longer being watched; carries the age |
+
+The eighth, `unreachable`, is **not** produced by Tower: a failed connect becomes
+`cooling-down`, which says more. It stays in the vocabulary for a host that
+observes unreachability another way — `tools/codev-agent-host` wires no provider
+at all and reports `not-provided`, which is the ninth thing this set can say and
+the one that used to be the only thing.
+
+`connecting` and `cooling-down` are deliberately not folded into one another: the
+first resolves on its own and the second will not until a timer passes, which is
+the difference between "wait" and "go look at your server".
+
+`stale` carries an age, and a row whose last-known content read as finished
+reports the age instead of `SETTLED` — "it had finished when I last looked" is
+not "it has finished".
 
 Per row, session status and thread settledness travel separately, because t3code
 keeps them apart: a `stopped` session on a settled thread finished, and on an

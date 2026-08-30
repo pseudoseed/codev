@@ -88,9 +88,17 @@ const DEFAULT_SWEEP_MS = 5_000;
 interface CachedThread {
   readonly threadId: string;
   session?: LiveThreadSession;
-  /** While the subscription is up this advances; when it drops it stops. */
-  observedAt: number;
-  /** False once the stream ends or rejects. */
+  /**
+   * When a frame last arrived, or `undefined` while none ever has.
+   *
+   * UNDEFINED IS LOAD-BEARING. A sweep creates the entry the moment it opens a
+   * subscription, which is BEFORE the first frame. Seeding this with the creation
+   * time made that placeholder look like an observation moments old, so the
+   * snapshot answered `available` — a claim to have observed something nothing
+   * had observed yet. An entry is published only once a frame has landed.
+   */
+  observedAt?: number;
+  /** False before the first frame, and again once the stream ends or rejects. */
   watching: boolean;
 }
 
@@ -100,6 +108,24 @@ interface WorkspaceCache {
   availability: ThreadBackendAvailability;
   /** When each failure was first seen, so `cooling-down` can report a `since`. */
   coolingSince?: number;
+  /**
+   * When the thread set was last read out of `global.db`.
+   *
+   * This is a real observation even when the set is EMPTY — "connected, and this
+   * workspace has no thread-backed agents" is something this process checked, and
+   * it is the state every real workspace is in today.
+   */
+  threadsReadAt?: number;
+  /**
+   * How many thread ids that read found.
+   *
+   * KEPT SEPARATELY FROM `threads.size`, which is not the same number: the map
+   * loses an entry when its content is discarded for age, and keying "nothing to
+   * watch" on the map would then report a workspace that HAS a thread as having
+   * none — turning a discarded observation into an assertion that there is
+   * nothing to observe.
+   */
+  threadIdCount?: number;
 }
 
 export interface T3codeSessionCacheOptions {
@@ -276,17 +302,40 @@ export class T3codeSessionCache {
       return { status: 'misconfigured', message: availability.message };
     }
 
+    if (availability.kind === 'cooling-down') {
+      return {
+        status: 'cooling-down',
+        message: availability.message,
+        since: new Date(cache.coolingSince ?? availability.since).toISOString(),
+      };
+    }
+    if (availability.kind !== 'ready') return { status: 'connecting' };
+
     const threads = this.#observed(cache);
-    if (threads === null) {
-      // Nothing observed yet. Report why we are not observing, not an empty
-      // observation — an empty thread list would say "t3code has no threads".
-      if (availability.kind === 'cooling-down') {
-        return {
-          status: 'cooling-down',
-          message: availability.message,
-          since: new Date(cache.coolingSince ?? availability.since).toISOString(),
-        };
+    if (threads.length === 0) {
+      /*
+       * READY WITH NOTHING TO WATCH IS NOT "CONNECTING".
+       *
+       * This returned `connecting` for any empty result, and that is the state
+       * EVERY REAL WORKSPACE IS IN: no row in `global.db` carries a `thread_id`,
+       * so a connected, healthy, correctly configured Tower reported "still
+       * connecting to t3code" for as long as it ran. Saying the connector's word
+       * for a connect in flight when the connector has already said `ready` is
+       * exactly the collapse the eight-status set exists to prevent.
+       *
+       * Connected with no threads is an observation — of the thread set, read
+       * from `global.db` on the sweep — so it is `available` with nothing in it.
+       * Each row then says why it has no session, which is the honest place for
+       * that answer: a row with no thread says so, and a row with one says t3code
+       * returned nothing for it.
+       */
+      if (cache.threadIdCount === 0 && cache.threadsReadAt !== undefined) {
+        return { status: 'available', observedAt: new Date(cache.threadsReadAt).toISOString(), threads: [] };
       }
+      // Threads exist and none has content: either their subscriptions have not
+      // answered yet, or their content aged out and the next sweep will
+      // resubscribe. Both are a connect in flight one layer down, and unlike the
+      // case above both resolve on their own.
       return { status: 'connecting' };
     }
 
@@ -298,15 +347,20 @@ export class T3codeSessionCache {
   }
 
   /**
-   * The cached threads with their ages, or null when nothing is worth reporting.
+   * The threads that have actually been OBSERVED, with their ages.
+   *
+   * An entry with no `observedAt` has an open subscription that has not delivered
+   * a frame, and it is skipped rather than published: publishing it would report
+   * a thread whose state nothing has seen, under a status that claims observation.
    *
    * Entries past the discard window are dropped here rather than published with a
    * large age: content that old is a wrong answer wearing a disclaimer.
    */
-  #observed(cache: WorkspaceCache): Array<{ thread: LiveThread; ageMs: number }> | null {
+  #observed(cache: WorkspaceCache): Array<{ thread: LiveThread; ageMs: number }> {
     const now = this.#now();
     const observed: Array<{ thread: LiveThread; ageMs: number }> = [];
     for (const [threadId, entry] of cache.threads) {
+      if (entry.observedAt === undefined) continue;
       const ageMs = entry.watching ? 0 : now - entry.observedAt;
       if (ageMs >= this.#discardAfterMs) {
         cache.threads.delete(threadId);
@@ -317,7 +371,7 @@ export class T3codeSessionCache {
         ageMs,
       });
     }
-    return observed.length === 0 ? null : observed;
+    return observed;
   }
 
   /** Start the maintenance loop. Idempotent. */
@@ -388,9 +442,16 @@ export class T3codeSessionCache {
     if (!streamer) return;
 
     const threadIds = this.#threadIds(workspacePath);
+    // Stamped even when the set is EMPTY: "connected, and this workspace has no
+    // thread-backed agents" is a fact this pass established, and it is what
+    // distinguishes it from a workspace the maintainer has never reached.
+    cache.threadsReadAt = this.#now();
+    cache.threadIdCount = threadIds.length;
     for (const threadId of threadIds) {
       if (!cache.threads.has(threadId)) {
-        cache.threads.set(threadId, { threadId, observedAt: this.#now(), watching: false });
+        // No `observedAt`: nothing has been observed yet, and seeding one here is
+        // what made an unobserved thread publish as `available`.
+        cache.threads.set(threadId, { threadId, watching: false });
       }
       this.#ensureSubscribed(key, threadId, streamer.stream);
     }
@@ -461,7 +522,12 @@ export class T3codeSessionCache {
       // when the answer stopped being observed rather than from when it was last
       // asked for.
       entry.watching = false;
-      entry.observedAt = this.#now();
+      // Only if something WAS observed. A subscription that ended without ever
+      // delivering a frame leaves nothing to age, and stamping a time here would
+      // turn "never seen" into "seen just now, then lost".
+      if (entry.session !== undefined || entry.observedAt !== undefined) {
+        entry.observedAt = this.#now();
+      }
       this.options.log('INFO', `t3code subscription for ${threadId} ended: ${reason}`);
     };
 
