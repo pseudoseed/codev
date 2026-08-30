@@ -38,6 +38,20 @@ The restarts were free for Phase 10, whose deliverable is a *recorded start*. Th
 for the phase that needs the elapsed result, which is why this one is left alone: **it is not
 restarted again, including for tidiness after the PR merges.**
 
+## This run lives somewhere it should not
+
+The process, the server on 3805 and the evidence path are all inside `.builders/air-235/`, and
+the normal completion path for a builder worktree is `afx cleanup`, which removes it. Today
+cleanup refuses on this worktree only because porch's post-merge state commits are stranded on the
+branch (#233) — so a day of evidence a later phase depends on is protected by an unrelated defect,
+in the command whose purpose is to delete that directory. When #233 is fixed the protection
+disappears silently.
+
+Filed as **#245**. The likely answer is that long-lived evidence should run outside any worktree
+in the first place: `T3_HARNESS_DIR` and the output path are already configurable.
+
+Until then: **do not `afx cleanup` air-235 and do not restart this run.**
+
 ## The 24-hour gate: started
 
 | | |
