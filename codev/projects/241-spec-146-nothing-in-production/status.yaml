@@ -38,7 +38,7 @@ gates:
       machine: chriss-MacBook-Pro.local
       caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
   dev-approval:
-    status: pending
+    status: approved
     requested_at: '2026-08-30T16:07:10.673Z'
     request:
       question: >-
@@ -71,13 +71,19 @@ gates:
         after `pnpm --filter @cluesmith/codev-artifact-canvas build` it passes. 7176 tests green.
 
         spec-241 suites: 32 passed | 1 skipped (live, needs T3_LIVE=1 + T3_NODE)
+    approved_at: '2026-08-30T16:27:46.429Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-30T16:27:46.429Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
   pr:
     status: pending
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-30T15:18:07.177Z'
-updated_at: '2026-08-30T16:20:22.323Z'
+updated_at: '2026-08-30T16:34:26.523Z'
 pr_history:
   - phase: implement
     pr_number: 258
