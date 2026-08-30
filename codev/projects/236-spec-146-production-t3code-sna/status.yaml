@@ -27,7 +27,13 @@ plan_phases:
 current_plan_phase: phase_7
 gates:
   pr:
-    status: pending
+    status: approved
+    approved_at: '2026-08-30T13:42:41.222Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-30T13:42:41.222Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
   verify-approval:
     status: pending
 iteration: 2
@@ -132,7 +138,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/aspir-236/codev/projects/236-spec-146-production-t3code-sna/236-phase_7-iter1-opencode.txt
         stated: true
 started_at: '2026-08-30T04:48:34.619Z'
-updated_at: '2026-08-30T10:47:24.405Z'
+updated_at: '2026-08-30T13:46:27.150Z'
 context_refreshes:
   - boundary: plan-phase:phase_2
     at: '2026-08-30T06:10:51.039Z'
@@ -157,3 +163,4 @@ pr_history:
     pr_number: 246
     branch: builder/aspir-236
     created_at: '2026-08-30T10:43:49.353Z'
+pr_ready_for_human: false
