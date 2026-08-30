@@ -22,6 +22,7 @@ import Database from 'better-sqlite3';
 import { GLOBAL_SCHEMA } from '../db/schema.js';
 import { enqueue, markDelivered, recentByAgent, RECENT_MESSAGE_BODY_LIMIT } from '../db/mailbox.js';
 import { readThreadRegistry } from '../servers/thread-registry.js';
+import { projectHierarchy } from '../servers/v2-projection.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
 
 const dirs: string[] = [];
@@ -210,5 +211,64 @@ describe('the snapshot the client reads', () => {
     // The rows are still published: a mailbox failure must not blank the tree.
     expect(snapshot.identities.map((identity) => identity.roleId).sort())
       .toEqual(['builder-air-234', 'main']);
+  });
+});
+
+/**
+ * THE BOUNDARY, PINNED BY A TEST RATHER THAN BY ONE CALL SITE.
+ *
+ * Message bodies are allowed on `/api/agent/v1/*`, which authenticates with a
+ * per-machine revocable credential. They are NOT allowed on the v2 and overview
+ * surfaces, which authenticate with Tower's shared key — `heldCount`, "count
+ * only, never message bodies" (`packages/types/src/api.ts`).
+ *
+ * Today that holds because `readThreadRegistry` has exactly one production
+ * caller. That is a convention, and a convention is what the next person adding
+ * a convenient field will not know about. This asserts the payload instead: the
+ * v2 projection is built over a workspace whose mailbox is full, and its
+ * serialised output is searched for the bodies.
+ *
+ * `V2Deps.heldByAgent` returning a boolean rather than rows is the structural
+ * reason it holds; if someone widens that to carry rows, this fails.
+ */
+describe('the v2 surface carries no message bodies', () => {
+  it('projects a workspace with a full mailbox and serialises none of it', () => {
+    const workspace = tmp();
+    const db = seeded(workspace);
+    const secret = 'THE-BODY-THAT-MUST-NOT-TRAVEL';
+    send(db, workspace, 'builder-air-234', secret, 1_000);
+    send(db, workspace, 'main', secret, 1_001);
+
+    // The agent surface DOES carry it — otherwise this test would pass simply
+    // because nothing was written anywhere.
+    const agentSurface = JSON.stringify(readThreadRegistry(db, workspace, []));
+    expect(agentSurface).toContain(secret);
+
+    const projection = projectHierarchy(Date.now(), {
+      listWorkspaces: () => [workspace],
+      discoverBuilders: () => [],
+      getBuilders: () => [{
+        id: 'builder-air-234',
+        name: 'builder-air-234',
+        worktree: join(workspace, '.builders', 'air-234'),
+        branch: 'builder/air-234',
+        status: 'running',
+        terminal_id: 'term-234',
+        spawned_by_architect: 'main',
+      }] as never,
+      getArchitects: () => [{ id: 'main', terminal_id: 'term-main' }] as never,
+      // A BOOLEAN. This is the structural reason bodies cannot reach v2.
+      heldByAgent: () => true,
+      sessionForRole: () => true,
+      sessionForTerminal: () => true,
+      terminalsForWorkspace: () => 1,
+      lastDataAt: () => Date.now(),
+      bytesWritten: () => 0,
+    });
+    db.close();
+
+    const v2Surface = JSON.stringify(projection);
+    expect(v2Surface).not.toContain(secret);
+    expect(v2Surface).not.toContain('"messages"');
   });
 });

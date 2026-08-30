@@ -165,6 +165,12 @@ away. The page carries per-machine credentials instead.
 create it and does not mint the credentials in it; an `afx pair` command for that
 does not exist yet and is tracked separately.
 
+**`origin` must be `https://` for anything that is not loopback.** A remote
+`http://` entry would send that machine's credential in the clear, so the proxy
+refuses it with `MACHINE_ORIGIN_REFUSED` rather than dialling it — a refusal that
+names the configuration, instead of the `UPSTREAM_GONE` that would report a
+mistake as a dead machine.
+
 Four problems, four answers — an absent file and a mistyped one need opposite
 next actions, so they never share one empty list:
 
@@ -177,21 +183,31 @@ next actions, so they never share one empty list:
 
 ### Reaching it from an iPad over a tailnet
 
+**Follow [`codev/resources/146-remote-access-runbook.md`](../../codev/resources/146-remote-access-runbook.md).**
+It is the canonical runbook for this spec, it carries the teardown, and it is
+the one that works.
+
+An earlier draft of this section listed `tailscale serve` and nothing else. That
+recipe **does not work**, and the reason is worth knowing before you improvise
+one: Tower's `isAllowedHost` accepts `localhost`, `127.0.0.1`, `::1`, and
+hostnames listed in `CODEV_TOWER_ALLOWED_ORIGINS` — a MagicDNS `.ts.net` name
+matches none of them, so the request is rejected before `/client/` is reached.
+`codev/experiments/39-https-on-a-phone/notes.md` records this.
+
+The runbook's two steps that a hand-rolled version misses:
+
 ```bash
-afx tower start                                   # or leave your running Tower alone
-tailscale serve --https=443 http://127.0.0.1:4100
-tailscale serve status                            # note the https://<host>.<tailnet>.ts.net URL
+export CODEV_TOWER_ALLOWED_ORIGINS=https://<host>.<tailnet>.ts.net
+afx tower restart          # Tower reads it in ITS process; exporting it in your
+                           # shell afterwards changes nothing, and the symptom is
+                           # a CORS failure while the variable looks correct
 ```
 
-Then open `https://<host>.<tailnet>.ts.net/client/` on the iPad. An iPad in
-portrait is 820px, which is a grid width rather than a paged one.
+Then open `https://<host>.<tailnet>.ts.net/client/`. An iPad in portrait is
+820px, which is a grid width rather than a paged one.
 
-Tear it down afterwards — leaving it up publishes a Tower to your whole tailnet:
-
-```bash
-tailscale serve --https=443 off
-tailscale serve status                            # must list nothing
-```
+Two runbooks for one spec drift, which is what happened here; that is why this
+section links rather than repeats.
 
 ## Tests
 

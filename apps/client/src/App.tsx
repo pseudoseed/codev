@@ -168,7 +168,22 @@ export function App() {
               className={`view-button${view === option ? ' is-current' : ''}`}
               data-view={option}
               aria-pressed={view === option}
-              onClick={() => setView(option)}
+              onClick={() => {
+                setView(option);
+                /*
+                 * THE URL FOLLOWS THE CLICK. Without this a link could open the
+                 * tree but a person who clicked to it copied an address bar
+                 * still pointing at the grid — the view they were looking at was
+                 * not the view they shared. `replaceState` rather than push, so
+                 * Back leaves the client instead of walking a toggle history.
+                 */
+                if (typeof window !== 'undefined') {
+                  const next = new URL(window.location.href);
+                  if (option === 'tree') next.searchParams.set('view', 'tree');
+                  else next.searchParams.delete('view');
+                  window.history.replaceState(null, '', next);
+                }
+              }}
             >
               {option === 'grid' ? 'Grid' : 'Tree'}
             </button>

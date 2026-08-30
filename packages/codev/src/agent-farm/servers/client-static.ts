@@ -38,6 +38,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import https from 'node:https';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -85,6 +86,42 @@ function machinesFile(): string {
   const override = process.env.CODEV_AGENT_FARM_DIR;
   const root = override ? path.resolve(override) : path.join(process.env.HOME ?? '', '.agent-farm');
   return path.join(root, 'client-machines.json');
+}
+
+/** Loopback, where plaintext never leaves the host. */
+function isLoopback(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+}
+
+/**
+ * Why an origin is CHECKED here rather than only dialled later.
+ *
+ * Two failures, both of which used to be spelled "that machine did not answer":
+ *
+ *   - `https://host` dialled with `http.request` reaches port 80 in cleartext
+ *     and fails, reporting a configuration mistake as a dead machine — the exact
+ *     conflation the rest of this module spends its comments avoiding. The proxy
+ *     now picks its module from the scheme, so https works.
+ *   - `http://` to a NON-LOOPBACK host sends a machine credential in cleartext
+ *     over whatever network is between here and there. The spec's constraint is
+ *     that all remote transport is HTTPS/WSS (spec 146, "Constraints"), so this
+ *     is refused rather than proxied, with its own signal.
+ */
+export function originProblem(origin: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return 'is not a URL';
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return `uses ${url.protocol}, and only http: and https: can be proxied`;
+  }
+  if (url.protocol === 'http:' && !isLoopback(url.hostname)) {
+    return 'is plaintext http: to a non-loopback host, which would send its machine '
+      + 'credential in the clear. Use https: for a remote machine.';
+  }
+  return null;
 }
 
 function wellFormed(value: unknown): value is ClientMachine {
@@ -246,16 +283,25 @@ function proxyToMachine(
     }));
     return;
   }
-  let target: URL;
-  try {
-    target = new URL(machine.origin);
-  } catch {
-    res.writeHead(502, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ signal: 'MACHINE_ORIGIN_MALFORMED', message: `${machine.id} has an unusable origin.` }));
+  const problem = originProblem(machine.origin);
+  if (problem !== null) {
+    // NOT 502, and not UPSTREAM_GONE. Nothing was dialled; this is a
+    // configuration answer, and reporting it as a dead machine sends an
+    // operator to restart a host that is fine.
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      signal: 'MACHINE_ORIGIN_REFUSED',
+      message: `The origin configured for "${machine.id}" ${problem}`,
+    }));
     return;
   }
-  const upstream = http.request({
+  const target = new URL(machine.origin);
+  const transport = target.protocol === 'https:' ? https : http;
+  const upstream = transport.request({
     host: target.hostname,
+    // `URL.port` is '' for a default port, which `request` reads as "use the
+    // module's default" — 443 for https, 80 for http. Passing it through is
+    // therefore correct for both, but only because the module now varies.
     port: target.port,
     path: rest,
     method: req.method,
@@ -293,6 +339,16 @@ export function serveClientStatic(
   const proxied = /^\/m\/([^/]+)(\/.*)$/.exec(`${url.pathname}${url.search}`);
   if (proxied) {
     proxyToMachine(req, res, proxied[1], proxied[2]);
+    return;
+  }
+  /*
+   * `/m`, `/m/`, and `/m/<id>` with no trailing path are PROXY paths that named
+   * no resource — not SPA routes. They missed the regex above and fell through
+   * to the shell, so a machine request got HTML and a 200 back. A request under
+   * this prefix is answered by the proxy or by a 404, never by the page.
+   */
+  if (url.pathname === '/m' || url.pathname.startsWith('/m/')) {
+    notFound(res);
     return;
   }
   if (req.method !== 'GET') {

@@ -134,10 +134,18 @@ export function keysMatch(presented: string, expected: string): boolean {
  * Routes intentionally reachable without the key. Kept deliberately narrow:
  * pre-auth liveness/version probes, the Tower launcher shell, and the React
  * dashboard's static assets (the page loads keyless, then authenticates its
- * own API/WebSocket calls with the key). Everything else requires the key.
+ * own API/WebSocket calls with the key).
  *
  * The privileged workspace `file` reader and every `api/` or `ws/` subpath are
  * explicitly excluded so a static-asset carve-out never exposes a data route.
+ *
+ * THE LIST IS NO LONGER GET-ONLY, and this sentence is here because the version
+ * of it that said "everything else requires the key" survived the change that
+ * made it false. Spec 146 Phase 12's `/m/<id>/*` proxy is public for every
+ * method — an approval is a POST — and it carries a per-machine credential
+ * instead of the shared key. The branch below states why in full. A reader
+ * trusting this paragraph over that branch would conclude the surface is
+ * narrower than it is.
  */
 export function isPublicRoute(method: string, pathname: string): boolean {
   /*

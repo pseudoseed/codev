@@ -22,6 +22,7 @@ import type http from 'node:http';
 import {
   CLIENT_CSP,
   isClientPath,
+  originProblem,
   readClientMachines,
   serveClientStatic,
   setClientDistRoot,
@@ -264,5 +265,70 @@ describe('the dispatcher and the key allowlist', () => {
 
   it('does not make the machine list writable by an unkeyed caller', () => {
     expect(isPublicRoute('POST', '/client/machines.json')).toBe(false);
+  });
+});
+
+/**
+ * WHICH ORIGINS MAY BE PROXIED, and why the check is here rather than in the
+ * dial.
+ *
+ * Both failures below used to be spelled `UPSTREAM_GONE`, "that machine did not
+ * answer" — a configuration mistake reported as a dead host, which sends an
+ * operator to restart something that is fine.
+ */
+describe('machine origins', () => {
+  it('accepts https anywhere and http on loopback', () => {
+    for (const origin of [
+      'https://box.tailnet.ts.net',
+      'https://10.0.0.4:4100',
+      'http://127.0.0.1:4100',
+      'http://localhost:4100',
+    ]) {
+      expect(originProblem(origin), origin).toBeNull();
+    }
+  });
+
+  /*
+   * The spec's constraint is that all remote transport is HTTPS/WSS, and the
+   * thing being carried is a machine credential. Plaintext to a remote host puts
+   * it on the wire.
+   */
+  it('refuses plaintext http to a non-loopback host, naming the credential', () => {
+    const problem = originProblem('http://box.tailnet.ts.net');
+    expect(problem).toContain('plaintext');
+    expect(problem).toContain('credential');
+  });
+
+  it.each(['ftp://host', 'file:///etc/passwd', 'not a url', ''])('refuses %s', (origin) => {
+    expect(originProblem(origin)).not.toBeNull();
+  });
+
+  it('answers a bad origin as a configuration refusal, never as a dead machine', () => {
+    writeMachines([{
+      id: 'remote', label: 'remote', origin: 'http://box.tailnet.ts.net',
+      workspacePath: '/w', credential: 'id.secret',
+    }]);
+    const out = makeRes();
+    serveClientStatic(makeReq('GET', '/m/remote/api/agent/v1/x'), out.res, url('/m/remote/api/agent/v1/x'));
+    const answer = JSON.parse(out.body()) as { signal: string; message: string };
+    expect(answer.signal).toBe('MACHINE_ORIGIN_REFUSED');
+    expect(answer.signal).not.toBe('UPSTREAM_GONE');
+    expect(out.status()).toBe(400);
+  });
+});
+
+/**
+ * A PROXY PATH THAT NAMED NO RESOURCE IS NOT AN SPA ROUTE.
+ *
+ * `/m`, `/m/` and `/m/<id>` miss the proxy regex, and the extensionless SPA
+ * fallback caught them — so a machine request was answered with the page, 200,
+ * and a client parsing HTML as JSON.
+ */
+describe('proxy paths that name nothing', () => {
+  it.each(['/m', '/m/', '/m/alpha'])('404s %s instead of serving the shell', (path) => {
+    const out = makeRes();
+    serveClientStatic(makeReq('GET', path), out.res, url(path));
+    expect(out.status()).toBe(404);
+    expect(out.body()).not.toContain('<div id="root">');
   });
 });

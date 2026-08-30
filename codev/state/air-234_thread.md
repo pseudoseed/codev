@@ -114,3 +114,96 @@ One failure was environmental: `bugfix-214-publish-scrub` fails until
 `e2e/two-machines.spec.ts` now opens `?view=tree`, because the grid is the default view and every
 criterion in that file is about machine boundaries and connection bands, which only the tree
 shows.
+
+## 3-way review (PR #237)
+
+`consult --type integration --issue 237`. My first three invocations died on a CLI mode conflict
+(`consult` refuses `--prompt-file` with `--type`) and produced nothing — including codex, so I had
+no evidence about its quota either way and said so rather than inheriting the assumption.
+
+| Lane | Verdict | Confidence |
+|---|---|---|
+| claude (opus 5) | COMMENT | HIGH (raised from MEDIUM after it verified finding 1) |
+| opencode (grok-4.6) | REQUEST_CHANGES | HIGH |
+| codex (gpt-5.6-sol) | REQUEST_CHANGES | HIGH |
+| gemini (agy) | **NO REVIEW** — lane skipped, `agy` exit 1, quota | — |
+
+Two real verdicts plus a named absence. A skipped lane is not an approval.
+
+### What they found, and what I did
+
+**1. The client threw away Tower's configuration sentence.** (opencode, HIGH; the best catch of the
+three.) The mount answers `{ signal, message, machines: [] }`; `loadMachines` accepted only a bare
+array, so all four configuration signals arrived as the generic "machine configuration is not a
+list of machines". And this is the **first-run path** — no `client-machines.json` is the normal
+state of a fresh install, so the generic sentence was the message most operators would ever see
+from the mount. The four-signal design died one layer below where I tested it.
+
+Fixed in `config.ts`, which now reads the envelope and shows the server's words; the bare array
+still works for the dev server and `scripts/serve.mjs`. Four unit tests plus a Playwright test that
+asserts the sentence reaches the page and the generic one does not.
+
+**2. The README's tailnet runbook does not work, and duplicated one that does.** (claude verified
+it against `codev/experiments/39-https-on-a-phone/notes.md:17,46`; codex flagged it
+independently.) `isAllowedHost` accepts loopback or hostnames in `CODEV_TOWER_ALLOWED_ORIGINS`; a
+MagicDNS `.ts.net` name matches neither, so my three-command recipe ends at a rejected Host.
+`codev/resources/146-remote-access-runbook.md` — the canonical runbook for this same spec — already
+carries the missing `export` and `afx tower restart`, and the reason the omission is hard to
+diagnose. The README section now links it and states why it does not repeat it.
+
+**3. An `https://` machine origin was reported as a dead machine.** (claude and codex.)
+`proxyToMachine` was `http.request` unconditionally; `new URL('https://host').port` is `''`, so it
+dialled port 80 in cleartext and failed as `UPSTREAM_GONE` — a configuration mistake spelled as a
+down host, the exact conflation this PR's comments spend their time avoiding. The proxy now picks
+its module from the scheme. Codex added the other half: plaintext `http://` to a **non-loopback**
+host would put a machine credential on the wire, against the spec's "all remote transport is
+HTTPS/WSS" (spec:368). That is now refused with `MACHINE_ORIGIN_REFUSED`, 400, before anything is
+dialled.
+
+**4. `isPublicRoute`'s docstring had become false.** (claude.) It still read "Everything else
+requires the key" directly above an all-methods `/m/*` branch. Corrected, and the correction says
+which sentence went stale and why, since that is the paragraph the next reader trusts.
+
+**5. Bare `/m`, `/m/` and `/m/<id>` returned the SPA shell.** (claude.) They missed the proxy regex
+and fell into the extensionless fallback, so a machine request got HTML with a 200. Now 404.
+
+**6. `client-dist` had no `npm pack` assertion** while `v2-dist` has had one since D14. (opencode.)
+A `files` entry that resolves to nothing is silently absent from the tarball, which is how a mount
+that works from a checkout ships broken. Added beside the v2 one.
+
+**7. Grid/Tree did not write `?view=`.** (opencode.) A link could open the tree, but clicking to it
+and copying the address gave the grid — the view you were looking at was not the view you shared.
+`replaceState`, so Back leaves the client rather than walking a toggle history.
+
+**8. The message-body boundary was held by one call site.** (claude, offered as follow-up; cheap
+enough to do now.) `readThreadRegistry` has exactly one production caller, which is a convention,
+and a convention is what the next person adding a convenient field will not know about. There is
+now a test that builds the v2 projection over a workspace with a full mailbox and asserts the
+serialised payload contains neither the bodies nor a `messages` key — and asserts the agent surface
+DOES carry them, so it cannot pass by nothing having been written.
+
+### What I did not do
+
+**Criterion 6 stays unmet.** Codex asked for the iPad run to be completed or the plan amended
+before merge. I cannot complete it and amending an approved plan is not mine to do. The architect's
+ruling stands: recorded unmet, with the runbook and its teardown both marked unexecuted.
+
+**`/m/<id>/*` still proxies any path on the configured origin** rather than only `/api/agent/v1/`.
+(opencode, integration note.) Narrowing it is defensible and I have left it, because the machine
+list is hand-configured today and the origins in it are the operator's own agent hosts; the
+reachability argument in `isPublicRoute` covers it. Worth revisiting when `afx pair` lands and the
+list stops being hand-written.
+
+**No WebSocket upgrade handling on the proxy.** (claude, integration note.) The agent surface is
+HTTP and SSE today. Noted rather than built.
+
+## The gap the reviews exposed in my own testing
+
+Every one of findings 1, 3 and 5 was reachable from the code I wrote and invisible to the tests I
+wrote, because I tested `serveClientStatic` directly and `loadMachines` against shapes I had
+already decided were the shapes. Before the reviews landed I had also added
+`spec-146-phase-12-client-mount.e2e.test.ts`, which binds a socket and drives the mount through
+Tower's real dispatcher with `isRequestAllowed` in front — that is what would have caught 5, and it
+did catch that a traversal escaping `/client/` is refused by the allowlist rather than the mount.
+It did not catch 1, because the client half was never in the loop. The Playwright test added for
+finding 1 closes that.

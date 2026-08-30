@@ -48,6 +48,38 @@ async function scrollWidth(page: Page): Promise<number> {
   return page.evaluate(() => document.documentElement.scrollWidth);
 }
 
+/*
+ * THE FIRST-RUN PATH, WHICH IS THE ONE MOST OPERATORS SEE.
+ *
+ * Tower's mount answers `{ signal, message, machines: [] }` when it has no
+ * machine list, and no `client-machines.json` is the normal state of a fresh
+ * install. The client used to reject that shape as "not a list of machines",
+ * replacing the server's specific reason with a generic one at exactly the
+ * moment a person needs to know what to do next.
+ *
+ * Served here by the harness rather than by Tower, because what is under test is
+ * the CLIENT's handling of the envelope; the mount's half is covered by
+ * `spec-146-phase-12-client-mount.e2e.test.ts` against the real dispatcher.
+ */
+test.describe("Tower's configuration sentence reaches the page", () => {
+  test('renders the server message instead of a generic one', async ({ page }) => {
+    const message = 'No machine list at /root/.agent-farm/client-machines.json. '
+      + 'Tower serves the client but has nothing to connect it to.';
+    await page.route('**/client/machines.json', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ signal: 'CLIENT_MACHINES_ABSENT', message, machines: [] }),
+    }));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${clientOrigin}/client/`);
+
+    const error = page.locator('.config-error');
+    await expect(error).toBeVisible({ timeout: 30_000 });
+    await expect(error).toContainText('client-machines.json');
+    await expect(error).not.toContainText('is not a list of machines');
+  });
+});
+
 test.describe('criterion 5: one pane per screen at 390px', () => {
   test('shows exactly one pane, with a pager, not a shrunken grid', async ({ page }) => {
     await openPhone(page);
