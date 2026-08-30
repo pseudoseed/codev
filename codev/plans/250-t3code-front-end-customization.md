@@ -61,12 +61,20 @@ same. So our column applier is that code verbatim; the only difference is **wher
 from** — a layer sequenced after `MigrationsLive` (`Migrations.ts:173`) rather than an entry in
 `migrationEntries`.
 
-That narrows the deviation a long way. It **still contradicts a spec assumption** — "t3code's
-server owns its own migrations; the added columns follow that mechanism" — because we skip the
-numbered registry, and that is the part worth a ruling. But it is the same SQL, the same guard and
-the same idempotence upstream itself relies on, so it is not a parallel mechanism. It is an
-Assumption, not a Constraint or a Baked Decision, and it is the assumption that produces the bug.
-Raised at the plan gate rather than changed quietly.
+That narrows the deviation to one question: registry membership. **Ruled by the architect on
+2026-08-30 — stay out of the numbered registry, and this supersedes the spec's risk row.** The
+reasoning, recorded because it is not the obvious answer: a number we occupy is a number upstream
+will eventually want, and that collision is silent. Two entries claiming `043` means one is
+skipped and its column never appears, which reads at runtime as "not recorded" rather than as a
+failed migration. The spec's own mitigation — "number ours far above upstream's range" — is
+obsolete for the same reason: a high number is still inside upstream's sequence and still collides
+once they reach it. A separate layer cannot collide at all.
+
+**The cost is real and is recorded rather than argued away:** our column addition never appears in
+upstream's migration history, so someone debugging a schema question reads `migrationEntries` and
+`effect_sql_migrations` and does not see ours. Mitigated by logging it once at start-up under a
+named signal, so "our columns were added" is observable somewhere rather than only inferrable from
+the schema itself.
 
 ### Two repositories, one PR
 
@@ -255,6 +263,12 @@ All in `/Users/chris/dev/t3code-codev`:
   itself is not touched.
 - `apps/server/src/orchestration/projector.ts` — read and write the columns.
 - `apps/server/src/orchestration/Schemas.ts` — re-export as the file already does.
+- **The columns must flow through the whole persistence path, not just the in-memory projector.**
+  Review round 1 caught the first draft naming too few modules; all four verified to exist:
+  - `apps/server/src/persistence/Services/ProjectionThreads.ts`
+  - `apps/server/src/persistence/Layers/ProjectionThreads.ts`
+  - `apps/server/src/orchestration/Layers/ProjectionPipeline.ts`
+  - `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts`
 - `packages/contracts/src/orchestration.test.ts` — decode cases.
 - `apps/server/src/orchestration/projector.codevHierarchy.test.ts` — new.
 - `apps/server/src/codev/schemaGuard.test.ts` — new.
@@ -275,6 +289,13 @@ This repository:
       stays where upstream put it and every future upstream migration still runs.
 - [ ] The guard is idempotent and safe to run on every start: present columns are left alone,
       absent ones are added, and running it twice changes nothing the second time.
+- [ ] **The guard logs once at start-up under a named signal** — `CODEV_SCHEMA_GUARD_APPLIED`
+      with the columns it added, and a distinct `CODEV_SCHEMA_GUARD_NOOP` when everything was
+      already present. This is the agreed mitigation for the one real cost of staying out of the
+      registry: our column addition is absent from upstream's migration history, so without a log
+      line it is inferrable only by reading the schema. Two signals, not one, because "added two
+      columns" and "had nothing to do" are different facts and a single line covering both is the
+      thing that makes the log useless.
 - [ ] `ALTER TABLE … ADD COLUMN` only. Nothing is rewritten, no table is recreated, no data is
       backfilled.
 - [ ] The **first draft's migration 900 is explicitly abandoned**, and `FORK.md` records why, so
@@ -282,6 +303,10 @@ This repository:
       safe under a watermark migrator.
 - [ ] `ThreadCreatedPayload` events already in the log decode with both fields defaulting to
       `null` — decoding **defaults**, never fails.
+- [ ] **Start-up layer ordering is stated, not left to construction order**, and asserted by a
+      test: `SqliteClient` → `MigrationsLive` → `CodevSchemaGuardLive` → the projection layers.
+      A repository query that runs before the guard reads a table without our columns, and the
+      failure would look like missing data rather than a boot-order bug.
 - [ ] Tests for this phase.
 
 #### Acceptance Criteria
@@ -387,6 +412,12 @@ In `/Users/chris/dev/t3code-codev`:
   **non-nullable** `gateRevision` defaulting to `0`. A `codev.gate.set` / `codev.gate.clear`
   command pair.
 - `packages/contracts/src/auth.ts` — `AuthCodevGateWriteScope = "codev:gate-write"`.
+- `apps/server/src/auth/RpcAuthorization.ts` — map the **new RPC method** to the new scope.
+- `apps/server/src/persistence/Services/ProjectionThreads.ts`,
+  `apps/server/src/persistence/Layers/ProjectionThreads.ts`,
+  `apps/server/src/orchestration/Layers/ProjectionPipeline.ts`,
+  `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` — the gate block and
+  `gateRevision` flow through the same four modules phase 2 threads the hierarchy columns through.
 - `apps/server/src/codev/schemaGuard.ts` — extended with the gate columns. Same mechanism as
   phase 2: guarded, idempotent, outside `migrationEntries`, watermark untouched.
 - `apps/server/src/orchestration/decider.ts` + `projector.ts` — allocate and enforce the revision.
@@ -404,19 +435,43 @@ This repository:
 - [ ] `gateRevision` is stored **separately from the block** and is a non-nullable high-water
       mark that only ever increases — including across a clear. Clearing is a write like any
       other and raises the mark.
-- [ ] The **server** allocates `gateRevision + 1` atomically and returns it. `codev-agent` sends
-      a gate write with no revision. A counter held in `codev-agent`'s memory is explicitly not
-      used: it resets on restart, and a reset counter renders every later gate as *no gate
-      pending*, which is a false negative exactly where a human is waiting.
-- [ ] A write whose revision does not **exceed** the mark is rejected. Equal is rejected, not
-      treated as idempotent. A retry of the same logical write becomes a new revision, which is
-      safe because the content is identical.
+- [ ] **The revision field is optional, and that is what makes allocation and stale-rejection
+      coexist.** The first draft asserted both "`codev-agent` sends no revision, the server
+      allocates" and "a write carrying a lower revision is rejected", which review round 1 
+      correctly called not implementable as written — if no write ever carries a revision, there
+      is nothing to reject and criterion 10 has nothing to deliver. Resolved as one rule:
+
+      | `revision` on the command | Server behaviour |
+      |---|---|
+      | absent — the normal path | allocate `gateRevision + 1` atomically, apply, return it |
+      | present — a replay, or a write from an older connection | apply **only if it exceeds** the current mark; otherwise refuse with `CODEV_GATE_REVISION_STALE` |
+
+      Equal is refused, not treated as idempotent. Criterion 10's stale write is exactly the
+      second row.
+- [ ] **The allocated revision is returned to the caller.** `dispatchCommand` resolves to
+      `{ commandId, result }` with `result` carrying the server's response
+      (`packages/porch-driver/src/commands.ts:310,321`), so the new revision travels there.
+      A gate write whose response cannot be read is reported as unconfirmed, never as applied.
+- [ ] A counter held in `codev-agent`'s memory is explicitly not used: it resets on restart, and a
+      reset counter renders every later gate as *no gate pending*, a false negative exactly where
+      a human is waiting.
 - [ ] Historical rows default to `0`, applied by the same guard rather than by a registered
       migration — a `DEFAULT 0` on the added column, so no backfill pass is needed.
-- [ ] Gate writes require `codev:gate-write`. A caller holding only `orchestration:operate` is
-      refused with a **named** signal (`CODEV_GATE_SCOPE_REQUIRED`), not a generic 403 — every
-      thread-driving client already holds `orchestration:operate`, so reusing it would grant
-      gate-writing to every builder.
+- [ ] **Gate writes travel a separate RPC method, because the existing authorization point cannot
+      see command types.** Verified: `apps/server/src/auth/RpcAuthorization.ts:24` maps
+      `ORCHESTRATION_WS_METHODS.dispatchCommand` as a whole to `AuthOrchestrationOperateScope`.
+      It authorizes the *method*, so routing `codev.gate.set` through `dispatchCommand` and hoping
+      to scope it separately is not expressible — every operator would reach it.
+
+      So the gate commands get their own method, `codev.gateWrite`, with its own row in that same
+      scope map pointing at `codev:gate-write`. This uses the existing machinery exactly as
+      designed rather than adding a command-aware branch inside `ws.ts`, and it means a builder
+      holding `orchestration:operate` cannot reach the method at all.
+- [ ] A caller holding only `orchestration:operate` is refused with a **named** signal
+      (`CODEV_GATE_SCOPE_REQUIRED`), not a generic 403.
+- [ ] The credential holding `codev:gate-write` is provisioned out of band at server start, is
+      never issued to a thread, and its storage path is named in the phase rather than left to the
+      implementer.
 - [ ] `hasPendingApprovals` is untouched. Provider tool approvals and porch gates stay separate.
 - [ ] Payload limits: an oversize or malformed gate payload is refused at the schema boundary and
       does not partially apply.
@@ -521,12 +576,18 @@ gate state from `status.yaml`.
 This repository:
 - `packages/porch-driver/src/thread.ts` — `role` and `parentThreadId` on `CreateThreadOptions`
   and on the `thread.create` payload.
-- `packages/codev/src/agent-farm/servers/t3-project-map.ts` — new. Canonical workspace root to
-  `projectId`, keyed the way `global.db` and the engine map already key it.
+- `packages/codev/src/agent-farm/thread-backend.ts` — **the file that actually owns this, and the
+  one the first draft failed to name.** Verified: `:442-450` already resolves a project by
+  comparing `canonicalWorkspaceKey(project.workspaceRoot)` against the target, and `:785-818`
+  calls `createProject` when there is no match, all inside `ensureThreadBackendReady`. A new
+  side module would have been dead code. The `role`/`parentThreadId` supply and the project map
+  extend **this** path.
 - `packages/codev/src/agent-farm/servers/t3-gate-publisher.ts` — new. Reads gate state through
-  the existing `status-reader.ts` and writes `codev.gate.set` / `codev.gate.clear`.
-- `packages/codev/src/agent-farm/servers/status-reader.ts` — hook for the publisher; no change to
-  what it reads.
+  the existing `status-reader.ts` and writes through the `codev.gateWrite` RPC.
+- `packages/codev/src/agent-farm/servers/status-reader.ts` — **`status-reader.ts` is a reader with
+  no publish cycle of its own**, so the phase names the lifecycle that drives the publisher rather
+  than assuming one exists: it is invoked from the same watch that already notices `status.yaml`
+  changing, and on reconnect.
 - `packages/codev/src/__tests__/spec-250-porch-driver-hierarchy.test.ts` — new.
 - `packages/codev/src/agent-farm/__tests__/spec-250-gate-publisher.test.ts` — new.
 - `packages/codev/src/agent-farm/__tests__/spec-250-project-map.test.ts` — new.
@@ -535,8 +596,17 @@ This repository:
 
 - [ ] An architect thread is created with `role: "architect"` and no parent; a builder thread
       with `role: "builder"` and the architect's thread id.
-- [ ] A workspace with no project gets one created on first spawn. A `projectId` that no longer
-      resolves is **reported as unresolvable**, not rendered as an empty workspace.
+- [ ] A workspace with no project gets one created on first spawn, through
+      `ensureThreadBackendReady`'s existing lookup-then-create path — extended, not duplicated.
+      `project.create` is **not** idempotent (t3code refuses a second active project for a
+      workspace root via `requireActiveProjectWorkspaceRootAbsent`, per `thread-backend.ts:382`),
+      so the existing single-flight guard keyed on the canonical workspace root is load-bearing
+      and stays.
+- [ ] The map's durable source of truth and its restart behaviour are stated: it is derived from
+      t3code's own project list on connect, not cached across processes, so a restart re-derives
+      rather than trusting stale state.
+- [ ] A `projectId` that no longer resolves is **reported as unresolvable**, not rendered as an
+      empty workspace.
 - [ ] Nothing derives a `projectId` from a path at read time: two checkouts of the same repo are
       two workspaces, and a path is not stable across machines.
 - [ ] `codev-agent` is the **only** gate writer, and it holds the only `codev:gate-write`
@@ -758,7 +828,31 @@ This repository:
       the page reaches it, and the proxy sees every forwarded credential — so it is scoped and
       revocable by design (`afx pair revoke <machine>`), and it is **never Tower's shared key**,
       which cannot be revoked for one machine without rotating it for all.
-- [ ] The page makes no cross-origin request. `connect-src 'self'` stays closed and is asserted.
+- [ ] The page makes no cross-origin request, **and this is asserted by observing what the page
+      requests, not by reading a CSP header.** Verified against the fork's tree: t3code sets
+      `Content-Security-Policy` on `.svg` asset responses only
+      (`apps/server/src/http.ts:51,62` — `default-src 'none'; style-src 'unsafe-inline'; sandbox`)
+      and `apps/web/index.html` carries no CSP meta tag. **There is no page-level CSP and
+      therefore no `connect-src` directive to keep closed.**
+
+      Both the spec's Security section and this plan's first draft said `connect-src 'self'`
+      "stays closed", which asserts a header that does not exist. The design is unchanged and
+      still correct — the same-origin proxy means no cross-origin request is *made* — but the
+      guarantee is structural, not enforced by CSP, and the test must therefore watch the
+      network rather than parse a header.
+- [ ] Adding a page-level CSP is **explicitly not done here** and is recorded as a follow-up. It
+      would be a change to how every t3code page loads, which is far wider than this spec's
+      "keep the diff narrow" constraint, and widening the fork to get a guarantee we can already
+      obtain structurally is the wrong trade.
+- [ ] **The proxy's upstream target is server-configured, never browser-selected.** Review round 1
+      found this and it is the most consequential item in the phase: the deliverable said the web
+      app "holds the `codev-agent` origin", and a server proxy that forwards to an origin the
+      browser names is an SSRF primitive — a route-path allowlist does not constrain the *host*.
+      So the fork's server holds an allowlist of permitted `codev-agent` origins from its own
+      configuration, and the browser selects **among** them by index or id, never by URL.
+- [ ] Scheme and address rules are explicit and enforced server-side: `http`/`https` only,
+      loopback or the configured mesh address, no credentials in the URL, and **redirects are not
+      followed**. An absolute URL arriving in a request field is refused rather than normalised.
 - [ ] **Hop-by-hop stripping is dynamic, not a fixed list.**
       `client-static.ts:329-337` builds the strip set from `HOP_BY_HOP` *plus the tokens named by
       the request's own `Connection` header*, because that header names headers that are
@@ -813,6 +907,13 @@ This repository:
   `status.yaml`.
 - Adversarial: session without machine credential; machine credential from another machine;
   revoked credential; an approval replayed after revocation.
+- **SSRF**: an absolute URL in place of the allowlist id; a loopback address that is not the
+  configured one; a redirect from the configured origin to somewhere else; an unconfigured
+  internal target. Each refused, and refused server-side rather than by the page declining to
+  ask.
+- Playwright: record every request the page issues while approving a gate and assert each one is
+  same-origin. This replaces the CSP assertion the first draft proposed, which would have passed
+  vacuously against a header t3code never sends.
 
 ### Phase 11: Acceptance run — tailnet iPad and the rebase drill
 
@@ -888,6 +989,10 @@ This repository:
 | The generator's source-hash becomes a tautology once generation is fork-sourced | High | Medium | Phase 1 hashes the upstream closure at `upstreamBase` alongside the fork's |
 | **Creating a public fork is outward-facing** and cannot be undone quietly | Certain | Low | Flagged to the architect before `gh repo fork` in phase 1; the spec bakes the destination |
 | The fork's commits cannot appear in this repository's PR, leaving a reviewer with no diff | High | Medium | `pin.commit` names it, `FORK.md` logs it, phase 5 exports patches as a review aid |
+| **SSRF through the same-origin proxy** — a server-side proxy forwarding to a browser-named origin, which a path allowlist does not constrain | Medium | Severe | The target is chosen from a server-held allowlist by id; absolute URLs refused, redirects not followed, scheme and address rules enforced server-side |
+| **Gate scope unenforceable at the existing authorization point** — `RpcAuthorization.ts:24` scopes the whole `dispatchCommand` method, so a gate command inside it inherits `orchestration:operate` | Was High | High | Gate writes get their own RPC method with its own row in the same scope map; a builder cannot reach the method at all |
+| **A new project-map module lands dead** because `thread-backend.ts` already owns workspace-to-project resolution | Was High | Medium | Phase 6 extends `ensureThreadBackendReady`'s existing lookup-then-create path rather than adding a parallel one |
+| **Our columns are invisible in upstream's migration history**, the accepted cost of staying out of the registry | Certain | Low | A named start-up log signal (`CODEV_SCHEMA_GUARD_APPLIED` / `_NOOP`) makes the fact observable rather than only inferrable from the schema |
 | The fork becomes unmergeable | Medium | High | Keep the diff narrow: two record fields, one gate block, one scope, sidebar, tiling, proxy. No refactors of upstream code |
 | Upstream security fix reaches us late — we now fork a server that executes shell commands | Medium | High | Criterion 9's cadence gets an owner and a maximum interval after the first rebase is measured |
 | Building and testing the fork is a large `pnpm` install on Node ^24.13.1, and the upstream clone currently has **no `node_modules` at all** — verified, not assumed | High | Medium | Fork install is done once in phase 1, before any phase depends on it; the Node advisory already recorded in the harness stands. Per-phase fork test runs are scoped to affected packages, with one full run at phase 11 |
@@ -932,9 +1037,38 @@ against source before being acted on, rather than taken as ground truth:
 | No abandonment path | — | Accepted. Added to `FORK.md` in phase 5 |
 | Fork suite scope unbounded | — | Accepted. Scoped per phase, one full run at phase 11 |
 
+**Round 1, `codex` lane** (substituted for `opencode`, see the lane note). `REQUEST_CHANGES`,
+`HIGH` confidence, and additive to claude's rather than overlapping it — five findings, all
+verified against source before being acted on:
+
+| Finding | Verified against | Outcome |
+|---|---|---|
+| Gate revision semantics not implementable: the plan said both "sends no revision" and "reject stale revisions" | Its own text, plus `commands.ts:310,321` for how a result returns | Confirmed contradiction. `revision` is now optional — absent means allocate, present means must exceed the mark |
+| `codev:gate-write` unenforceable at the referenced point | `apps/server/src/auth/RpcAuthorization.ts:24` maps the whole `dispatchCommand` method to `orchestration:operate` | Confirmed. Gate writes get their own RPC method with its own row in that scope map |
+| Phase 6's new project-map module would be dead code | `thread-backend.ts:442-450` already resolves projects by canonical workspace key; `:785-818` creates them | Confirmed. Phase 6 now extends `ensureThreadBackendReady` instead |
+| Persistence work named too few modules | All four exist: `Services/ProjectionThreads.ts`, `Layers/ProjectionThreads.ts`, `Layers/ProjectionPipeline.ts`, `Layers/ProjectionSnapshotQuery.ts` | Confirmed. Named in phases 2 and 4, with start-up layer ordering asserted |
+| Proxy has no upstream-target trust boundary — SSRF | — | Accepted. Server-held origin allowlist selected by id; absolute URLs refused, redirects not followed |
+
+**A third finding of my own, while verifying the above.** Phase 10 and the spec's Security section
+both claimed `connect-src 'self'` "stays closed". Verified in the fork's tree: t3code sets
+`Content-Security-Policy` on `.svg` asset responses only (`apps/server/src/http.ts:51,62`) and
+`apps/web/index.html` has no CSP meta tag. There is no page-level CSP and no `connect-src`
+directive to keep closed. The same-origin design is unchanged and still correct, but the guarantee
+is structural rather than CSP-enforced, and the test now watches the network instead of parsing a
+header that is never sent.
+
 **Lane note.** The `opencode` lane ran under a **non-default permission**. It auto-rejects
 `external_directory` requests, and this plan cites `/Users/chris/dev/t3code` throughout, so two
 runs died on their first outside read and exited `0` with no review file — a silent lane loss that
 reads exactly like a review with nothing to say. It was re-run with
 `OPENCODE_CONFIG_CONTENT='{"permission":{"external_directory":"allow"}}'` scoped to the single
-invocation, with no global config edited. Filed as issue #261.
+invocation, with no global config edited. Filed as issue #261. It auto-rejects
+`external_directory` requests, and this plan cites `/Users/chris/dev/t3code` throughout, so the
+first two runs died on their first outside read and exited `0` with no review file — a silent lane
+loss that reads exactly like a review with nothing to say. Filed as issue #261.
+
+A third run under `OPENCODE_CONFIG_CONTENT='{"permission":{"external_directory":"allow"}}'`
+(scoped to the single invocation, no global config edited) read every external file it wanted and
+**still exited 0 with no review file**. So the permission was one cause and not the only one. The
+`codex` lane was substituted so round 1 is genuinely two independent reviews rather than one, and
+the substitution is recorded here rather than left for a reader to infer from a missing file.

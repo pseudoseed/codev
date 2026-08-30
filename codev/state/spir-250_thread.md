@@ -135,3 +135,56 @@ transactional. Outside the migrator there is no wrapper, so the kill test now di
   machine/session/timestamp client-side, which criterion 4 depends on.
 - Phases 2, 3, 4, 7, 8, 9 touch only the fork, so each now logs its fork commit in `FORK.md` —
   their only artifact in this repository.
+
+## Architect ruling — stay out of the numbered registry
+
+2026-08-30. Ruled with my finding rather than around it: because `schemaGuard` is upstream's own
+PRAGMA-then-conditional-ALTER pattern verbatim, the only open question was registry membership,
+and the answer is stay out. The reasoning worth keeping: a number we occupy is a number upstream
+will eventually want, and that collision is silent — two entries claiming `043` means one is
+skipped and its column never appears, which reads at runtime as "not recorded" rather than as a
+failed migration. A separate layer cannot collide at all.
+
+Accepted cost, recorded rather than argued away: our columns never appear in upstream's migration
+history. Mitigated with a named start-up signal, `CODEV_SCHEMA_GUARD_APPLIED` /
+`CODEV_SCHEMA_GUARD_NOOP` — two signals, because "added two columns" and "had nothing to do" are
+different facts.
+
+Spec risk row amended at `codev/specs/250-...md:341` under the architect's authority as approver.
+
+## Plan review round 1 — codex lane, REQUEST_CHANGES
+
+Substituted for opencode after three silent failures. Additive to claude's round rather than
+overlapping it. All five verified before acting:
+
+1. **Gate revision was not implementable as written.** I had asserted both "codev-agent sends no
+   revision, the server allocates" and "a write carrying a lower revision is rejected". If no
+   write ever carries one, there is nothing to reject and criterion 10 has nothing to deliver.
+   Resolved by making `revision` optional: absent means allocate, present means must exceed the
+   mark or be refused `CODEV_GATE_REVISION_STALE`.
+2. **`codev:gate-write` was unenforceable where I put it.** `RpcAuthorization.ts:24` maps the
+   whole `dispatchCommand` method to `orchestration:operate` — it scopes methods, not command
+   types, so a gate command routed through it would be reachable by every operator. Gate writes
+   now travel their own RPC method with its own row in that same map.
+3. **My `t3-project-map.ts` would have been dead code.** `thread-backend.ts:442-450` already
+   resolves projects by `canonicalWorkspaceKey` and `:785-818` creates them, inside
+   `ensureThreadBackendReady`. Phase 6 extends that path instead. Also noted: `project.create` is
+   not idempotent (`:382`), so the existing single-flight guard is load-bearing.
+4. **Persistence work named too few modules.** All four codex named exist and are now in phases 2
+   and 4, with the start-up layer order asserted by a test rather than left to construction order.
+5. **SSRF.** A server proxy forwarding to a browser-named origin is an SSRF primitive, and a
+   route-path allowlist does not constrain the host. Target is now chosen from a server-held
+   allowlist by id; absolute URLs refused, redirects not followed.
+
+## My own finding: the CSP claim was false
+
+Chasing codex's proxy finding I checked the CSP the plan and the spec both lean on. t3code sets
+`Content-Security-Policy` on `.svg` asset responses only (`apps/server/src/http.ts:51,62`,
+`default-src 'none'; style-src 'unsafe-inline'; sandbox`), and `apps/web/index.html` carries no
+CSP meta tag. There is no page-level CSP and therefore no `connect-src` to "keep closed" — both
+the spec's Security section and my plan asserted a header that is never sent.
+
+The same-origin design is unchanged and still right; the guarantee is structural, not enforced.
+The test now records every request the page makes under Playwright instead of parsing a header.
+Adding a page-level CSP is recorded as a follow-up, explicitly not done: it changes how every
+t3code page loads, far wider than the spec's "keep the diff narrow" constraint.

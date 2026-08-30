@@ -338,7 +338,7 @@ client instead.
 | Risk | Probability | Impact | Mitigation |
 |---|---|---|---|
 | **Churn detection goes blind** — `classify-churn --since` pointed at the fork head compares our tree to itself and reports no churn forever | High | High | It consumes `upstreamBase`; a test asserts non-zero churn against a known-moved upstream |
-| **Rebase-time migration collision** — upstream adds a migration at the same version | Medium | High | Number ours far above upstream's range and assert the gap at rebase |
+| **Rebase-time migration collision** — upstream adds a migration at the same version | Medium | High | **Superseded 2026-08-30 by the plan-gate ruling.** Codev's columns stay OUT of upstream's numbered registry entirely: a guarded `PRAGMA table_info` + `ALTER TABLE ADD COLUMN` (upstream's own idiom, per `042_ProjectionThreadLinkedPullRequest.ts`) invoked from a layer sequenced after `MigrationsLive`. "Number ours far above upstream's range" is obsolete and was unsafe: `effect` `Migrator.js:121` skips any id `<= MAX(migration_id)`, so a high id silently shadows every later upstream migration, and any id we occupy collides once upstream reaches it. A separate layer cannot collide. Cost: our columns are absent from upstream's migration history, mitigated by a named start-up log signal |
 | **Stale gate write recreates an approved gate** | Medium | High | The revision high-water mark survives the clear; criterion 10 delivers a stale revision after approval |
 | Contract regeneration drifts from the fork | Medium | Medium | Criterion 9 makes regeneration part of the rebase, not a follow-up |
 | The fork becomes unmergeable | Medium | High | Keep the diff narrow: two record fields, one gate block, sidebar and tiling. No refactors |
