@@ -75,6 +75,15 @@ interface EvidenceFile {
   readonly describes: Record<string, string>;
   /** Repo-relative path → sha256 of the built artifact that actually ran, or null. */
   readonly executed: Record<string, string | null>;
+  /**
+   * Set when the code has knowingly moved on and re-running is not worth it.
+   *
+   * Deliberately not a boolean and not a bare sha: it has to say WHAT changed and
+   * WHY the evidence no longer describes it, and `146-driver-parity.md` has to
+   * carry a matching note. Setting the hatch should cost the same as writing the
+   * truth — the moment it is cheaper, it replaces the truth.
+   */
+  readonly supersededBy?: { readonly change: string; readonly why: string; readonly at: string };
   readonly runs: ReadonlyArray<RunEvidence>;
   readonly longGate: { readonly startedAt: string; readonly gateSeconds: number; readonly harness: string };
 }
@@ -235,7 +244,8 @@ describe('Spec 146 Phase 10 — the recorded full-protocol runs', () => {
      * redone, which is the point: the criteria are claims about what that code
      * did, and after an edit it is not that code.
      */
-    const { describes } = loadEvidence();
+    const evidence = loadEvidence();
+    const { describes } = evidence;
     // Named before it is used, so evidence written by an older collector fails
     // with a sentence instead of `Cannot convert undefined or null to object`.
     expect(
@@ -244,24 +254,64 @@ describe('Spec 146 Phase 10 — the recorded full-protocol runs', () => {
         + 'tools/t3-server/collect-phase10-evidence.mjs.',
     ).toBeDefined();
     expect(Object.keys(describes).length, 'the evidence names no source at all').toBeGreaterThanOrEqual(20);
+
+    /*
+     * THE ESCAPE HATCH, AND WHY IT COSTS WHAT IT COSTS.
+     *
+     * Re-running is two 3600-second live runs against a pinned t3code checkout,
+     * which most contributors cannot perform. A guard whose only remedy is
+     * unavailable is a guard that gets deleted the first time it blocks someone,
+     * and then there is no guard at all.
+     *
+     * So the evidence may declare itself superseded — but that declaration has to
+     * say what changed and why, and `146-driver-parity.md` has to carry a matching
+     * note naming the same change. If the two disagree, this is red. Setting the
+     * hatch is therefore the same amount of work as writing the truth, which is
+     * the only thing that stops it becoming the truth's replacement.
+     */
+    const superseded = evidence.supersededBy;
+    if (superseded) {
+      expect(
+        superseded.change?.length ?? 0,
+        '`supersededBy.change` must name WHAT changed, specifically enough for a reader to find it',
+      ).toBeGreaterThanOrEqual(20);
+      expect(
+        superseded.why?.length ?? 0,
+        '`supersededBy.why` must say why this evidence no longer describes the code — a sha is not a reason',
+      ).toBeGreaterThanOrEqual(40);
+      expect(Number.isNaN(new Date(superseded.at).getTime()), '`supersededBy.at` is not a date').toBe(false);
+      const parity = readFileSync(parityPath, 'utf8');
+      expect(
+        parity.toLowerCase(),
+        '146-driver-parity.md does not mention that this evidence is superseded. The evidence and the record '
+          + 'people read must not disagree about whether these runs still describe the code.',
+      ).toContain('superseded');
+      expect(
+        parity,
+        `146-driver-parity.md does not name the change the evidence was superseded by: ${superseded.change}`,
+      ).toContain(superseded.change);
+      return;
+    }
+
     for (const [relative, recorded] of Object.entries(describes)) {
       const absolute = join(repoRoot, relative);
       expect(existsSync(absolute), `the evidence names ${relative}, which does not exist`).toBe(true);
       const actual = createHash('sha256').update(readFileSync(absolute)).digest('hex');
       expect(
         actual,
-        `${relative} has changed since the evidence was recorded. Re-run the protocol rather than trusting a `
-          + 'stale result — the criteria are claims about what this code did, and it is not this code any more.\n'
-          + `  recorded ${recorded.slice(0, 16)}…, on disk ${actual.slice(0, 16)}…`,
+        `${relative} has changed since the evidence was recorded, so these runs no longer describe it.\n`
+          + `  recorded ${recorded.slice(0, 16)}…, on disk ${actual.slice(0, 16)}…\n`
+          + '  Two ways out. Re-run and regenerate:\n'
+          + '    T3_NODE=/abs/node tools/t3-server/full-protocol-run.sh 3803 claude   claude-haiku-4-5 3600 claude-1h\n'
+          + '    T3_NODE=/abs/node tools/t3-server/full-protocol-run.sh 3804 opencode xai/grok-4.6    3600 opencode-1h\n'
+          + '    node tools/t3-server/collect-phase10-evidence.mjs claude-1h opencode-1h --long-gate ...\n'
+          + '  Or, if re-running is not worth it, declare the evidence superseded: add `supersededBy`\n'
+          + '  to codev/research/146-phase10-live-evidence.json with `change` (what changed), `why`\n'
+          + '  (why these runs no longer describe it) and `at`, AND add a matching note naming the same\n'
+          + '  change to codev/research/146-driver-parity.md. Both, or this stays red.',
       ).toBe(recorded);
     }
-    // The runner and the fresh-process resubscriber are the two that carry the
-    // criteria; naming them explicitly stops the set silently shrinking to one
-    // trivially-stable file.
-    // Named individually, so the set cannot silently shrink to one
-    // trivially-stable file. The launcher counts: it writes the provider opt-in
-    // without which a turn on some drivers is refused, so evidence gathered
-    // without it describes a different experiment.
+
     // The harness AND the implementation. The first version named only harness
     // files, which left the evidence green across a change to `turn.ts` — the
     // exact kind of change these runs are evidence ABOUT.

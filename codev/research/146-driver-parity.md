@@ -198,6 +198,28 @@ Worth stating, because each was suspected and tested rather than assumed:
   — which the plan listed for "per-driver quirks, if any are found" — **was not created**. There
   were none to put in it.
 
+## If this evidence goes stale
+
+`spec-146-phase-10-full-protocol.test.ts` asserts sha256 of 21 committed sources against
+`146-phase10-live-evidence.json`, so any edit to the harness or to
+`packages/porch-driver/src` / `packages/t3-client/src` turns the default suite red. That is
+intended: the criteria above are claims about what *that* code did.
+
+Two ways out, and only two.
+
+**Re-run.** Two fresh 3600-second runs and a regeneration. This is the right answer when the
+change affects what the runs mean.
+
+**Declare it superseded.** Add `supersededBy` to the evidence with `change` (what changed),
+`why` (why these runs no longer describe it) and `at`, **and** add a matching note here naming
+the same change. The test requires both; if the evidence and this document disagree about whether
+the runs still describe the code, it stays red.
+
+The hatch exists because a guard whose only remedy is two hours on a pinned checkout with
+`T3_NODE` — which most contributors cannot perform — is a guard that gets deleted the first time
+it blocks somebody. It is deliberately not a boolean: setting it costs the same as writing the
+truth, which is the only thing that stops it becoming the truth's replacement.
+
 ## What this does not tell you
 
 - **That porch restarts mid-protocol.** The plan's acceptance criterion 2 has three clauses, and
