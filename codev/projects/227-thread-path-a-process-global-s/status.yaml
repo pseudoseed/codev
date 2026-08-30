@@ -1,0 +1,14 @@
+id: '227'
+title: thread-path-a-process-global-s
+protocol: air
+phase: implement
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: pending
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-30T15:18:37.610Z'
+updated_at: '2026-08-30T15:18:37.611Z'
