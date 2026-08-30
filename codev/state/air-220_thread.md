@@ -180,3 +180,51 @@ a bare "the server answered 503" with the signal dropped — because only 401 an
 "I could not check" is transient: it retries now, under a third band (CANNOT
 VERIFY), so withdrawn, unverifiable and unreachable are three appearances,
 asserted pairwise distinct.
+
+## Slice 4: review round 2
+
+### The security one
+
+`MachineConfig.towerKey` was on the **production** config type, written into
+`.dev-machines.json`, served to the page, and sent as a header by production
+client code. Tower's shared host secret is all-or-nothing — it cannot be revoked
+for one machine without rotating it for all — so a page holding it kept host-wide
+access to every workspace even after criterion 15's revocation. Phase 7's whole
+trade, inverted.
+
+It was never needed. `isRequestAllowed` returns true for `isCodevAgentRoute`
+before any key check, precisely so a paired device reaches the surface holding
+only what pairing gave it. Verified in the source before removing rather than
+assumed. Two guards now: a grep over `src/` for the secret's names, and a header
+assertion.
+
+### The other three
+
+- **Shallow validation.** `validateSnapshot` checked top-level containers and
+  cast the rest, so a malformed nested identity, gate or choice threw in
+  `buildTree` or mid-render — and a throw there takes the whole tree, not the
+  subtree it came from. Deep now, with a test asserting a healthy machine renders
+  beside one sending nonsense.
+- **Machine ids.** Everything is keyed by id, so duplicates impersonate each
+  other. Constrained, deduplicated conservatively, counted when dropped.
+- **A successful approval reported as a refusal.** `writeStateAndCommit` shared
+  one catch across write, commit and push. Push failure is `StatePushFailed` now
+  and the route answers 200 with a caveat — success first, caveat second, which
+  is the difference between a caveat and a retry.
+- **Checks inside Tower.** Refused before starting rather than bounded with a
+  timeout: a client that gives up does not stop porch, so a timeout abandons a
+  call that goes on to approve the gate anyway. Uses porch's own post-override
+  computation. The e2e now covers both branches.
+
+### The 9 server failures — comparative, not absolute
+
+Scratch worktree at the merge base, one file on each ref, same machine, same
+contention: **8 failed / 83 passed on both**, identical failure site, and the
+test file is byte-identical between the refs. The branch is not the cause. That
+is not the same as the tests being fine — issue #200 already reads the
+phenomenon correctly, and 12 of that file's tests are `skipIf(CI)` so CI never
+settles it either.
+
+Correcting my own earlier report: I called them flaky after one clean re-run.
+Two consecutive full runs showed the same 9. One clean run is not evidence of
+flakiness; it is one clean run.
