@@ -188,11 +188,31 @@ describe('spec 250: the two churn ranges are two questions', () => {
     expect(range.to).toBe('origin/main');
   });
 
-  it('reads fork drift from the fork checkout, base..fork head', () => {
+  /**
+   * To HEAD, not to `pin.commit`. Once `pin.commit` was ruled to stay at
+   * `upstreamBase` until regeneration, measuring to it reported zero drift for a
+   * fork carrying real commits — "I could not tell" spelled like "nothing
+   * changed", on the tool whose whole job is answering "what have we changed?".
+   */
+  it('reads fork drift from the fork checkout, base..HEAD', () => {
     const range = churnRange('fork-drift', ids);
     expect(range.root).toBe('/tmp/fork');
     expect(range.from).toBe('a'.repeat(40));
-    expect(range.to).toBe('f'.repeat(40));
+    expect(range.to).toBe('HEAD');
+    expect(range.to).not.toBe(ids.fork.commit);
+  });
+
+  it('measures fork drift even while pin.commit still equals upstreamBase', () => {
+    // The exact shape of phases 2-4: the contract pin has not moved, the
+    // checkout has. A range of base..base would report a diverged fork as clean.
+    const undiverged = resolveIdentities(
+      { ...pin, commit: 'a'.repeat(40), upstreamBase: 'a'.repeat(40) },
+      { T3CODE_FORK_ROOT: '/tmp/fork' },
+    );
+    const range = churnRange('fork-drift', undiverged);
+    expect(range.from).toBe('a'.repeat(40));
+    expect(range.to).toBe('HEAD');
+    expect(`${range.from}..${range.to}`).not.toBe(`${range.from}..${range.from}`);
   });
 
   it('never resolves the two modes to the same range', () => {
@@ -895,6 +915,40 @@ describe('spec 250: every T3CODE_ROOT reader is assigned to an identity', () => 
     expect(src).toContain("process.env.T3CODE_FORK_ROOT ?? ''");
     expect(src).toContain('HAS_FORK_CHECKOUT');
     expect(src).toContain('HAS_CHECKOUT');
+  });
+
+  /**
+   * The fork hash suite compares generated artifacts against the fork checkout,
+   * which is only a valid comparison while the checkout sits ON `pin.commit`.
+   * Through phases 2-4 it does not, so the suite skips — and a skip that nobody
+   * can see the end of is how a suite quietly stops existing.
+   *
+   * This pins two things: the gate is the contract commit and not merely the
+   * checkout's presence, and the skip carries a reason naming which case it is.
+   */
+  it('gates the fork hash suite on the contract commit, and says why it skipped', () => {
+    const src = readFileSync(join(here, 'spec-146-t3-contract.test.ts'), 'utf8');
+    expect(src, 'presence is not the same question as being on the contract commit')
+      .toContain('FORK_AT_CONTRACT');
+    expect(src).toMatch(/describe\.skipIf\(!FORK_AT_CONTRACT\)/);
+    expect(src).toContain('forkSkipReason');
+    // Three distinguishable reasons, not one blank skip.
+    expect(src).toContain('no fork checkout at');
+    expect(src).toContain('could not read HEAD of');
+    expect(src).toContain('ahead of contract commit');
+  });
+
+  /**
+   * The other end of the same rule: once phase 5 sets `contractSource` to
+   * `"fork"`, `pin.commit` IS the fork head, so this gate opens again on its own.
+   * If it ever stops doing that, the suite is dead and this test says so.
+   */
+  it('the gate reopens by itself once pin.commit names the fork head', () => {
+    const atContract = classifyForkHead({
+      head: pin.commit, commit: pin.commit, descendant: true, contractSource: 'fork',
+    });
+    expect(atContract.state).toBe('at-contract');
+    expect(atContract.ok).toBe(true);
   });
 });
 

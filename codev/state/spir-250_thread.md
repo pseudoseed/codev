@@ -473,3 +473,80 @@ deliverable that the flip must be asserted by a test which fails if ahead still 
 
 Plan edited at `codev/plans/250-*.md` phase 5 deliverables and acceptance criteria. 63 tests in
 the spec 250 suite; `pnpm -w test` 7274 passed, 54 skipped, 0 failed.
+
+---
+
+## Phase 2 — Thread hierarchy in the fork's contract and projection
+
+### What a human can see or do now that they could not before
+
+**Nothing.** Schema and contract only, exactly as the phase table predicts. Two nullable columns
+exist and nothing renders them. Phase 7 is still the first phase that puts anything on a screen.
+
+### The plan's wiring premise was wrong
+
+The plan said to sequence `CodevSchemaGuardLive` after `MigrationsLive` (`Migrations.ts:173`).
+**`MigrationsLive` is exported and nothing builds it** — every reference in the tree is its own
+definition or its own docstring. The real boot path is `persistence/Layers/Sqlite.ts`'s `setup`,
+which calls `runMigrations()` directly and is what both `makeSqlitePersistenceLive` and
+`SqlitePersistenceMemory` provide.
+
+A guard hung off `MigrationsLive` would never have run in production, and a test that built
+`MigrationsLive` itself would have passed anyway. The guard is called from `setup` instead, and
+the ordering test reads that production file rather than a layer it assembles.
+
+### Two spellings for the two fields, deliberately
+
+`ThreadCreatedPayload` keeps `withDecodingDefault(null)`: the log is full of pre-fork payloads, a
+rebuild replays every one, and the projector reads `payload.role` unconditionally, so that read
+has to be total.
+
+`OrchestrationThread` and `OrchestrationThreadShell` use `Schema.optional` instead, matching
+`linkedPullRequest` — upstream's own newest field, optional so older cached snapshots decode. The
+strict form cost **32 errors across 11 upstream test files**, which is the divergence this fork is
+explicitly shaped to avoid. Every server read path normalizes `?? null`, so one spelling reaches
+clients in practice. Final upstream test churn: 5 fixture edits in 3 files.
+
+### Two bugs the architect's ruling exposed in phase 1 code
+
+Both found by running the tools against a genuinely diverged fork for the first time.
+
+1. **`classify-churn --fork-drift` measured `upstreamBase..pin.commit`.** Those were the same
+   commit until the ruling froze `pin.commit`. After it, a fork with real customization commits
+   reported **zero drift** — "I could not tell" spelled exactly like "nothing changed", on the one
+   tool whose job is answering "what have we changed?". Now measures to `HEAD`, correct on both
+   sides of phase 5.
+2. **The first commit in any range was reported as `baseline`, never classified.** `git log
+   from..to` excludes `from`, so with a single fork commit the mode returned a placeholder instead
+   of a verdict. Now seeded from the range start. It immediately produced a real answer:
+   `consumed-change-undecidable` — the phase-2 contract altered a union in
+   `orchestration.subscribeThread`, which the classifier honestly refuses to decide. That is a
+   genuine signal for phase 5.
+
+### The fork live suite now skips, with a reason
+
+`spec-146-t3-contract.test.ts`'s fork-hash suite compares generated artifacts against the fork
+checkout, which is only valid while the checkout sits ON `pin.commit`. Through phases 2-4 it does
+not. Gated on `FORK_AT_CONTRACT` and it names which of three cases it skipped for:
+
+```
+spec 250 [live: needs the fork checkout ON pin.commit — fork is at 1a414cee8409,
+ahead of contract commit 082e6ea52186 (expected until phase 5 regenerates)]
+```
+
+It reopens by itself once phase 5 moves `pin.commit`, and a test asserts that.
+
+### Flaky Tests
+
+`apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint` fails in the fork.
+**Pre-existing and unrelated**: `git diff 082e6ea5 -- entrypoint.ts entrypoint.test.ts` is empty,
+the module imports only `node:fs` and `node:url`, and macOS resolves `/var` to `/private/var`.
+Not skipped and not modified — touching upstream's test would be gratuitous divergence.
+
+### Receipts
+
+- Fork commit `1a414cee8409`, pushed to `origin/codev`.
+- Fork typecheck green. contracts **291 passed**; server **2769 passed, 8 skipped**, 1 pre-existing
+  failure above.
+- Codev repo: build green, **7276 passed, 55 skipped, 0 failed**, plus 180 in the v2 suite.
+- 66 tests in the spec 250 suite; 17 new fork tests across three new files.

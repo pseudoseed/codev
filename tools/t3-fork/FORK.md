@@ -110,3 +110,34 @@ against, and without that check it verifies green.
 | Phase | Fork commit | What landed |
 |---|---|---|
 | 1 | `082e6ea521861fff37b90fcd789b5eaa5ef5d6a6` | Branch `codev` created at `upstreamBase`. No customization yet — the two identities exist and are equal on purpose, so every new assertion has a known answer. |
+| 2 | `1a414cee8409a407977ff6c6505fad1ab82f2ec8` | `role` and `parentThreadId` on the thread record, through the contract, the projector and both persistence paths. Columns applied by `apps/server/src/codev/schemaGuard.ts`, outside upstream's migration registry. |
+
+### Migration 900 is abandoned, and must stay abandoned
+
+The first draft of phase 2 planned a numbered migration at id 900, reasoning that a large gap
+below upstream's next id was safe. **Under a watermark migrator it is the opposite of safe.**
+
+`effect_sql_migrations` records the highest id that has run and the runner skips everything at or
+below it. Once 900 runs, the watermark is 900 and upstream's `043` is below it — so every future
+upstream migration is silently skipped, forever, on every Codev database. Nothing errors. The
+schema simply stops keeping up, and the first symptom arrives months later as a query failing
+against a column upstream added and we never got.
+
+A low id is no better: upstream takes the number we took, and a database that ran ours is then
+told it already ran a migration it has never seen.
+
+So Codev's columns are applied outside the registry, in upstream's own idiom — `PRAGMA
+table_info` then `ALTER TABLE … ADD COLUMN` for what is absent, the same shape as
+`042_ProjectionThreadLinkedPullRequest.ts`. Nothing Codev writes ever touches
+`effect_sql_migrations`. `apps/server/src/codev/schemaGuard.test.ts` asserts that, and asserts
+that schema work landing after the guard still takes effect.
+
+The one real cost is that the columns are absent from the migration history. The mitigation is
+that the guard logs `CODEV_SCHEMA_GUARD_APPLIED` (with the columns it added) or
+`CODEV_SCHEMA_GUARD_NOOP` on every start. Two signals, because "added two columns" and "had
+nothing to do" are different facts.
+
+**Where it is wired:** `apps/server/src/persistence/Layers/Sqlite.ts`, in `setup`, immediately
+after `runMigrations()`. Not after `MigrationsLive` — that export exists and nothing builds it,
+so a guard hung there would never run in production while a test that constructed the layer
+itself passed.

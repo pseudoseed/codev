@@ -144,11 +144,24 @@ export const CHURN_MODES = {
   },
   'fork-drift': {
     identity: 'fork',
-    describe: (i) => `${i.base}..${i.commit}`,
+    describe: (i) => `${i.base}..HEAD`,
+    /**
+     * Measured to the checkout's HEAD, NOT to `pin.commit`.
+     *
+     * They were the same thing until `pin.commit` was ruled to stay at
+     * `upstreamBase` until regeneration. After that ruling, measuring to
+     * `pin.commit` reports `upstreamBase..upstreamBase` — zero drift — for a fork
+     * carrying real customization commits. That is "I could not tell" spelled
+     * exactly like "nothing changed", on the one tool whose entire job is
+     * answering "what have we changed?".
+     *
+     * HEAD is correct on both sides of phase 5, so it does not need revisiting
+     * when `contractSource` flips.
+     */
     range: (identities) => ({
       root: identities.fork.root,
       from: identities.fork.base,
-      to: identities.fork.commit,
+      to: 'HEAD',
     }),
   },
 };

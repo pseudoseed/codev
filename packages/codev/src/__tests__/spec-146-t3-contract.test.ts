@@ -55,6 +55,34 @@ const T3_FORK_ROOT = process.env.T3CODE_FORK_ROOT ?? '';
 const HAS_FORK_CHECKOUT =
   T3_FORK_ROOT !== '' && existsSync(join(T3_FORK_ROOT, 'packages', 'contracts', 'src'));
 
+/**
+ * Is the fork checkout ON the commit the artifacts were generated from?
+ *
+ * Having a fork checkout is not the same question. `pin.commit` means "the
+ * vendored contract came from this commit" and only regeneration moves it, so
+ * between the fork's first customization commit and that regeneration the
+ * checkout is legitimately AHEAD — and hashing its files against artifacts
+ * generated from an older commit compares two different trees.
+ *
+ * That window is three plan phases long. Letting the suite fail through it would
+ * train everyone to ignore a red suite, which is the failure the whole
+ * ahead-vs-wrong distinction exists to prevent. So it SKIPS, and the suite name
+ * says which of the two reasons it skipped for — never silently passing.
+ */
+const forkHead = (() => {
+  if (!HAS_FORK_CHECKOUT) return null;
+  const result = spawnSync('git', ['-C', T3_FORK_ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+  return result.status === 0 ? result.stdout.trim() : null;
+})();
+const FORK_AT_CONTRACT =
+  forkHead !== null && forkHead === readJson(join(t3Root, 'pin.json')).commit;
+const forkSkipReason = !HAS_FORK_CHECKOUT
+  ? `no fork checkout at ${T3_FORK_ROOT || '$T3CODE_FORK_ROOT (unset)'}`
+  : forkHead === null
+    ? `could not read HEAD of ${T3_FORK_ROOT}`
+    : `fork is at ${forkHead.slice(0, 12)}, ahead of contract commit ` +
+      `${readJson(join(t3Root, 'pin.json')).commit.slice(0, 12)} (expected until phase 5 regenerates)`;
+
 describe('spec 146: packages/types stays dependency-free', () => {
   it('declares no runtime dependencies', () => {
     const pkg = readJson(join(typesRoot, 'package.json'));
@@ -180,7 +208,7 @@ describe.skipIf(!HAS_CHECKOUT)(`spec 146 [live: needs upstream t3code checkout a
   });
 });
 
-describe.skipIf(!HAS_FORK_CHECKOUT)(`spec 250 [live: needs fork checkout at ${T3_FORK_ROOT || '$T3CODE_FORK_ROOT (unset)'}]`, () => {
+describe.skipIf(!FORK_AT_CONTRACT)(`spec 250 [live: needs the fork checkout ON pin.commit — ${forkSkipReason}]`, () => {
   it('generated hashes match the fork checkout the artifacts came from', () => {
     const pin = readJson(join(t3Root, 'pin.json'));
     const contracts = join(T3_FORK_ROOT, pin.contractsRoot);

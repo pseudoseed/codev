@@ -309,6 +309,34 @@ const rows = [];
 let previous = null;
 let previousSource = null;
 
+/**
+ * Seed the comparison from the range's START commit.
+ *
+ * `git log from..to` EXCLUDES `from`, so without this the first commit in the
+ * range has nothing to diff against and is reported as `baseline` — a placeholder,
+ * not a verdict. For `--fork-drift` that is the whole answer: with a single
+ * customization commit the tool reported "baseline" and no drift, on the one
+ * question it exists to answer.
+ *
+ * `from` is a real commit in both modes (`upstreamBase`, or whatever `--since`
+ * named), so comparing the first row against it is the comparison the range
+ * already implies. Skipped when `--since` was given a DATE rather than a sha:
+ * there is no commit to emit at, and guessing one would be worse than the
+ * baseline row.
+ */
+if (/^[0-9a-f]{7,40}$/.test(from)) {
+  const seed = await emitAt(from);
+  if (seed.error) {
+    console.error(
+      `[classify-churn] could not emit at range start ${from.slice(0, 12)} (${seed.error}); ` +
+        `the first commit will be reported as \`baseline\` rather than compared.`,
+    );
+  } else {
+    previous = seed.schemas;
+    previousSource = sourceOf(from);
+  }
+}
+
 for (const [index, commit] of commits.entries()) {
   const emitted = await emitAt(commit.sha);
   const source = sourceOf(commit.sha);
