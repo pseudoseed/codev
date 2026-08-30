@@ -25,6 +25,8 @@ import {
   resolveProjectId,
   resolveArtifactBaseName,
   resolvePorchWorkspaceRoot,
+  StateCommitFailed,
+  StatePushFailed,
 } from './state.js';
 import {
   loadProtocol,
@@ -58,6 +60,7 @@ import { findUnlandedCommits, completionReport } from './unlanded.js';
 import { resolveDefaultBranch } from '../../lib/default-branch.js';
 
 import { notifyTerminal, gateApprovedMessage, notifyProtocolComplete } from './notify.js';
+import type { ApprovalRecord } from './approval-record.js';
 import { loadConfig } from '../../lib/config.js';
 import { version } from '../../version.js';
 import { readGateRequestFile } from './gate-request.js';
@@ -883,6 +886,76 @@ export interface ApproveOptions {
   readonly cwd?: string;
   readonly capabilities?: ApprovalCapabilityStore;
   readonly nonces?: ApprovalNonceStore;
+  /**
+   * What a refusal does. The CLI exits; a SERVER MUST NOT.
+   *
+   * Spec 146 Phase 11 calls this function in codev-agent's process to spend a
+   * capability, and `process.exit(1)` there would take Tower down and answer the
+   * request with nothing at all — the worst possible spelling of "refused".
+   * Defaults to `'exit'`, so every existing caller behaves exactly as before.
+   */
+  readonly onRefusal?: 'exit' | 'throw';
+  /**
+   * Refuse BEFORE running the phase's checks, rather than running them.
+   *
+   * An HTTP request is the wrong place to run a repository's build and test
+   * suite: it is unbounded, it holds a connection open for minutes, and a caller
+   * that gives up does not stop porch — so a timeout would abandon a call that
+   * goes on to approve the gate anyway, reporting one outcome while another
+   * happened. Refusing up front is bounded by construction and says what is
+   * needed instead of guessing at it.
+   *
+   * Set only by codev-agent. The CLI runs the checks, as it always has.
+   */
+  readonly refuseIfChecksWouldRun?: boolean;
+}
+
+/**
+ * WHAT AN `approve()` CALL ACTUALLY DID.
+ *
+ * `approve` used to return `void`, and it returns NORMALLY when the gate was
+ * already approved. A caller could not tell "I approved this" from "somebody
+ * else already had", so codev-agent answered both with GATE_APPROVED, the
+ * requesting session id, and a fresh timestamp — claiming that session approved
+ * a gate it did not, at a time that never happened. Provenance falsified by a
+ * missing return value.
+ *
+ * `record` is the record PERSISTED IN `status.yaml`, never one built for the
+ * response, so a caller reporting an approval reports the one that exists.
+ */
+export interface ApproveOutcome {
+  /**
+   * `approved` — this invocation performed the gate transition.
+   * `already-approved` — it was approved before this call and nothing changed.
+   */
+  readonly outcome: 'approved' | 'already-approved';
+  /** From `status.yaml`. Absent only on records that predate the field. */
+  readonly approvedAt?: string;
+  readonly record?: ApprovalRecord;
+  /**
+   * How far the gate write got, when it did not get all the way.
+   *
+   * Absent means written, committed and pushed. The two failure stages are kept
+   * apart because they are different instructions: one needs a push from the
+   * worktree, the other needs the commit investigated — and NEITHER means the
+   * gate is unapproved, which is the thing a caller must not get wrong.
+   */
+  readonly delivery?: 'written-not-committed' | 'committed-not-pushed';
+  /** The failure in the words of whatever failed. */
+  readonly deliveryMessage?: string;
+}
+
+/**
+ * A refusal raised instead of exiting, for in-process callers.
+ *
+ * Carries the same `code` and `message` the CLI prints, so a route can answer
+ * with the reason rather than a generic failure.
+ */
+export class ApprovalRefusedError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = 'ApprovalRefusedError';
+  }
 }
 
 /**
@@ -900,7 +973,7 @@ export async function approve(
   hasHumanFlag: boolean,
   resolver?: ArtifactResolver,
   options: ApproveOptions = {},
-): Promise<void> {
+): Promise<ApproveOutcome> {
   const statusPath = findStatusPath(workspaceRoot, projectId);
   if (!statusPath) {
     throw new Error(projectNotFoundMessage(workspaceRoot, projectId));
@@ -920,15 +993,45 @@ export async function approve(
   //
   // The flag is checked first only because it is the cheaper, more actionable
   // message; failing it is not an authorization decision.
-  if (!hasHumanFlag) {
-    console.log('');
-    console.log(chalk.red('ERROR: Human approval required.'));
-    console.log('');
-    console.log('  To approve, please run:');
-    console.log('');
-    console.log(chalk.cyan(`    porch approve ${projectId} ${gateName} --a-human-explicitly-approved-this`));
-    console.log('');
+  /*
+   * NOTHING IS PRINTED WHEN A PROGRAM IS CALLING.
+   *
+   * Every line below went to stdout, and `onRefusal: 'throw'` means codev-agent
+   * is calling this in Tower's process — so an approval from the client wrote
+   * ANSI-coloured porch output into Tower's log, where it is noise at best and,
+   * on a refusal, a second and differently-worded account of an answer the
+   * caller already has as a typed error. The CLI is unchanged.
+   */
+  const say = options.onRefusal === 'throw'
+    ? (): void => {}
+    : (...args: unknown[]): void => console.log(...args);
+
+  /*
+   * NOT REMOVABLE, DESPITE LOOKING LIKE IT. This exists so a caller can be given
+   * a typed refusal instead of having the process exited from under it, and the
+   * verbose annotation is load-bearing: TypeScript narrows after a call only
+   * when the VARIABLE is declared to return `never`. Written as
+   * `const refuse = (...): never =>` it still type-checks, and every line below
+   * a refusal is then treated as reachable — which is how a refusal ends up
+   * falling through into an approval.
+   *
+   * Simplify at your peril; `spec-146-phase-11-approval-writes.test.ts` covers
+   * the behaviour, not this shape.
+   */
+  const refuse: (code: string, message: string) => never = (code, message) => {
+    if (options.onRefusal === 'throw') throw new ApprovalRefusedError(code, message);
     process.exit(1);
+  };
+
+  if (!hasHumanFlag) {
+    say('');
+    say(chalk.red('ERROR: Human approval required.'));
+    say('');
+    say('  To approve, please run:');
+    say('');
+    say(chalk.cyan(`    porch approve ${projectId} ${gateName} --a-human-explicitly-approved-this`));
+    say('');
+    refuse('HUMAN_APPROVAL_REQUIRED', 'this call did not assert an explicit human approval');
   }
 
   const approvalDecision = resolveApprovalAuthorization({
@@ -941,29 +1044,69 @@ export async function approve(
     nonces: options.nonces ?? new ApprovalNonceStore(),
   });
   if (!approvalDecision.authorized) {
-    console.log('');
-    console.log(chalk.red(`ERROR: approval refused (${approvalDecision.code}).`));
-    console.log(`  ${approvalDecision.message}`);
-    console.log('');
-    console.log('  Approve from the client, or from a shell holding a capability:');
-    console.log(chalk.cyan(`    ${CAPABILITY_ENV_VAR}=<id>.<secret> ${NONCE_ENV_VAR}=<nonce> \\`));
-    console.log(chalk.cyan(`      porch approve ${projectId} ${gateName} --a-human-explicitly-approved-this`));
-    console.log('');
-    process.exit(1);
+    say('');
+    say(chalk.red(`ERROR: approval refused (${approvalDecision.code}).`));
+    say(`  ${approvalDecision.message}`);
+    say('');
+    say('  Approve from the client, or from a shell holding a capability:');
+    say(chalk.cyan(`    ${CAPABILITY_ENV_VAR}=<id>.<secret> ${NONCE_ENV_VAR}=<nonce> \\`));
+    say(chalk.cyan(`      porch approve ${projectId} ${gateName} --a-human-explicitly-approved-this`));
+    say('');
+    refuse(approvalDecision.code, approvalDecision.message);
   }
   const approvalRecord = approvalDecision.record;
   if (approvalRecord.authorization === 'flag-only') {
     // Said out loud rather than left silent: this approval carries no evidence
     // of who made it. Silence here would read as "a human was verified".
-    console.log(chalk.yellow('  Approving with no capability: this approval records no session id.'));
+    say(chalk.yellow('  Approving with no capability: this approval records no session id.'));
   }
 
   const state = readState(statusPath);
 
+  /*
+   * A WRITE THAT HAPPENS BEFORE THE GATE IS APPROVED.
+   *
+   * `writeStateAndCommit` throws `StatePushFailed` when the state was written
+   * and committed but the push failed, and codev-agent turns that into
+   * "approved, but not pushed — do not approve again". That is right for the
+   * gate write and CATASTROPHIC for the three writes above it: a push failure
+   * during the verify auto-complete, the upgrade gate-creation or the verify
+   * phase transition would report an approval that never happened AND tell the
+   * human not to retry. They walk away believing a gate is approved that is not.
+   *
+   * The round before this one had the opposite bug — a successful approval
+   * reported as a refusal — which merely made someone re-approve. Same class,
+   * opposite sign, and this direction is far worse.
+   *
+   * So a push failure before the gate write is translated into an ordinary
+   * failure, which says plainly that the gate was NOT approved. Only the write
+   * at the end may raise `StatePushFailed`, and
+   * `spec-146-phase-11-approval-writes.test.ts` reads this function's source to
+   * assert that stays true — the push is skipped under VITEST, so no behavioural
+   * test can reach this.
+   */
+  const writeBeforeApproval = async (message: string): Promise<void> => {
+    try {
+      await writeStateAndCommit(statusPath, state, message);
+    } catch (error: unknown) {
+      // BOTH delivery failures, because both leave the gate unapproved when they
+      // happen HERE. Only the gate write's failures are a caveat on a real
+      // approval; these are failures of a preparatory step, and saying "approved
+      // but not pushed" about one would be a completed approval that never was.
+      if (error instanceof StatePushFailed || error instanceof StateCommitFailed) {
+        throw new Error(
+          `the ${gateName} gate was NOT approved: a preparatory write did not complete `
+          + `(${message}). ${error.message}`,
+        );
+      }
+      throw error;
+    }
+  };
+
   // Convenience: for verify-approval, auto-complete porch done if build_complete is false
   if (gateName === 'verify-approval' && state.phase === 'verify' && !state.build_complete) {
     state.build_complete = true;
-    await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} verify build-complete (auto)`);
+    await writeBeforeApproval(`chore(porch): ${state.id} verify build-complete (auto)`);
   }
 
   // Auto-create gate entry for upgraded projects (e.g., verify-approval missing after upgrade)
@@ -973,7 +1116,7 @@ export async function approve(
     if (phaseGate === gateName) {
       // Gate belongs to the current phase — initialize it
       state.gates[gateName] = { status: 'pending', requested_at: new Date().toISOString() };
-      await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} ${gateName} gate-created (upgrade)`);
+      await writeBeforeApproval(`chore(porch): ${state.id} ${gateName} gate-created (upgrade)`);
     } else {
       const knownGates = Object.keys(state.gates).join(', ');
       throw new Error(`Unknown gate: ${gateName}\nKnown gates: ${knownGates || 'none'}`);
@@ -981,8 +1124,14 @@ export async function approve(
   }
 
   if (state.gates[gateName].status === 'approved') {
-    console.log(chalk.yellow(`Gate ${gateName} is already approved.`));
-    return;
+    say(chalk.yellow(`Gate ${gateName} is already approved.`));
+    // The EXISTING record, so a caller reports the approval that happened rather
+    // than the one it just asked for.
+    return {
+      outcome: 'already-approved',
+      ...(state.gates[gateName].approved_at ? { approvedAt: state.gates[gateName].approved_at } : {}),
+      ...(state.gates[gateName].approval ? { record: state.gates[gateName].approval } : {}),
+    };
   }
 
   // Run phase checks before approving
@@ -999,7 +1148,7 @@ export async function approve(
     if (state.phase === 'review' && state.gates['pr']?.status === 'approved') {
       state.phase = 'verify';
       state.build_complete = true;
-      await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} verify phase-transition (verify-approval)`);
+      await writeBeforeApproval(`chore(porch): ${state.id} verify phase-transition (verify-approval)`);
     } else {
       throw new Error(
         `Cannot approve verify-approval from phase '${state.phase}'. ` +
@@ -1013,22 +1162,41 @@ export async function approve(
   const phaseCheckNames = phaseConfig?.checks ?? [];
   const checks = getPhaseChecks(protocol, state.phase, overrides ?? undefined, workspaceRoot);
 
+  if (phaseCheckNames.length > 0 && Object.keys(checks).length > 0 && options.refuseIfChecksWouldRun) {
+    // Asked with porch's OWN computation of what would run — after overrides —
+    // rather than a second reading of the protocol that could drift from it.
+    refuse(
+      'PHASE_CHECKS_REQUIRED',
+      `approving ${gateName} would run the ${state.phase} phase checks `
+      + `(${Object.keys(checks).join(', ')}), which this caller will not run. `
+      + 'Run them where they belong, then approve.',
+    );
+  }
+
   if (phaseCheckNames.length > 0) {
     const checkEnv: CheckEnv = { PROJECT_ID: state.id, PROJECT_TITLE: resolveArtifactBaseName(artifactRoot, state.id, state.title, scopedResolver) };
 
-    console.log('');
-    console.log(chalk.bold('RUNNING CHECKS...'));
+    say('');
+    say(chalk.bold('RUNNING CHECKS...'));
     logCheckOverrides(phaseCheckNames, checks, overrides);
 
     if (Object.keys(checks).length > 0) {
       const results = await runPhaseChecks(checks, artifactRoot, checkEnv, undefined, scopedResolver);
-      console.log(formatCheckResults(results));
+      say(formatCheckResults(results));
 
       if (!allChecksPassed(results)) {
+        // The CLI exits here. A server MUST NOT: failing checks are a refusal
+        // with a reason, not a reason to end the process and answer nothing.
+        if (options.onRefusal === 'throw') {
+          throw new ApprovalRefusedError(
+            'PHASE_CHECKS_FAILED',
+            `the ${state.phase} phase checks did not pass, so the gate was not approved`,
+          );
+        }
         exitChecksNotPassed(results, 'Cannot approve gate.');
       }
     } else {
-      console.log(chalk.dim('  (all checks skipped via .codev/config.json)'));
+      say(chalk.dim('  (all checks skipped via .codev/config.json)'));
     }
   }
 
@@ -1038,11 +1206,11 @@ export async function approve(
   // re-mint through the authenticated route for no reason.
   const nonceCommit = approvalDecision.consumeNonce?.();
   if (nonceCommit && !nonceCommit.accepted) {
-    console.log('');
-    console.log(chalk.red(`ERROR: approval refused (${nonceCommit.code}).`));
-    console.log(`  ${nonceCommit.message}`);
-    console.log('');
-    process.exit(1);
+    say('');
+    say(chalk.red(`ERROR: approval refused (${nonceCommit.code}).`));
+    say(`  ${nonceCommit.message}`);
+    say('');
+    refuse(nonceCommit.code, nonceCommit.message);
   }
 
   state.gates[gateName].status = 'approved';
@@ -1057,7 +1225,33 @@ export async function approve(
   if (gateName === 'pr') {
     state.pr_ready_for_human = false;
   }
-  await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} ${gateName} gate-approved`);
+  /*
+   * THE ONE WRITE THAT MAY RAISE `StatePushFailed` TO THE CALLER.
+   *
+   * Everything above went through `writeBeforeApproval`, which converts a push
+   * failure into an ordinary failure saying the gate was NOT approved. From
+   * here the gate IS approved and committed, so a push failure is a caveat on a
+   * real approval — and the caller is told which of the two it has.
+   */
+  let delivery: ApproveOutcome['delivery'];
+  let deliveryMessage: string | undefined;
+  try {
+    await writeStateAndCommit(statusPath, state, `chore(porch): ${state.id} ${gateName} gate-approved`);
+  } catch (error: unknown) {
+    // `writeState` ran before either git step, so `status.yaml` says approved in
+    // both cases and porch reads `status.yaml`. THE GATE IS APPROVED. What
+    // failed is how far that fact travelled, and the caller is told which.
+    if (error instanceof StateCommitFailed) {
+      delivery = 'written-not-committed';
+    } else if (error instanceof StatePushFailed) {
+      delivery = 'committed-not-pushed';
+    } else {
+      throw error;
+    }
+    deliveryMessage = (error as Error).message;
+    say('');
+    say(chalk.yellow(`  ${deliveryMessage}`));
+  }
 
   // Wake the builder iff porch was invoked from OUTSIDE the builder's
   // worktree. The wake-up wakes an *idle* builder; when the builder is
@@ -1077,8 +1271,8 @@ export async function approve(
     });
   }
 
-  console.log('');
-  console.log(chalk.green(`Gate ${gateName} approved.`));
+  say('');
+  say(chalk.green(`Gate ${gateName} approved.`));
 
   // For verify-approval: auto-advance to terminal state (convenience — one command)
   // NOTE: The 'verified' state is committed to the builder branch, which may not
@@ -1088,9 +1282,18 @@ export async function approve(
   if (gateName === 'verify-approval') {
     await advanceProtocolPhase(workspaceRoot, state, protocol, statusPath, resolver);
   } else {
-    console.log(`\n  Run: porch done ${state.id} (to advance)`);
+    say(`\n  Run: porch done ${state.id} (to advance)`);
   }
-  console.log('');
+  say('');
+
+  // Read back off the state that was written, not off the decision that produced
+  // it: a caller reporting this approval reports the one now in status.yaml.
+  return {
+    outcome: 'approved',
+    ...(state.gates[gateName].approved_at ? { approvedAt: state.gates[gateName].approved_at } : {}),
+    ...(state.gates[gateName].approval ? { record: state.gates[gateName].approval } : {}),
+    ...(delivery ? { delivery, deliveryMessage } : {}),
+  };
 }
 
 /**

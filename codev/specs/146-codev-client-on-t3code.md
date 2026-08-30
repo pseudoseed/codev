@@ -201,8 +201,18 @@ The requirement, stated so it is actually true:
   not reuse it. And `spawn-worktree.ts` symlinks the workspace `.env` into every builder
   worktree, so the capability must never be stored there. A test asserts both.
 - `codev-agent` refuses issuance to any caller it can identify as a builder or architect process,
-  and issuance is not reachable without a human-paired session.
-- Every approval records the capability id, machine, and timestamp in `status.yaml`.
+  and issuance is not reachable without a paired client session.
+- Every approval records the capability id, machine, session, stated authority and timestamp in
+  `status.yaml`.
+
+  > **Correction, phase 11.** An earlier version of this line said issuance needed a *human-paired*
+  > session and read as though that established human presence. It does not. Minting a pairing
+  > token requires only write access to the pairing store, and every agent on this host runs as the
+  > same user, so a builder can mint one, redeem it and hold a session. The residual is demonstrated
+  > by `lets anything with filesystem access complete the ceremony` in
+  > `agent-approval-path.test.ts` and set out in `codev/resources/146-approval-threat-model.md`.
+  > What the chain provides is scoping, revocation, ceremony binding and recorded provenance —
+  > not proof a person was there.
 
 **What this buys and what it does not.** It removes the shell-in-a-worktree self-approval path,
 which is the actual threat and which the flag never addressed. It does not stop a human who
@@ -255,8 +265,10 @@ documented install requirement.
 
 ## Non-Goals
 
-- Approving a gate from an *unauthenticated* surface, or by any agent. Approval requires a human
-  acting in an authenticated client session. See "Gate approval" below.
+- Approving a gate from an *unauthenticated* surface. Approval requires an authenticated client
+  session holding a capability, and every approval records who held it. **This is not enforcement
+  against an agent** — see the correction under "Gate approval" — it is scoping, revocation and
+  provenance. Preventing a same-uid agent is out of reach of this design and is not claimed.
 - Forking t3code.
 - Enabling T3 Connect or any cloud relay.
 - Replacing `afx` as a CLI.

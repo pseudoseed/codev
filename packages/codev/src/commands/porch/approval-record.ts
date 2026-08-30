@@ -4,13 +4,26 @@
  *
  * Success criterion 9b names the approving SESSION id specifically, and the
  * capability id is stored beside it because the two answer different questions:
- * which credential was used, and which human session used it. A capability that
+ * which credential was used, and which session used it. A capability that
  * outlives one browser session is presented by several sessions over its life.
  *
  * The record also names the authorization mode. `flag-only` is not a failure and
  * not a success — it is the honest statement that the approval carried no
  * capability, so nothing about who typed it is recorded. Leaving the field out
  * would spell "I could not tell" the same way as "a human did it".
+ *
+ * ## `capability` MEANS VERIFIED CREDENTIAL, NOT VERIFIED HUMAN
+ *
+ * A capability is issued to a session paired with a single-use token minted on
+ * this host. Minting one requires nothing but write access to the pairing store,
+ * and every agent on this host runs as the same user — so a builder can mint a
+ * token, redeem it, and approve its own gate through the advertised path.
+ *
+ * That is a real residual and it is stated rather than papered over. The record
+ * therefore carries `authority`: what the minter said authorized the token, in
+ * its own words, verbatim. A reader can see the claim an approval was made
+ * under. What it must never do is read `authorization: 'capability'` as proof a
+ * person was there.
  */
 
 import {
@@ -35,7 +48,11 @@ import {
 export type ApprovalMode = 'capability' | 'flag-only' | 'pre-approved-artifact';
 
 export interface ApprovalRecord {
-  /** `capability` means verified; `flag-only` means nothing about the caller is known. */
+  /**
+   * `capability` means a verified credential and a spent single-use nonce. It
+   * does NOT mean a human was verified — see the note above. `flag-only` means
+   * nothing about the caller is known.
+   */
   authorization: ApprovalMode;
   approved_at: string;
   machine: string;
@@ -43,6 +60,13 @@ export interface ApprovalRecord {
   caller: string;
   session_id?: string;
   capability_id?: string;
+  /**
+   * What the pairing token behind this capability claimed authorized it, verbatim.
+   *
+   * Absent when the capability predates authorities, or on the `flag-only` path.
+   * Absence means "not recorded", never "nothing authorized it".
+   */
+  authority?: string;
 }
 
 export type ApprovalDecision =
@@ -147,6 +171,7 @@ export function resolveApprovalAuthorization(input: ApprovalAuthorizationInput):
       caller: attribution.evidence,
       session_id: verification.sessionId,
       capability_id: verification.capabilityId,
+      ...(verification.authority ? { authority: verification.authority } : {}),
     },
     consumeNonce: () => input.nonces.consume(input.env[NONCE_ENV_VAR]?.trim(), scope),
   };

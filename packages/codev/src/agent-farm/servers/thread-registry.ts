@@ -20,16 +20,46 @@ export type T3codeThreadSnapshot =
   | { readonly status: 'available'; readonly threads: readonly LiveThread[] };
 
 export interface ThreadIdentity {
-  readonly threadId: string;
+  /**
+   * How this row is driven today.
+   *
+   * The dual-write window is real: on 2026-08-29 every architect and builder row
+   * in `global.db` was terminal-backed and none carried a `thread_id`. A registry
+   * that publishes only thread-backed rows therefore reports a busy workspace as
+   * EMPTY, which is the same words as "nothing is running here" for a completely
+   * different situation. Terminal-backed rows are published and labelled instead.
+   */
+  readonly backing: 'thread' | 'terminal';
+  /** Absent on a terminal-backed row, which has no t3code thread yet. */
+  readonly threadId?: string;
   readonly role: 'architect' | 'builder' | 'unmanaged';
   readonly roleId?: string;
   readonly workspacePath: string;
   readonly worktree?: string;
   readonly management: 'managed' | 'unmanaged';
   readonly porch?: PorchStatusProjection;
+  /**
+   * Which architect spawned this builder, when `global.db` recorded one. The
+   * client groups builders under their architect; without this the grouping
+   * would be a guess, and a guessed parent is a wrong answer wearing a tree.
+   */
+  readonly spawnedByArchitect?: string;
+  /**
+   * The live t3code session state, present ONLY when t3code was reachable. Its
+   * absence is not "settled" — see `t3code` on the snapshot for which of the two
+   * this is.
+   */
+  readonly sessionState?: string;
 }
 
 export interface ThreadRegistrySnapshot {
+  /**
+   * Whether session state was observable at all when this snapshot was built.
+   * A consumer that cannot see this cannot tell "t3code says every thread is
+   * settled" from "t3code was never asked", and would render the second as the
+   * first. Same word, two different situations.
+   */
+  readonly t3code: T3codeThreadSnapshot['status'];
   readonly architects: Readonly<Record<string, string>>;
   readonly builders: Readonly<Record<string, string>>;
   readonly identities: readonly ThreadIdentity[];
@@ -51,6 +81,23 @@ interface BuilderRow {
   readonly worktree: string;
   readonly terminal_id: string | null;
   readonly thread_id: string | null;
+  readonly spawned_by_architect: string | null;
+}
+
+/**
+ * The live session state for a thread, or nothing.
+ *
+ * Nothing is returned when t3code was not consulted AND when it was consulted
+ * and returned a thread carrying no state. Those are the same fact at this
+ * layer — no state was observed for this thread — and the snapshot's `t3code`
+ * field is what distinguishes "we could not ask" from "we asked".
+ */
+function sessionStateOf(
+  live: Map<string, LiveThread> | null,
+  threadId: string,
+): { sessionState?: string } {
+  const state = live?.get(threadId)?.state;
+  return state === undefined ? {} : { sessionState: state };
 }
 
 function dbSignal(error: unknown): AgentStateSignal {
@@ -236,12 +283,12 @@ export function readThreadRegistry(
       FROM architect WHERE workspace_path = ? ORDER BY id
     `).all(workspace) as ArchitectRow[];
     builders = db.prepare(`
-      SELECT id, worktree, terminal_id, thread_id
+      SELECT id, worktree, terminal_id, thread_id, spawned_by_architect
       FROM builders WHERE workspace_path = ? ORDER BY id
     `).all(workspace) as BuilderRow[];
   } catch (error) {
     signals.push(dbSignal(error));
-    return { architects: {}, builders: {}, identities: [], statuses, signals };
+    return { t3code: t3code.status, architects: {}, builders: {}, identities: [], statuses, signals };
   }
 
   const architectMap: Record<string, string> = {};
@@ -281,15 +328,28 @@ export function readThreadRegistry(
       });
       continue;
     }
-    if (row.thread_id === null) continue;
+    if (row.thread_id === null) {
+      if (row.terminal_id !== null) {
+        identities.push({
+          backing: 'terminal',
+          role: 'architect',
+          roleId: row.id,
+          workspacePath: workspace,
+          management: 'unmanaged',
+        });
+      }
+      continue;
+    }
     architectMap[row.id] = row.thread_id;
     consumed.add(row.thread_id);
     identities.push({
+      backing: 'thread',
       threadId: row.thread_id,
       role: 'architect',
       roleId: row.id,
       workspacePath: workspace,
       management: 'unmanaged',
+      ...sessionStateOf(live, row.thread_id),
     });
     if (live && !live.has(row.thread_id)) {
       signals.push({
@@ -313,13 +373,29 @@ export function readThreadRegistry(
       });
       continue;
     }
-    if (row.thread_id === null) continue;
+    if (row.thread_id === null) {
+      if (row.terminal_id !== null) {
+        const terminalPorch = statusForWorktree(statuses, row.worktree, row.id, '').status;
+        identities.push({
+          backing: 'terminal',
+          role: 'builder',
+          roleId: row.id,
+          workspacePath: workspace,
+          worktree: row.worktree,
+          management: terminalPorch ? 'managed' : 'unmanaged',
+          ...(terminalPorch ? { porch: terminalPorch } : {}),
+          ...(row.spawned_by_architect ? { spawnedByArchitect: row.spawned_by_architect } : {}),
+        });
+      }
+      continue;
+    }
     builderMap[row.id] = row.thread_id;
     consumed.add(row.thread_id);
     const resolved = statusForWorktree(statuses, row.worktree, row.id, row.thread_id);
     const porch = resolved.status;
     const management = porch ? 'managed' : 'unmanaged';
     identities.push({
+      backing: 'thread',
       threadId: row.thread_id,
       role: 'builder',
       roleId: row.id,
@@ -327,6 +403,8 @@ export function readThreadRegistry(
       worktree: row.worktree,
       management,
       ...(porch ? { porch } : {}),
+      ...(row.spawned_by_architect ? { spawnedByArchitect: row.spawned_by_architect } : {}),
+      ...sessionStateOf(live, row.thread_id),
     });
     if (!porch && resolved.candidates > 1) {
       // NOT "unmanaged". Several porch records live under this worktree and none
@@ -402,10 +480,12 @@ export function readThreadRegistry(
     for (const thread of live.values()) {
       if (consumed.has(thread.threadId)) continue;
       identities.push({
+        backing: 'thread',
         threadId: thread.threadId,
         role: 'unmanaged',
         workspacePath: workspace,
         management: 'unmanaged',
+        ...(thread.state !== undefined ? { sessionState: thread.state } : {}),
       });
       signals.push({
         code: 'THREAD_UNMANAGED',
@@ -416,5 +496,5 @@ export function readThreadRegistry(
     }
   }
 
-  return { architects: architectMap, builders: builderMap, identities, statuses, signals };
+  return { t3code: t3code.status, architects: architectMap, builders: builderMap, identities, statuses, signals };
 }

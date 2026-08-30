@@ -1,0 +1,4 @@
+.dev-machines.json
+dist/
+test-results/
+playwright-report/

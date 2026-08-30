@@ -117,6 +117,26 @@ jobs:
         working-directory: apps/v2
         run: pnpm test
 
+      # Spec 146 phase 11. The client's own suite carries the fidelity checks and
+      # the CSP/raw-HTML guard, and none of it ran anywhere before this step: the
+      # root `pnpm test` filters to @cluesmith/codev, so 90 tests existed and CI
+      # never saw one. That is this PR's own thesis — code nothing reaches passes
+      # its tests — reproduced at the repo level.
+      - name: Run client unit tests
+        working-directory: apps/client
+        run: pnpm test
+
+      - name: Type-check the client
+        working-directory: apps/client
+        run: pnpm check-types
+
+      # The two-machine e2e harness imports AgentRouteContext and the approval
+      # stores. Nothing else type-checks it, so a change to either would rot the
+      # harness silently and the criteria it proves would stop being provable.
+      - name: Type-check the codev-agent host
+        working-directory: tools/codev-agent-host
+        run: pnpm check-types
+
   canvas-browser:
     name: Artifact-Canvas Browser Tests
     runs-on: ubuntu-latest
@@ -340,4 +360,61 @@ jobs:
 
       - name: Run v2 Playwright tests
         working-directory: apps/v2
+        run: pnpm test:e2e
+
+  client-playwright:
+    name: client Playwright (two live servers)
+    runs-on: ubuntu-latest
+    # Spec 146 criteria 7, 8, 9b and 15 cannot be met against one server, and a
+    # single-server approximation of "one machine stopped" is not evidence. This
+    # job starts two real codev-agent hosts, kills one, and revokes another's
+    # credential. Bound so a stall fails rather than hangs (#1502).
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      # THE DEPENDENCY CLOSURE, NOT A LIST OF PACKAGES.
+      #
+      # `tools/codev-agent-host` runs `packages/codev` FROM SOURCE through tsx,
+      # so anything that source imports from a sibling workspace package must
+      # have a built `dist`. A fresh checkout has none, and the first version of
+      # this job built only `packages/types` — which passed locally six times,
+      # because a developer's worktree already carries the outputs of an earlier
+      # full build. It failed here on the first CI run.
+      #
+      # The missing packages were `codev-sdk` and `codev-core`, reached through
+      # `agent-farm/lib/tower-client.ts`. Naming those three would work today and
+      # would drift silently the moment `packages/codev` imports a fourth — the
+      # same hand-kept-list failure this PR keeps finding. `^...` is derived from
+      # the workspace graph instead, and costs 6s measured.
+      - name: Build the packages codev imports
+        run: pnpm --filter "@cluesmith/codev^..." build
+
+      # porch commits every state write, so the fixture's workspaces are real git
+      # repositories. Without an identity the commit fails and the approval
+      # criterion cannot run.
+      - name: Configure git identity for the fixture workspaces
+        run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "codev ci"
+
+      - name: Install Playwright Chromium
+        working-directory: apps/client
+        run: pnpm exec playwright install chromium
+
+      - name: Run client Playwright tests
+        working-directory: apps/client
         run: pnpm test:e2e

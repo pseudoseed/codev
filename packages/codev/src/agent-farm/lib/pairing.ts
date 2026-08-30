@@ -44,6 +44,10 @@ export const PAIRING_SIGNAL = {
   /** Issuance failed after the token was spent; see `release`. */
   PAIRING_CREDENTIAL_ISSUE_FAILED: 'PAIRING_CREDENTIAL_ISSUE_FAILED',
   PAIRING_STORE_UNREADABLE: 'PAIRING_STORE_UNREADABLE',
+  /** The token was minted for a different ceremony than the one spending it. */
+  PAIRING_TOKEN_WRONG_PURPOSE: 'PAIRING_TOKEN_WRONG_PURPOSE',
+  /** Issuance was asked for without naming what authorized it. */
+  PAIRING_AUTHORITY_REQUIRED: 'PAIRING_AUTHORITY_REQUIRED',
 } as const;
 
 export type PairingSignal = (typeof PAIRING_SIGNAL)[keyof typeof PAIRING_SIGNAL];
@@ -54,12 +58,34 @@ const MAX_TOKEN_TTL_MS = 60 * 60 * 1000;
 /** How long a spent or expired token is kept so REDEEMED/EXPIRED stay distinct from UNKNOWN. */
 const TOMBSTONE_RETENTION_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * What a token may be spent on.
+ *
+ * ONE TOKEN USED TO SERVE BOTH CEREMONIES with nothing binding it to either, so
+ * a token an operator minted to pair a device could be spent instead on the
+ * session that authorizes gate approvals. Binding is cheap and the absence of it
+ * was a real hole.
+ */
+export type PairingPurpose = 'machine-credential' | 'client-session';
+
 interface StoredPairingToken {
   readonly id: string;
   /** Hex SHA-256 of the secret. */
   readonly verifier: string;
   readonly issuedAt: number;
   readonly expiresAt: number;
+  /** What this token may be redeemed for. Absent on tokens minted before purposes existed. */
+  readonly purpose?: PairingPurpose;
+  /**
+   * WHAT AUTHORIZED THIS MINT, in the minter's own words, recorded verbatim.
+   *
+   * This store cannot verify a human was present — see `issue` — so it records
+   * who says so instead of asserting it. The string travels to the redemption,
+   * to the session, and into `status.yaml` beside any approval that session
+   * makes, so provenance is a chain of stated facts rather than one unstated
+   * assumption.
+   */
+  readonly authority?: string;
   /** Set when redeemed; the record stays as a tombstone until retention passes. */
   redeemedAt?: number;
   /** The machine name the redeemer declared. Recorded for the audit trail. */
@@ -82,6 +108,8 @@ export interface PairingRedemption {
   readonly code: PairingSignal;
   readonly message: string;
   readonly pairingId?: string;
+  /** The authority recorded at mint time, carried forward on a success. */
+  readonly authority?: string;
 }
 
 function sha256Hex(value: string): string {
@@ -174,9 +202,36 @@ export class PairingStore {
     });
   }
 
-  issue(options: { ttlMs?: number } = {}): IssuedPairingToken {
+  /**
+   * Mint a token for one ceremony, naming what authorized the mint.
+   *
+   * ## WHAT THIS DOES NOT PROVE, stated because the code cannot enforce it
+   *
+   * Minting requires nothing but the ability to write this file. A process
+   * running as the same user as the operator — which every builder on this host
+   * is — can construct this store and mint a token, redeem it, and hold whatever
+   * the redemption grants. There is no channel on a single-uid host that a
+   * builder cannot also reach, so **no argument written here makes a token
+   * evidence that a human was present.**
+   *
+   * An earlier version of the threat model said a builder was stopped by having
+   * no paired session. It was not: it could mint itself one. The property the
+   * document asserted did not exist, which is worse than a documented gap
+   * because the next person builds on it.
+   *
+   * So this records rather than asserts. `authority` is the minter's own account
+   * of what authorized it, carried verbatim to the redemption, the session and
+   * `status.yaml`. A gate approved through a token an agent minted for itself
+   * says so, in the record, where a reader can see it.
+   *
+   * `purpose` binds the token to one ceremony, which IS enforced: a token minted
+   * to pair a device cannot be spent on a session, and vice versa.
+   */
+  issue(options: { ttlMs?: number; purpose: PairingPurpose; authority: string }): IssuedPairingToken {
     const requested = options.ttlMs ?? DEFAULT_TOKEN_TTL_MS;
     if (!Number.isFinite(requested) || requested <= 0) throw new Error('PAIRING_TTL_INVALID');
+    const authority = options.authority?.trim();
+    if (!authority) throw new Error(PAIRING_SIGNAL.PAIRING_AUTHORITY_REQUIRED);
     const ttl = Math.min(requested, MAX_TOKEN_TTL_MS);
     const id = randomUUID();
     const secret = randomBytes(32).toString('base64url');
@@ -186,6 +241,8 @@ export class PairingStore {
       verifier: sha256Hex(secret),
       issuedAt,
       expiresAt: issuedAt + ttl,
+      purpose: options.purpose,
+      authority,
     };
     withStoreLock(this.#path, PAIRING_SIGNAL.PAIRING_STORE_LOCKED, () => {
       this.#write([...this.#sweep(this.#read()), record]);
@@ -204,7 +261,10 @@ export class PairingStore {
    * of the same token would otherwise both read it unredeemed and both succeed,
    * which is precisely the property this is supposed to have.
    */
-  redeem(token: string | undefined, options: { machine: string }): PairingRedemption {
+  redeem(
+    token: string | undefined,
+    options: { machine: string; purpose: PairingPurpose },
+  ): PairingRedemption {
     if (token === undefined || token.length === 0) {
       return {
         redeemed: false,
@@ -261,6 +321,19 @@ export class PairingStore {
           pairingId,
         };
       }
+      // CHECKED AFTER expiry and replay, and NOT SPENT on a mismatch: a token
+      // presented to the wrong ceremony is still good for its own. Consuming it
+      // here would let anything that can reach one route destroy tokens minted
+      // for the other.
+      const purpose = record.purpose ?? 'machine-credential';
+      if (purpose !== options.purpose) {
+        return {
+          redeemed: false,
+          code: PAIRING_SIGNAL.PAIRING_TOKEN_WRONG_PURPOSE,
+          message: `this token was minted for ${purpose}, not ${options.purpose}`,
+          pairingId,
+        };
+      }
       tokens[index] = { ...record, redeemedAt: now, redeemedBy: options.machine };
       this.#write(tokens);
       return {
@@ -268,6 +341,7 @@ export class PairingStore {
         code: PAIRING_SIGNAL.PAIRING_TOKEN_ACCEPTED,
         message: 'pairing token redeemed',
         pairingId,
+        authority: record.authority,
       };
     });
   }
