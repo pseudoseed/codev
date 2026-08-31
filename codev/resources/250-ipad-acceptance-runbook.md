@@ -73,13 +73,31 @@ Playwright suite asserts by recording every request the page issues.
 `https://<mac>.<tailnet>.ts.net:5733/api/codev/agent-targets`. It must answer
 `{"targets":[{"id":"local"}], ...}`.
 
-### 3. Mint the two tokens the iPad will need
+### 3a. Mint the t3code pairing link — the iPad's way IN to t3code
+
+This is t3code's own pairing, and it is **not** the codev-agent credential. It gets the iPad into
+the app; approving a gate needs the two tokens in 3b as well.
+
+```bash
+t3 auth pairing create --base-url https://<mac>.<tailnet>.ts.net:5733
+```
+
+`--base-url` makes it print a ready `/pair#token=…` link, which is the whole point — it is one tap
+on the iPad instead of a transcribed token (`apps/server/src/cli/auth.ts:74-76`).
+
+The `t3` CLI reads the same auth store the server does, so this works when both point at the same
+base dir. Step 1 uses the shared `~/.t3`, and so does an installed `t3` with no location flags. If
+your `t3` is pinned elsewhere, pass the same location flags `pnpm dev` is using, or fall back to
+`POST /api/auth/pairing-token` against the running server with an existing bearer — the same route
+the phase-10 fixture uses.
+
+### 3b. Mint the two codev-agent tokens
 
 They are different secrets with different purposes, and one does not substitute for the other.
 
 ```bash
-afx pair issue --purpose machine-credential --ttl-minutes 30   # step 11 on the iPad
-afx pair issue --purpose client-session     --ttl-minutes 30   # step 13 on the iPad
+afx pair issue --purpose machine-credential --ttl-minutes 30   # step 11 on the iPad (pairing form)
+afx pair issue --purpose client-session     --ttl-minutes 30   # step 13 on the iPad (Session token)
 ```
 
 `--purpose` is required and has no default, and a token minted for one ceremony is refused at the
@@ -111,7 +129,7 @@ Safari. No app, no account, no cloud relay.
 | # | Do this | You should see | If not |
 |---|---|---|---|
 | 5 | Open `https://<mac>.<tailnet>.ts.net:5733` (the URL `dev:share` printed) | t3code's pairing screen, "Enter a pairing token to start a session" | A blank page means `dev:share` warned and served locally only — re-read step 1's output. A timeout means the iPad is not on the tailnet — check `tailscale status` on the Mac lists the iPad |
-| 6 | Paste the t3code pairing credential — `POST /api/auth/pairing-token` on the Mac with your bearer, or open the `/pair#token=<credential>` URL directly | The app loads with the sidebar | Landing back on the pairing form means the credential was already spent — mint another |
+| 6 | Open the pair link from step 3b, or paste its token into the form | The app loads with the sidebar | Landing back on the pairing form means the credential was already spent — mint another |
 | 7 | Tap the sidebar toggle if the sidebar is off-canvas | **The tree: workspace → architect → its builders**, indented, with `Architect` captions | A flat list means `hasCodevHierarchy` is false — the threads carry no `role`, so this is not an iPad problem |
 | 8 | Tap **Builders** in the sidebar | The grid, one pane per agent, each showing its porch phase and its last three messages | Panes reading "Phase needs a codev-agent credential" is expected here — you have not paired with the agent yet. That is step 9 |
 | 9 | Open the gated builder's thread | A rose **Waiting on you: `<gate>`** panel with the question and the choices | If the panel is absent the gate is not on the thread; check `porch status` again |
