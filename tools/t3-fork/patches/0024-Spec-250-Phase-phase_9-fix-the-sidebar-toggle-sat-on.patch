@@ -1,0 +1,67 @@
+From 36717ab7ecfcd3e2262580c6c3b56d68a67d4929 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Mon, 31 Aug 2026 02:07:28 -0600
+Subject: [PATCH 24/26] [Spec 250][Phase: phase_9] fix: the sidebar toggle sat
+ on the first pane's title at 390
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Caught in the screenshot, not by a test — the shell's floating sidebar toggle
+overlaps the top-left of the content area, and with no header on this route it
+landed on the first pane's own 'architect/' label.
+
+A header row clears it at every width and names the page, which seven unlabelled
+cards otherwise leave a reader to infer. The mobile inset is on the header rather
+than on the grid, so the panes keep the full width the geometry measured.
+
+Also shortens the messages placeholder: the same three-line sentence repeated in
+seven panes was most of the screen's text. It still says what is true and what
+publishes it, in one line, and the footer's Open link was already the affordance
+the long version was spelling out.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/codev/BuilderPane.tsx           |  3 +--
+ apps/web/src/routes/_chat.codev-builders.tsx | 14 ++++++++++++++
+ 2 files changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/apps/web/src/codev/BuilderPane.tsx b/apps/web/src/codev/BuilderPane.tsx
+index 3c5c535c4..8ccf51a55 100644
+--- a/apps/web/src/codev/BuilderPane.tsx
++++ b/apps/web/src/codev/BuilderPane.tsx
+@@ -123,8 +123,7 @@ export function BuilderPane(props: {
+           which is a claim about the builder rather than about what reached the
+           browser — and it would be wrong.
+         */}
+-        Recent messages come from codev-agent, which this page does not read yet. Open the thread
+-        to read them now.
++        Messages not read here yet — published by codev-agent.
+       </div>
+ 
+       <footer className="flex min-w-0 items-baseline gap-2 text-[13px] text-muted-foreground">
+diff --git a/apps/web/src/routes/_chat.codev-builders.tsx b/apps/web/src/routes/_chat.codev-builders.tsx
+index 1cde3215f..ddf978fa0 100644
+--- a/apps/web/src/routes/_chat.codev-builders.tsx
++++ b/apps/web/src/routes/_chat.codev-builders.tsx
+@@ -65,6 +65,20 @@ function CodevBuilderGridRoute() {
+ 
+   return (
+     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
++      {/*
++        A header, and it is not decoration.
++
++        At 390 the shell's sidebar toggle floats over the top-left of the content
++        area, and without a header it lands on the first pane's own title. This
++        row clears it at every width and names the page, which the grid otherwise
++        does not do — seven cards with no heading is a screen you have to infer.
++      */}
++      <header className="flex shrink-0 items-baseline gap-2 border-b border-sidebar-border/60 px-3 py-2 ps-12 sm:ps-3">
++        <h1 className="font-medium text-card-foreground text-sm">Builders</h1>
++        <span data-testid="codev-builder-grid-count" className="text-[13px] text-muted-foreground">
++          {panes.length}
++        </span>
++      </header>
+       {panes.length === 0 ? (
+         <p className="px-4 py-8 text-center text-muted-foreground text-sm">
+           No Codev agents in this workspace yet.

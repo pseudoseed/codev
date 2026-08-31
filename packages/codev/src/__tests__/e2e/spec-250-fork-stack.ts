@@ -556,3 +556,84 @@ export async function seedHierarchy(stack: ForkStackReady): Promise<SeededHierar
     gate,
   };
 }
+
+
+export interface SeededTiling {
+  readonly projectId: string;
+  readonly projectTitle: string;
+  readonly architectTitle: string;
+  readonly builderTitles: readonly string[];
+}
+
+/**
+ * One architect and six builders, and nothing else, for the tiling measurement.
+ *
+ * A separate seeding from `seedHierarchy` on purpose. The grid is not scoped to
+ * a project — it shows the agents Codev is running in this workspace — so a run
+ * that also carried the hierarchy fixture's threads would be measuring a grid
+ * with a pane count nobody chose. The fixture restarts the server on empty data,
+ * which is what makes "exactly seven panes" a fact rather than a hope.
+ *
+ * SEVEN panes is the point. Criterion 5 wants six builders watchable at
+ * 1440x900; criterion 5b wants seven panes at 1920 tiling 4x2 rather than 3x3,
+ * and seven is the count that tells the fewest-rows rule apart from a
+ * near-square one — both give three columns at 1440.
+ */
+export async function seedTiling(stack: ForkStackReady): Promise<SeededTiling> {
+  const { client, close } = await connect(stack, stack.accessToken);
+  const projectId = uniqueId();
+  const projectTitle = "spec 250 tiling";
+  const forkRoot = harnessEnv().T3CODE_FORK_ROOT ?? "";
+  await client.call("orchestration.dispatchCommand", {
+    type: "project.create",
+    commandId: uniqueId(),
+    projectId,
+    title: projectTitle,
+    workspaceRoot: forkRoot,
+    defaultModelSelection: { instanceId: "codex", model: "gpt-5.6-luna" },
+    createdAt: new Date().toISOString(),
+  });
+
+  const createThread = async (fields: Record<string, unknown>): Promise<void> => {
+    await client.call("orchestration.dispatchCommand", {
+      type: "thread.create",
+      commandId: uniqueId(),
+      modelSelection: { instanceId: "codex", model: "gpt-5.6-luna" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: forkRoot,
+      createdAt: new Date().toISOString(),
+      projectId,
+      ...fields,
+    });
+  };
+
+  const architectTitle = "Architect main";
+  const architectId = uniqueId();
+  await createThread({ threadId: architectId, title: architectTitle, role: "architect" });
+  const builderTitles = [
+    "Builder one",
+    "Builder two",
+    // Deliberately long, and it is the only reason the role-prefix test can
+    // fail. With six short titles a pane never runs out of room, so a prefix
+    // that COULD be clipped never is — and a test that cannot fail is not a
+    // test. Real builder threads are named `builder/spir-250 gate rendering in
+    // t3code` and worse.
+    "Builder three with a deliberately very long thread title that will not fit a pane",
+    "Builder four",
+    "Builder five",
+    "Builder six",
+  ];
+  for (const title of builderTitles) {
+    await createThread({
+      threadId: uniqueId(),
+      title,
+      role: "builder",
+      parentThreadId: architectId,
+    });
+  }
+
+  close();
+  return { projectId, projectTitle, architectTitle, builderTitles };
+}

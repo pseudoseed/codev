@@ -986,7 +986,121 @@ than as finished. And a gate with nothing attached says so, instead of looking l
 
 Nothing here approves anything: that is phase 10. This is the reading half.
 
+## Phase 9 — Builder tiling
+
+### The port was a re-measurement, and the difference is 228px
+
+`apps/client/src/responsive/layout.ts` computes every column count from `viewportWidth`, because its
+grid **was** the page. This one is a route inside t3code's chat shell, behind a sidebar that is
+232px at rest, narrower when dragged, and gone at 390. Carrying the constants across unchanged would
+have produced numbers that are right about a page nobody is looking at.
+
+Every function takes the AVAILABLE width now, and the grid measures its own container with a
+`ResizeObserver` — a window listener would miss a collapsed sidebar entirely, which changes the
+space without changing the window. Six panes at 1440 have 1176px of it, not 1404.
+
+Three columns fit either way, so **criterion 5 would have passed on the viewport version by luck.**
+That is worth saying plainly: the acceptance criterion the plan leads with cannot detect the bug the
+plan asks the port to avoid. Criterion 5b can, which is why it exists.
+
+`PAGE_PADDING` dropped 18 → 12 (t3code's shell already pays for horizontal inset); `GRID_GAP` stayed
+at 12 (already t3code's rhythm). Both recorded in the file with the measurement.
+
+### The rendered columns are counted from the browser, not from the component
+
+The grid publishes `data-codev-grid-columns`, and an assertion on that alone would be asking the
+component to confirm its own arithmetic — the same defect as phase 7's builder count, which the
+review caught there. So the Playwright spec counts distinct rendered x-positions of the pane boxes,
+and asserts the attribute too. They have to agree.
+
+### Two defects the screenshots caught that the tests did not
+
+**Pane text was 12px.** `text-xs` is t3code's own secondary-label size and it is right in a sidebar
+row, read from a foot away with one thread in focus. A pane is a tile in a grid of seven, scanned
+rather than read, and criterion 5 puts the floor at 13 for that reason. The type went up. The
+alternative — narrowing the assertion to "body text only" and declaring the labels out of scope — is
+how a grid passes its tests and is unusable, which is the failure this project already has on record
+from spec 83.
+
+**At 390 the shell's floating sidebar toggle sat on the first pane's own label.** No test could see
+it: every pane was over the floor, nothing overflowed, and the toggle is not part of the grid. The
+route has a header now, which clears it at every width and names a screen that was otherwise seven
+unlabelled cards.
+
+### The pane says what it cannot see, and the first version of that was FALSE
+
+Two of the four things the plan asks a pane to show — the porch phase and the last three messages —
+are not on the thread. The first draft called them "not published" and asked the architect to choose
+between adding a contract field, subscribing per pane, or shipping without them.
+
+All three options were wrong, and the architect checked rather than ruling from the framing:
+`codev-agent` **already publishes both**, workspace-scoped, in ONE request for the whole grid —
+`GET /api/agent/v1/workspaces/<b64>/state` carries `porch.phase` and the last three messages per
+identity. That is where `apps/client` reads them. So the plan's ban on six continuous subscriptions
+was never in tension with showing them, and no contract change was needed.
+
+The lasting correction is the wording. "Phase not published" is a claim about the world and it is
+false; the true sentence is that this page cannot reach codev-agent yet, which phase 10 fixes. A
+pane asserting data does not exist when the pane simply cannot see it is this project's most-caught
+defect, and it nearly shipped again in the words rather than in the code.
+
+### A criterion the spec dropped, restored because a screenshot argued for it
+
+Spec 250 restated spec 146's criteria 5 and 5b and never restated 4b — the architect does not take
+an equal tile where that makes a ragged row. Nothing in this plan was broken by the omission, and
+the first 1440 screenshot was the argument: six builders and an architect at three columns is
+3 + 3 + 1, one lonely card beside two empty slots. It is in the plan as a criterion now, so the next
+reader checks it rather than remembering it.
+
+The interesting part is the number. Spec 146 states 4b as "1920 or wider", and implementing that
+literally here would have been **wrong**: `apps/client` owns the whole viewport, so its viewport
+width and its available width are the same number, while this grid sits behind a sidebar where 1920
+of viewport is 1688 of grid. A viewport threshold would offer the tile at 1920 with the sidebar
+dragged wide enough that only three columns fit — the exact defect the criterion exists to prevent.
+
+So it is stated as "four columns fit", which is not a proxy for the reason but the reason itself:
+seven items at four columns is 4 + 3, the ordinary shape of any grid. It gives what 4b names at both
+viewports 4b names, and it is right at a 1600px window with a collapsed sidebar, where the literal
+reading would wrongly withhold the tile. Spec 146's wording stays as it is — `apps/client` is frozen
+and still owns its viewport, so it is still true there.
+
+Raised before building rather than after, and the architect ruled on the departure rather than on
+the framing.
+
+### A test that could not fail, and the fixture that fixed it
+
+The architect asked whether an architect TILE stays distinguishable from a builder tile in the
+multi-architect case, where there is no strip, no indent and no rail — the role prefix is the whole
+distinction. It could be clipped: the prefix lived inside the truncating span, so a long enough
+title in a narrow enough pane would eat it.
+
+Two things about the check that catches it. It measures `scrollWidth` against `clientWidth` rather
+than reading text, because `text-overflow: ellipsis` is invisible to a text assertion — the DOM
+still holds `builder/`, so `toContainText("builder/")` passes on a prefix rendered as `buil…`. And
+it could not have failed as first written: six short fixture titles never fill a pane, so a prefix
+that COULD be clipped never was.
+
+One fixture builder is named long enough to truncate now. Verified by reverting: that pane clips its
+prefix by 22px, and the text assertion still passes. Real threads are named `builder/spir-250 gate
+rendering in t3code` and worse, so the long title is the realistic case rather than a contrivance.
+
+### What can a human see or do now that they could not before
+
+Open one screen and watch six builders at once inside t3code, each pane naming the agent by role,
+its status, and the gate it is stopped at if it has one — a clean 3x2 at 1440x900 with every pane
+over 340x240 and the architect on a strip below it that expands on demand, seven equal tiles in four
+columns at 1920 where that is not ragged, and on a phone pages of two rather than seven panes
+squeezed under the readable floor.
+
 ## Flaky Tests
+
+`packages/codev/src/terminal/__tests__/session-manager.test.ts > stderr tail logging (integration) >
+no stderr tail logged for file-based stderr (Bugfix #324)` timed out at 30s once during phase 9,
+in a full-suite run. It spawns a real process, nothing in spec 250 goes near `src/terminal/`, and it
+passed alone immediately afterwards and in the next full run (7370 passed, 0 failed). Recorded
+rather than skipped: a test that passes on its own and once timed out under load is a timing
+sensitivity, and annotating it as skipped would remove coverage to hide a slow machine.
+
 
 `apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint` fails in the fork.
 Pre-existing and unrelated to spec 250: `git diff 082e6ea5 -- entrypoint.ts entrypoint.test.ts` is

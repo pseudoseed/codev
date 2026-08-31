@@ -1,0 +1,60 @@
+From 0065abc29ed71e42766c0152ec830394088b177d Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Mon, 31 Aug 2026 02:23:40 -0600
+Subject: [PATCH 26/26] [Spec 250][Phase: phase_9] fix: the pane's role prefix
+ could be clipped, and it is the only thing saying what a tile is
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Raised by the architect against the multi-architect case, and it was a real
+exposure. With several architects every one of them takes a tile beside the
+builders — no strip, no indent, no rail — so the `architect/` prefix is the
+entire distinction between a tile that runs builders and a tile that is one.
+
+It was inside the truncating span. A long enough title in a narrow enough pane
+would have clipped it, and `text-overflow: ellipsis` makes that invisible to a
+text assertion: the DOM still holds the whole string, so `toContainText` passes
+on 'archi…'.
+
+Prefix and title are separate elements now: the prefix does not shrink and the
+title gives way. The e2e measures `scrollWidth` against `clientWidth` rather than
+reading text, because reading text is what would not have caught it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/codev/BuilderPane.tsx | 18 +++++++++++++++---
+ 1 file changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/apps/web/src/codev/BuilderPane.tsx b/apps/web/src/codev/BuilderPane.tsx
+index 8ccf51a55..239343ce8 100644
+--- a/apps/web/src/codev/BuilderPane.tsx
++++ b/apps/web/src/codev/BuilderPane.tsx
+@@ -67,12 +67,24 @@ export function BuilderPane(props: {
+       className="flex min-w-0 flex-col gap-2 overflow-hidden rounded-xl border border-sidebar-border/60 bg-card p-3"
+     >
+       <header className="flex min-w-0 items-baseline gap-2">
++        {/*
++          The role prefix does NOT shrink, and the title does.
++
++          In the sidebar the role caption competes for the row and truncates to
++          "Archit…" when a gate is beside it; there the indent and the rail still
++          say what the row is. A pane in a grid has neither — the prefix IS the
++          distinction, and it matters most in the case where every architect
++          takes a tile beside the builders rather than a strip. So it is its own
++          element with `shrink-0`, and the title is what gives way.
++        */}
+         <span
+           data-testid="codev-pane-id"
+-          className="min-w-0 truncate font-medium text-card-foreground text-sm"
++          className="flex min-w-0 items-baseline font-medium text-sm"
+         >
+-          <span className="text-muted-foreground">{rolePrefix}/</span>
+-          {thread.title}
++          <span data-testid="codev-pane-role" className="shrink-0 text-muted-foreground">
++            {rolePrefix}/
++          </span>
++          <span className="min-w-0 truncate text-card-foreground">{thread.title}</span>
+         </span>
+         <span
+           data-testid="codev-pane-status"

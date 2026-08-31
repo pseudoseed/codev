@@ -1,7 +1,7 @@
 From a183f56ecec2c039fb0b2b33a2ea75b7316bce76 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 23:50:54 -0600
-Subject: [PATCH 16/21] [Spec 250][Phase: phase_7] feat: the project level, the
+Subject: [PATCH 16/26] [Spec 250][Phase: phase_7] feat: the project level, the
  role marker, and an orphan group that is not a warning
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

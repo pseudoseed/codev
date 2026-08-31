@@ -983,13 +983,34 @@ This repository:
 - [ ] **Criterion 5b**: seven panes at 1920 tile **4x2, not 3x3**. This is the case that
       distinguishes the two rules — both give 3 columns at 1440x900, so criterion 5 alone cannot
       tell them apart.
+- [ ] **Criterion 4b** (added during phase 9, at the architect's direction, after the first
+      screenshot showed the defect it exists to prevent). The architect does **not** occupy an
+      equal tile where that makes a ragged row: at 1440x900 six builders and an architect are
+      3 + 3 + 1, one lonely card beside two empty slots. It gets a **persistent strip below the
+      grid** showing identity and status, and **expands to a full pane on demand**. An equal tile
+      is offered only where four columns fit.
+
+      **Four columns, not "1920 or wider", and the number changed for a reason the next reader
+      should not undo.** Spec 146 states 4b as a viewport width, which is correct for
+      `apps/client`: that client owns the whole viewport, so available width and viewport width
+      are the same number, and it stays correct there — `apps/client` is frozen. This grid sits
+      behind t3code's sidebar, where 1920 of viewport is 1688 of grid, and a viewport threshold
+      would offer the tile at 1920 even with the sidebar dragged wide enough that only three
+      columns fit — the exact ragged row 4b exists to prevent. Four columns is not a proxy for the
+      reason; it **is** the reason: seven items at four columns is 4 + 3, the ordinary shape of
+      any grid.
+
+      Keyed on **width alone**, never on the builder count. A count-based rule would move the
+      architect between strip and tile as builders come and go, which is a layout that reflows
+      under a reader who did nothing.
 - [ ] The same grid at 390px has no horizontal scroll.
 - [ ] Fork typecheck green; fork tests green for `apps/web`'s codev suites.
 
 #### Test Plan
 
 - Unit: `columnsFor` across 1..8 panes at 1440, 1920 and 700, including the 7-at-1920 case as its
-  own named test.
+  own named test. `architectPlacement` at both viewports 4b names, at its turnover width, and a
+  test asserting it does not consult the builder count.
 - Playwright, from this repository at
   `packages/codev/src/__tests__/e2e/spec-250-tiling.spec.ts`: measure pane bounding boxes and
   computed font size at 1440x900 with six panes; at 1920 with seven; at 390px for overflow. These
@@ -997,6 +1018,8 @@ This repository:
   it proves the arithmetic, not that the rendered pane is 340px wide inside t3code's chrome.
 - The seeded fixture is part of the deliverable: six builder threads with roles and parents, so
   the measurement runs against a real tree rather than a mocked grid.
+- Playwright, for 4b: six panes and a strip at 1440x900, seven panes and no strip at 1920, and the
+  strip expanding to a full pane and back with the builders' grid intact behind it.
 - Visual: the grid beside the `apps/client` grid, to catch content that was dropped rather than
   laid out.
 

@@ -1,7 +1,7 @@
 From 90a5a2d3a3123f8eae7d280ed46fd6e7b3640db1 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 23:22:52 -0600
-Subject: [PATCH 15/21] [Spec 250][Phase: phase_7] feat: the sidebar draws
+Subject: [PATCH 15/26] [Spec 250][Phase: phase_7] feat: the sidebar draws
  Workspace > Architect > Builders
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

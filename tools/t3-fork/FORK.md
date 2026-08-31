@@ -217,6 +217,13 @@ vendored contract is what decides whether Codev depends on the customization.
 | 8 | `90d2b118b786` | The terminal excerpt gains a caption — unlabelled it is just trailing monospace. |
 | 8 | `81c2463d7…` → `98e950e42` | The row marker: two placements tried, both clipped something at ~230px. It is a gavel plus the gate name now, on the line above the title. |
 | 8 | `efadf838c414` | Both phases re-shot against those changes. |
+| 9 | `36038cdcb…` → `d2e675a7aa08` | `apps/web/src/codev/layout.ts`, `BuilderGrid.tsx`, `BuilderPane.tsx` and a `_chat/codev-builders` route — four to six builders watchable at once, geometry ported from `apps/client` and re-measured against t3code's chrome. |
+| 9 | `36717ab7ecfc` | The route gains a header: at 390 the shell's floating sidebar toggle was sitting on the first pane's title. |
+| 9 | `2529a40421d1` | The grid screenshotted at the three widths. |
+| 9 | `6fecade36146` | Criterion 4b: the architect takes a strip below the grid rather than a ragged seventh tile, and an equal tile only where four columns fit. |
+| 9 | `b97ef30dea2b` | Re-shot with the strip. |
+| 9 | `0065abc29ed7` | The pane's role prefix cannot be clipped: it is the only thing distinguishing an architect tile from a builder tile when every architect takes one. |
+| 9 | `aeebd7f2b9c2` | Re-shot with a long title in the grid, which is what makes the prefix test able to fail. |
 
 **Phase 5 added no row, and that is not an omission.** It regenerated the vendored contract in the
 Codev repository from `51b55d4899e4`; it changed nothing in the fork.
@@ -300,6 +307,54 @@ So the fixture reads that credential from `<serverBaseDir>/codev/gate-writer.tok
 fork's server writes it at start, and opens its own connection with it — which is exactly what
 `thread-backend.ts` does in production. A fixture that obtained the ability any other way would
 have been testing a path no writer uses.
+
+### Phase 9: the tiling had to be re-measured, and the width is not the viewport's
+
+`apps/client/src/responsive/layout.ts` computed every column count from
+`viewportWidth`, because its grid WAS the page. This one is a route inside the chat shell, behind a
+sidebar that is 232px at rest, narrower when dragged and gone at 390. Carrying the constants across
+unchanged would have produced numbers that are right about a page nobody is looking at.
+
+So every function takes the AVAILABLE width and the grid measures its own container with a
+`ResizeObserver` — a window listener would miss a collapsed sidebar entirely, which changes the
+space without changing the window. Six panes at 1440 have 1176px, not 1404. Three columns fit
+either way, so criterion 5 would have passed on the viewport version by luck; seven panes at 1920
+is the case that keeps it honest, and it is criterion 5b.
+
+`PAGE_PADDING` dropped from 18 to 12 — t3code's shell already pays for horizontal inset and the
+grid should not double it. `GRID_GAP` stayed at 12 because that was already t3code's rhythm. Both
+are in the file with the measurement rather than carried silently.
+
+### Criterion 4b came back, and the screenshot is why
+
+Spec 250 restated spec 146's criteria 5 and 5b and never restated 4b. Nothing in the plan was
+broken by leaving it out — and the first 1440 screenshot was the argument for it: six builders and
+an architect at three columns is 3 + 3 + 1, one lonely card beside two empty slots. The architect
+directed it in, and the plan carries it as a criterion now rather than as a memory.
+
+**It is stated as "four columns fit", not as "1920 or wider", and the number must not be corrected
+back.** Spec 146 states a viewport width, which is right for `apps/client`: that client owns the
+whole viewport, so available and viewport are the same number, and it stays right there. This grid
+sits behind a sidebar, where 1920 of viewport is 1688 of grid — and a viewport threshold would offer
+the tile at 1920 with the sidebar dragged wide enough that only three columns fit, which is the
+ragged row 4b exists to prevent. Four columns is not a proxy for the reason; it is the reason
+written down: seven items at four columns is 4 + 3, the ordinary shape of any grid.
+
+Keyed on width alone and never on the builder count, asserted as its own test. A count-based rule
+would move the architect between strip and tile as builders come and go, which is a layout that
+reflows under a reader who did nothing.
+
+### Two phase 9 defects the screenshots caught and the tests did not
+
+The pane's status, phase and footer lines were `text-xs`, which is 12px. That is right for a sidebar
+row — read from a foot away with one thread in focus — and wrong for a tile in a grid of seven,
+which is scanned. Criterion 5 puts the floor at 13 for exactly that reason. The type went up; the
+alternative was narrowing the assertion to "body text only" and declaring the labels out of scope,
+which is how a grid passes its tests and is unusable.
+
+And at 390 the shell's floating sidebar toggle sat on top of the first pane's own `architect/`
+label. The route has a header now, which clears it at every width and names a screen that was
+otherwise seven unlabelled cards.
 
 ### The gate marker had to fit a 230px row, and neither first answer did
 

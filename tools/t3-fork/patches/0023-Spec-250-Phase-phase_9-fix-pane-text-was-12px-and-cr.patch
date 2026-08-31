@@ -1,0 +1,62 @@
+From d2e675a7aa08703998b52d802e5e16d5cf43432e Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Mon, 31 Aug 2026 02:05:56 -0600
+Subject: [PATCH 23/26] [Spec 250][Phase: phase_9] fix: pane text was 12px and
+ criterion 5 puts the floor at 13
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Measured from the rendered page, not assumed: the status, phase and footer lines
+were t3code's `text-xs`, which is 12px.
+
+That is right for a sidebar row — read from a foot away with one thread in focus
+— and wrong for a tile in a grid of seven, which is scanned. Criterion 5 puts the
+floor at 13 for exactly that reason. Raised the type; the alternative was
+narrowing the assertion to 'body text only' and declaring the labels out of
+scope, which is how a grid passes its tests and is unusable.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/codev/BuilderPane.tsx | 16 +++++++++++++---
+ 1 file changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/apps/web/src/codev/BuilderPane.tsx b/apps/web/src/codev/BuilderPane.tsx
+index c13ec7366..3c5c535c4 100644
+--- a/apps/web/src/codev/BuilderPane.tsx
++++ b/apps/web/src/codev/BuilderPane.tsx
+@@ -76,13 +76,23 @@ export function BuilderPane(props: {
+         </span>
+         <span
+           data-testid="codev-pane-status"
+-          className={cn("ml-auto shrink-0 font-medium text-xs", status.colorClass)}
++          className={cn("ml-auto shrink-0 font-medium text-[13px]", status.colorClass)}
+         >
+           {status.label}
+         </span>
+       </header>
+ 
+-      <p data-testid="codev-pane-phase" className="flex min-w-0 items-center gap-1 text-xs">
++      {/*
++        13px, not `text-xs`.
++
++        t3code's own secondary labels are 12px and that is right in a sidebar
++        row, which is read from a foot away with one thread in focus. A pane is
++        a tile in a grid of seven, scanned rather than read, and criterion 5 puts
++        the floor at 13 for exactly that reason. Raising the type is the honest
++        way to meet it; narrowing the assertion to "body text only" would have
++        been the other way.
++      */}
++      <p data-testid="codev-pane-phase" className="flex min-w-0 items-center gap-1 text-[13px]">
+         {gate.kind === "none" ? (
+           /*
+             NOT "phase not published" — it is published, and this page cannot
+@@ -117,7 +127,7 @@ export function BuilderPane(props: {
+         to read them now.
+       </div>
+ 
+-      <footer className="flex min-w-0 items-baseline gap-2 text-muted-foreground text-xs">
++      <footer className="flex min-w-0 items-baseline gap-2 text-[13px] text-muted-foreground">
+         {thread.branch === null ? (
+           <span className="min-w-0 truncate text-muted-foreground/70">no branch</span>
+         ) : (

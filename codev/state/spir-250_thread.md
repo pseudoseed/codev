@@ -1241,3 +1241,70 @@ Codev suite at the same pin: 7370 + 180, 54 skipped, 0 failed.
    re-shoot. Architect ruled: exclude `docs/codev` from the export. Now 504KB / 21 patches; the four
    screenshot-only commits produce none, and `FORK.md`'s phase log is the complete commit list.
    `format-patch -o` also takes an ABSOLUTE path — a relative one writes into the fork checkout.
+
+## Phase 9 — builder tiling
+
+Geometry ported from `apps/client/src/responsive/layout.ts` and **re-measured**. The one change that
+matters: every function takes the AVAILABLE width, not the viewport, and the grid measures its own
+container with a `ResizeObserver` (a window listener misses a collapsed sidebar, which changes the
+space without changing the window). 1176px at 1440, not 1404. Three columns fit either way — so
+**criterion 5 would have passed on the viewport version by luck**, and criterion 5b is the one that
+catches it. `PAGE_PADDING` 18 → 12, `GRID_GAP` stays 12; both recorded with the measurement.
+
+Route is `_chat/codev-builders`, a child of the chat shell on purpose — the criteria are about how
+many panes fit BESIDE the sidebar.
+
+**Architect ruling that changed the work:** my option set (add a contract field / subscribe per pane
+/ ship without) was wrong on all three. `codev-agent` ALREADY publishes the porch phase and the last
+three messages, workspace-scoped, one request for the whole grid —
+`GET /api/agent/v1/workspaces/<b64>/state`. That is where apps/client reads them. Pane content lands
+with **phase 10** over the same-origin proxy. **Do not extend the fork's contract for it.**
+
+And the wording: "Phase not published" was FALSE. It is published; this page cannot reach it yet.
+Now reads "Phase not read here yet — published by codev-agent".
+
+**Two defects the screenshots caught and the tests did not:** pane text was 12px (`text-xs` is right
+for a sidebar row, wrong for a scanned tile; raised rather than narrowing the assertion), and at 390
+the shell's floating sidebar toggle sat on the first pane's title (route has a header now).
+
+24 Playwright tests green across three specs. Rendered columns are counted from the browser's x/y
+positions AND from `data-codev-grid-columns` — the attribute alone would be the component confirming
+its own arithmetic, which is the phase 7 builder-count defect.
+
+One combined run failed once at 12px immediately after the `text-[13px]` edit — Vite had not served
+the new CSS yet. Green twice since on a settled server. Not a code defect and not skipped.
+
+Pin at `2529a40421d1`, 24 patches (552K), both evidence files re-collected.
+
+**Criterion 4b restored, at the architect's direction, after the first 1440 screenshot.** Spec 250
+restated 5 and 5b and dropped 4b; the screenshot showed exactly what 4b prevents — six builders plus
+an architect at three columns is 3+3+1. Architect now takes a persistent strip below the grid that
+expands to a full pane; an equal tile only where FOUR COLUMNS FIT.
+
+**Stated as columns, not as "1920 or wider", and the architect approved the departure before I
+built it.** apps/client's viewport number is right there because that client owns the viewport;
+here 1920 of viewport is 1688 of grid, and a viewport threshold would offer the tile with the
+sidebar dragged wide enough that only three columns fit. Four columns IS the reason: 7 items at 4
+columns is 4+3. Keyed on width alone, never the builder count — asserted as its own test, because a
+count-based rule reflows the layout under a reader who did nothing. Spec 146's wording is unchanged;
+apps/client is frozen and still owns its viewport. The plan now carries 4b as a criterion.
+
+Header counts agents not tiles: "6 builders and an architect". With more than one architect there is
+no "the" architect, so they all take tiles and no strip appears.
+
+Architect will NOT rule on pane internals until phase 10 puts real content in them — every pane is
+placeholder right now and that is not something to approve on.
+
+Pin at `b97ef30dea2b`, 25 patches, both evidence files re-collected. 7 tiling tests green.
+
+**Architect condition on multi-architect mode, and it found a real exposure.** With every architect
+taking a tile there is no strip, no indent and no rail — the `architect/` prefix is the entire
+distinction — and it lived inside the truncating span, so a long title would eat it. Prefix and
+title are separate elements now; the prefix does not shrink and the title gives way.
+
+The check measures `scrollWidth` vs `clientWidth`, NOT text: `text-overflow: ellipsis` is invisible
+to a text assertion because the DOM keeps the whole string, so `toContainText("builder/")` passes on
+`buil…`. And the test could not have failed as first written — six short fixture titles never fill a
+pane. One fixture builder is long now; reverting the fix clips that pane's prefix by 22px.
+
+26 e2e green. Pin at `aeebd7f2b9c2`, 26 patches, both evidence files re-collected.
