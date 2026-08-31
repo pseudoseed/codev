@@ -17,10 +17,10 @@ plan_phases:
     status: complete
   - id: phase_5
     title: Vendored contract regenerated from the fork
-    status: in_progress
+    status: complete
   - id: phase_6
     title: Hierarchy and gate state published by porch-driver and codev-agent
-    status: pending
+    status: in_progress
   - id: phase_7
     title: Workspace to architect to builder sidebar
     status: pending
@@ -36,7 +36,7 @@ plan_phases:
   - id: phase_11
     title: 'Acceptance run: tailnet iPad and the rebase drill'
     status: pending
-current_plan_phase: phase_5
+current_plan_phase: phase_6
 gates:
   spec-approval:
     status: approved
@@ -100,8 +100,8 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 2
-build_complete: true
+iteration: 1
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -188,7 +188,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/spir-250/codev/projects/250-t3code-is-the-front-end-privat/250-phase_5-iter1-opencode.txt
         stated: true
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-31T03:35:39.108Z'
+updated_at: '2026-08-31T03:38:38.361Z'
 context_refreshes:
   - boundary: enter:implement
     at: '2026-08-30T20:09:29.526Z'
@@ -205,3 +205,5 @@ context_refreshes:
   - boundary: plan-phase:phase_5
     at: '2026-08-31T02:49:02.911Z'
     acknowledged_at: '2026-08-31T02:51:24.420Z'
+  - boundary: plan-phase:phase_6
+    at: '2026-08-31T03:38:38.360Z'
