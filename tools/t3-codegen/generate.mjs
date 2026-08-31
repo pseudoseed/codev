@@ -453,8 +453,18 @@ for (const [method, spec] of Object.entries(pin.methods)) {
   }
 }
 
-// The event union is not an RPC payload but every consumer decodes it.
-for (const name of ['OrchestrationEvent', 'ClientOrchestrationCommand']) {
+/**
+ * Schemas that are not RPC payloads and are decoded by every consumer anyway.
+ *
+ * `OrchestrationDispatchRefusal` joined the list in spec 250 phase 6. It is an
+ * ERROR shape rather than a payload, and the generator otherwise emits neither —
+ * but this one travels on `OrchestrationDispatchCommandError.refusal` and carries
+ * the reason vocabulary a client switches on. Leaving it out meant `porch-driver`
+ * kept its own copy of six string literals and checked it by hand against a file
+ * in a checkout it does not import, which is the arrangement this whole vendoring
+ * exists to replace.
+ */
+for (const name of ['OrchestrationEvent', 'ClientOrchestrationCommand', 'OrchestrationDispatchRefusal']) {
   if (orchestration[name]) record(name, orchestration[name]);
 }
 

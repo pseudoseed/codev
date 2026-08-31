@@ -1,0 +1,482 @@
+From 804e56f8f864025fc5f9bedc1fcb4fbe23d2b87f Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 22:12:03 -0600
+Subject: [PATCH 13/13] [Spec 250][Phase: phase_6] fix: a refusal's
+ discriminant did not survive the ws boundary
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+MEASURED, against a live server. Phase 6 dispatched four illegal hierarchy edges
+over a real socket and read the answers: every one came back as
+`OrchestrationDispatchCommandError` with the reason present only inside `message`,
+as English, behind a `cause` holding a serialized `Error`. A client could not tell
+`parent-not-found` from `parent-not-architect` without parsing a sentence. On the
+wire, the discriminant did not exist.
+
+Phase 3 fixed `OrchestrationEngine` deleting these discriminants. This is one hop
+further out, in `ws.ts`, and every test beneath that hop was green — the same
+shape a third time, which is why the acceptance criterion for it is a live round
+trip and not a unit test.
+
+`OrchestrationDispatchCommandError` gains an optional `refusal` field carrying the
+tag and the machine-readable reason. `bootstrapThreadDisposition` one field above
+is the precedent: an optional machine-readable field so a client branches without
+reading prose. Optional for the same reason — most dispatch errors are internal
+and have no reason to give, and `refusal: null` on all of them would be a claim
+rather than an absence.
+
+`CodevHierarchyInvalidReason` MOVES from `apps/server` into the contract, because
+it travels. A vocabulary that reaches a client and is declared only in the server
+means every client keeps its own copy of six literals and checks it by hand
+against a file it does not import. `Errors.ts` re-exports it, so nothing else
+changed. Both reason unions are now declared above the dispatch error, because a
+`const` is not hoisted and TDZ is a runtime error rather than a build one.
+
+The lifting function shape-checks against the contract's own struct instead of
+listing which errors carry a reason: a seventh reason travels without editing it,
+an error with no reason yields nothing, and a `reason` outside the declared unions
+is NOT carried — a client switching exhaustively would otherwise be lied to.
+
+Four wrapping sites, not one. The test that asserts them found two the first fix
+missed, including one that rebuilds an existing dispatch error to add a field and
+would have deleted the discriminant while adding it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/server/src/codev/dispatchRefusal.test.ts | 133 ++++++++++++++++++
+ apps/server/src/orchestration/Errors.ts       |  32 ++---
+ apps/server/src/ws.ts                         |  51 +++++++
+ packages/contracts/src/orchestration.ts       | 121 +++++++++++++---
+ 4 files changed, 290 insertions(+), 47 deletions(-)
+ create mode 100644 apps/server/src/codev/dispatchRefusal.test.ts
+
+diff --git a/apps/server/src/codev/dispatchRefusal.test.ts b/apps/server/src/codev/dispatchRefusal.test.ts
+new file mode 100644
+index 000000000..2aca1793f
+--- /dev/null
++++ b/apps/server/src/codev/dispatchRefusal.test.ts
+@@ -0,0 +1,133 @@
++/**
++ * Codev customization (spec 250), phase 6 — a refusal's discriminant on the wire.
++ *
++ * WHY THIS FILE EXISTS: phase 6 dispatched an illegal hierarchy edge over a real
++ * socket against a live fork server and read what came back. The reason was
++ * present only inside `message`, as English, behind a `cause` holding a
++ * serialized `Error`. A client could not tell `parent-not-found` from
++ * `parent-not-architect` without parsing a sentence — so on the wire, the
++ * discriminant did not exist.
++ *
++ * Phase 3 fixed `OrchestrationEngine` deleting these. This was one hop further
++ * out, in `ws.ts`, and every test beneath that hop was green — the same shape a
++ * third time.
++ *
++ * These tests are about the SHAPE and the CALL SITES. The end-to-end proof is
++ * `packages/t3-client/live/spec-250-hierarchy.mjs` in the Codev repository, which
++ * runs against a server started from this source; a unit test cannot cross the
++ * boundary it exists to check.
++ */
++
++import { assert, describe, it } from "@effect/vitest";
++import { readFileSync } from "node:fs";
++import { dirname, join } from "node:path";
++import { fileURLToPath } from "node:url";
++import * as Schema from "effect/Schema";
++
++import {
++  CodevGateWriteErrorReason,
++  CodevHierarchyInvalidReason,
++  OrchestrationDispatchCommandError,
++  OrchestrationDispatchRefusal,
++} from "@t3tools/contracts";
++
++const here = dirname(fileURLToPath(import.meta.url));
++const wsSource = readFileSync(join(here, "..", "ws.ts"), "utf8");
++
++const isRefusal = Schema.is(OrchestrationDispatchRefusal);
++
++describe("codev: the dispatch error carries a refusal discriminant", () => {
++  it("accepts a hierarchy reason and a gate reason", () => {
++    assert.isTrue(isRefusal({ tag: "CodevHierarchyInvalidError", reason: "parent-not-found" }));
++    assert.isTrue(isRefusal({ tag: "CodevGateWriteError", reason: "CODEV_GATE_REVISION_STALE" }));
++  });
++
++  /**
++   * A reason outside the declared unions is NOT carried.
++   *
++   * The lifting function shape-checks against this struct rather than listing
++   * which errors have a `reason`, so an arbitrary `reason` field on some other
++   * error would otherwise ride along. A client switching exhaustively on this
++   * union would then be lied to — which is worse than the reason being absent,
++   * because absence is a case it already has to handle.
++   */
++  it("refuses a reason that belongs to neither union", () => {
++    assert.isFalse(isRefusal({ tag: "SomethingElse", reason: "not-a-declared-reason" }));
++    assert.isFalse(isRefusal({ tag: "CodevHierarchyInvalidError" }));
++    assert.isFalse(isRefusal({ reason: "parent-not-found" }));
++  });
++
++  /**
++   * Both reason unions live in the CONTRACT, because they travel.
++   *
++   * `CodevHierarchyInvalidReason` was in `apps/server/src/orchestration/Errors.ts`
++   * until this phase. A vocabulary that reaches a client and is declared only in
++   * the server means every client keeps its own copy of six string literals and
++   * checks it by hand against a file it does not import.
++   */
++  it("declares both vocabularies where the wire is described", () => {
++    assert.deepStrictEqual([...CodevHierarchyInvalidReason.literals].sort(), [
++      "builder-without-parent",
++      "parent-in-other-project",
++      "parent-is-self",
++      "parent-not-architect",
++      "parent-not-found",
++      "parent-on-non-builder",
++    ]);
++    assert.isTrue(CodevGateWriteErrorReason.literals.length > 0);
++  });
++
++  it("leaves the field optional, so an internal error claims nothing", () => {
++    const internal = new OrchestrationDispatchCommandError({ message: "the disk went away" });
++    assert.strictEqual(internal.refusal, undefined);
++    const refused = new OrchestrationDispatchCommandError({
++      message: "Codev hierarchy invalid (thread.create, parent-not-found): ...",
++      refusal: { tag: "CodevHierarchyInvalidError", reason: "parent-not-found" },
++    });
++    assert.strictEqual(refused.refusal?.reason, "parent-not-found");
++  });
++});
++
++/**
++ * ASSERT THE CALL SITES.
++ *
++ * `ws.ts` wraps a cause into `OrchestrationDispatchCommandError` in TWO places —
++ * the general one and the bootstrap path. Lifting the discriminant at one of them
++ * would leave the other opaque, which is the one-list-two-places shape that has
++ * now produced this class of bug three times in this spec.
++ */
++describe("codev: both wrapping sites lift the discriminant", () => {
++  it("calls refusalOf wherever a cause becomes a dispatch error", () => {
++    const constructions = wsSource.split("new OrchestrationDispatchCommandError({").slice(1);
++    assert.isAtLeast(constructions.length, 2, "found no construction sites to check");
++
++    /**
++     * Every construction that takes a raw cause must LIFT the discriminant, and
++     * every construction that rebuilds an existing dispatch error must FORWARD it.
++     * Both are ways to lose it and they are spelled differently, so both are
++     * checked. This test found two sites the first fix missed, including one that
++     * rebuilds an error to add a field and would have deleted the discriminant
++     * while adding it.
++     */
++    const wrappingSites = constructions.filter((block) => block.slice(0, 600).includes("cause"));
++    assert.isAtLeast(wrappingSites.length, 3);
++    for (const [index, block] of wrappingSites.entries()) {
++      const head = block.slice(0, 900);
++      assert.isTrue(
++        head.includes("...refusalOf(") || head.includes("{ refusal: dispatchError.refusal }"),
++        `dispatch-error construction ${index} loses the refusal discriminant`,
++      );
++    }
++  });
++
++  it("shape-checks rather than listing which errors have a reason", () => {
++    // To the arrow function's closing brace at column 0, not to the first `};`
++    // in the body — `return {};` contains one, and slicing there cut the function
++    // in half and made this assertion fail against correct code.
++    const start = wsSource.indexOf("const refusalOf = ");
++    const fn = wsSource.slice(start, wsSource.indexOf("\n};", start));
++    assert.isAbove(fn.length, 50);
++    assert.notInclude(fn, "CodevHierarchyInvalidError\"");
++    assert.include(fn, "isDispatchRefusal(");
++  });
++});
+diff --git a/apps/server/src/orchestration/Errors.ts b/apps/server/src/orchestration/Errors.ts
+index 5b1eb51b1..6ed642c3b 100644
+--- a/apps/server/src/orchestration/Errors.ts
++++ b/apps/server/src/orchestration/Errors.ts
+@@ -1,6 +1,6 @@
+ import * as SchemaIssue from "effect/SchemaIssue";
+ import * as Schema from "effect/Schema";
+-import type { CodevGateWriteError } from "@t3tools/contracts";
++import { CodevHierarchyInvalidReason, type CodevGateWriteError } from "@t3tools/contracts";
+ 
+ import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
+ 
+@@ -44,30 +44,14 @@ export class OrchestrationCommandInvariantError extends Schema.TaggedErrorClass<
+ /**
+  * Codev customization (spec 250) — an illegal hierarchy edge, refused at write time.
+  *
+- * The `reason` is a discriminant, not prose. Five causes share one shape and a
+- * caller has to act differently on each: "no such parent" is a retry after the
+- * parent lands, "wrong parent role" is a caller bug, "builder without a parent"
+- * is a missing field. One generic error for five causes tells a caller that
+- * something is wrong and nothing about what to do, so it gets read once and then
+- * matched on the message string, which is worse than no discriminant at all.
+- *
+- * `detail` stays human-readable and is never parsed.
++ * The reason union MOVED to `@t3tools/contracts` in phase 6 and is re-exported
++ * here so every existing reference keeps working. It moved because it travels:
++ * `OrchestrationDispatchCommandError.refusal` carries it to the client, so it is
++ * part of the wire and belongs where the wire is described. Leaving it here meant
++ * every client had to keep its own copy of six string literals and check it by
++ * hand against a file it does not import.
+  */
+-export const CodevHierarchyInvalidReason = Schema.Literals([
+-  /** `parentThreadId` names a thread that does not exist. */
+-  "parent-not-found",
+-  /** The parent exists but belongs to a different project. */
+-  "parent-in-other-project",
+-  /** The thread names itself as its own parent. */
+-  "parent-is-self",
+-  /** The parent exists in this project but is not an architect. */
+-  "parent-not-architect",
+-  /** `role: "builder"` with no `parentThreadId`. A builder is owned by definition. */
+-  "builder-without-parent",
+-  /** `role: "architect"` or no role, carrying a `parentThreadId`. */
+-  "parent-on-non-builder",
+-]);
+-export type CodevHierarchyInvalidReason = typeof CodevHierarchyInvalidReason.Type;
++export { CodevHierarchyInvalidReason } from "@t3tools/contracts";
+ 
+ export class CodevHierarchyInvalidError extends Schema.TaggedErrorClass<CodevHierarchyInvalidError>()(
+   "CodevHierarchyInvalidError",
+diff --git a/apps/server/src/ws.ts b/apps/server/src/ws.ts
+index 4613d2f99..bd7451333 100644
+--- a/apps/server/src/ws.ts
++++ b/apps/server/src/ws.ts
+@@ -26,6 +26,7 @@ import {
+   type GitActionProgressEvent,
+   type GitManagerServiceError,
+   OrchestrationDispatchCommandError,
++  OrchestrationDispatchRefusal,
+   type OrchestrationEvent,
+   type OrchestrationShellStreamEvent,
+   type OrchestrationShellStreamItem,
+@@ -139,6 +140,36 @@ import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http
+ import * as RelayClient from "@t3tools/shared/relayClient";
+ const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+ 
++/**
++ * Codev customization (spec 250). Lift a refusal's discriminant onto the wire.
++ *
++ * MEASURED. Phase 6 dispatched an illegal hierarchy edge over a real socket
++ * against a live fork server and read the answer: `OrchestrationDispatchCommandError`
++ * with the reason present only inside `message`, as English, and a `cause` holding
++ * a serialized `Error` with no `reason` field. A client could not tell
++ * `parent-not-found` from `parent-not-architect` without parsing a sentence.
++ *
++ * Phase 3 fixed the ENGINE deleting these discriminants. This is one hop further
++ * out, and every test beneath it was green — which is the same shape a third time,
++ * and the reason phase 6's acceptance criterion is a live round trip rather than a
++ * unit test.
++ *
++ * SHAPE-CHECKED, not tag-listed. It reads `reason` off the cause and does not
++ * enumerate which errors have one: a seventh refusal reason added to either union
++ * travels without editing this function, and an error with no `reason` yields
++ * nothing rather than an invented one. `Schema.is` on the contract's own struct is
++ * what decides — so a `reason` outside the declared unions is NOT carried, because
++ * a client switching on it exhaustively would be lied to.
++ */
++const isDispatchRefusal = Schema.is(OrchestrationDispatchRefusal);
++const refusalOf = (cause: unknown): { readonly refusal?: OrchestrationDispatchRefusal } => {
++  if (typeof cause !== "object" || cause === null) return {};
++  const tag = (cause as { readonly _tag?: unknown })._tag;
++  const reason = (cause as { readonly reason?: unknown }).reason;
++  const candidate = { tag, reason };
++  return isDispatchRefusal(candidate) ? { refusal: candidate } : {};
++};
++
+ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+ const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
+ 
+@@ -582,6 +613,8 @@ const makeWsRpcLayer = (
+           : new OrchestrationDispatchCommandError({
+               message: cause instanceof Error ? cause.message : fallbackMessage,
+               cause,
++              // Codev customization (spec 250). See `refusalOf`.
++              ...refusalOf(cause),
+             });
+       const randomUUID = crypto.randomUUIDv4.pipe(
+         Effect.mapError((cause) =>
+@@ -644,6 +677,11 @@ const makeWsRpcLayer = (
+               message:
+                 error instanceof Error ? error.message : "Failed to bootstrap thread turn start.",
+               cause,
++              // Codev customization (spec 250). The SECOND wrapping site, and it
++              // has to carry the discriminant too. Fixing only the first would
++              // leave a bootstrap-path refusal opaque for exactly the reason the
++              // whole class of bug keeps recurring: one list, two places.
++              ...refusalOf(error),
+             });
+       };
+ 
+@@ -1083,6 +1121,15 @@ const makeWsRpcLayer = (
+                             ...(dispatchError.cause !== undefined
+                               ? { cause: dispatchError.cause }
+                               : {}),
++                            // Codev customization (spec 250). FORWARDED, not
++                            // dropped. This site rebuilds an error that already
++                            // exists in order to add the disposition, so every
++                            // field it does not copy is a field it deletes — and
++                            // the one being added here is the discriminant a
++                            // caller branches on.
++                            ...(dispatchError.refusal !== undefined
++                              ? { refusal: dispatchError.refusal }
++                              : {}),
+                             bootstrapThreadDisposition: "deleted",
+                           })
+                         : dispatchError,
+@@ -1340,6 +1387,10 @@ const makeWsRpcLayer = (
+                   : new OrchestrationDispatchCommandError({
+                       message: "Failed to dispatch orchestration command",
+                       cause,
++                      // Codev customization (spec 250). The dispatchCommand RPC's
++                      // own wrapping site — the one an ordinary client actually
++                      // hits, and the one the live wire test measured.
++                      ...refusalOf(cause),
+                     }),
+               ),
+             ),
+diff --git a/packages/contracts/src/orchestration.ts b/packages/contracts/src/orchestration.ts
+index 37cc4e914..fa0f7a6f5 100644
+--- a/packages/contracts/src/orchestration.ts
++++ b/packages/contracts/src/orchestration.ts
+@@ -2009,33 +2009,46 @@ export class OrchestrationGetSnapshotError extends Schema.TaggedErrorClass<Orche
+   },
+ ) {}
+ 
+-export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<OrchestrationDispatchCommandError>()(
+-  "OrchestrationDispatchCommandError",
+-  {
+-    message: TrimmedNonEmptyString,
+-    cause: Schema.optional(Schema.Defect()),
+-    bootstrapThreadDisposition: Schema.optional(Schema.Literal("deleted")),
+-  },
+-) {}
+-
++// Codev customization (spec 250). Both reason unions are declared HERE, above
++// `OrchestrationDispatchCommandError`, because it now carries one of them and a
++// `const` is not hoisted — declared after it, the module raises a TDZ error at
++// evaluation rather than a type error at build.
+ /**
+- * Codev customization (spec 250). A refused gate write, with a named reason.
++ * Codev customization (spec 250). Why an illegal hierarchy edge was refused.
+  *
+- * Four causes that a caller must act on differently. The literals below carry
+- * the two that need argument; these two are the plain ones:
+- *   CODEV_GATE_REVISION_STALE   the write carried a revision at or below the
+- *                               current high-water mark. Equal counts: two
+- *                               writers that computed the same number are
+- *                               colliding, not agreeing.
+- *   CODEV_GATE_THREAD_NOT_FOUND no such thread.
++ * The `reason` is a discriminant, not prose. Six causes share one shape and a
++ * caller has to act differently on each: "no such parent" is a retry after the
++ * parent lands, "wrong parent role" is a caller bug, "builder without a parent"
++ * is a missing field. One generic error for six causes tells a caller that
++ * something is wrong and nothing about what to do, so it gets read once and then
++ * matched on the message string, which is worse than no discriminant at all.
+  *
+- * A missing `codev:gate-write` scope is deliberately NOT a reason here. It is
+- * refused by the transport as `EnvironmentAuthorizationError` carrying
+- * `requiredScope: "codev:gate-write"`, before the handler runs — already
+- * distinguishable from an unauthenticated 401 and from any other scope failure.
+- * A reason literal for it would be unreachable except from a test that bypassed
+- * production, so do not add one back when you go looking for it.
++ * IT LIVES IN THE CONTRACT because it travels. Phase 6 measured the round trip
++ * against a live fork server and found the discriminant did NOT survive: the ws
++ * layer flattened every refusal into `OrchestrationDispatchCommandError` with the
++ * reason only inside the message string. It is carried as a field now
++ * (`OrchestrationDispatchCommandError.refusal`), and a field on the wire belongs
++ * where the wire is described — not in `apps/server`, where every client would
++ * have to keep its own copy of six literals and check it by hand.
++ *
++ * The `detail` on the server's error stays human-readable and is never parsed.
+  */
++export const CodevHierarchyInvalidReason = Schema.Literals([
++  /** `parentThreadId` names a thread that does not exist. */
++  "parent-not-found",
++  /** The parent exists but belongs to a different project. */
++  "parent-in-other-project",
++  /** The thread names itself as its own parent. */
++  "parent-is-self",
++  /** The parent exists in this project but is not an architect. */
++  "parent-not-architect",
++  /** `role: "builder"` with no `parentThreadId`. A builder is owned by definition. */
++  "builder-without-parent",
++  /** `role: "architect"` or no role, carrying a `parentThreadId`. */
++  "parent-on-non-builder",
++]);
++export type CodevHierarchyInvalidReason = typeof CodevHierarchyInvalidReason.Type;
++
+ export const CodevGateWriteErrorReason = Schema.Literals([
+   "CODEV_GATE_REVISION_STALE",
+   "CODEV_GATE_THREAD_NOT_FOUND",
+@@ -2062,6 +2075,68 @@ export const CodevGateWriteErrorReason = Schema.Literals([
+ ]);
+ export type CodevGateWriteErrorReason = typeof CodevGateWriteErrorReason.Type;
+ 
++/**
++ * Codev customization (spec 250). A refusal's discriminant, carried to the client.
++ *
++ * MEASURED, not assumed. Phase 6 dispatched an illegal hierarchy edge over a real
++ * socket against a live fork server and read what came back: the reason was
++ * present only inside `message`, as English, behind a `cause` holding a
++ * serialized `Error`. A caller could not tell "no such parent" from "wrong parent
++ * role" without parsing a sentence — so, on the wire, the discriminant did not
++ * exist. Phase 3 fixed the ENGINE deleting these; the ws layer was flattening
++ * them one hop further out, and every test beneath that hop was green.
++ *
++ * `bootstrapThreadDisposition` one field above is the precedent this follows: an
++ * optional, machine-readable field on the dispatch error so a client can branch
++ * without reading prose. Optional for the same reason — most dispatch errors are
++ * internal and have no reason to give, and `refusal: null` on every one of them
++ * would be a claim rather than an absence.
++ */
++export const OrchestrationDispatchRefusal = Schema.Struct({
++  /** The refusing error's tag, e.g. `"CodevHierarchyInvalidError"`. */
++  tag: TrimmedNonEmptyString,
++  /**
++   * Its machine-readable reason.
++   *
++   * A union of the reason vocabularies that actually travel, not a bare string:
++   * a client switching on this gets exhaustiveness from the compiler, which is
++   * the whole difference between a discriminant and a label.
++   */
++  reason: Schema.Union([CodevHierarchyInvalidReason, CodevGateWriteErrorReason]),
++});
++export type OrchestrationDispatchRefusal = typeof OrchestrationDispatchRefusal.Type;
++
++export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<OrchestrationDispatchCommandError>()(
++  "OrchestrationDispatchCommandError",
++  {
++    message: TrimmedNonEmptyString,
++    cause: Schema.optional(Schema.Defect()),
++    bootstrapThreadDisposition: Schema.optional(Schema.Literal("deleted")),
++    // Codev customization (spec 250). See `OrchestrationDispatchRefusal`.
++    refusal: Schema.optional(OrchestrationDispatchRefusal),
++  },
++) {}
++
++/**
++ * Codev customization (spec 250). A refused gate write, with a named reason.
++ *
++ * Four causes that a caller must act on differently. The literals below carry
++ * the two that need argument; these two are the plain ones:
++ *   CODEV_GATE_REVISION_STALE   the write carried a revision at or below the
++ *                               current high-water mark. Equal counts: two
++ *                               writers that computed the same number are
++ *                               colliding, not agreeing.
++ *   CODEV_GATE_THREAD_NOT_FOUND no such thread.
++ *
++ * A missing `codev:gate-write` scope is deliberately NOT a reason here. It is
++ * refused by the transport as `EnvironmentAuthorizationError` carrying
++ * `requiredScope: "codev:gate-write"`, before the handler runs — already
++ * distinguishable from an unauthenticated 401 and from any other scope failure.
++ * A reason literal for it would be unreachable except from a test that bypassed
++ * production, so do not add one back when you go looking for it.
++ */
++
++
+ export class CodevGateWriteError extends Schema.TaggedErrorClass<CodevGateWriteError>()(
+   "CodevGateWriteError",
+   {

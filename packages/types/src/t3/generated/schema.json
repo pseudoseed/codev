@@ -13663,6 +13663,34 @@
           "additionalProperties": false
         }
       ]
+    },
+    "OrchestrationDispatchRefusal": {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "parent-not-found",
+            "parent-in-other-project",
+            "parent-is-self",
+            "parent-not-architect",
+            "builder-without-parent",
+            "parent-on-non-builder",
+            "CODEV_GATE_REVISION_STALE",
+            "CODEV_GATE_THREAD_NOT_FOUND",
+            "CODEV_GATE_WRITE_UNCONFIRMED",
+            "CODEV_GATE_WRITE_FAILED"
+          ]
+        }
+      },
+      "required": [
+        "tag",
+        "reason"
+      ],
+      "additionalProperties": false
     }
   }
 }

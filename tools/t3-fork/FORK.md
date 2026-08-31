@@ -189,10 +189,23 @@ vendored contract is what decides whether Codev depends on the customization.
 | 4 | `570cc29dc63c` | `dispatchErrorKind` makes an unclassified dispatch error a **compile error**, replacing the hand-written disjunction that shipped the same bug three times. |
 | 4 | `0254c84e1241` | The gate-writer credential is actually provisioned at server start. It had no production caller — costume one, in the phase that named it. |
 | 4 | `51b55d4899e4` | `OrchestrationRefusal` derived from the `DISPATCH_ERROR_KIND` table instead of hand-listing the same three tags a second time. The classification is one place; a missing member is a missing key. |
+| 6 | `804e56f8f864` | A refusal's `reason` did not survive the ws boundary — measured against a live fork server, not inferred. `OrchestrationDispatchCommandError` gains an optional `refusal` field; `CodevHierarchyInvalidReason` moves into the contract because it travels; four wrapping sites lift or forward it. |
 
 **Phase 5 added no row, and that is not an omission.** It regenerated the vendored contract in the
-Codev repository from `51b55d4899e4`; it changed nothing in the fork. The fork's HEAD is the same
-commit phase 4 ended on.
+Codev repository from `51b55d4899e4`; it changed nothing in the fork.
+
+**Phase 6 added one, and it was found by running the thing.** The plan's acceptance criterion for
+phase 6 is a live round trip: dispatch an illegal hierarchy edge over a socket and assert the client
+can still tell "no such parent" from "wrong parent role". Doing that needs a server built from THIS
+source, which `t3-server.mjs start` does not provide — it runs the published `t3@<pin.cliVersion>`
+CLI against the upstream checkout, and that server has no `codev.*` anything. So the harness gained
+`start-fork`, which runs `apps/server/src/bin.ts` directly, on its own port and its own runtime
+directory, sharing no state with the upstream server.
+
+The first run of that test failed, and the failure was the point: every refusal arrived as
+`OrchestrationDispatchCommandError` with the reason inside `message`, as English. Phase 3 fixed the
+ENGINE deleting discriminants; the ws layer was flattening them one hop further out, and every test
+beneath that hop was green.
 
 ### What the churn classifier could not decide, decided
 
