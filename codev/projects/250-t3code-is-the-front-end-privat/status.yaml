@@ -151,11 +151,40 @@ gates:
   verify-approval:
     status: pending
     requested_at: '2026-08-31T13:32:31.306Z'
+    request:
+      question: Verification is green on the merged tree. Approve verify-approval and close spec 250 out?
+      choices:
+        - label: Approve — spec 250 is done
+          consequence: >-
+            Closes the protocol. 4 follow-up issues stay open and are yours to schedule: #264 (spurious gate-approval
+            messages), #267 (consult --type pr vs the 20,000-line diff cap), #268 (porch records only failing
+            consultation rounds), #269 (nothing automated runs the e2e or the contract check). Criterion 6 ships UNMET
+            with an executable runbook and can be flipped later by running it.
+          recommended: true
+        - label: Hold — rule on the pane screenshots first
+          consequence: >-
+            The 12 phase-10 pane screenshots at docs/codev/spec-250/phase-10/ in the fork have still never been ruled on
+            by a human. Everything measurable passes; how the panes LOOK is the one thing no machine signed off. It is
+            now merged either way, so this would be a follow-up rather than a change to this work.
+        - label: Hold — run criterion 6 before closing
+          consequence: >-
+            Needs an iPad on the tailnet. The 16-step runbook is at codev/resources/250-ipad-acceptance-runbook.md and
+            every step not requiring the device was verified. You already ruled that this ships UNMET, so this reopens
+            that decision.
+      terminalExcerpt: |-
+        codev suite (merged tree): 7396 + 180 passed, 58 skipped, 0 failed
+        t3-server verify: upstream clean at 082e6ea52186; fork clean at 2f64a1b0ee2b on that base
+        collect-spec-250-evidence.mjs --check: evidence is up to date
+        main CI on 357a3640b: completed success
+        PR #266 merged 2026-08-31T13:27:51Z; issue #250 closed COMPLETED
+
+        UNMET: criterion 6 (iPad over the tailnet) — runbook written, ruled to ship unmet
+        UNRULED: the phase-10 pane screenshots, 12 images in the fork
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-31T13:32:31.306Z'
+updated_at: '2026-08-31T13:32:49.569Z'
 context_refreshes:
   - boundary: enter:implement
     at: '2026-08-30T20:09:29.526Z'
