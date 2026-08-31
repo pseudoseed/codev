@@ -1168,11 +1168,21 @@ describe('spec 250: criterion 8b, the kill test', () => {
     expect(evidence.steps.preForkServerOpensHalfApplied).toBe(true);
   });
 
-  it('the guard then adds the missing column and only that one', () => {
-    expect(evidence.steps.guardResume.added).toEqual(['codev_parent_thread_id']);
-    expect(evidence.steps.guardResume.present).toEqual(['codev_role']);
-    expect(evidence.steps.guardAddedOnlyTheMissingColumn).toBe(true);
-    expect(evidence.steps.columnsAfterResume).toHaveLength(2);
+  /**
+   * Expressed as properties, not counts. The count form broke when phase 4 added
+   * two more guard columns while the criterion it tests still held — the same
+   * brittleness as a test written against a list that later grows.
+   */
+  it('the guard sees what the crash left and finishes the rest', () => {
+    expect(evidence.steps.guardResume.present).toEqual(evidence.steps.columnsAfterKill);
+    expect(evidence.steps.guardSawWhatTheCrashLeft).toBe(true);
+    expect(evidence.steps.guardFinishedTheJob).toBe(true);
+    expect(evidence.steps.guardResume.added.length).toBeGreaterThan(0);
+    // Nothing added twice, and nothing left out.
+    expect(evidence.steps.schemaComplete).toBe(true);
+    expect([...evidence.steps.columnsAfterResume].sort()).toEqual(
+      [...evidence.steps.guardResume.present, ...evidence.steps.guardResume.added].sort(),
+    );
   });
 
   it('and the pre-fork binary still opens it once fully applied', () => {

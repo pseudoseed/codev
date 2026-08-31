@@ -722,3 +722,81 @@ Amendment applied: the *trigger* half ("when stuck after 2 failed hypotheses or 
 into the consultation lesson, because a threshold only works if it is always-on — a stuck agent does
 not go and read the cold file. Cap still 10, file still 30 lines. Skeleton got the addition only:
 displacement is cap-driven and 3 against 10 is not at the cap.
+
+---
+
+## Phase 4 — Porch gate block with a server-allocated revision
+
+### What a human can see or do now that they could not before
+
+**Nothing.** State on a record nothing renders, written over an RPC nothing calls yet. Phase 7 is
+still the first phase that puts anything on a screen.
+
+### The one rule that made allocation and stale-rejection coexist
+
+Review round 1 on the plan said these could not both be true as written, and it was right. Resolved
+by making `revision` **optional on the command**:
+
+| `revision` | Server |
+|---|---|
+| absent (normal) | allocate `gateRevision + 1`, apply, return it |
+| present | apply only if it **exceeds** the mark; else `CODEV_GATE_REVISION_STALE` |
+
+Equal is refused. Two writers that computed the same number are colliding, not agreeing.
+
+The mark lives **on the thread, not inside the gate block**, and the *clear* raises it too. That is
+the entire mechanism for criterion 10: the mark outlives the block it described, so a stale write
+arriving after a human answered cannot resurrect the gate. Had it lived inside the block it would
+have vanished with it.
+
+### Why the gate needed its own RPC method
+
+`RpcAuthorization` maps the **method**, not the command type: `dispatchCommand` as a whole is
+`orchestration:operate`. A gate command routed through it would be reachable by every operator and
+no row in the scope map could say otherwise. Four places, as the plan required. The commands are
+deliberately **absent** from `ClientOrchestrationCommand` and
+`DispatchableClientOrchestrationCommand`, which *are* the dispatchCommand payload.
+
+`codev:gate-write` is in `AuthEnvironmentScope` and in **neither** `AuthStandardClientScopes` nor
+`AuthAdministrativeScopes` nor the token allowlist. The scope tests are the exclusions, because
+that is where the whole value is.
+
+### The engine now returns its committed events
+
+The gate's response must carry the revision allocated for **that** write. Re-reading the thread row
+races a concurrent writer: both see the later value and one is told a number never allocated to it.
+So `dispatch` returns `{ sequence, events }`. The idempotent replay path returns an **empty** array
+honestly — it committed nothing this time, so there is nothing to read a revision from, and the
+caller reports the write as unconfirmed rather than inventing one.
+
+### Deviation: `gateRevision` is optional-in, required-out
+
+The plan says non-nullable. Strict-required cost **159 errors across upstream test fixtures**,
+which is the rebase debt phase 2 established we do not sign up for. So it is
+`Schema.optional(NonNegativeInt).pipe(withDecodingDefault(0))`: optional on input, always a number
+after decoding. The DB column is `INTEGER NOT NULL DEFAULT 0` and every read normalizes, so there
+is still exactly one spelling of "no gate yet". **Flagged for the architect.**
+
+### My own driver had the brittleness I keep finding in other people's code
+
+`criterion-8b.mjs` hardcoded a two-element Codev column list. Phase 4 added two more columns and
+the driver failed **while the criterion it tests still held** — the pre-fork server opened both the
+half-applied and fully-applied databases exactly as before. Now derived from what the guard itself
+reports: `present` is what the crash left, `added` is what the resume finished, and the assertions
+are properties rather than counts.
+
+The `--out` safeguard from phase 3 did its job: the failed run left the previous passing evidence
+untouched.
+
+### Interference worth knowing
+
+Running `criterion-8b.mjs` **concurrently** with `npm test` produces spurious failures across
+unrelated suites — both use port 3811 and the shared `tools/t3-server/.runtime` data dir. Run them
+sequentially. A batch of 10 unrelated failures vanished on a clean sequential run.
+
+### Receipts
+
+- Fork `3a1780bbf66f` (wiring) and `57d24ddcb3be` (tests), pushed.
+- Fork typecheck green; contracts **301 passed**; server **2815 passed, 8 skipped**, 1 pre-existing.
+- Codev: build green, **7285 passed, 55 skipped, 0 failed**, plus 180 in the v2 suite.
+- 29 new fork tests; 75 in the spec 250 suite here.

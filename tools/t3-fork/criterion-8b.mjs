@@ -55,7 +55,16 @@ const harness = join(repoRoot, 'tools', 't3-server', 't3-server.mjs');
 const runtimeDir = process.env.T3_HARNESS_DIR ?? join(repoRoot, 'tools', 't3-server', '.runtime');
 const dbPath = join(runtimeDir, 'data', 'userdata', 'state.sqlite');
 
-const CODEV_COLUMNS = ['codev_role', 'codev_parent_thread_id'];
+/**
+ * The FIRST Codev column, which is the one the child applies before being killed.
+ *
+ * The full set is deliberately NOT hardcoded here. It was, and phase 4 adding two
+ * more columns broke this driver while the criterion it tests still held — the
+ * same brittleness this project keeps finding. The set is derived from what the
+ * guard itself reports: `present` is what the crash left, `added` is what the
+ * resume finished, and their union is the schema the pre-fork server then opens.
+ */
+const CODEV_FIRST_COLUMN = 'codev_role';
 
 const say = (message) => console.error(`[criterion-8b] ${message}`);
 
@@ -126,7 +135,7 @@ try {
   if (!existsSync(dbPath)) throw new Error(`no database at ${dbPath} after a cold start`);
 
   const before = columnsOf(dbPath);
-  evidence.steps.columnsBeforeGuard = CODEV_COLUMNS.filter((c) => before.includes(c));
+  evidence.steps.columnsBeforeGuard = before.filter((c) => c.startsWith('codev_'));
   if (evidence.steps.columnsBeforeGuard.length !== 0) {
     throw new Error('the pre-fork database already has Codev columns; this run proves nothing');
   }
@@ -156,12 +165,15 @@ try {
   if (killed.signal !== 'SIGKILL') throw new Error(`child exited by ${killed.signal ?? killed.code}, not SIGKILL`);
 
   const half = columnsOf(dbPath);
-  evidence.steps.columnsAfterKill = CODEV_COLUMNS.filter((c) => half.includes(c));
-  evidence.steps.halfApplied = evidence.steps.columnsAfterKill.length === 1;
+  evidence.steps.columnsAfterKill = half.filter((c) => c.startsWith('codev_'));
+  evidence.steps.halfApplied =
+    evidence.steps.columnsAfterKill.length === 1 &&
+    evidence.steps.columnsAfterKill[0] === CODEV_FIRST_COLUMN;
   if (!evidence.steps.halfApplied) {
     throw new Error(
-      `expected exactly one Codev column after the kill, found ${evidence.steps.columnsAfterKill.length}. ` +
-        'Without a genuinely half-applied file the rest of this run proves nothing.',
+      `expected exactly ${CODEV_FIRST_COLUMN} after the kill, found ` +
+        `[${evidence.steps.columnsAfterKill.join(', ')}]. Without a genuinely half-applied file ` +
+        'the rest of this run proves nothing.',
     );
   }
   say(`half-applied on disk: ${evidence.steps.columnsAfterKill.join(', ')}`);
@@ -178,11 +190,18 @@ try {
   );
   const guard = JSON.parse(guardOut.trim().split('\n').pop());
   evidence.steps.guardResume = guard;
-  evidence.steps.guardAddedOnlyTheMissingColumn =
-    guard.added.length === 1 && guard.present.length === 1;
+  // The property, not a count: the guard saw exactly what the crash left, and
+  // finished everything else. Robust to a later phase adding more columns.
+  evidence.steps.guardSawWhatTheCrashLeft =
+    JSON.stringify([...guard.present].sort()) ===
+    JSON.stringify([...evidence.steps.columnsAfterKill].sort());
+  evidence.steps.guardFinishedTheJob = guard.added.length > 0;
 
   const after = columnsOf(dbPath);
-  evidence.steps.columnsAfterResume = CODEV_COLUMNS.filter((c) => after.includes(c));
+  evidence.steps.columnsAfterResume = after.filter((c) => c.startsWith('codev_'));
+  const expected = [...guard.present, ...guard.added].sort();
+  evidence.steps.schemaComplete =
+    JSON.stringify([...evidence.steps.columnsAfterResume].sort()) === JSON.stringify(expected);
 
   // 5. And the pre-fork binary still opens the fully-applied file.
   evidence.steps.preForkServerOpensFullyApplied = preForkServerOpens('fully applied', { keepData: true });
@@ -191,8 +210,9 @@ try {
     evidence.steps.preForkServerCreatedDatabase === true &&
     evidence.steps.halfApplied === true &&
     evidence.steps.preForkServerOpensHalfApplied === true &&
-    evidence.steps.guardAddedOnlyTheMissingColumn === true &&
-    evidence.steps.columnsAfterResume.length === 2 &&
+    evidence.steps.guardSawWhatTheCrashLeft === true &&
+    evidence.steps.guardFinishedTheJob === true &&
+    evidence.steps.schemaComplete === true &&
     evidence.steps.preForkServerOpensFullyApplied === true;
 } catch (error) {
   evidence.passed = false;

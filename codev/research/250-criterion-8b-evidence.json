@@ -3,7 +3,7 @@
   "preForkCliVersion": "0.0.36",
   "upstreamBase": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
   "forkRoot": "/Users/chris/dev/t3code-codev",
-  "forkCommit": "40fb82ce92a8ed42e6868bd946bfee00b79b3022",
+  "forkCommit": "57d24ddcb3be0fe1b893948274dadc466c67b81e",
   "dbPath": "/Users/chris/dev/codev-1455/.builders/spir-250/tools/t3-server/.runtime/data/userdata/state.sqlite",
   "steps": {
     "preForkServerCreatedDatabase": true,
@@ -16,17 +16,23 @@
     "preForkServerOpensHalfApplied": true,
     "guardResume": {
       "added": [
-        "codev_parent_thread_id"
+        "codev_parent_thread_id",
+        "codev_gate_json",
+        "codev_gate_revision"
       ],
       "present": [
         "codev_role"
       ]
     },
-    "guardAddedOnlyTheMissingColumn": true,
+    "guardSawWhatTheCrashLeft": true,
+    "guardFinishedTheJob": true,
     "columnsAfterResume": [
       "codev_role",
-      "codev_parent_thread_id"
+      "codev_parent_thread_id",
+      "codev_gate_json",
+      "codev_gate_revision"
     ],
+    "schemaComplete": true,
     "preForkServerOpensFullyApplied": true
   },
   "passed": true
