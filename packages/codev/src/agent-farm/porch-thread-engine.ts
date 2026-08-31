@@ -47,6 +47,13 @@ export interface PorchThreadEngineOptions {
    * told otherwise. Production always passes one.
    */
   readonly subscriptions?: ThreadSubscriptionPool;
+  /**
+   * How long `create` holds the spawn open waiting for a REFUSAL (issue #260).
+   *
+   * Overridable so a test can assert the fall-through without sitting out the real
+   * bound; production never passes one.
+   */
+  readonly refusalGraceMs?: number;
 }
 
 /**
@@ -79,6 +86,52 @@ function unknownThread(threadId: string): string {
  * recorded pair to disagree with the pair actually used (issue #227 item 3).
  */
 export const DEFAULT_THREAD_HARNESS = 'codex';
+
+/**
+ * How long a spawn waits to hear the session refused, before it stops listening.
+ *
+ * A SECOND IS ENOUGH, AND IT HAS TO BE (issue #260).
+ *
+ * This bound does not measure how long a turn takes to start — that is
+ * provider-latency-bound and unbounded in practice, and waiting for it here would
+ * reintroduce exactly the wait `track` was written to avoid. It measures how long a
+ * REFUSAL takes to arrive, and a refusal is prompt by construction: the server
+ * answered the `opencode`-disabled case in ~12ms, having decided before it started
+ * anything. So the window separates "refused" from "starting slowly" without
+ * charging a healthy spawn for the provider's warm-up.
+ *
+ * Expiring is NOT a verdict. It means no refusal arrived in the window, which is
+ * the ordinary case, and the spawn then falls through to the follow-and-return
+ * behaviour it had before. A refusal that somehow arrives later still reaches
+ * `track`'s log — this window changes what `create` can act on, not what is seen.
+ */
+export const SESSION_REFUSAL_GRACE_MS = 2_000;
+
+/**
+ * Resolve when the turn starts OR when the window closes; reject only on a refusal.
+ *
+ * The asymmetry is the whole design. A rejection is a definite "the server will not
+ * start this session", so it fails the caller. The timer expiring is "I have not been
+ * told anything yet", which must never be spelled the same way — so it resolves, and
+ * the caller carries on.
+ */
+function refusalWindow(running: Promise<string>, boundMs: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, boundMs);
+    // A bound whose only job is to expire must not hold the process open.
+    timer.unref?.();
+    running.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
 
 export function createPorchThreadEngine(options: PorchThreadEngineOptions): ThreadEngine {
   const threads = new Map<string, DriverThread>();
@@ -124,9 +177,12 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
          *
          * `track` cannot THROW it: its caller asked to start a turn, not to wait for one,
          * and both promises are followed rather than awaited on purpose. So the honest
-         * thing it can do is say what happened. A caller that wants to fail on a refusal
-         * has to await `running` itself, and none does today — that is a real remaining
-         * gap and it is stated in the review rather than implied away.
+         * thing it can do is say what happened. A caller that wants to FAIL on a refusal
+         * has to watch `running` itself, and `create` now does — bounded, via
+         * `refusalWindow` (issue #260). `startTurn` does not: a mailbox delivery runs on
+         * Tower's sequential drain, where a new per-message wait is a cost this change
+         * did not measure. So a refusal there is still only logged, and that is stated
+         * rather than implied away.
          *
          * `TurnDisplacedError` comes through here too, and means something different:
          * a second turn replaced this waiter. Both are worth a line; neither is worth
@@ -216,7 +272,46 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
       // The initial turn IS the spawn: without it the thread exists and the builder has
       // been given nothing to do. Tracked like any other turn so the record does not
       // read idle while the first one runs.
-      if (input.prompt) track(record, await thread.beginTurn(input.prompt));
+      if (input.prompt) {
+        const started = await thread.beginTurn(input.prompt);
+        track(record, started);
+        /*
+         * THE LAST STEP OF #238's CHAIN (issue #260).
+         *
+         * #241 made `SessionStartFailedError` reachable and #258 made it visible, and
+         * a spawn onto a harness the server refuses still SUCCEEDED: the row was
+         * written, the agent existed, and the only trace was a line in Tower's log.
+         * The operator saw a builder that spawned fine and then did nothing, forever.
+         *
+         * A refusal is the one failure that is certain — not "the turn may still be
+         * running" but "the server will not start this session" — so it is the one
+         * that should fail loudly and immediately. Bounded rather than awaited: see
+         * `SESSION_REFUSAL_GRACE_MS`.
+         */
+        try {
+          await refusalWindow(started.running, options.refusalGraceMs ?? SESSION_REFUSAL_GRACE_MS);
+        } catch (error) {
+          /*
+           * The engine forgets the thread, and this is what "what should a refusal do
+           * to the builder row" resolves to.
+           *
+           * The ROW is the caller's: `launchSpawnedBuilder` returns the thread id and
+           * only then does its caller run `persistSpawnedBuilder`. Throwing from here
+           * means no row is ever written, so there is nothing to clean up out there —
+           * the fix is the throw, not a compensating delete.
+           *
+           * What IS ours is these two maps and the subscription, and leaving them is
+           * not harmless: `attach` would find the record and return early, adopting a
+           * thread that can never run, and the pool would keep a stream open for it.
+           * The thread itself is left on the server deliberately — its events are the
+           * evidence for the sentence the operator is about to read.
+           */
+          threads.delete(thread.threadId);
+          records.delete(thread.threadId);
+          options.subscriptions?.stop(thread.threadId);
+          throw error;
+        }
+      }
       return thread.threadId;
     },
 
