@@ -459,6 +459,8 @@ export async function runAgentFarm(args: string[]): Promise<void> {
     .option('--raw', 'Skip structured message formatting')
     .option('--no-enter', 'Do not send Enter after message')
     .option('--delay <seconds>', 'Deliver after N seconds (persisted; survives a Tower restart, except a delayed --interrupt keystroke nudge)')
+    .option('--exact', 'Resolve the address exactly — no builder tail match; a miss is an error and nothing is sent')
+    .option('--worktree <path>', "Resolve the recipient and the workspace from this worktree instead of the sender's session; with no builder given, addresses the builder that owns it")
     .action(async (builder, message, options) => {
       const { send } = await import('./commands/send.js');
       try {
@@ -492,6 +494,8 @@ export async function runAgentFarm(args: string[]): Promise<void> {
           raw: options.raw,
           noEnter: !options.enter,
           delay,
+          exact: options.exact,
+          worktree: options.worktree,
         });
       } catch (error) {
         logger.error(error instanceof Error ? error.message : String(error));

@@ -261,6 +261,107 @@ export function detectCurrentBuilderId(): string | null {
 }
 
 /**
+ * Thrown when `--worktree <path>` cannot be resolved to the builder that owns it.
+ *
+ * A miss must END the send. Issue #264's failure was a notification about a
+ * project in one workspace arriving at a builder in another, and the reason it
+ * arrived at all is that every hop had something plausible to fall back on. This
+ * error exists so the last hop has nothing.
+ */
+export class RecipientResolutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RecipientResolutionError';
+  }
+}
+
+/** The workspace that owns a worktree, and the builder working in it. */
+export interface RecipientWorktree {
+  /** Canonical builder id, or null when no builder worktree is involved. */
+  builderId: string | null;
+  /** Normalized workspace path — the resolution scope for the address. */
+  workspacePath: string;
+}
+
+/**
+ * The workspace that owns a worktree, from the path alone.
+ *
+ * Used when the caller already names its recipient and needs only the
+ * resolution SCOPE pinned to the project — `notifyProtocolComplete` addresses
+ * `architect`, and reading global.db to learn something the path already says
+ * would let an orphaned worktree suppress the cleanup trigger.
+ */
+export function workspaceForWorktree(worktreePath: string): string {
+  const trimmed = worktreePath.replace(/\/+$/, '');
+  const match = trimmed.match(/^(.+)\/\.builders\/([^/]+)$/);
+  return normalizeWorkspacePath(match ? match[1] : trimmed);
+}
+
+/**
+ * Resolve a worktree path to the workspace that owns it and the builder in it.
+ *
+ * This is `--worktree`'s whole point: the recipient and the workspace both come
+ * from the PROJECT's location on disk, not from the sending process's session
+ * environment or cwd. In issue #264 those two disagreed — a `porch approve` for a
+ * project in a throwaway temp workspace ran in a process whose launch identity
+ * belonged to a live builder elsewhere, and the notification followed the
+ * process, not the project.
+ *
+ * A path with no `.builders/<dir>` segment is a workspace root: a project owned
+ * by the main checkout rather than a builder. That resolves the workspace and
+ * reports `builderId: null` — there is no builder to wake, and inventing one is
+ * the bug.
+ */
+export function resolveRecipientWorktree(worktreePath: string): RecipientWorktree {
+  const trimmed = worktreePath.replace(/\/+$/, '');
+  const match = trimmed.match(/^(.+)\/\.builders\/([^/]+)$/);
+  if (!match) {
+    return { builderId: null, workspacePath: normalizeWorkspacePath(trimmed) };
+  }
+
+  const workspacePath = normalizeWorkspacePath(match[1]);
+  const worktreeDirName = match[2];
+
+  const dbPath = getGlobalDbPath();
+  if (!existsSync(dbPath)) {
+    throw new RecipientResolutionError(
+      `Cannot resolve the builder owning worktree '${trimmed}': global.db not found at ${dbPath}.`,
+    );
+  }
+
+  let gdb: Database.Database;
+  try {
+    gdb = new Database(dbPath, { readonly: true });
+  } catch (err) {
+    throw new RecipientResolutionError(describeStateDbOpenFailure(dbPath, worktreeDirName, err));
+  }
+
+  try {
+    const rows = gdb
+      .prepare('SELECT id, worktree FROM builders WHERE workspace_path = ? AND worktree IS NOT NULL')
+      .all(workspacePath) as Array<{ id: string; worktree: string }>;
+    // Scoped to this workspace, then matched on the full path or the worktree
+    // directory name — which is unique within a workspace. Same shape as
+    // detectCurrentBuilderId's lookup, and deliberately not a tail match on the
+    // builder id.
+    const owner = rows.find(
+      r => normalizeWorkspacePath(r.worktree) === normalizeWorkspacePath(trimmed)
+        || r.worktree.replace(/\/+$/, '').split('/').pop() === worktreeDirName,
+    );
+    if (owner) return { builderId: owner.id, workspacePath };
+
+    throw new RecipientResolutionError(
+      `No builder in workspace '${workspacePath}' owns worktree '${trimmed}' ` +
+        `(registered: ${rows.length ? rows.map(r => r.id).join(', ') : '<none>'}). ` +
+        `Refusing to guess a recipient — addressing a plausible neighbour is how a ` +
+        `notification for one project reaches another (issue #264).`,
+    );
+  } finally {
+    gdb.close();
+  }
+}
+
+/**
  * Read file content for --file flag, with size validation.
  */
 function readFileContent(filePath: string): string {
@@ -372,8 +473,10 @@ export async function send(options: SendOptions): Promise<void> {
   let message = options.message;
   let target = options.builder;
 
-  // When using --all, the first positional arg (builder) is actually the message
-  if (options.all && target && !message) {
+  // When using --all, the first positional arg (builder) is actually the message.
+  // `--worktree` names the recipient the same way, so it shifts the positionals
+  // identically.
+  if ((options.all || options.worktree) && target && !message) {
     message = target;
     target = undefined;
   }
@@ -388,8 +491,12 @@ export async function send(options: SendOptions): Promise<void> {
     fatal('No message provided. Usage: afx send <builder> "message" or afx send --all "message"');
   }
 
-  if (!options.all && !target) {
+  if (!options.all && !options.worktree && !target) {
     fatal('Must specify a builder ID or use --all flag. Usage: afx send <builder> "message"');
+  }
+
+  if (options.all && options.worktree) {
+    fatal('Cannot use --all with --worktree: one addresses every builder, the other addresses exactly one.');
   }
 
   if (options.all && target) {
@@ -404,8 +511,36 @@ export async function send(options: SendOptions): Promise<void> {
 
   logger.header('Sending Instruction');
 
-  // Detect workspace for target resolution and sender provenance
-  const workspace = detectWorkspaceRoot() ?? undefined;
+  // Detect workspace for target resolution and sender provenance.
+  //
+  // Issue #264: these are two different questions and used to share one answer.
+  // `fromWorkspace` is provenance — where the SENDER is — and belongs to the
+  // session. The resolution scope belongs to the RECIPIENT, and when the caller
+  // names the project's worktree it comes from there instead, so a notification
+  // cannot follow the sending process into a workspace the project has nothing
+  // to do with.
+  const senderWorkspace = detectWorkspaceRoot() ?? undefined;
+  let workspace = senderWorkspace;
+
+  if (options.worktree && target) {
+    // The recipient is already named; the worktree pins only the scope.
+    workspace = workspaceForWorktree(options.worktree);
+  } else if (options.worktree) {
+    let recipient: RecipientWorktree;
+    try {
+      recipient = resolveRecipientWorktree(options.worktree);
+    } catch (err) {
+      fatal(err instanceof Error ? err.message : String(err));
+    }
+    workspace = recipient!.workspacePath;
+    if (!recipient!.builderId) {
+      fatal(
+        `--worktree '${options.worktree}' is not a builder worktree, so it names no recipient. ` +
+          `Address the agent explicitly, or pass a '<workspace>/.builders/<id>' path.`,
+      );
+    }
+    target = recipient!.builderId!;
+  }
 
   // Detect sender identity (builder ID if in a worktree, otherwise 'architect').
   // In a confirmed builder worktree, detectCurrentBuilderId throws when the
@@ -439,7 +574,7 @@ export async function send(options: SendOptions): Promise<void> {
 
   if (options.all) {
     // Broadcast to all builders
-    const results = await sendToAll(client, message, workspace, from, options);
+    const results = await sendToAll(client, message, senderWorkspace, from, options);
 
     if (results.delivered.length > 0) {
       logger.success(`Delivered to ${results.delivered.length} builder(s): ${results.delivered.join(', ')}`);
@@ -467,11 +602,12 @@ export async function send(options: SendOptions): Promise<void> {
         from,
         fromName: fromName ?? undefined,
         workspace,
-        fromWorkspace: workspace,
+        fromWorkspace: senderWorkspace,
         raw: options.raw,
         noEnter: options.noEnter,
         interrupt: options.interrupt,
         deliverAfter: options.delay,
+        exact: options.exact,
       });
 
       if (!result.ok) {

@@ -1466,7 +1466,7 @@ describe('tower-routes', () => {
       const { res } = makeRes();
       await handleRequest(req, res, makeCtx());
 
-      expect(mockResolveTarget).toHaveBeenCalledWith('architect', '/tmp/ws', 'spir-100');
+      expect(mockResolveTarget).toHaveBeenCalledWith('architect', '/tmp/ws', 'spir-100', { exact: false });
     });
 
     it('forwards undefined `from` when sender is not supplied (non-builder send)', async () => {
@@ -1484,7 +1484,7 @@ describe('tower-routes', () => {
       const { res } = makeRes();
       await handleRequest(req, res, makeCtx());
 
-      expect(mockResolveTarget).toHaveBeenCalledWith('architect', '/tmp/ws', undefined);
+      expect(mockResolveTarget).toHaveBeenCalledWith('architect', '/tmp/ws', undefined, { exact: false });
     });
 
     it('returns 200 delivered:true on a successful send to a clean prompt (Spec 1313)', async () => {
