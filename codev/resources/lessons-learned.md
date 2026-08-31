@@ -752,6 +752,26 @@ so it survives review. Pin the constant to the highest migration block in a test
 
 ## Debugging and Root Cause Analysis
 
+- [From #272] **A green in your own shell is not a green in the harness — verify under the runtime
+  the harness runs, not the one your shell has.** A `dev-approval` gate failed nine times over four
+  hours while every run the builder drove passed. Same tree, same cwd, same env: the builder's shell
+  was on Homebrew Node 26 and `porch` runs nvm Node 20, and one native binary compiled for the wrong
+  ABI produced **729 failures across 49 files**. Two general habits fall out. First, when a check
+  fails for one party and passes for another, stop diffing the *inputs* and diff the *loader* —
+  capture the live process ancestry (`ps -o ppid=` up the chain, `lsof -a -p <pid> -d cwd`) rather
+  than trusting either party's belief about where and how it runs; that single capture overturned
+  two confident, mutually-agreed diagnoses in a row. Second, when hundreds of tests across dozens of
+  unrelated files fail at once, the cause is one shared dependency, not hundreds of defects — group
+  the error text before reading any individual failure.
+
+- [From #272] **A repair that produced no output repaired nothing — check the artifact's
+  mtime, not the command's exit code.** `pnpm install --frozen-lockfile`, `pnpm rebuild <pkg>` and
+  `npm_config_build_from_source=true pnpm rebuild <pkg>` each exited 0, printed nothing, and left a
+  native binary untouched, because a satisfied lockfile plus an existing build output means the
+  install script is never re-run. Three "successful" repairs in a row while the file's timestamp sat
+  two months in the past. Exit 0 from a build tool means "I had nothing to do" as often as it means
+  "I did it".
+
 - [Demoted from the hot tier, #250] **When stuck (2 failed hypotheses or ~30 min), get an outside
   model's perspective and build a minimal repro — captured raw data beats guessing.** Still true;
   demoted rather than deleted when the hot tier's slot was needed for "a test that cannot fail is
