@@ -427,39 +427,34 @@ function resolveAgentInWorkspace(
   }
 
   // Check builders — tail match with leading-zero stripping.
-  // Issue #264: an exact-only caller stops here. Falling through to the tail
-  // match is what turned a bare project id into a delivery to whichever
-  // builder in this workspace happened to end with it.
-  if (options?.exact) {
-    return {
-      code: 'NOT_FOUND',
-      message: exactMissErrorMessage(agent, workspacePath, [...entry.builders.keys()]),
-    };
-  }
+  // Issue #264: `exact` removes THIS step and only this step. Skipping the
+  // shell lookup below would make the flag wider than its name, and a shell is
+  // matched by its full id anyway — the fuzziness being refused lives here.
+  if (!options?.exact) {
+    const strippedAgent = stripLeadingZeros(agent).toLowerCase();
+    const tailMatches: Array<{ builderId: string; terminalId: string }> = [];
 
-  const strippedAgent = stripLeadingZeros(agent).toLowerCase();
-  const tailMatches: Array<{ builderId: string; terminalId: string }> = [];
-
-  for (const [builderId, terminalId] of entry.builders) {
-    if (builderId.toLowerCase().endsWith(`-${strippedAgent}`)) {
-      tailMatches.push({ builderId, terminalId });
+    for (const [builderId, terminalId] of entry.builders) {
+      if (builderId.toLowerCase().endsWith(`-${strippedAgent}`)) {
+        tailMatches.push({ builderId, terminalId });
+      }
     }
-  }
 
-  if (tailMatches.length === 1) {
-    return {
-      terminalId: tailMatches[0].terminalId,
-      workspacePath,
-      agent: tailMatches[0].builderId,
-    };
-  }
+    if (tailMatches.length === 1) {
+      return {
+        terminalId: tailMatches[0].terminalId,
+        workspacePath,
+        agent: tailMatches[0].builderId,
+      };
+    }
 
-  if (tailMatches.length > 1) {
-    const candidates = tailMatches.map(m => m.builderId).join(', ');
-    return {
-      code: 'AMBIGUOUS',
-      message: `Agent '${agent}' is ambiguous — matches ${tailMatches.length} builders: ${candidates}. Use the full name.`,
-    };
+    if (tailMatches.length > 1) {
+      const candidates = tailMatches.map(m => m.builderId).join(', ');
+      return {
+        code: 'AMBIGUOUS',
+        message: `Agent '${agent}' is ambiguous — matches ${tailMatches.length} builders: ${candidates}. Use the full name.`,
+      };
+    }
   }
 
   // Check shells — exact match
@@ -467,6 +462,13 @@ function resolveAgentInWorkspace(
     if (shellId.toLowerCase() === agent) {
       return { terminalId, workspacePath, agent: shellId };
     }
+  }
+
+  if (options?.exact) {
+    return {
+      code: 'NOT_FOUND',
+      message: exactMissErrorMessage(agent, workspacePath, [...entry.builders.keys()]),
+    };
   }
 
   return {

@@ -60,11 +60,11 @@ import {
 const LIVE_WS = '/Users/dev/codev-1455';
 const OTHER_WS = '/Users/dev/other-repo';
 
-function terminalsFor(builderIds: string[]): WorkspaceTerminals {
+function terminalsFor(builderIds: string[], shellIds: string[] = []): WorkspaceTerminals {
   return {
     architects: new Map([['main', 'term-arch']]),
     builders: new Map(builderIds.map((id) => [id, `term-${id}`])),
-    shells: new Map(),
+    shells: new Map(shellIds.map((id) => [id, `term-${id}`])),
     fileTabs: new Map(),
   };
 }
@@ -74,7 +74,7 @@ describe('issue #264 — exact resolution refuses the builder tail match', () =>
     vi.clearAllMocks();
     mockGetWorkspaceTerminals.mockReturnValue(
       new Map([
-        [LIVE_WS, terminalsFor(['builder-spir-250'])],
+        [LIVE_WS, terminalsFor(['builder-spir-250'], ['shell-1'])],
         [OTHER_WS, terminalsFor(['builder-bugfix-250'])],
       ]),
     );
@@ -105,6 +105,18 @@ describe('issue #264 — exact resolution refuses the builder tail match', () =>
     const result = resolveTarget('builder-spir-250', LIVE_WS, undefined, { exact: true });
     expect(isResolveError(result)).toBe(false);
     expect((result as { agent: string }).agent).toBe('builder-spir-250');
+  });
+
+  it('removes the tail match and nothing else — architects and shells still resolve', () => {
+    // `exact` must be as wide as its name. Short-circuiting the shell lookup
+    // too would refuse an address that was never fuzzy in the first place.
+    const shell = resolveTarget('shell-1', LIVE_WS, undefined, { exact: true });
+    expect(isResolveError(shell)).toBe(false);
+    expect((shell as { agent: string }).agent).toBe('shell-1');
+
+    const architect = resolveTarget('architect', LIVE_WS, undefined, { exact: true });
+    expect(isResolveError(architect)).toBe(false);
+    expect((architect as { agent: string }).agent).toBe('architect');
   });
 
   it('refuses the tail match on the offline-hold path too', () => {

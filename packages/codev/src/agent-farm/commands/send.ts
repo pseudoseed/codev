@@ -284,6 +284,20 @@ export interface RecipientWorktree {
 }
 
 /**
+ * The workspace that owns a worktree, from the path alone.
+ *
+ * Used when the caller already names its recipient and needs only the
+ * resolution SCOPE pinned to the project — `notifyProtocolComplete` addresses
+ * `architect`, and reading global.db to learn something the path already says
+ * would let an orphaned worktree suppress the cleanup trigger.
+ */
+export function workspaceForWorktree(worktreePath: string): string {
+  const trimmed = worktreePath.replace(/\/+$/, '');
+  const match = trimmed.match(/^(.+)\/\.builders\/([^/]+)$/);
+  return normalizeWorkspacePath(match ? match[1] : trimmed);
+}
+
+/**
  * Resolve a worktree path to the workspace that owns it and the builder in it.
  *
  * This is `--worktree`'s whole point: the recipient and the workspace both come
@@ -298,20 +312,6 @@ export interface RecipientWorktree {
  * reports `builderId: null` — there is no builder to wake, and inventing one is
  * the bug.
  */
-/**
- * The workspace that owns a worktree, from the path alone.
- *
- * Used when the caller already names its recipient and needs only the
- * resolution SCOPE pinned to the project — `notifyProtocolComplete` addresses
- * `architect`, and reading global.db to learn something the path already says
- * would let an orphaned worktree suppress the cleanup trigger.
- */
-export function workspaceForWorktree(worktreePath: string): string {
-  const trimmed = worktreePath.replace(/\/+$/, '');
-  const match = trimmed.match(/^(.+)\/\.builders\/([^/]+)$/);
-  return normalizeWorkspacePath(match ? match[1] : trimmed);
-}
-
 export function resolveRecipientWorktree(worktreePath: string): RecipientWorktree {
   const trimmed = worktreePath.replace(/\/+$/, '');
   const match = trimmed.match(/^(.+)\/\.builders\/([^/]+)$/);

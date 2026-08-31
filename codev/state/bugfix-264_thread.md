@@ -97,3 +97,22 @@ recipient to confirm with `porch next <id>` and what a mismatch means.
 
 Issue #185's "On it" false positive in the spawn render gate, per the
 architect — separate issue.
+
+## PR + CMAP (2026-08-31)
+
+PR #270. Three verdicts, all APPROVE:
+
+- **claude** — HIGH. Verified the `exact` short-circuit sits after the exact
+  builder loop and the architect block, so `--exact builder-spir-250` and
+  `--exact architect` still resolve. Two non-blocking items, both applied:
+  `exact` also skipped the SHELL lookup (wider than the flag's name), and a
+  JSDoc block was orphaned above `workspaceForWorktree`.
+- **codex** — HIGH, no issues.
+- **opencode** — HIGH, no issues. Run in place of gemini.
+
+The **gemini lane did not review**: `agy` exited 1 on quota. Recorded as a
+non-blocking skip, which is not an approval — so opencode was run as the third
+lane rather than counting the skip as a verdict.
+
+Post-review changes: `exact` now removes the tail match and nothing else (shells
+and architects still resolve), pinned by a new test; JSDoc reattached.
