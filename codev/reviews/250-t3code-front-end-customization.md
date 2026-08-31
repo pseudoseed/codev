@@ -15,6 +15,8 @@ reading). Counting the two sub-criteria the spec adds, 5b and 8b, that is **12 o
 that is not met is criterion 6, the iPad run: it closes **UNMET** with a written runbook, because
 no device was reachable.
 
+PR #266 merged as `357a3640b9b9656d4cdda941cd34b75a120552a5`; issue #250 auto-closed.
+
 Every number in this review is regenerated, not typed: `tools/t3-server/collect-spec-250-evidence.mjs`
 rebuilds the measurement tables in `codev/resources/250-acceptance-evidence.md` and `--check`
 exits 0 against the committed file.
@@ -402,6 +404,7 @@ plan-level amendment recorded only in a review is invisible to anyone reading th
 - **Routed: cold** — `lessons-learned.md`, Testing: a test whose work grows with the repository looks flaky before it looks under-budgeted, and the two have opposite remedies; and harness/screenshot runs poisoning the suite that follows them (issue #263).
 - **Routed: cold** — `lessons-learned.md`, Testing, from review round 2: a careful vocabulary for reporting failure is not the same as reaching the code that reports it — grep for the transport call rather than the error type, and make a transport failure a value rather than a throw so the compiler asks at every call site.
 - **Routed: cold** — `lessons-learned.md`, 3-Way Reviews, from review round 2: a reviewer with no history of the work sees what the incumbents stopped seeing. Rotate a fresh lane in at the END of a long project, not only at the start.
+- **Routed: cold** — `lessons-learned.md`, from the merge: a measurement carried forward past the thing it measured is no longer a measurement. "CI green 9 of 9" was true of the last code commit and about to be restated about a different HEAD. Report what was measured, not just the result — and note that this applies to status reports, not only to code.
 - **Routed: cold** — `lessons-learned.md`, Testing, from review round 1: a rebuttal is scoped to the tests its argument actually covers. The phase 11 rebuttal was sound for one test in a file of six and had been applied to all six, and applying it that widely also concealed a cross-file race nobody had looked for.
 
 ## Flaky Tests

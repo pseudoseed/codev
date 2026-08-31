@@ -1897,3 +1897,50 @@ any gate-approval message. **That is a habit, not a control** — it survives on
 keeps writing it into the state file, and it would not survive a context refresh that dropped it.
 Added to #264, with the suggestion that a gate-approval message should not be actionable on its own:
 `porch status` is the authority, and the message could say so rather than instruct.
+
+---
+
+## Merged, and the verify phase
+
+PR #266 merged as **`357a3640b9b9656d4cdda941cd34b75a120552a5`** at 2026-08-31T13:27:51Z. Issue #250
+auto-closed on the `Closes #250` keyword. `porch done 250 --merged 266` recorded it.
+
+### The CI claim, and why I split it rather than repeating it
+
+The architect's approval said "CI is green 9 of 9; I checked it myself." When I looked, `gh pr
+checks 266` showed **9 pending** and `mergeStateStatus: UNSTABLE`.
+
+Both were true about different commits. The green run was `33394104007` on `8892aa285` — the last
+commit carrying code. Between their check and mine, porch had committed `c224c6eef`,
+`chore(porch): 250 pr gate-approved`, `status.yaml` only, 9 insertions, and that triggered a fresh
+run which was still going.
+
+I merged, because green-on-the-code plus a state-file-only delta is sound, and reported it as
+exactly that rather than as "9 of 9 green". The architect's reply: they had checked that run
+themselves and would have carried it forward onto a different HEAD without noticing.
+
+**This is the project's own recurring defect pointed at a status report.** "CI is green" was a
+measurement of one commit being restated about another, the same way `classify-churn` measured one
+identity and answered about the other, and the same way the acceptance numbers described one fork
+while naming a different one. A number carried forward past the thing it measured stops being a
+measurement and becomes a claim. The habit that catches it is naming *what* was measured, not just
+the result — and it applies to my own reports, not only to the code.
+
+### Verify
+
+Worktree merged to the integrated state (`1c9b8c23f`), pushed. The merge brought in one spec edit
+from main: the CSP correction, which now stands in the spec as well as the review — the guarantee is
+structural and a test obligation, not a header, because upstream sends no page-level CSP.
+
+Checks on the merged tree: `verify` clean on **both** identities — upstream at `082e6ea52186`, fork
+at `2f64a1b0ee2b` on that base — and `collect-spec-250-evidence.mjs --check` exits 0, so the
+acceptance numbers still describe the fork that shipped.
+
+The post-merge suite on the integrated tree: **7396 + 180 passed, 58 skipped, 0 failed**, under the
+default node. Identical to the pre-merge count, which is the point — the merge brought in one spec
+edit and nothing else moved.
+
+Not run during the suite: any `git commit`. The determinism test in
+`spec-1280-measurement-instrument.test.ts` invokes an instrument twice and compares bytes, and a
+commit landing between the two invocations fails it for a reason that has nothing to do with the
+code. That cost one false red earlier today.
