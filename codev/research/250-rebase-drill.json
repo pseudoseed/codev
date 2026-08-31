@@ -52,8 +52,8 @@
     "regenerationReachable": true,
     "detail": "every file the generator reads merged without conflict, so regenerating the contract from the rebased tree is not blocked by the rebase. What the regenerated contract would CHANGE is a separate question, answered by classify-churn --upstream-movement."
   },
-  "startedAt": "2026-08-31T10:46:19.212Z",
-  "finishedAt": "2026-08-31T10:46:24.792Z",
+  "startedAt": "2026-08-31T11:09:02.249Z",
+  "finishedAt": "2026-08-31T11:09:08.426Z",
   "upstreamRoot": "/Users/chris/dev/t3code",
   "forkRoot": "/Users/chris/dev/t3code-codev",
   "base": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",

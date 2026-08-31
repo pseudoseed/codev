@@ -138,6 +138,21 @@ if (target === base) {
     signal: 'NO_UPSTREAM_MOVEMENT',
     detail: `${onto} is still ${base.slice(0, 12)}; there is nothing to rebase onto. The procedure `
       + 'ran and had nothing to do, which is different from the procedure not running.',
+    /*
+     * SAID OUT LOUD RATHER THAN LEFT ABSENT.
+     *
+     * This path skips the watermark check, and it is right to: with no upstream
+     * movement there are no new migrations, so the check would be vacuous. But a
+     * result whose `watermark` field is simply MISSING looks identical to a run
+     * where the check failed to happen for some other reason — and the evidence
+     * test asserts `checked: true`, so a silent absence would surface as a
+     * confusing test failure rather than as this fact.
+     */
+    watermark: {
+      checked: false,
+      reason: 'no upstream movement, so no migrations arrived and there was nothing to check. '
+        + 'Vacuous rather than skipped.',
+    },
     upstreamRoot, forkRoot, base, target, forkHead,
   });
 }
