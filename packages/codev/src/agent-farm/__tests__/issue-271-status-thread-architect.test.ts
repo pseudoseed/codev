@@ -182,6 +182,36 @@ describe('issue 271: afx status shows thread-backed architects', () => {
     expect(architectSection().filter((line) => line.includes('main'))).toHaveLength(1);
   });
 
+  /**
+   * The Tower-down fallback renders the same rows through different code. It
+   * printed `cmd= started=…` for a thread-backed architect — `cmd` is empty
+   * because there is no process — so the two paths disagreed about the same row:
+   * one named the thread, the other named nothing.
+   */
+  it('names the thread in the Tower-down fallback too, instead of an empty cmd', async () => {
+    mockIsRunning.mockResolvedValue(false);
+    mockLoadState.mockReturnValue({
+      architect: null,
+      architects: [
+        { name: 'main', cmd: 'claude', startedAt: 'T0', terminalId: 'term-main' },
+        { name: 'lan', cmd: '', startedAt: 'T0', threadId: 'thr-1' },
+      ],
+      builders: [],
+      utils: [],
+      annotations: [],
+    });
+
+    await status();
+
+    const lines = mockLoggerInfo.mock.calls.map((c: any[]) => stripAnsi(String(c[0])));
+    const lan = lines.find((line) => line.includes('lan:'));
+    expect(lan, 'the thread-backed architect is absent from the Tower-down listing').toBeDefined();
+    expect(lan).toContain('thread=thr-1');
+    expect(lan).not.toContain('cmd=');
+    // The PTY-backed row is unchanged: it has a command, and that is what it says.
+    expect(lines.find((line) => line.includes('main:'))).toContain('cmd=claude');
+  });
+
   it('carries threadId into the --json payload, null for a PTY-backed architect', async () => {
     mockGetWorkspaceStatus.mockResolvedValue({ name: 'codev-1455', active: true, terminals: [] });
     mockLoadState.mockReturnValue({

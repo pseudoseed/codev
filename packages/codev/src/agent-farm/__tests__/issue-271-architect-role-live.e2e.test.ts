@@ -36,7 +36,7 @@
 
 import { describe, it, expect, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,6 +73,14 @@ function projectionDbPath(): string {
  * issue's reproducer read it.
  */
 function projectionRole(threadId: string): { present: boolean; role: string | null } {
+  // Refused rather than escaped. `sqlite3` takes one SQL string and no bound
+  // parameters, so the id is interpolated — and an interpolation that quietly
+  // accepts anything is the shape someone copies into a query where the value is
+  // not a server-minted UUID. A thread id that is not one is a bug in the caller,
+  // and it stops here.
+  if (!/^[0-9a-fA-F-]{36}$/.test(threadId)) {
+    throw new Error(`refusing to query for a thread id that is not a UUID: ${JSON.stringify(threadId)}`);
+  }
   const out = execFileSync(
     'sqlite3',
     [
@@ -102,8 +110,28 @@ function scratchWorkspace(): string {
 
 let workspace: string | undefined;
 
+/**
+ * The env this test sets, captured so it can be put back.
+ *
+ * `CODEV_T3_URL` and its siblings are read by `readThreadBackendConfig` for EVERY
+ * workspace, so leaving them set points the rest of the run at a server this test
+ * has already stopped. The suite is sequential and this file happened to run
+ * last; that is a property of the schedule, not a guarantee.
+ */
+const CODEV_T3_KEYS = ['CODEV_T3_URL', 'CODEV_T3_TOKEN', 'CODEV_T3_MODEL'] as const;
+const savedEnv = new Map<string, string | undefined>(
+  CODEV_T3_KEYS.map((key) => [key, process.env[key]]),
+);
+
 afterAll(() => {
-  if (workspace !== undefined) closeThreadBackend(workspace);
+  if (workspace !== undefined) {
+    closeThreadBackend(workspace);
+    rmSync(workspace, { recursive: true, force: true });
+  }
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   stopForkStack();
 });
 

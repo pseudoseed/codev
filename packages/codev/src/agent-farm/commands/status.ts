@@ -482,7 +482,15 @@ export async function status(options: StatusOptions = {}): Promise<void> {
     logger.kv('Architects', chalk.green(`${architects.length} registered`));
     logger.info(`  (Tower not running — PID/port not available)`);
     for (const a of architects) {
-      logger.info(`  ${chalk.cyan(a.name ?? 'main')}: cmd=${a.cmd} started=${a.startedAt}`);
+      // Issue #271. A thread-backed architect has an empty `cmd` — there is no
+      // process, which is the point — so this line rendered as `cmd= started=…`
+      // and named nothing that identified the thread. The two render paths then
+      // disagreed about the same row: Tower-up showed a thread id, Tower-down
+      // showed a blank. Same fact, one spelling.
+      const backing = a.threadId !== undefined
+        ? `thread=${a.threadId}`
+        : `cmd=${a.cmd}`;
+      logger.info(`  ${chalk.cyan(a.name ?? 'main')}: ${backing} started=${a.startedAt}`);
     }
   } else {
     logger.kv('Architects', chalk.gray('none registered'));
