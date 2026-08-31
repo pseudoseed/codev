@@ -163,3 +163,20 @@ Consequence worth checking: any porch `tests` check that passed in this workspac
 
 Removed; the file is back to `shell` + `porch.checks.tests.timeout: 1200` + `consultation`.
 `timeout: 1200` predates me and was left alone.
+
+## Gate held (architect, 18:26)
+
+The `pr` gate is requested and the architect is holding it deliberately. Removing my exclusion
+made the `tests` check live again, and criterion 8b now fails workspace-wide for a reason
+unrelated to this PR: the regenerated evidence naming fork commit `26b4c2dc09f0` is only on
+`builder/pir-272`, while `main` names `2f64a1b0ee2b`. Approving now would burn a 900s suite and
+then refuse. The architect is waiting on bugfix-278 (a skip-when-unobservable fix on the test
+itself) or pir-272 to land, and will approve then.
+
+Worth separating two things that are both called "green": my PR's **CI** runs in a clean
+checkout where the t3code fork is absent, so `spec-250`'s `it.skipIf(!FORK_ROOT_PRESENT)` skips
+it there. CI green on #285 is therefore real and says nothing about the local check. The local
+`tests` check and CI disagree only about a test that cannot observe its subject on this machine.
+
+CMAP position accepted by the architect: the subscriptions-window fix was Codex's blocking item,
+and declining to delete the review artifact stands.
