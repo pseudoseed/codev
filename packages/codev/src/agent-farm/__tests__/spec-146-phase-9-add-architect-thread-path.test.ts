@@ -16,6 +16,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ensureThreadBackendReady = vi.fn();
+const closeThreadBackend = vi.fn();
 const createArchitectThread = vi.fn();
 const tryGetThreadEngine = vi.fn();
 const architectThreadDefaults = vi.fn();
@@ -24,6 +25,7 @@ const addArchitect = vi.fn();
 
 vi.mock('../thread-backend.js', () => ({
   ensureThreadBackendReady: (...args: unknown[]) => ensureThreadBackendReady(...args),
+  closeThreadBackend: (...args: unknown[]) => closeThreadBackend(...args),
 }));
 
 vi.mock('../thread-runtime.js', () => ({
@@ -156,6 +158,40 @@ describe('workspace add-architect — the thread path is reachable in a fresh pr
 
     expect(createArchitectThread).not.toHaveBeenCalled();
     expect(addArchitect).toHaveBeenCalledWith('/ws', 'uiv2');
+  });
+
+  /**
+   * Issue #271. The command hung past two minutes on real hardware, having
+   * already created the thread AND written the row: an open WebSocket keeps the
+   * event loop alive, and nothing closed it.
+   *
+   * Asserted AFTER `setArchitectByName`, not merely "was called". Closing the
+   * socket before the row is written would exit a process whose registration had
+   * not landed, which is a worse bug than the hang it replaces.
+   */
+  it('closes the thread backend after registering, so the process can exit', async () => {
+    threadEngineInstalled();
+    const order: string[] = [];
+    setArchitectByName.mockImplementation(() => { order.push('register'); });
+    closeThreadBackend.mockImplementation(() => { order.push('close'); });
+
+    await workspaceAddArchitect({ name: 'uiv2' });
+
+    expect(closeThreadBackend).toHaveBeenCalledWith('/ws');
+    expect(order).toEqual(['register', 'close']);
+  });
+
+  /**
+   * A create that throws must still close. Otherwise the failure path is the
+   * hang: an error printed, and a process that never returns to print it from.
+   */
+  it('closes the thread backend even when the create fails', async () => {
+    threadEngineInstalled();
+    createArchitectThread.mockRejectedValue(new Error('server refused'));
+
+    await expect(workspaceAddArchitect({ name: 'uiv2' })).rejects.toThrow('server refused');
+
+    expect(closeThreadBackend).toHaveBeenCalledWith('/ws');
   });
 
   /**
