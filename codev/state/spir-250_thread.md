@@ -788,11 +788,27 @@ are properties rather than counts.
 The `--out` safeguard from phase 3 did its job: the failed run left the previous passing evidence
 untouched.
 
-### Interference worth knowing
+### Interference worth knowing — and my first workaround for it was WRONG
 
-Running `criterion-8b.mjs` **concurrently** with `npm test` produces spurious failures across
-unrelated suites — both use port 3811 and the shared `tools/t3-server/.runtime` data dir. Run them
-sequentially. A batch of 10 unrelated failures vanished on a clean sequential run.
+Running `criterion-8b.mjs` before `npm test` produces spurious failures in unrelated suites.
+
+I first recorded "run them sequentially" as the fix. **That is wrong and I have disproven it.**
+Sequential runs fail too, and *which* tests fail changes every time:
+
+| Run | Failures |
+|---|---|
+| 8b concurrent with the suite | 10 in consult/porch |
+| 8b, then build, then suite — strictly sequential | 10 in the registry/reconciliation suite |
+| 8b, then the suite — strictly sequential | 2 in `test-isolation.test.ts` |
+| suite alone | **0** (7285 passed) |
+
+Every one passes in isolation. **I do not know the mechanism and have not claimed one.** The leading
+lead is a latent order/worker dependency in the suite itself — `MetricsDB.defaultPath` looks like it
+is computed at module load — surfaced by the load 8b puts on the machine rather than by anything 8b
+corrupts. Recorded on #263 as a correction, with both hypotheses marked as leads not findings.
+
+**Operational rule:** a green suite run that immediately followed a harness run is not trustworthy.
+Re-run the suite alone before believing either a pass or a failure.
 
 ### Receipts
 
