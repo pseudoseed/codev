@@ -104,6 +104,31 @@ export async function createProject(
   return projectId;
 }
 
+export interface UpdateProjectMetaOptions {
+  readonly projectId: string;
+  /** Absent leaves the stored title alone; `project.meta.update` treats every field that way. */
+  readonly title?: string;
+}
+
+/**
+ * Change a project's metadata in place.
+ *
+ * Only the fields present are sent, because `project.meta.update` reads an absent
+ * field as "leave unchanged" — a helper that filled the rest in from a snapshot
+ * would turn every rename into a full overwrite of whatever it last read.
+ */
+export async function updateProjectMeta(
+  dispatcher: CommandDispatcher,
+  journal: DispatchJournal,
+  options: UpdateProjectMetaOptions,
+): Promise<void> {
+  await dispatchCommand(dispatcher, journal, {
+    type: 'project.meta.update',
+    projectId: options.projectId,
+    ...(options.title === undefined ? {} : { title: options.title }),
+  });
+}
+
 export interface CreateThreadOptions {
   readonly projectId: string;
   readonly title: string;

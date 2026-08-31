@@ -81,6 +81,10 @@ import {
   type ThreadAdoptionSweeper,
 } from '../thread-subscriptions.js';
 import { requestThreadBackend } from '../thread-backend.js';
+import {
+  createWorkspaceProjectionSweeper,
+  type WorkspaceProjectionSweeper,
+} from '../workspace-projection-sweep.js';
 import { tryGetThreadEngine } from '../thread-runtime.js';
 import { ApprovalOperationStore } from '../lib/approval-operations.js';
 import { normalizeWorkspacePath } from '../utils/workspace-path.js';
@@ -100,6 +104,14 @@ let t3codeSessionCache: T3codeSessionCache | null = null;
  * module-level function here.
  */
 let threadAdoptionSweeper: ThreadAdoptionSweeper | null = null;
+
+/**
+ * The workspace projection sweeper, so shutdown can stop its interval (issue #272).
+ *
+ * Module-scoped for the same reason as the two above: shutdown is a module-level
+ * function here.
+ */
+let workspaceProjectionSweeper: WorkspaceProjectionSweeper | null = null;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -270,6 +282,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // reads like a t3code problem.
   threadAdoptionSweeper?.stop();
   threadAdoptionSweeper = null;
+  // Same reason again: its pass reads global.db and talks to a t3code server, and a
+  // pass landing after the database is closed would log a projection failure that
+  // reads like a t3code problem.
+  workspaceProjectionSweeper?.stop();
+  workspaceProjectionSweeper = null;
   shutdownAgentRoutes();
 
   // 7. Tear down instance module (Spec 0105 Phase 3)
@@ -898,6 +915,26 @@ async function bootSequence(): Promise<void> {
   // below is maintenance or background service startup: it must not gate the
   // API, and none of it is a prerequisite for a correct response.
   markBootComplete();
+
+  /*
+   * Issue #272: every known Codev workspace is a project row, named after its
+   * directory.
+   *
+   * After `markBootComplete`, deliberately. This reaches a t3code server over the
+   * network, and a server that is down would otherwise hold the API closed for as
+   * long as its connect takes — for a sweep whose whole output is what a sidebar
+   * looks like. Nothing below the gate is a prerequisite for a correct response.
+   *
+   * `getKnownWorkspacePaths`, not the `architect UNION builders` query the thread
+   * adoption sweeper uses. That narrower list is the point of the issue: a
+   * registered workspace nobody has spawned into has neither an architect row nor a
+   * builder row, and it is exactly the workspace that was missing from the tree.
+   */
+  workspaceProjectionSweeper = createWorkspaceProjectionSweeper({
+    knownWorkspacePaths: getKnownWorkspacePaths,
+    log,
+  });
+  workspaceProjectionSweeper.start();
 
   // Issue #1227: run the stricter husk sweep once at startup too, same
   // ordering requirement as killOrphanedShellpers (must run after

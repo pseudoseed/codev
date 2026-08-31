@@ -1,0 +1,131 @@
+id: '272'
+title: the-sidebar-tree-needs-every-w
+protocol: pir
+phase: verified
+plan_phases: []
+current_plan_phase: null
+gates:
+  plan-approval:
+    status: approved
+    requested_at: '2026-08-31T16:54:09.121Z'
+    request:
+      question: >-
+        Fixing #272 requires a t3code fork commit (an empty project draws no sidebar heading today), and any fork commit
+        obliges the full REFRESH.md tail. Take that scope, or narrow it?
+      choices:
+        - label: 'Full scope: both repos plus the REFRESH tail'
+          consequence: >-
+            Codev gets the workspace name and a Tower reconciler; the fork gets a heading for a project with zero
+            architects. Then pin.commit moves, the contract is regenerated, patches are re-exported and the four
+            spec-250 evidence collectors are re-run against a live fork server. Delivers the issue as written.
+          recommended: true
+        - label: 'Codev repo only: name the workspaces, defer the empty-heading'
+          consequence: >-
+            Project titles become codev-1455 rather than codev:/Users/chris/dev/codev-1455, and a project row exists for
+            every known workspace. But a workspace with no architect still draws nothing on screen, so half of the issue
+            stays open and needs a second PR carrying the REFRESH tail anyway.
+        - label: 'Fork only: heading first, names later'
+          consequence: >-
+            Empty workspaces appear, still labelled with prefixed absolute paths. Pays the REFRESH tail now and leaves
+            the complaint that a sidebar of full paths does not scan.
+      terminalExcerpt: >-
+        $ sqlite3 ~/.t3/dev/state.sqlite "select title, workspace_root from projection_projects;"
+
+        codev:/Users/chris/dev/codev-1455|/Users/chris/dev/codev-1455
+
+
+        Sidebar.logic.ts:1072  for (const subtree of hierarchy.architects) {   <- headings come from architects; zero
+        architects, zero headings
+    approved_at: '2026-08-31T17:19:28.435Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-31T17:19:28.435Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
+  dev-approval:
+    status: approved
+    requested_at: '2026-08-31T18:11:31.881Z'
+    request:
+      question: >-
+        Approve dev-approval for #272? Four builders are blocked until this merges, and the change is verified live in
+        both repos.
+      choices:
+        - label: Approve, go to PR
+          consequence: >-
+            Unblocks 273, 278, 260 and 242: main starts naming fork commit 26b4c2dc09f0, so criterion 8b stops failing
+            on every shared suite run. Codev names each workspace after its directory and reconciles a project per known
+            workspace; the fork draws a heading for a workspace nobody has spawned into.
+          recommended: true
+        - label: Open the running worktree first
+          consequence: >-
+            Costs a fork server start and a Vite dev server. The same evidence is already recorded:
+            tools/t3-fork/issue-272-projection.mjs passed 8 of 8 against a live server, and the sidebar screenshot at
+            1440x900 shows the idle-workspace heading.
+      terminalExcerpt: >-
+        porch done 272
+          build   PASS (60.3s)
+          tests   PASS (435.8s)
+
+        issue-272-projection.mjs, against a live fork server:
+          ok  a workspace with no project gets one named after its directory - title=codev-1455
+          ok  the legacy codev:<path> title is rewritten to the directory name - title=dvarr
+          ok  a title a human chose is left alone - title=Entriq (do not rename)
+          ok  two workspaces sharing a directory name come out distinguishable - backend/api / mobile/api
+          ok  no project for a builder worktree, a deleted checkout, or a non-workspace - 5 rows for 5 workspaces
+          ok  the rename kept the project id rather than creating a second row
+          ok  a second pass writes nothing - created=0 renamed=0
+
+        spec-250-hierarchy.spec.ts: 10 passed, including the new empty-project test in a browser.
+
+
+        Known, NOT mine: spec-250-approval.spec.ts times out intermittently in openThread. A/B with my fixture reverted
+        to HEAD still failed, at a third different test. Documented, not skipped.
+    approved_at: '2026-08-31T21:58:51.040Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-31T21:58:51.040Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
+  pr:
+    status: approved
+    requested_at: '2026-08-31T22:10:40.784Z'
+    request:
+      question: 'Merge PR #305 for issue #272? Both consultation lanes returned APPROVE and the one substantive finding is fixed.'
+      choices:
+        - label: Approve the pr gate
+          consequence: >-
+            I merge with --merge (not squash), record it with porch, and the Fixes #272 in the body closes the issue.
+            Workspaces become named top-level sidebar nodes and a workspace nobody has spawned into finally renders.
+          recommended: true
+        - label: Review the diff first
+          consequence: >-
+            Nothing is lost; the gate stays pending. The four spots worth your eye are listed under 'Things to Look At'
+            in the PR body, and the live 8-of-8 evidence is in codev/research/272-workspace-projection-evidence.json.
+      terminalExcerpt: |-
+        claude    VERDICT: APPROVE   (4 non-blocking items)
+        opencode  VERDICT: APPROVE   KEY_ISSUES: None
+
+        Finding 1 FIXED, not deferred: isCodevWorkspaceDirectory was injected away by every
+        test AND by the live harness, so the production filter had no coverage. Testing it
+        surfaced a real defect - existsSync accepted a .codev that is a FILE. Now requires a
+        directory; the assertion fails with the guard reverted. 33 tests in that file, was 28.
+
+        Items 2-4 (sweeper interval untested, token re-exchanged every 30s, WARN every 30s on
+        a down server) are real, documented in the review, and need issues - that call is yours.
+    approved_at: '2026-08-31T22:12:14.438Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-31T22:12:14.438Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-31T16:47:04.075Z'
+updated_at: '2026-08-31T22:12:22.730Z'
+pr_history:
+  - phase: review
+    pr_number: 305
+    branch: builder/pir-272
+    created_at: '2026-08-31T22:05:41.124Z'
+pr_ready_for_human: false

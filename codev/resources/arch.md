@@ -110,6 +110,16 @@ tail -f ~/.agent-farm/tower.log
 
 9. **Tower API Authentication**: Tower's local HTTP + WebSocket API enforces request authentication (advisory GHSA-xvjp-7748-v88v). Every route outside the narrow public-route allowlist (`isPublicRoute` in `agent-farm/utils/server-utils.ts`) requires the shared local key (`~/.agent-farm/local-key`), sent as the `codev-tower-key` HTTP header or a `Sec-WebSocket-Protocol` subprotocol, and fails closed with 401 (the server also accepts the legacy `codev-web-key` header for one release). Any new Tower route must decide public-vs-keyed — a wrong allowlist entry either breaks a pre-auth path (health/version probes, the served HTML shells + static assets) or exposes a data route. The key is delivered to browser shells via same-origin serve-time injection; those shell responses omit `Access-Control-Allow-Origin` so the injected key is not cross-origin readable.
 
+10. **The toolchain's Node, not your shell's**: `porch` and `afx` run under nvm **Node 20**
+    (`~/.nvm/versions/node/v20.19.2`), not whatever a shell happens to be on. Every native module in
+    a worktree must match that ABI (`NODE_MODULE_VERSION` 115). This matters because
+    `better-sqlite3` publishes **no Node-20 prebuild for darwin/arm64**: an install run under a
+    newer Node succeeds by *downloading* a mismatched binary, and only a from-source
+    `node-gyp rebuild --release` under Node 20 produces a loadable one. `pnpm install`,
+    `pnpm rebuild` and `npm_config_build_from_source` are all no-ops once a build output exists —
+    check the binary's mtime to tell a real rebuild from a silent one. The four native packages are
+    listed in `pnpm-workspace.yaml`'s `onlyBuiltDependencies`.
+
 ## Agent Farm Internals
 
 This section provides comprehensive documentation of how the Agent Farm (`afx`) system works internally. Agent Farm is the most complex component of Codev, enabling parallel AI-assisted development through the architect-builder pattern.
@@ -2139,6 +2149,31 @@ consult -m claude spec 42
 - **GitHub Copilot**: Via AGENTS.md standard
 - **Other AI coding assistants**: Via AGENTS.md standard
 - **Consult CLI**: For multi-agent consultation (installed with @cluesmith/codev)
+
+### Codev workspaces are projected into t3code as projects (#272)
+
+t3code's model is Project → Thread; Codev's unit is a workspace. The mapping is one project per
+workspace, keyed on `workspaceRoot`, and it is maintained from two places:
+
+- **The connect path.** `initialiseThreadBackend` creates the project when a workspace's
+  thread backend first connects (`agent-farm/thread-backend.ts`). It knows one workspace, so it
+  titles the project with that directory's **leaf name**.
+- **A Tower sweep**, `agent-farm/workspace-projection.ts` + `-sweep.ts`, started after
+  `markBootComplete()`. It enumerates `getKnownWorkspacePaths()` — which is wider than the
+  `architect ∪ builders` set the thread-adoption sweeper uses, and is the point: a registered
+  workspace nobody has spawned into has neither row. It creates the missing projects and repairs
+  titles.
+
+Two properties worth knowing before changing it. **The title is the sidebar heading**, verbatim —
+a single-member project group's label *is* its title, through `projectGrouping.ts` and
+`sidebarProjectGrouping.ts` with no cleanup step between. And the sweep opens **one connection per
+server**, not per workspace: reads are plain HTTP and the socket is opened lazily, so a pass with
+nothing to do never opens one. Doing it per workspace via `ensureThreadBackendReady` would hold one
+live engine socket per known workspace for the life of the process.
+
+Only two titles are ever rewritten, both machine-written: the legacy `codev:<workspaceRoot>` form
+and the workspace's own leaf name. Anything else is somebody's decision and is left alone — a sweep
+that enforced a computed title would undo a rename made in the UI, silently, every 30s.
 
 ### Forge Concept Commands (Spec 589)
 

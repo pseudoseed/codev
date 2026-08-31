@@ -30,8 +30,9 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 /** Scopes Codev asks for, plus the one that mints a browser's pairing credential. */
 const SEED_SCOPES = [
@@ -92,6 +93,15 @@ export type ForkStack = ForkStackReady | ForkStackUnavailable;
 export interface SeededHierarchy {
   readonly projectId: string;
   readonly projectTitle: string;
+  /**
+   * A project with no threads at all (issue #272).
+   *
+   * The tree draws its heading from the project list rather than from an
+   * architect, which is the whole of change C: a workspace nobody has spawned
+   * into must not render the same as a workspace that does not exist.
+   */
+  readonly idleProjectId: string;
+  readonly idleProjectTitle: string;
   /**
    * Phase 8. Two gated builders, because the panel has THREE states and only
    * one of them is "no gate": a builder carrying #128's structured request, and
@@ -444,6 +454,33 @@ export async function seedHierarchy(stack: ForkStackReady): Promise<SeededHierar
     createdAt: new Date().toISOString(),
   });
 
+  /*
+   * A SECOND project, with nothing in it (issue #272).
+   *
+   * The tree's project level is derived from architects, so before #272 this
+   * project drew nothing at all — indistinguishable from a workspace that does
+   * not exist. Codev registers a project per workspace whether or not anything
+   * has been spawned there, so this is the ordinary state of a workspace nobody
+   * has started work in, not an edge case.
+   */
+  const idleProjectId = uniqueId();
+  const idleProjectTitle = "idle-workspace";
+  // A real directory, because the server refuses a project whose workspace root
+  // does not exist — `Workspace root does not exist` is a dispatch failure, not a
+  // stored string. A temp one rather than a path under the fork: `start-fork`
+  // refuses a dirty fork checkout, so a fixture that created a directory there
+  // would poison the next run.
+  const idleWorkspaceRoot = mkdtempSync(join(tmpdir(), "codev-spec250-idle-"));
+  await client.call("orchestration.dispatchCommand", {
+    type: "project.create",
+    commandId: uniqueId(),
+    projectId: idleProjectId,
+    title: idleProjectTitle,
+    workspaceRoot: idleWorkspaceRoot,
+    defaultModelSelection: { instanceId: "codex", model: "gpt-5.6-luna" },
+    createdAt: new Date().toISOString(),
+  });
+
   const createThread = async (fields: Record<string, unknown>): Promise<void> => {
     await client.call("orchestration.dispatchCommand", {
       type: "thread.create",
@@ -585,6 +622,8 @@ export async function seedHierarchy(stack: ForkStackReady): Promise<SeededHierar
   return {
     projectId,
     projectTitle,
+    idleProjectId,
+    idleProjectTitle,
     architectAlpha,
     architectBeta,
     architectGhost,
