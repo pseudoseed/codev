@@ -8,6 +8,34 @@ gates:
   plan-approval:
     status: pending
     requested_at: '2026-08-31T16:54:09.121Z'
+    request:
+      question: >-
+        Fixing #272 requires a t3code fork commit (an empty project draws no sidebar heading today), and any fork commit
+        obliges the full REFRESH.md tail. Take that scope, or narrow it?
+      choices:
+        - label: 'Full scope: both repos plus the REFRESH tail'
+          consequence: >-
+            Codev gets the workspace name and a Tower reconciler; the fork gets a heading for a project with zero
+            architects. Then pin.commit moves, the contract is regenerated, patches are re-exported and the four
+            spec-250 evidence collectors are re-run against a live fork server. Delivers the issue as written.
+          recommended: true
+        - label: 'Codev repo only: name the workspaces, defer the empty-heading'
+          consequence: >-
+            Project titles become codev-1455 rather than codev:/Users/chris/dev/codev-1455, and a project row exists for
+            every known workspace. But a workspace with no architect still draws nothing on screen, so half of the issue
+            stays open and needs a second PR carrying the REFRESH tail anyway.
+        - label: 'Fork only: heading first, names later'
+          consequence: >-
+            Empty workspaces appear, still labelled with prefixed absolute paths. Pays the REFRESH tail now and leaves
+            the complaint that a sidebar of full paths does not scan.
+      terminalExcerpt: >-
+        $ sqlite3 ~/.t3/dev/state.sqlite "select title, workspace_root from projection_projects;"
+
+        codev:/Users/chris/dev/codev-1455|/Users/chris/dev/codev-1455
+
+
+        Sidebar.logic.ts:1072  for (const subtree of hierarchy.architects) {   <- headings come from architects; zero
+        architects, zero headings
   dev-approval:
     status: pending
   pr:
@@ -16,4 +44,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T16:47:04.075Z'
-updated_at: '2026-08-31T16:54:09.122Z'
+updated_at: '2026-08-31T16:54:25.037Z'
