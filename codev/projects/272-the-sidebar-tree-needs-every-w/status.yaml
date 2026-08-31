@@ -45,10 +45,45 @@ gates:
   dev-approval:
     status: pending
     requested_at: '2026-08-31T18:11:31.881Z'
+    request:
+      question: >-
+        Approve dev-approval for #272? Four builders are blocked until this merges, and the change is verified live in
+        both repos.
+      choices:
+        - label: Approve, go to PR
+          consequence: >-
+            Unblocks 273, 278, 260 and 242: main starts naming fork commit 26b4c2dc09f0, so criterion 8b stops failing
+            on every shared suite run. Codev names each workspace after its directory and reconciles a project per known
+            workspace; the fork draws a heading for a workspace nobody has spawned into.
+          recommended: true
+        - label: Open the running worktree first
+          consequence: >-
+            Costs a fork server start and a Vite dev server. The same evidence is already recorded:
+            tools/t3-fork/issue-272-projection.mjs passed 8 of 8 against a live server, and the sidebar screenshot at
+            1440x900 shows the idle-workspace heading.
+      terminalExcerpt: >-
+        porch done 272
+          build   PASS (60.3s)
+          tests   PASS (435.8s)
+
+        issue-272-projection.mjs, against a live fork server:
+          ok  a workspace with no project gets one named after its directory - title=codev-1455
+          ok  the legacy codev:<path> title is rewritten to the directory name - title=dvarr
+          ok  a title a human chose is left alone - title=Entriq (do not rename)
+          ok  two workspaces sharing a directory name come out distinguishable - backend/api / mobile/api
+          ok  no project for a builder worktree, a deleted checkout, or a non-workspace - 5 rows for 5 workspaces
+          ok  the rename kept the project id rather than creating a second row
+          ok  a second pass writes nothing - created=0 renamed=0
+
+        spec-250-hierarchy.spec.ts: 10 passed, including the new empty-project test in a browser.
+
+
+        Known, NOT mine: spec-250-approval.spec.ts times out intermittently in openThread. A/B with my fixture reverted
+        to HEAD still failed, at a third different test. Documented, not skipped.
   pr:
     status: pending
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T16:47:04.075Z'
-updated_at: '2026-08-31T18:11:31.882Z'
+updated_at: '2026-08-31T18:11:51.869Z'
