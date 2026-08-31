@@ -1396,11 +1396,90 @@ The Playwright suite is **not** recorded as a substitute. It drives the same pro
 ceremony, so it covers the approval path; what the iPad closes is tailnet reach and touch targets,
 and nothing on the Mac tests either.
 
+### The third finding of one shape in two phases, and all three were mine
+
+Both lanes, independently, found that the drill's `ok` outcome documented "rebase clean, contract
+regenerated, shape-check held" while the clean branch called neither tool — and that
+`regenerate-failed` and `shape-check-failed` were documented outcomes assigned nowhere in the file.
+claude REQUEST_CHANGES/HIGH, opencode COMMENT/HIGH; the stricter reading is the one that was acted
+on.
+
+**The family is now three, across two phases.** A guard that logged and returned, which vitest
+records as a pass. `startsWith` as a same-origin assertion, unable to fail across ten ephemeral
+ports. And a comment describing work no code does. The common cause is not carelessness about
+tests. It is that **the claim gets written in prose while the mechanism is being built, and the
+prose is what gets re-read when checking the work** — and it is always right, because the same hand
+wrote both. The remedy that generalises is a check that reads the artifact rather than the intent:
+`documents exactly the outcomes it can assign, and no others` extracts the vocabulary from the
+header comment and from the `outcome:` assignments and asserts set equality. A prose-only fix cannot
+fail that test.
+
+### The reviewer's cheap option was unreachable, and finding that out changed the fix
+
+The suggested fix was to run the generator and `shape-check` in the clean branch, making the two
+dead outcomes reachable. It cannot be done. `generate.mjs` refuses any checkout whose `HEAD` is not
+`pin.commit`, and a rebased tree never satisfies that: its head is a commit that did not exist
+before the rebase. Regenerating from one means moving the pin, which is the adoption the drill
+exists in order not to perform.
+
+So the choice was not "two lines or a comment edit". It was between narrowing the header — honest,
+and leaving criterion 9 answered by `regenerationReachable`, a boolean that only says the generator
+would FIND its source — and measuring something real without running the generator. Both were done.
+`contractClosure.sourceHash` hashes the closure off the merged tree and compares it to
+`generated/source-hash.json`, which `generate.mjs` itself argues is the load-bearing drift detector
+because the emitted schema is blind to constraints behind a `decodeTo` transform.
+
+**The measurement changed the answer, which is the only thing that justified taking it.** Zero
+closure conflicts, so regeneration is not blocked — and **4 of the 9 closure files come out of the
+merge with different bytes**, so the regenerated contract would not be the one vendored.
+"Regenerable" and "unchanged" had been reading as a single fact in `FORK.md`, in `REFRESH.md` and in
+the acceptance evidence. All three now carry both.
+
+### The same tautology had two doors, and only one was obvious
+
+The hash has to be taken while the merged worktree is on disk, before `merge --abort`. Taken after,
+the worktree is the fork again and the comparison is the fork against itself. That was checked
+rather than assumed: hashing the unmerged fork against `source-hash.json` reports `moved: []`, which
+is what the post-abort version would have published on every run, looking exactly like good news.
+
+The second door was found re-reading the fix, and neither lane raised it. Guarding on
+`closureConflicts.length === 0` is the right question **once a merge has happened**. A `git merge`
+that refuses to start — already up to date, a wedged index — leaves the worktree as the unmerged
+fork with no conflicts to notice, and walks into the same comparison through a different branch.
+`mergeProducedATree` is now the outer condition.
+
+### A number that is typed is a number that will be wrong
+
+opencode's third point: `104 commits, of which 5 touch the pinned closure` was prose, in the
+document whose own opening paragraph explains that hand-typed numbers rot, next to a collector built
+to stop exactly that. The drill now counts both from the preserved clone over the same range it
+rebased across — so the churn and the conflict surface can never describe two different ranges — and
+the collector prints them. `null` renders as "not counted", never as `0`.
+
+The counted values matched what had been typed. That is the outcome that makes this worth recording:
+the fix was not prompted by a wrong number, and the next drill is where a typed one would have gone
+wrong silently.
+
+### The e2e re-run, and the run that looked like a pass
+
+claude's non-blocking note: the phase 11 regression run excluded `**/e2e/**`, so criteria 1, 2, 3, 5
+and 5b rested on the phase 7-10 Playwright runs. Phase 11 adds no fork commit, so `pin.commit` is
+still phase 10's head and those runs were already at the final fork head — but 2.3 minutes buys a
+run instead of an argument. **32 passed.**
+
+**The first attempt reported `32 skipped` and exited 0.** `T3_NODE` was unset and the fixture
+refuses to start the fork server without it. That is phase 10's own lesson working as built: a skip
+carrying its reason rather than a pass. It is also why the evidence row says "32 passed" and not
+"the suite is green" — a run that exits 0 having executed nothing is the failure this phase is
+about, and it turned up one more time in the phase that fixed it.
+
 ### What can a human see or do now that they could not before
 
 Know what carrying this customization onto a newer t3code actually costs — three files, named —
 instead of guessing from a risk table; and re-run that measurement any time with one command,
-against a fork and an upstream clone that the measurement provably did not disturb.
+against a fork and an upstream clone that the measurement provably did not disturb. And read, from
+the same run, whether the contract that comes out the other side is the one already vendored: four
+closure files say it is not.
 
 ## Flaky Tests
 
