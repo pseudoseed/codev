@@ -1,7 +1,7 @@
 From 5e8ace3b186f3452a82da0272ceb3ec157f02a62 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Mon, 31 Aug 2026 00:32:32 -0600
-Subject: [PATCH 18/31] [Spec 250][Phase: phase_8] feat: a porch gate says
+Subject: [PATCH 18/32] [Spec 250][Phase: phase_8] feat: a porch gate says
  which gate, and what it is asking
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

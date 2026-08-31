@@ -3,7 +3,7 @@
   "preForkCliVersion": "0.0.36",
   "upstreamBase": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
   "forkRoot": "/Users/chris/dev/t3code-codev",
-  "forkCommit": "e0476d49aec1d3b8f066525527942c9cdf0b7bb9",
+  "forkCommit": "24aeeebb3ded44d0fd40f41f6af73597d770ebb7",
   "dbPath": "/Users/chris/dev/codev-1455/.builders/spir-250/tools/t3-server/.runtime/data/userdata/state.sqlite",
   "steps": {
     "preForkServerCreatedDatabase": true,

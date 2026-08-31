@@ -357,6 +357,63 @@ describe('spec 250 phase 10: approving a gate from t3code', () => {
   }, 120_000);
 
   /**
+   * THE PROXY BUFFERS, SO IT MUST BE BOUNDED.
+   *
+   * `HttpServerRequest.MaxBodySize` defaults to UNBOUNDED in Effect, and this
+   * route reads the whole body before forwarding it — so without a cap one
+   * authenticated caller makes the server hold an arbitrary amount in memory, on
+   * the route whose whole purpose is to be reachable from a phone.
+   *
+   * Two paths, and both are driven: a body that DECLARES an oversize
+   * `content-length` is refused before it is read, and a chunked body that
+   * declares no length is caught by the cap on the read itself. Asserted here
+   * rather than in a unit test because the bound lives in the route handler, and
+   * a unit test of the pure functions cannot see whether anything applies it.
+   */
+  it('refuses an oversize body, declared or chunked, rather than buffering it', async () => {
+    if (skipIfUnavailable()) return;
+
+    const oversize = 'x'.repeat(200_000);
+
+    const declared = await fetch(proxied('/api/agent/v1/pairing/redeem'), {
+      method: 'POST',
+      headers: browserHeaders({ [PAIRING_TOKEN_HEADER]: 'unused' }),
+      body: JSON.stringify({ machine: oversize }),
+      redirect: 'manual',
+    });
+    expect(declared.status).toBe(413);
+    expect(((await declared.json()) as { signal: string }).signal).toBe('CODEV_AGENT_BODY_TOO_LARGE');
+
+    // Chunked: a ReadableStream body declares no content-length, so the early
+    // check cannot see it and the cap on the read is what answers.
+    const chunked = await fetch(proxied('/api/agent/v1/pairing/redeem'), {
+      method: 'POST',
+      headers: browserHeaders({ [PAIRING_TOKEN_HEADER]: 'unused' }),
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({ machine: oversize })));
+          controller.close();
+        },
+      }),
+      // Node's fetch requires this for a stream body.
+      duplex: 'half',
+      redirect: 'manual',
+    } as RequestInit & { duplex: 'half' });
+    expect(chunked.status).toBe(413);
+    expect(((await chunked.json()) as { signal: string }).signal).toBe('CODEV_AGENT_BODY_UNREAD');
+
+    // And an ordinary body still goes through, so the cap is a bound rather than
+    // a wall — without this the two above pass on a proxy that refuses every POST.
+    const machineToken = agent!.pairings.issue(MACHINE_MINT).token;
+    const ordinary = await post(
+      proxied('/api/agent/v1/pairing/redeem'),
+      { [PAIRING_TOKEN_HEADER]: machineToken },
+      { machine: 'within-the-bound' },
+    );
+    expect(ordinary.status).toBe(201);
+  }, 120_000);
+
+  /**
    * t3code's own session does not travel to `codev-agent`.
    *
    * The request below carries a valid t3code bearer and NO machine credential.

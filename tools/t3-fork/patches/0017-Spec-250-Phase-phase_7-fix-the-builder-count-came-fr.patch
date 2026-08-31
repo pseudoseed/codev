@@ -1,7 +1,7 @@
 From 7c7096d49de9f7aef8dfd0fc6f97aa81ec33ddac Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Mon, 31 Aug 2026 00:10:31 -0600
-Subject: [PATCH 17/31] [Spec 250][Phase: phase_7] fix: the builder count came
+Subject: [PATCH 17/32] [Spec 250][Phase: phase_7] fix: the builder count came
  from the render, so it could only agree with it
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

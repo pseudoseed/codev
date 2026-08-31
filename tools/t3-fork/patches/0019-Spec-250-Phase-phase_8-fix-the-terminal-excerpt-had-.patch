@@ -1,7 +1,7 @@
 From 90d2b118b7864eb44a2c88748e9da1654856315f Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Mon, 31 Aug 2026 00:45:19 -0600
-Subject: [PATCH 19/31] [Spec 250][Phase: phase_8] fix: the terminal excerpt
+Subject: [PATCH 19/32] [Spec 250][Phase: phase_8] fix: the terminal excerpt
  had no label
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
