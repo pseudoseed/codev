@@ -92,6 +92,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { closureMeasurability } from './drill-closure.mjs';
 import { resolveIdentities } from './identities.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -375,27 +376,21 @@ try {
      * tree is the fork again and the comparison becomes the fork against itself —
      * a tautology that reports zero moved files on every run, forever.
      *
-     * And only when the merge actually produced a merged tree. A `git merge` that
-     * refuses to start (already up to date, a wedged index) leaves the worktree
-     * as the fork with no conflicts to notice, which walks straight into that
-     * same tautology by a different door. `mergeProducedATree` is the guard: no
-     * merged tree means no measurement, said as `checked: false`.
+     * Whether the comparison is possible at all is decided in `drill-closure.mjs`
+     * rather than inline. Its second case — a merge that neither completed nor
+     * conflicted — is not reachable from any normal run, so asserting it here
+     * would be asserting it where no test can get to it. It lives in a module a
+     * unit test can import; this file is a script, and importing it runs a drill.
      */
-    const mergeProducedATree = merge.ok || conflictedList.length > 0;
-    const mergedSourceHash = !mergeProducedATree
-      ? {
-        checked: false,
-        reason: 'the probe merge neither completed nor conflicted, so the worktree is still the '
-          + `unmerged fork and hashing it would compare the fork to itself. git said: ${
-            merge.out.split('\n').slice(0, 3).join(' / ')}`,
-      }
-      : closureConflicts.length === 0
-        ? closureSourceHash(clone)
-        : {
-          checked: false,
-          reason: `${closureConflicts.join(', ')} conflicted, so the merged tree holds no single `
-            + 'version of the generator\'s source to hash.',
-        };
+    const measurable = closureMeasurability({
+      mergeOk: merge.ok,
+      conflictedFiles: conflictedList,
+      closureConflicts,
+      gitSaid: merge.out,
+    });
+    const mergedSourceHash = measurable.measurable
+      ? closureSourceHash(clone)
+      : { checked: false, reason: measurable.reason };
     tryRun(clone, 'merge', '--abort');
     result.wholeSurface = {
       method: 'three-way merge of the same two trees, aborted immediately',
