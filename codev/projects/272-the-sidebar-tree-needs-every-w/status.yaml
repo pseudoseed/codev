@@ -122,10 +122,12 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T16:47:04.075Z'
-updated_at: '2026-08-31T22:12:22.730Z'
+updated_at: '2026-08-31T22:12:38.466Z'
 pr_history:
   - phase: review
     pr_number: 305
     branch: builder/pir-272
     created_at: '2026-08-31T22:05:41.124Z'
+    merged: true
+    merged_at: '2026-08-31T22:12:38.465Z'
 pr_ready_for_human: false
