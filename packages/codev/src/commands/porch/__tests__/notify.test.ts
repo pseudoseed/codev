@@ -23,7 +23,13 @@ vi.mock('../../../lib/test-env.js', () => ({
 }));
 
 import { execFile } from 'node:child_process';
-import { notifyTerminal, gateApprovedMessage, protocolCompleteMessage, notifyProtocolComplete } from '../notify.js';
+import {
+  notifyTerminal,
+  gateApprovedMessage,
+  protocolCompleteMessage,
+  notifyProtocolComplete,
+  notifyGateApproved,
+} from '../notify.js';
 
 const mockExecFile = vi.mocked(execFile);
 
@@ -126,6 +132,7 @@ describe('notifyTerminal', () => {
     mockIsUnderTestRunner.mockReturnValue(true);
     notifyTerminal({ target: 'architect', message: 'x', worktreeDir: '/p' });
     notifyProtocolComplete('/p', 'bugfix-147');
+    notifyGateApproved('/p/.builders/pir-108', '108', 'pr');
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 
@@ -133,14 +140,14 @@ describe('notifyTerminal', () => {
     notifyProtocolComplete('/projects/test', 'bugfix-147');
     const args = mockExecFile.mock.calls[0][1]!;
     expect(args).toContain('send');
-    expect(args[args.indexOf('send') + 1]).toBe('architect');
-    expect(args).toContain(protocolCompleteMessage('bugfix-147'));
+    expect(args).toContain('architect');
+    expect(args).toContain(protocolCompleteMessage('bugfix-147', '/projects/test'));
   });
 });
 
 describe('gateApprovedMessage', () => {
   it('references the gate and porch next', () => {
-    const msg = gateApprovedMessage('dev-approval');
+    const msg = gateApprovedMessage('dev-approval', '108', '/ws/.builders/pir-108');
     expect(msg).toContain('dev-approval');
     expect(msg).toContain('porch next');
   });
@@ -148,7 +155,7 @@ describe('gateApprovedMessage', () => {
 
 describe('protocolCompleteMessage (issue #109)', () => {
   it('names the project and cleanup', () => {
-    const msg = protocolCompleteMessage('bugfix-147');
+    const msg = protocolCompleteMessage('bugfix-147', '/ws/.builders/bugfix-147');
     expect(msg).toContain('bugfix-147');
     expect(msg).toMatch(/protocol complete/i);
     expect(msg).toMatch(/cleanup/i);

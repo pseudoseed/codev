@@ -39,6 +39,27 @@ export function addressSpoofingErrorMessage(builderId: string): string {
 }
 
 /**
+ * The NOT_FOUND for an exact-only address (issue #264).
+ *
+ * It names the address, the workspace it was resolved in, and who is actually
+ * there — because the failure mode this replaces was silent success against the
+ * wrong agent. A caller reading this must be able to see that it asked the
+ * wrong workspace, without having to reproduce the send.
+ */
+export function exactMissErrorMessage(
+  agent: string,
+  workspacePath: string,
+  registeredBuilders: string[],
+): string {
+  const names = registeredBuilders.length ? registeredBuilders.join(', ') : '<none>';
+  return (
+    `Agent '${agent}' is not a builder in workspace '${workspacePath}' ` +
+    `(builders there: ${names}). This send required an exact match, so no ` +
+    `tail match was attempted — nothing was delivered.`
+  );
+}
+
+/**
  * Heuristic: does `sender` look like a builder identity (canonical
  * `builder-<protocol>-<id>` or the bare worktree form `<protocol>-<id>[-slug]`)
  * rather than an architect? Used only for the issue #1094 defense-in-depth
@@ -127,6 +148,24 @@ export interface ResolveError {
 }
 
 /**
+ * Resolution strictness.
+ *
+ * The builder tail match (`250` -> `builder-spir-250`) is a convenience for a
+ * human typing an address. On a machine-generated, authority-adjacent message
+ * it is a way to reach the wrong agent silently: issue #264 had a gate-approval
+ * notification for a project in a throwaway temp workspace land on a live
+ * builder in another workspace, because the sending process's session decided
+ * the workspace and `250` tail-matched the builder there.
+ *
+ * `exact: true` refuses that convenience. The address must match a builder id
+ * outright; anything else is NOT_FOUND naming what could not be resolved,
+ * never a plausible neighbour.
+ */
+export interface ResolveOptions {
+  exact?: boolean;
+}
+
+/**
  * Resolve a `[project:]agent` address to a terminal ID.
  *
  * Resolution logic:
@@ -147,12 +186,14 @@ export interface ResolveError {
  * @param fallbackWorkspace - Workspace path when no project: prefix is given
  * @param sender - Optional sender identity (a builder ID or 'architect').
  *                 Enables affinity-aware architect routing per Spec 755.
+ * @param options - `exact: true` disables the builder tail match (issue #264).
  * @returns ResolveResult on success, ResolveError on failure
  */
 export function resolveTarget(
   target: string,
   fallbackWorkspace?: string,
   sender?: string,
+  options?: ResolveOptions,
 ): ResolveResult | ResolveError {
   const { project, agent } = parseAddress(target);
 
@@ -196,7 +237,7 @@ export function resolveTarget(
   }
 
   // Resolve agent within the workspace
-  return resolveAgentInWorkspace(agent, workspacePath, sender);
+  return resolveAgentInWorkspace(agent, workspacePath, sender, options);
 }
 
 /**
@@ -298,6 +339,7 @@ function resolveAgentInWorkspace(
   agent: string,
   workspacePath: string,
   sender?: string,
+  options?: ResolveOptions,
 ): ResolveResult | ResolveError {
   const allWorkspaces = getWorkspaceTerminals();
   const entry = allWorkspaces.get(workspacePath);
@@ -384,7 +426,17 @@ function resolveAgentInWorkspace(
     }
   }
 
-  // Check builders — tail match with leading-zero stripping
+  // Check builders — tail match with leading-zero stripping.
+  // Issue #264: an exact-only caller stops here. Falling through to the tail
+  // match is what turned a bare project id into a delivery to whichever
+  // builder in this workspace happened to end with it.
+  if (options?.exact) {
+    return {
+      code: 'NOT_FOUND',
+      message: exactMissErrorMessage(agent, workspacePath, [...entry.builders.keys()]),
+    };
+  }
+
   const strippedAgent = stripLeadingZeros(agent).toLowerCase();
   const tailMatches: Array<{ builderId: string; terminalId: string }> = [];
 
@@ -463,6 +515,7 @@ export function resolveAgentInRegistry(
   target: string,
   fallbackWorkspace?: string,
   sender?: string,
+  options?: ResolveOptions,
 ): RegistryResolveResult | ResolveError {
   const { project, agent } = parseAddress(target);
 
@@ -506,6 +559,16 @@ export function resolveAgentInRegistry(
   for (const b of builders) {
     if (b.id.toLowerCase() === lower) return { workspacePath: ws, agent: b.id, kind: 'builder' };
   }
+  // Issue #264: the exact-only contract holds on the offline-hold path too.
+  // Holding mail for a tail-matched neighbour is the same misdelivery, merely
+  // slower.
+  if (options?.exact) {
+    return {
+      code: 'NOT_FOUND',
+      message: exactMissErrorMessage(agent, ws, builders.map((b) => b.id)),
+    };
+  }
+
   const stripped = stripLeadingZeros(agent).toLowerCase();
   const tail = builders.filter((b) => b.id.toLowerCase().endsWith(`-${stripped}`));
   if (tail.length === 1) return { workspacePath: ws, agent: tail[0].id, kind: 'builder' };

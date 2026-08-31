@@ -1693,6 +1693,8 @@ interface DelayedSendParams {
   raw: boolean;
   noEnter: boolean;
   interrupt: boolean;
+  /** Issue #264: exact-only resolution; no builder tail match. */
+  exact: boolean;
   deliverAfter: number;
   senderWorkspace: string;
 }
@@ -1731,7 +1733,7 @@ function handleDelayedSend(
   db: ReturnType<typeof getGlobalDb>,
   params: DelayedSendParams,
 ): void {
-  const { to, workspace, from, fromName, message, raw, noEnter, interrupt, deliverAfter, senderWorkspace } = params;
+  const { to, workspace, from, fromName, message, raw, noEnter, interrupt, exact, deliverAfter, senderWorkspace } = params;
   const now = Date.now();
   const notBefore = now + deliverAfter * 1000;
 
@@ -1741,7 +1743,7 @@ function handleDelayedSend(
   let isArchitectTarget: boolean;
   let terminalId: string | null;
 
-  const live = resolveTarget(to, workspace, from);
+  const live = resolveTarget(to, workspace, from, { exact });
   if (!isResolveError(live)) {
     const identity = liveTargetIdentity(live);
     workspacePath = live.workspacePath;
@@ -1749,7 +1751,7 @@ function handleDelayedSend(
     isArchitectTarget = identity.isArchitectTarget;
     terminalId = live.terminalId;
   } else if (live.code === 'NOT_FOUND') {
-    const reg = resolveAgentInRegistry(to, workspace, from);
+    const reg = resolveAgentInRegistry(to, workspace, from, { exact });
     if (isResolveError(reg)) {
       const statusCode = reg.code === 'AMBIGUOUS' ? 409 : reg.code === 'NO_CONTEXT' ? 400 : 404;
       const errorCode = reg.code === 'NO_CONTEXT' ? 'INVALID_PARAMS' : reg.code;
@@ -1888,6 +1890,10 @@ async function handleSend(
   const noEnter = options.noEnter === true;
   const interrupt = options.interrupt === true;
   const escape = options.escape === true;
+  // Issue #264: exact-only resolution. Machine-generated, authority-adjacent
+  // sends (porch's gate notification) set this so a miss is an error naming the
+  // address, never a tail match onto a plausible neighbour.
+  const exact = options.exact === true;
 
   // Spec 1307 `--delay` (re-homed onto the mailbox): optional deferred delivery.
   // Validated here as well as at the CLI boundary — /api/send is a public route, so an
@@ -1925,7 +1931,7 @@ async function handleSend(
   // makes the delay durable across a Tower restart.
   if (deliverAfter !== undefined) {
     handleDelayedSend(res, ctx, db, {
-      to, workspace, from, fromName, message, raw, noEnter, interrupt, deliverAfter, senderWorkspace,
+      to, workspace, from, fromName, message, raw, noEnter, interrupt, exact, deliverAfter, senderWorkspace,
     });
     return;
   }
@@ -1933,7 +1939,7 @@ async function handleSend(
   // Resolve the target address against LIVE terminals.
   // Spec 755: pass `from` so architect resolution is sender-affinity-aware
   // when the sender is a builder. Non-builder senders see unchanged behavior.
-  const result = resolveTarget(to, workspace, from);
+  const result = resolveTarget(to, workspace, from, { exact });
 
   // --- Resolution failed against live terminals ---
   if (isResolveError(result)) {
@@ -1942,7 +1948,7 @@ async function handleSend(
     // its mail instead of 404ing. escape/interrupt act on a live session only, so
     // an unresolved target keeps the original error for them.
     if (result.code === 'NOT_FOUND' && !escape && !interrupt) {
-      const reg = resolveAgentInRegistry(to, workspace, from);
+      const reg = resolveAgentInRegistry(to, workspace, from, { exact });
       if (!isResolveError(reg)) {
         const formattedMessage = formatMessageForTarget(reg.kind === 'architect', from, message, raw);
         const row = enqueueMailbox(db, {
