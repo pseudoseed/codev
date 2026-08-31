@@ -6,7 +6,7 @@ plan_phases: []
 current_plan_phase: null
 gates:
   plan-approval:
-    status: pending
+    status: approved
     requested_at: '2026-08-31T16:54:09.121Z'
     request:
       question: >-
@@ -36,6 +36,12 @@ gates:
 
         Sidebar.logic.ts:1072  for (const subtree of hierarchy.architects) {   <- headings come from architects; zero
         architects, zero headings
+    approved_at: '2026-08-31T17:19:28.435Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-31T17:19:28.435Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
   dev-approval:
     status: pending
   pr:
@@ -44,4 +50,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T16:47:04.075Z'
-updated_at: '2026-08-31T16:54:25.037Z'
+updated_at: '2026-08-31T17:19:28.445Z'
