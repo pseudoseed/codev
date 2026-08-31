@@ -293,6 +293,85 @@ previous record untouched and reports itself through its exit code and stdout.
 Worth generalizing: **a redirect is not a way to save a result, it is a way to destroy one early.**
 Anything that records evidence a test later depends on should write on success, not on start.
 
+---
+
+## Phase 4 — Porch gate block with a server-allocated revision
+
+### The mark has to outlive the thing it described
+
+Criterion 10 — clear an approved gate, deliver a lower revision, the gate does not reappear — is
+carried by one design choice: `gateRevision` lives **on the thread, not inside the gate block**, and
+the *clear* raises it as well as the set.
+
+Inside the block it would have vanished with the block, the stale write would have been the first
+one at that revision, and an answered gate would be back in front of a human. The rule generalizes:
+a monotonic guard has to outlive the state it guards, or clearing that state resets the guard.
+
+Two rules that looked contradictory in the plan resolve into one by making `revision` **optional on
+the command**: absent means the server allocates, present means apply only if it exceeds the mark.
+Equal is refused as well as lower, because two writers that computed the same number are colliding,
+not agreeing.
+
+### The same function, the third time
+
+`isRefusal` in `OrchestrationEngine` decides which errors reach a dispatcher intact. Phase 3 fixed
+it once, for `CodevHierarchyInvalidError`. Phase 4 added a **third** refusal type and did not extend
+it — so every gate refusal, including the stale write that *is* criterion 10, was rewritten as
+"Failed to generate an event identifier", and criterion 10 was false at the wire while all eleven
+decider tests stayed green.
+
+Both lanes found it independently. What generalizes is narrow and mechanical: **a predicate that
+enumerates a category has to be extended whenever the category grows, and nothing in the type system
+says so.** The union it feeds is structural; the predicate is a hand-written disjunction. Adding a
+member to the union and forgetting the predicate compiles cleanly and silently drops the new member.
+A type-level exhaustiveness check would have caught all three occurrences.
+
+### No test saw the projector, and the decider tests could not
+
+The best finding of phase 4, from the claude lane: nothing asserted that the read model applies
+either gate event.
+
+Every decider test hand-builds its read model. So a projector that dropped `gateRevision` would pass
+all eleven of them — while every write after the first re-allocated revision 1, and criterion 10
+became unenforceable. The mechanism's own test suite could not see the mechanism failing.
+
+This is the same family as the `MigrationsLive` and `isRefusal` findings, and worth stating as one
+rule: **when a value is produced in one layer and consumed in another, a test that constructs the
+intermediate state by hand tests neither.** The decider tests build the read model; the projector
+builds it in production. Only a test that lets the projector build it can tell you the two agree.
+
+### Three claims, three tests, all verified to fail
+
+By phase 4 the "revert the fix and confirm the test fails" check had become routine, and it earned
+its place three times in one phase: the engine's `isRefusal`, the projector's mark, and the wire's
+decoding default. Each was verified by removing the mechanism and watching the specific test go red.
+
+Also caught this way: a test asserting the revision column rejects NULL ran its `UPDATE` against an
+**empty table**. Zero rows touched, trivially successful. It was noticed only because the assertion
+expected a refusal — written the other way round it would have passed forever.
+
+### A count hardcoded in a driver, failing for a reason unrelated to what it measures
+
+`criterion-8b.mjs` hardcoded a two-element Codev column list. Phase 4 added two more columns and the
+driver failed — **while the criterion it exists to protect still held**. The pinned pre-fork server
+opened both the half-applied and the fully-applied database exactly as before.
+
+That is a false negative on the thing the driver was built to guard, and it is worse than a plain
+bug: the next person sees a red 8b, concludes the crash-safety property broke, and goes looking in
+the wrong place. Now derived from what the guard itself reports, asserted as properties rather than
+counts.
+
+### A test that could not fail, caught by running it
+
+The first version of "the revision column rejects NULL" ran `UPDATE projection_threads SET
+codev_gate_revision = NULL` against an **empty table**. Zero rows touched, trivially successful, and
+the assertion that it should have been refused failed — which is the only reason it was noticed. Had
+it been written the other way round it would have passed forever while proving nothing.
+
+The fix is one line: insert a row first, so the constraint has something to refuse. The lesson is
+that "assert the constraint, not the DDL" is not enough on its own — the assertion also needs
+something for the constraint to act on.
+
 ## Flaky Tests
 
 `apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint` fails in the fork.

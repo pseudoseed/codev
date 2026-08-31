@@ -142,6 +142,8 @@ against that file rather than against a layer it assembles.
 | 3 | `40fb82ce92a8ed42e6868bd946bfee00b79b3022` | `OrchestrationEngine` was rewriting every refusal as "Failed to generate an event identifier" and persisting it onto the rejected receipt. The discriminants now survive the wrapper, asserted by an engine-level test. |
 | 4 | `3a1780bbf66f` | Gate block, `gateRevision` high-water mark, `codev.gateWrite` on its own RPC method with its own scope, and the engine returning its committed events. |
 | 4 | `57d24ddcb3be` | 29 tests: revision monotonicity and criterion 10, the scope exclusions, the payload bounds. |
+| 4 | `6e8bdec207d6` | The two tests the optional-on-the-wire deviation rests on: the column rejects NULL, and an absent `gateRevision` decodes to a number. |
+| 4 | `3d0e76776cd9` | `isRefusal` was deleting gate refusals — the phase 3 bug in the same function. Reason taxonomy split, projector gate coverage added, and the single gate-write credential named. |
 
 ### Migration 900 is abandoned, and must stay abandoned
 

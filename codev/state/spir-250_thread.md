@@ -800,3 +800,43 @@ sequentially. A batch of 10 unrelated failures vanished on a clean sequential ru
 - Fork typecheck green; contracts **301 passed**; server **2815 passed, 8 skipped**, 1 pre-existing.
 - Codev: build green, **7285 passed, 55 skipped, 0 failed**, plus 180 in the v2 suite.
 - 29 new fork tests; 75 in the spec 250 suite here.
+
+### Phase 4, review round 1 — the same function, the third time
+
+Both lanes REQUEST_CHANGES; both independently found the blocking one.
+
+**`isRefusal` was deleting gate refusals.** Phase 3 fixed that function for
+`CodevHierarchyInvalidError`. Phase 4 added a third refusal type and I did not extend it, so every
+gate refusal — including the stale write that IS criterion 10 — was rewritten as "Failed to generate
+an event identifier". **Criterion 10 was false at the wire while all 11 decider tests stayed green.**
+Third occurrence of the same mistake. A type-level exhaustiveness check would have caught all three.
+
+**"Could not tell" shared a spelling with "no", on the routine path.** The unconfirmed branch was
+labelled `CODEV_GATE_THREAD_NOT_FOUND`, and an idempotent replay of the same `commandId` lands there
+*every time* — so a normal retry was reported as a nonexistent thread. Now
+`CODEV_GATE_WRITE_UNCONFIRMED`, plus `CODEV_GATE_WRITE_FAILED` for database and decode errors that
+were also being relabelled as a missing thread.
+
+**Two declared reasons were never constructed.** `CODEV_GATE_SCOPE_REQUIRED` dropped — the transport's
+`EnvironmentAuthorizationError` already names the scope. `CODEV_GATE_THREAD_NOT_FOUND` was raised as
+the generic invariant error, making the RPC's declared error type a lie for its commonest failure;
+found by *tightening a test*, not by reading.
+
+**Best finding: no projector coverage.** Every decider test hand-builds its read model, so a
+projector that dropped `gateRevision` would pass all 11 while every write after the first
+re-allocated revision 1 — the exact failure the mechanism prevents, invisible to its own suite. Six
+projector tests now; verified to fail when the mark is dropped.
+
+**Third time this project caught me writing a test that cannot fail**: assertions inside
+`if (events[0]?.type === ...)`, and a thread-not-found test asserting only that *something* failed.
+
+Also done: OAuth allowlist exclusion asserted (the third place the scope must not appear),
+and `codev/gateCredential.ts` names the issuance API and on-disk path of the single credential —
+read + gate-write, deliberately not operate, scopes asserted as a set, token written 0600 by
+temp-and-rename.
+
+Fork `3d0e76776cd9`. Typecheck green, contracts 304, server 2832.
+
+**New flaky observation:** `server.test.ts > routes websocket rpc server.upsertKeybinding` failed
+once under the full parallel run, passes in isolation and on re-run. Same shared-resource class as
+issue #263. Not fixed, recorded.
