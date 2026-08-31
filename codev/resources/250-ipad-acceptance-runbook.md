@@ -68,13 +68,19 @@ and would read as a broken feature rather than an unconfigured one.
 They are different secrets with different purposes, and one does not substitute for the other.
 
 ```bash
-afx pair issue --purpose machine-credential   # step 6 on the iPad
-afx pair issue --purpose client-session       # step 9 on the iPad
+afx pair issue --purpose machine-credential --ttl-minutes 30   # step 11 on the iPad
+afx pair issue --purpose client-session     --ttl-minutes 30   # step 13 on the iPad
 ```
 
-Both are **single-use and expire in minutes**. Mint them when the iPad is in hand, not before.
-Write them somewhere you can retype from — they are transcribed by a human, which is the whole
-reason the token field is not masked.
+`--purpose` is required and has no default, and a token minted for one ceremony is refused at the
+other — so a wrong guess fails later and elsewhere.
+
+**The default TTL is 10 minutes and the maximum is 60.** Ten is tight for a token typed on an iPad
+keyboard, which is why `--ttl-minutes 30` is written out here rather than left to the default.
+Mint them when the iPad is in hand.
+
+Both are single-use. Write them somewhere you can retype from — they are transcribed by a human,
+which is the whole reason the token field on the form is not masked.
 
 ### 4. Have a real builder at a real gate
 
@@ -127,6 +133,17 @@ Safari. No app, no account, no cloud relay.
 - The `porch status <id>` output from step 15, beside the session id the iPad displayed.
 - Anything that needed a retry, and why. A run that needed three attempts and says so is worth more
   than a clean one that does not say what it skipped.
+
+## Teardown
+
+```bash
+afx pair revoke ipad     # withdraws the machine credential AND its approval capabilities
+afx pair list            # confirm: `ipad  REVOKED`, and nothing else changed
+```
+
+`afx pair list` prints no secrets. Revoking one machine is per-machine by design — criterion 3 of
+the phase-10 e2e asserts exactly that, so if another paired device stops working too, that is a
+finding worth reporting rather than expected behaviour.
 
 ## If no iPad appears
 
