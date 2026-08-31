@@ -87,3 +87,16 @@ create, the bound's ceiling), which is the correct split.
 The first `src/agent-farm` run showed 14 failures with `Roles directory not found in
 .codev/roles/, codev/roles/, or embedded skeleton`. Not the change: `packages/codev/skeleton`
 is a build artifact (`copy-skeleton`) and a fresh worktree has none. They pass after the build.
+
+## Environmental check failure (#278)
+
+`porch check` failed `tests` on `spec-250-vendoring-identities.test.ts`, not on this change.
+`verifyFork()` (`tools/t3-server/t3-server.mjs:310`) runs `verifyForkHead()` — which prints
+`FORK_AHEAD_OF_CONTRACT` and returns, since that case is exit 0 — and then `assertClean(fork)`,
+which dies `MISMATCH` at `t3-server.mjs:188` on an uncommitted file in the fork checkout. The
+test's first assertion passes and its second cannot.
+
+Raised with the architect rather than routed around. Instruction: treat as environmental,
+document in the PR body, reference #278, proceed. Two other builders hit it today. The file in
+the fork checkout is the LAN server the iPad uses and stays until Chris clears it — not to be
+deleted or committed.

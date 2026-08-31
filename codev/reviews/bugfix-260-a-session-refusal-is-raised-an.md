@@ -102,9 +102,27 @@ that fails for the wrong reason is worse.
 - `npx vitest run src/agent-farm` — **217 files passed, 1 skipped; 4269 tests passed, 40 skipped**
 - `pnpm --filter @cluesmith/codev build` — clean
 
+- `npx vitest run` (whole `packages/codev`) — **7419 passed, 58 skipped, 2 failed**
+
 An initial `src/agent-farm` run showed 14 failures reading `Roles directory not found in
 .codev/roles/, codev/roles/, or embedded skeleton`. Not the change: `packages/codev/skeleton`
 is a build artifact (`copy-skeleton`) and a fresh worktree has none. They pass after a build.
+
+### The two remaining failures are environmental (#278)
+
+Both are the same test, `spec-250-vendoring-identities.test.ts > exits 1 against the real fork
+checkout when it is ahead of a fork-sourced pin`, counted twice across concurrent runs.
+
+`verifyFork()` (`tools/t3-server/t3-server.mjs:310`) calls `verifyForkHead()` first, which
+prints `FORK_AHEAD_OF_CONTRACT` and deliberately does **not** die — that case is exit 0. It
+then calls `assertClean(fork)`, and `t3-server.mjs:188` dies `MISMATCH` because the fork
+checkout has an uncommitted file. So the test's first assertion (`stderr` contains
+`FORK_AHEAD_OF_CONTRACT`) passes and its second (`status` is 0) cannot: the verifier got past
+the contract check and then failed on tree cleanliness, which is a different thing than the
+test is measuring.
+
+Nothing in this branch reaches it. The diff is `porch-thread-engine.ts` plus a new test file
+and docs; that suite imports none of them. Filed as **#278** and hit by other builders today.
 
 ## What This Does NOT Do
 
