@@ -1,7 +1,7 @@
 id: '272'
 title: the-sidebar-tree-needs-every-w
 protocol: pir
-phase: review
+phase: verified
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -122,7 +122,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T16:47:04.075Z'
-updated_at: '2026-08-31T22:12:14.896Z'
+updated_at: '2026-08-31T22:12:22.730Z'
 pr_history:
   - phase: review
     pr_number: 305
