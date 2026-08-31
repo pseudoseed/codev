@@ -1,9 +1,347 @@
 # Review — Spec 250: t3code is the front end
 
-Written incrementally as phases land, not reconstructed at the end. Sections are added by the
-phase that produced them.
+## Summary
+
+t3code became Codev's front end through a private fork (`pseudoseed/t3code@codev`), across **11
+plan phases** landed as **105 `[Spec 250]` commits** on one branch — 128 files, ~40k insertions.
+The fork gained a thread hierarchy (`parentThreadId` + `role`), a porch gate block with a
+server-allocated revision, nested Workspace > Architect > Builders rendering in t3code's own
+sidebar, a builder tile grid, and gate approval driven from t3code over a same-origin proxy.
+**10 of 11 success criteria are met** (criterion 9 under the plan's amended reading); criterion
+6, the iPad run, closes **UNMET** with a written runbook because no device was reachable.
+
+Every number in this review is regenerated, not typed: `tools/t3-server/collect-spec-250-evidence.mjs`
+rebuilds the measurement tables in `codev/resources/250-acceptance-evidence.md` and `--check`
+exits 0 against the committed file.
+
+## Spec Compliance
+
+Full evidence, per criterion, in `codev/resources/250-acceptance-evidence.md`. Phase attribution
+and the one-line evidence pointer:
+
+- [x] **1.** Architect + 3 builders render as a tree in t3code's own web app (Phase 7) — `spec-250-hierarchy.spec.ts`, 9 Playwright tests against the live fork app.
+- [x] **2.** Two architects render as two subtrees (Phase 7) — `spec-250-hierarchy.spec.ts:265`.
+- [x] **3.** A gated builder shows the gate name and #128's structured question **from the gate block, not the title** (Phase 8) — `spec-250-gate.spec.ts`, 9 tests, one asserting no thread title anywhere contains a gate name.
+- [x] **4.** The gate is approved from t3code and porch records the approving session id, machine and timestamp in `status.yaml` over `codev-agent`'s capability path (Phases 4, 6, 10) — `spec-250-t3code-approval.e2e.test.ts` through the real fork server's proxy into a real `status.yaml`, plus `spec-250-approval.spec.ts` from a real browser.
+- [x] **5.** Six builders at 1440x900, panes ≥340x240 CSS px, body text ≥13px, measured against t3code's chrome (Phase 9) — `spec-250-tiling.spec.ts:136`, measured from the browser's own geometry rather than the component's attribute.
+- [x] **5b.** Seven panes at 1920 tile **4x2, not 3x3** (Phase 9) — `spec-250-tiling.spec.ts:243`.
+- [ ] **6. UNMET.** Reached from an iPad over the tailnet, no account, no relay, driving a builder to completion. **No run — no device on the tailnet.** Closed UNMET rather than as passed or left open, with the procedure at `codev/resources/250-ipad-acceptance-runbook.md`; every step that does not need the device was verified. See "Criterion 6 — UNMET, and why" in the evidence document.
+- [x] **7.** A `role: null` thread created by t3code's own UI appears where it always did and nothing in the new tree claims it (Phase 7) — `spec-250-hierarchy.spec.ts:291`.
+- [x] **8.** An existing database opens against the customized server, added columns read as "not recorded", and a projection rebuilt over a pre-fork event log decodes every historical `ThreadCreatedPayload` (Phases 2, 3) — `apps/server/src/codev/schemaGuard.test.ts` and the fork's projector tests.
+- [x] **8b.** A migration interrupted partway leaves the database openable by the **pre-fork** server, tested by killing the server mid-migration (Phase 2) — `tools/t3-fork/criterion-8b.mjs`, evidence at `codev/research/250-criterion-8b-evidence.json`, `passed: true`.
+- [x] **9. Met under the plan's amended reading**, and the difference is stated rather than smoothed over (Phase 11). Run literally, the fork does **not** rebase cleanly: a sequential rebase stops at commit **6 of 42** on `apps/server/src/server.test.ts`, and the whole conflict surface is **3 files of the 35 we modify**. The contract **does** regenerate from the rebased tree, and `shape-check` against it **moves 3 artifacts** (`schema.json`, `schema.ts`, `types.d.ts`) — the cost of adopting that base, measured rather than predicted. `verify` holds on both identities; upstream churn is 104 commits, 5 touching the pinned closure. All four clauses are tabulated against what was run in "What the criterion 9 wording asks for and what was run".
+- [x] **10.** An approved gate cannot be re-displayed by a later write carrying a lower revision (Phases 4, 6) — the revision high-water-mark tests, and the live delivery in phase 6.
+- [x] **11.** Hierarchy integrity refused by the server **at write time**, never rendered in a fallback (Phase 3) — `apps/server/src/codev/threadHierarchy.test.ts` plus live wire evidence at `codev/research/250-hierarchy-wire-evidence.json`, `passed: true`.
+
+The spec's open question — **does `apps/client` survive?** — was ruled by the architect during the
+project: it is **kept as the fallback and frozen.** Nothing from phases 7-10 is backported. The
+freeze authorises fixes that keep its own suite green, and nothing more.
+
+## Deviations from Plan
+
+Per phase, what changed and why.
+
+**Plan-wide, decided at review round 1.** Migration 900 was abandoned for
+`apps/server/src/codev/schemaGuard.ts`: a numbered migration at 900 would have silently disabled
+every future upstream migration below it, which is a rebase hazard that outlives the spec.
+
+**Phase 2.** Criterion 8b moved from simulated to exercised. The plan's version constructed the
+half-applied state by hand; that substitutes the thing whose absence is the risk. It became a
+real child process killed mid-migration (`tools/t3-fork/criterion-8b.mjs`).
+
+**Phase 4.** `CODEV_GATE_SCOPE_REQUIRED` was dropped from the refusal union — the transport
+refuses first, so the reason was unreachable and a declared-but-unconstructable discriminant is a
+lie in the type. Gate-writer provisioning became non-fatal and idempotent **by rotation, not
+lookup**, because a lookup-keyed provision cannot be idempotent across a credential rotation.
+
+**Phase 7.** Added `parent-elsewhere` to the sidebar's unattributed group, which the plan did not
+call for. A parent archived after the fact orphans its children, and dropping them silently is a
+second correct-looking answer.
+
+**Phase 8.** The plan asked for a test of "a choice with no consequence". That state is
+unrepresentable in the contract, so it is kept as a refusal test instead of deleted.
+
+**Phase 9.** **Criterion 4b was added at the architect's direction** — "four columns fit", keyed
+on **width alone, never on builder count**. Spec 146's wording is unchanged; this is an addition
+to what phase 9 asserts, not a reinterpretation of an existing criterion.
+
+**Phase 11 — the largest deviation, and it changed a success criterion's execution.** The plan's
+phase-11 file list says `upstreamBase` and `commit` are "advanced by the drill". **They are not.**
+Amended 2026-08-31 at the architect's direction: the drill runs in a throwaway clone and
+`pin.json` never moves (`preserved.pinCommitUnchanged: true`). The reason is that the moment
+`pin.json` names a new base, `verify-upstream` expects the preserved clone to *be* there, and
+every spec 146 and 236 result tied to `082e6ea52186` stops being re-runnable. Advancing the base
+is a decision taken when there is a reason — a security fix, a feature we need — never as a phase
+deliverable. The spec's criterion 9 carries the amendment inline.
+
+Also in phase 11: `apps/client` was found red and had been since phase 5. Fixed under the freeze,
+which authorises exactly that.
+
+## Consultation Feedback
+
+Lanes: **Claude** and **opencode** on every implementation phase, plus **codex** on the plan
+round. The **Gemini/agy lane produced no output for this project** and is absent from every
+round rather than recorded as an approval. No `CONSULT_ERROR` was raised in any round.
+
+Full per-round responses are committed under
+`codev/projects/250-t3code-is-the-front-end-privat/` as `*-rebuttals.md`; the raw lane outputs are
+alongside them. What follows is the disposition of each round.
+
+### Plan Phase (Round 1)
+
+All three lanes returned **REQUEST_CHANGES**. Twenty findings, **all Addressed** — the plan was
+rewritten before phase 1 began.
+
+#### Claude
+- **Concern**: Migration 900 would silently disable every future upstream migration. → **Addressed**: migration abandoned for `schemaGuard.ts`.
+- **Concern**: Phase 1 breaks `spec-146-t3-contract.test.ts:254`; phase 5 breaks `:231`. → **Addressed**: both call sites updated in the phase that breaks them.
+- **Concern**: Seven `T3CODE_ROOT` readers, not the three the plan named. → **Addressed**: all seven enumerated and repointed.
+- **Concern**: Criterion 8b would pass by construction. → **Addressed**: rewritten as a kill test (and moot after phase 2).
+- **Concern**: Phase 10 understates both modules it ports; fork-only phases carry no artifact in this repo; no abandonment path; fork suite scope unbounded. → **Addressed**: each written into the plan.
+
+#### Codex
+- **Concern**: Gate revision semantics not implementable as written. → **Addressed**: revision became server-allocated.
+- **Concern**: `codev:gate-write` unenforceable at the referenced point. → **Addressed**: enforcement moved to the capability path.
+- **Concern**: Phase 6's project map would be dead code. → **Addressed**: removed.
+- **Concern**: Persistence work named too few modules; the proxy has no upstream-target trust boundary. → **Addressed**: the target is configured, not derived from the request.
+
+#### opencode
+- **Concern**: `codev.gateWrite` is never registered on the wire; gate commands must stay out of the client command unions; phase 5 would not vendor the method. → **Addressed**: all three — and the third resurfaced as a real defect in phase 5 (below).
+- **Concern**: `acquire` still keys off `pin.commit`. → **Addressed**: this became phase 1's headline finding.
+- **Concern**: Gate-write credential path unnamed; leftover revision return path. → **Addressed**.
+
+**Two findings of my own, raised while verifying the lanes**: the CSP claim was **false** in both
+my plan and the spec, and three phases planned tests with a tool the fork does not have. Both
+corrected in the plan.
+
+### Phase 1 (Round 1 — Claude APPROVE, opencode REQUEST_CHANGES; Round 2 — both APPROVE)
+
+- **opencode**: `ready()` still runs full `verify()`. → **Addressed**.
+- **opencode**: `verifyCheckout` treats a failed `git status` as clean. → **Addressed** — "I could not tell" was spelled the same as "clean".
+- **Claude**: `FORK.md` overstates "nothing re-derives it"; a test heading says "the seventh readers" over six. → **Addressed**, both.
+- **Claude (round 2)**: `--since` bypassed the ref-resolution guard; no direct test for the `NO_UPSTREAM_MOVEMENT` named zero. → **Addressed**, both.
+- Items each lane flagged as *unverifiable from its session* are listed in the rebuttal rather than counted as findings.
+
+### Phase 2 (Round 1 — Claude REQUEST_CHANGES, opencode COMMENT; Round 2 — both APPROVE)
+
+- **Both lanes**: "a newly introduced upstream migration still runs" never invoked the migrator. → **Addressed**, and it uncovered more than the finding: a whole class of tests here asserted against hand-built state.
+- **Both lanes**: criterion 8b was simulated, not exercised. → **Addressed** — became a real kill test.
+- **Claude**: `forkSkipReason` says "ahead" for any non-matching head. → **Addressed**.
+
+### Phase 3 (Round 1 — both REQUEST_CHANGES; Round 2 — both APPROVE)
+
+- **Blocking, both lanes**: the engine deleted every reason discriminant one layer above the tests, so the deliverable was destroyed where no test looked. → **Addressed**; the more useful half is *why it went unnoticed*, recorded in the phase log.
+- **Non-blocking**: a test asserting its own literals; a test asserting its own input fixture; `commandInvariants.test.ts` had no Codev cases. → **Addressed**, all three.
+
+### Phase 4 (Round 1 — both REQUEST_CHANGES; Round 2 — Claude APPROVE, opencode REQUEST_CHANGES; Round 3 — both APPROVE)
+
+The longest round chain in the project, because one defect kept reappearing in different costumes.
+
+- **BLOCKING**: the engine deleted gate refusals — the same shape as phase 3. → **Addressed**.
+- **Concern**: "could not tell" shared a spelling with "no"; every unexpected cause was relabelled as a missing thread. → **Addressed**.
+- **Concern**: `CODEV_GATE_SCOPE_REQUIRED` declared and never constructed. → **Addressed** by dropping it from the union.
+- **Concern**: two of my own tests asserted nothing. → **Addressed**.
+- **The finding that mattered most**: no projector coverage — the decider tests could not see the projector at all. → **Addressed**.
+- **Concern**: the OAuth token allowlist exclusion was unasserted; the single credential was never named. → **Addressed**.
+- **Round 2, opencode**: the credential had no production caller. → **Addressed** — costume one again, one layer further out.
+- **Round 2, opencode**: the map row was asserted, the enforcement was not. → **Addressed**.
+- **Round 2**: source-string assertions are brittle to reformatting. → **Acknowledged, not changed** in round 2; **Addressed** in round 3 once a non-brittle form existed.
+- **Round 3, Claude**: `OrchestrationRefusal` kept a second copy of the refusal list; a doc comment documented a reason that cannot arrive. → **Addressed**, both.
+
+### Phase 5 (Round 1 — Claude REQUEST_CHANGES, opencode COMMENT; Round 2 — both APPROVE)
+
+- **Blocking**: `codev.gateWrite` would have been vendored as **nothing at all** — the generator iterates `pin.methods`, and the entry's source was wrong. → **Addressed**; the test that let it through was replaced with one that asserts the generated output, not the input.
+- **Round 2, one non-blocking note**. → **Addressed**.
+
+### Phase 6 (Round 1 — Claude APPROVE, opencode REQUEST_CHANGES; Round 2 — both APPROVE)
+
+- **opencode, blocking**: the gate watch is not torn down on reconnect. → **Addressed**; it needed a server the harness could not start, which is the finding's second half.
+- **Claude**: three non-blocking notes. → **Addressed**.
+- **Round 2, Claude**: the wire-evidence guard can flake on a fresh clone. → **Addressed**.
+
+### Phase 7 (Round 1 — both APPROVE)
+
+- **Concern**: `data-codev-builder-count` was two derivations of one fact. → **Addressed**.
+- **Concern**: the tree covers the Active section only, documented nowhere outside a code comment. → **Addressed** by documenting it, and phase 8 inherits the boundary.
+- **Concern**: no `package.json` script for the spec-250 Playwright config; `props.projectTitle ?? props.codevRoleLabel ?` reads ambiguously. → **Addressed**.
+
+### Phase 8 (Round 1 — both APPROVE)
+
+No blocking concerns from either lane. The fork suite was confirmed green after the last three
+commits. One item was raised **by the architect during the phase rather than by a lane** and is
+recorded as such in the rebuttal.
+
+### Phase 9 (Round 1 — Claude APPROVE, opencode COMMENT)
+
+Seven findings, all **Addressed**: the grid had no in-app entry point (and the test was complicit
+in not noticing); the width was measured two ways; orphans were dropped from the grid; the sidebar
+is 256px, not 232; two things the DOM was asserting that were not true; `--codev-pane-body` set and
+consumed nowhere; the route computed the same grouping twice.
+
+### Phase 10 (Round 1 — Claude APPROVE, opencode REQUEST_CHANGES; Round 2 — Claude COMMENT, opencode APPROVE)
+
+- **opencode, blocking**: the vitest e2e reported a **PASS on a run that never happened**. → **Addressed**, and it is the single most valuable finding of the project: a green suite that never executed is indistinguishable from a green suite that did, unless something asserts the run occurred.
+- **Claude, non-blocking**: `UPSTREAM_TIMEOUT_MS` claimed more than the mechanism gives — an idle timeout does not bound a trickling upstream. → **Addressed** by correcting the claim in `agentProxy.ts` rather than the mechanism; the limitation is stated, not hidden.
+- **Both lanes**: `data-codev-approval-state` was coarser than its own words. → **Addressed**.
+- **Round 2, Claude**: the same-origin assertion was a **prefix match**, so `https://evil-example.com` would satisfy `https://example.com`. → **Addressed**.
+- **Round 2, Claude, non-blocking**: `blob:` alongside `data:`. → **Addressed**.
+
+### Phase 11 (Round 1 — Claude REQUEST_CHANGES, opencode COMMENT; Round 2 — Claude APPROVE, opencode COMMENT)
+
+- **Claude, binding**: the drill's `ok` outcome **claimed** the contract regenerated and `shape-check` held, while the clean branch ran neither and both failure states were unreachable. → **Addressed** by making the drill actually regenerate in a second throwaway, not by narrowing the claim. Both new checks were verified capable of failing.
+- **Claude**: the criterion 9 `shape-check` row described the current pin, not the rebase result. → **Addressed**.
+- **Claude**: churn `104 / 5` was hand-typed. → **Addressed** — the whole measurement block is now generated by `collect-spec-250-evidence.mjs`, with `--check` in the suite.
+- **Claude**: the regression run excluded `**/e2e/**`, so criteria 1, 2, 3, 5, 5b rested on phase 7-10 runs rather than a run at the final fork head. → **Addressed**: 32 Playwright tests re-run at `3786b840e1a4`.
+- **Round 2, opencode**: my own tests would have failed a *correct* zero-movement drill. → **Addressed**.
+- **Round 2**: a comment outlived the test it described by one commit; the churn classification was hand-typed prose; `contractRegeneration` was not in "every result". → **Addressed**, all three.
+- **Round 2, Claude**: `spec-250-evidence-collector.test.ts` mutates two committed files and restores them in a `finally`. → **Rebutted**: the mutation is the only way to prove `--check` can fail, the restore is unconditional, and the alternative (a fixture copy) tests a copy rather than the committed file the check actually reads. Reasoning in `250-phase_11-iter2-rebuttals.md`.
+
+## Lessons Learned
+
+### What Went Well
+
+**The 3-way review found things no test could have.** Three of the project's most expensive
+defects were found by a lane and not by the suite: the engine deleting refusal discriminants one
+layer above where the tests looked (phases 3 and 4), `codev.gateWrite` vendoring as nothing at all
+(phase 5), and a vitest e2e reporting a pass on a run that never happened (phase 10). Each was
+green before the review.
+
+**Evidence that regenerates cannot rot.** Every measurement in the acceptance document is produced
+by `collect-spec-250-evidence.mjs` and checked by a test. Two rounds of "this number was typed"
+findings stopped after the collector existed.
+
+**Falsifiability as a standing rule.** Every regression test in this project was verified by
+reverting its mechanism and confirming it fails. That rule caught tests that could not fail in
+phases 4, 9 and 11 — each of which had been written, read and reviewed while incapable of failing.
+
+**The screenshots ruled on things the tests approved.** Phase 7's tests passed on a tree the
+screenshots showed was wrong; phase 9's tests passed on two defects the images made obvious. A
+green Playwright run is not the deliverable.
+
+### Challenges Encountered
+
+**The same defect in five costumes.** A refusal reason declared in a type, deleted by an engine
+layer, never constructed in production, asserted only in a decider test, and documented in a
+comment that outlived it — one bug wearing five shapes across phases 3, 4 and 11. It cost three
+review rounds in phase 4 alone. What eventually closed it was assertion **at the call site**
+rather than at the module.
+
+**Two commits that were equal, and a test that could not tell which it read.** `pin.commit` and
+`pin.upstreamBase` were deliberately equal until the fork diverged. `classify-churn --fork-drift`
+read the wrong one, every test had the right answer for the wrong reason, and the spec had *named
+this exact hazard in prose*. It only became reachable once a ruling froze `pin.commit` while the
+checkout moved on — and then the tool whose entire job is "what have we changed?" reported zero.
+
+**A harness run poisoning the next suite run** (issue #263) made failures untrustworthy until the
+rule "re-run a suspect suite alone before believing it" was adopted.
+
+**Two node versions in one project.** Fork tooling needs Node 22; the codev suite must run under
+Node 20 or `better-sqlite3` fails 724 tests in a way that looks exactly like a regression. This
+cost real time more than once and is now written into the fork docs.
+
+### What Would Be Done Differently
+
+**Write the evidence collector in phase 1, not phase 11.** Every hand-typed number in the
+acceptance document became a review finding. A generator that emits the measurement block and a
+`--check` test that fails when the committed file drifts would have removed three rounds of
+findings across two phases.
+
+**Assert the seam before writing either end.** The phases that went cleanly (7, 8) are the ones
+where the seam check came first. The phases that needed three rounds (4) are the ones where two
+correct ends were built and the wiring between them was assumed.
+
+**Name which identity a test reads while the two values are still equal.** A test written when
+`commit == upstreamBase` cannot tell you which one the code reads. Either force them apart in the
+fixture, or assert the field name in the source — before they diverge, because after they diverge
+the bug already shipped.
+
+### Methodology Improvements
+
+**Porch should carry a "run alone" retry for a suspect failure.** Issue #263's poisoning made
+every full-suite failure ambiguous. A protocol-level convention — a failure in a full run is not a
+finding until it reproduces alone — would have saved time in three phases.
+
+**A criterion that cannot be run needs a third status.** Criterion 6 is not met and not open; it
+is **UNMET with a runbook**. The review template's checkbox has two states, and "we could not run
+this and here is exactly how the next person does" is neither. It was written into the prose
+instead, which works but relies on the reader noticing.
+
+**An amended criterion should be amended in the spec, in place.** Criterion 9's amendment is
+inline in the spec with the original wording preserved above it, and the evidence document
+tabulates all four clauses against what was actually run. That shape is worth making standard: a
+plan-level amendment recorded only in a review is invisible to anyone reading the spec later.
+
+## Architecture Updates
+
+- **Routed: cold** — `codev/resources/arch.md`, new `### The t3code Fork (Spec 250)` under `## Integration Points`: the two checkouts and their two pin identities, why the upstream clone must never be checked out, why the private repo is a *created* repo rather than a `gh repo fork` (a fork inherits the source's visibility), what `pin.contractSource: "fork"` changes about `verify`, the `schemaGuard.ts` watermark, and where the tooling lives. Placed under an existing top-level section deliberately, so the hot file's cold-doc map stays at its 12-topic cap.
+- **Routed: hot** — `codev/resources/arch-critical.md`: one fact — t3code is the front end via the private fork, `/Users/chris/dev/t3code` is read-only, never `gh repo fork`, **`apps/client` is the frozen fallback**, and every fork commit obliges `REFRESH.md`. This is hot rather than cold because the expensive mistake it prevents is one a builder makes *before* consulting anything: extending the frozen `apps/client`, or checking out the read-only upstream clone.
+- **Demotion, to respect the 10-fact cap** — the "governance docs are two-tier (Spec 987)" one-liner moved out of the hot tier into `arch.md`'s `## Governance Docs (Hot/Cold Tiers)` section, which already stated it in full. It is the one hot entry whose content is restated in the header comment of each hot file, which any producer editing one is already reading.
+- Caps after the change: **10 facts, 12 map topics, 32 lines** — unchanged, all within the stated limits.
+
+## Lessons Learned Updates
+
+- **Routed: hot** (during the project, phases 2 and 4) — `lessons-critical.md` gained "a test that cannot fail is not a test — revert the fix and confirm the test fails", and the collaborator-substitution lesson was widened to the rule the five costumes produced: "a test that supplies the boundary itself cannot tell you the boundary exists — test the seam, not the two ends."
+- **Demotion, to respect the 10-lesson cap** (during the project) — "when stuck, get an outside model's perspective and build a minimal repro" moved to `lessons-learned.md`, with **the trigger itself kept hot**, folded into the consultation lesson. A threshold only works if it is always-on: a stuck agent does not go and read the cold file, which is the whole reason it was hot.
+- **Routed: cold** — `lessons-learned.md`, Critical: naming a hazard in a spec does not prevent it; only a test that can fail does — with the `classify-churn` account, and the general rule that a test written while two values are equal cannot tell you which one the code reads.
+- **Routed: cold** — `lessons-learned.md`, Testing: a test whose work grows with the repository looks flaky before it looks under-budgeted, and the two have opposite remedies; and harness/screenshot runs poisoning the suite that follows them (issue #263).
+
+## Flaky Tests
+
+
+`packages/codev/src/terminal/__tests__/session-manager.test.ts > stderr tail logging (integration)`
+has timed out under full-suite load twice: `no stderr tail logged for file-based stderr` in phase 9,
+and its sibling `logs session exit without stderr tail (stderr goes to file)` in phase 11. Both are
+in the same block, both spawn a real process, and both pass alone. Recorded rather than skipped —
+see the reasoning below, which applies to both. It spawns a real process, nothing in spec 250 goes near `src/terminal/`, and it
+passed alone immediately afterwards and in the next full run (7370 passed, 0 failed). Recorded
+rather than skipped: a test that passes on its own and once timed out under load is a timing
+sensitivity, and annotating it as skipped would remove coverage to hide a slow machine.
+
+
+### One timeout in phase 11 was NOT flaky, and calling it that would have been wrong
+
+`spec-250-vendoring-identities.test.ts > reports zero fork drift as a named zero` timed out at the
+5s default in phase 11's full run, and passed standalone in 2s. The tempting conclusion is "flaky
+under load". It is not.
+
+The test spawns `classify-churn --fork-drift`, which re-emits the whole pinned closure **once per
+closure-touching commit in the range** — and that range grows every time the fork gains
+customization. It was near-empty when the test was written and is 6 commits now. The work is real,
+bounded by the fork's history, and rising; nothing about it is timing-sensitive.
+
+So the budget was wrong, not the test: a 5s default that silently became too small turns a passing
+test into an intermittent one without anyone touching it. Raised to 30s with the reason recorded at
+the call site, because the next person to see it fail should not have to re-derive this.
+
+The distinction matters because the two have opposite remedies. A flaky test is skipped or
+stabilised; this one needed its budget corrected, and skipping it would have removed coverage of
+`classify-churn`'s named-zero contract to hide arithmetic that is working correctly.
+
+
+`apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint` fails in the fork.
+Pre-existing and unrelated to spec 250: `git diff 082e6ea5 -- entrypoint.ts entrypoint.test.ts` is
+empty, the module imports only `node:fs` and `node:url`, and macOS resolves `/var` to
+`/private/var`. Not skipped and not modified — editing an upstream test we did not break is
+gratuitous divergence on a fork that has to rebase.
+
+## Follow-up Items
+
+- **Criterion 6, the iPad run.** Not descoped — unrun. The runbook is at `codev/resources/250-ipad-acceptance-runbook.md`, and every step that does not need the device was verified. It needs a device on the tailnet and nothing else.
+- **A page-level CSP for t3code.** Explicitly not done in phase 10, recorded as a follow-up in the plan.
+- **The proxy's idle timeout does not bound a trickling upstream.** Stated at the mechanism in `agentProxy.ts` rather than fixed; a total-duration ceiling is the fix if it ever matters.
+- **Issue #263** — a harness run poisons the next suite run. Filed, not fixed here.
+- **Issue #264** — a spurious "gate approved, run `porch next`" message reaches a builder from its own Playwright fixture. Filed, and the architect ruled it out of scope for this spec. It fired twice in this worktree; both times `porch status` showed no pending gate. **Any gate-approval message should be checked against `porch status` before acting on it.**
+- **Issue #265** — root `npm test` filters to `@cluesmith/codev`, so nothing local runs the frozen `apps/client` suite. That is how it stayed red from phase 5 to phase 11 without anyone noticing.
+- **Issue #251** — folding the two t3code subscriptions per watched thread. Pre-existing, unrelated to this spec, noted because phase 6 touched the neighbourhood.
+- **The architect has not ruled on the pane internals.** 12 screenshots at `docs/codev/spec-250/phase-10/` in the fork. The tests and measurements pass; what the panes *look like* is a human call and has not been made.
 
 ---
+
+## Phase-by-phase record
+
+Written incrementally as each phase landed, not reconstructed at the end. Kept because the
+findings are the useful part: what was wrong, how it was found, and why the fix took the shape it
+did. The sections above summarise; this is the working record.
 
 ## Phase 1 — Two-identity vendoring harness
 
@@ -1520,40 +1858,3 @@ against a fork and an upstream clone that the measurement provably did not distu
 the same run, what the contract that comes out the other side actually looks like: it regenerates,
 and three of its shape artifacts move.
 
-## Flaky Tests
-
-`packages/codev/src/terminal/__tests__/session-manager.test.ts > stderr tail logging (integration)`
-has timed out under full-suite load twice: `no stderr tail logged for file-based stderr` in phase 9,
-and its sibling `logs session exit without stderr tail (stderr goes to file)` in phase 11. Both are
-in the same block, both spawn a real process, and both pass alone. Recorded rather than skipped —
-see the reasoning below, which applies to both. It spawns a real process, nothing in spec 250 goes near `src/terminal/`, and it
-passed alone immediately afterwards and in the next full run (7370 passed, 0 failed). Recorded
-rather than skipped: a test that passes on its own and once timed out under load is a timing
-sensitivity, and annotating it as skipped would remove coverage to hide a slow machine.
-
-
-### One timeout in phase 11 was NOT flaky, and calling it that would have been wrong
-
-`spec-250-vendoring-identities.test.ts > reports zero fork drift as a named zero` timed out at the
-5s default in phase 11's full run, and passed standalone in 2s. The tempting conclusion is "flaky
-under load". It is not.
-
-The test spawns `classify-churn --fork-drift`, which re-emits the whole pinned closure **once per
-closure-touching commit in the range** — and that range grows every time the fork gains
-customization. It was near-empty when the test was written and is 6 commits now. The work is real,
-bounded by the fork's history, and rising; nothing about it is timing-sensitive.
-
-So the budget was wrong, not the test: a 5s default that silently became too small turns a passing
-test into an intermittent one without anyone touching it. Raised to 30s with the reason recorded at
-the call site, because the next person to see it fail should not have to re-derive this.
-
-The distinction matters because the two have opposite remedies. A flaky test is skipped or
-stabilised; this one needed its budget corrected, and skipping it would have removed coverage of
-`classify-churn`'s named-zero contract to hide arithmetic that is working correctly.
-
-
-`apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint` fails in the fork.
-Pre-existing and unrelated to spec 250: `git diff 082e6ea5 -- entrypoint.ts entrypoint.test.ts` is
-empty, the module imports only `node:fs` and `node:url`, and macOS resolves `/var` to
-`/private/var`. Not skipped and not modified — editing an upstream test we did not break is
-gratuitous divergence on a fork that has to rebase.

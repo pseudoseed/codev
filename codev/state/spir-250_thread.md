@@ -1668,3 +1668,51 @@ Three things I would have got wrong an iteration ago:
 **Cost: about an hour, including a hand probe before writing any of it.** The probe is what made the
 decision cheap: fifteen minutes assembling the scratch root by hand told me the mechanism worked
 before I committed to a design.
+
+---
+
+## Review phase — the retrospective the incremental log was not
+
+The review file was 1,559 lines of per-phase findings and had **none** of the REVIEW template's
+sections: no Summary, no Spec Compliance, no Deviations, no Consultation Feedback, no Lessons
+Learned, no Architecture or Lessons routing, no Follow-up Items. Written incrementally as each
+phase landed, it answered "what went wrong in phase N" perfectly and "did this spec get built"
+not at all.
+
+So the template sections were written and the phase log demoted to `## Phase-by-phase record`
+below them, unmodified. Not merged into the new sections — 1,500 lines of findings compressed
+into four headings would lose the thing that makes them worth keeping, and a diff that rewrites
+every line of a document nobody asked to have rewritten is worse than an appendix.
+
+**The Consultation Feedback section is reconstructed from the committed artifacts, not from
+memory.** Every verdict came from grepping `VERDICT:` out of the 44 raw lane files; every
+disposition came from the `*-rebuttals.md` written at the time. Two files carry two verdict
+blocks (a lane reviewing twice in one output); the **last** one is the binding one, which is
+what the rebuttal responded to — checked rather than assumed, because taking the first would
+have recorded phase 11 iteration 1 as an APPROVE when it was the round that found the drill's
+`ok` tautology.
+
+The **agy/Gemini lane produced no output for this project.** It is absent from every round and
+recorded as absent, not as an approval — a lane that did not run and a lane that approved must
+not be spelled the same way.
+
+### Governance routing
+
+- **Cold, `arch.md`**: a new `### The t3code Fork (Spec 250)` under the existing `## Integration
+  Points`. Deliberately under an existing top-level section: a new one would have forced a
+  thirteenth entry into the hot file's cold-doc map, which is capped at 12.
+- **Hot, `arch-critical.md`**: one fact — the fork, the read-only upstream clone, never `gh repo
+  fork`, and **`apps/client` is the frozen fallback**. Hot because the mistake it prevents is one
+  made *before* anyone consults a reference doc.
+- **Displacement**: the file was at 10/10 facts, so the two-tier-governance one-liner was demoted
+  into `arch.md`'s Governance section, which already stated it in full — and each hot file's own
+  header comment repeats the rule to anyone editing it. Caps after: 10 facts, 12 map topics, 32
+  lines.
+- **Cold, `lessons-learned.md`**: the "looks flaky, is actually under-budgeted" distinction from
+  phase 11, and harness runs poisoning the following suite (#263).
+
+### What the Spec Compliance pass changed
+
+Nothing about the code — but writing criterion 6 as a checkbox forced the question of what an
+unrun criterion *is*. It is not met and not open. `[ ] 6. UNMET` with the runbook, and a
+methodology note that the template's two checkbox states cannot express it.
