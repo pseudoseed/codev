@@ -39,8 +39,16 @@ const INTER_LINE_DELAY_MS = 10;
  * it writes one line at a time and that body *is* one line. The bound has to be on
  * bytes, at the write itself.
  *
- * 256 is a quarter of the smallest queue we know of, so several chunks can sit in the
- * queue at once while the reader drains between them.
+ * **The cap counts UTF-16 units; the hazard is UTF-8 bytes.** The conversion is not 1:1,
+ * and the bound only holds because of the ratio: the worst case is 3 bytes per unit (a
+ * 3-byte BMP character such as 日 is one unit; a 4-byte character is a surrogate PAIR, so
+ * it costs two units for four bytes, which is cheaper per unit). So 256 units emit **at
+ * most 768 bytes** — still inside the 1024-byte queue, with room for several chunks to
+ * sit there while the reader drains between them.
+ *
+ * That is the constraint to preserve if this number is ever changed: `3 × cap < 1024`,
+ * so **the cap must stay at or below 341**. Raising it to 512 on the reasoning that it
+ * is "still half the queue" would emit 1536-byte writes and reopen this bug.
  */
 export const MAX_WRITE_CHUNK_CHARS = 256;
 const PACED_ENTER_DELAY_MS = 80;
@@ -144,9 +152,11 @@ export function segmentMessageForWrite(message: string): string[] {
     let offset = 0;
     while (offset < text.length) {
       let end = Math.min(offset + MAX_WRITE_CHUNK_CHARS, text.length);
-      // Don't cut a surrogate pair in half.
+      // Don't cut a surrogate pair in half. `Math.max` keeps the loop finite: giving a
+      // unit back can only ever move `end` to `offset`, and a chunk of zero length would
+      // never advance.
       const code = text.charCodeAt(end - 1);
-      if (end < text.length && code >= 0xd800 && code <= 0xdbff) end -= 1;
+      if (end < text.length && code >= 0xd800 && code <= 0xdbff) end = Math.max(offset + 1, end - 1);
       segments.push(text.slice(offset, end));
       offset = end;
     }

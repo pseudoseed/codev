@@ -152,6 +152,36 @@ describe('segmentMessageForWrite (Bugfix #273)', () => {
     }
   });
 
+  it('keeps every chunk inside the 1024-byte queue even at 3 bytes per UTF-16 unit', () => {
+    // The cap counts UTF-16 units; the queue counts bytes. The worst ratio is a 3-byte
+    // BMP character, which is one unit — so this is the widest a chunk can ever get.
+    const msg = '日'.repeat(2000);
+
+    for (const chunk of segmentMessageForWrite(msg)) {
+      expect(Buffer.byteLength(chunk, 'utf8')).toBeLessThanOrEqual(3 * MAX_WRITE_CHUNK_CHARS);
+      expect(Buffer.byteLength(chunk, 'utf8')).toBeLessThan(1024);
+    }
+  });
+
+  it('handles a line of exactly the cap, whose newline becomes its own chunk', () => {
+    const line = 'a'.repeat(MAX_WRITE_CHUNK_CHARS);
+    const segments = segmentMessageForWrite(line + '\ntail');
+
+    expect(segments).toEqual([line, '\n', 'tail']);
+    expect(segments.join('')).toBe(line + '\ntail');
+  });
+
+  it('reassembles at every line length either side of the cap', () => {
+    for (let n = MAX_WRITE_CHUNK_CHARS - 2; n <= MAX_WRITE_CHUNK_CHARS + 2; n++) {
+      const msg = 'a'.repeat(n) + '\n' + 'b'.repeat(n);
+      const segments = segmentMessageForWrite(msg);
+      expect(segments.join('')).toBe(msg);
+      for (const chunk of segments) {
+        expect(chunk.length).toBeLessThanOrEqual(MAX_WRITE_CHUNK_CHARS);
+      }
+    }
+  });
+
   it('keeps the newline attached to the tail chunk of its line', () => {
     const segments = segmentMessageForWrite('x'.repeat(300) + '\nshort');
     expect(segments.filter(s => s.includes('\n'))).toHaveLength(1);

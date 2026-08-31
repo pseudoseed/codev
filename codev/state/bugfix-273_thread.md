@@ -103,3 +103,43 @@ Chunking removes the oversized single write. It does not make delivery acknowled
 there is no ack channel from a tty, so a reader that never drains at all can still lose
 bytes across chunks. The gate's precondition (a clean, idle prompt) is what makes that
 unlikely, not this fix.
+
+## 3-way review (2026-08-31)
+
+- **codex** (gpt-5.6-sol): APPROVE, HIGH, no issues.
+- **claude** (opus-5): APPROVE, HIGH. Three non-blocking notes, all taken.
+- **opencode** (xai/grok-4.6): APPROVE, HIGH, no issues.
+- **gemini**: SKIPPED — `agy` exited 1 on quota. Recorded as a skip, not an approval;
+  the opencode lane was run in its place.
+
+### Changes made in response
+
+The architect required one and the reviewers found two more:
+
+1. **The cap counts UTF-16 units; the hazard is UTF-8 bytes.** The bound held only by an
+   unstated ratio. Worst case is 3 bytes per unit (a 3-byte BMP character such as 日 is
+   one unit; a 4-byte character is a surrogate pair, so it costs two units for four bytes
+   — cheaper per unit). 256 units emit at most 768 bytes. The docstring now states the
+   constraint to preserve: `3 × cap < 1024`, so the cap must stay at or below 341. A test
+   asserts it against `'日'.repeat(2000)`.
+
+   The Claude lane put the worst case at 1024 bytes via 4-byte characters. That is the
+   wrong direction: 4-byte characters cost 2 units each, so 256 units of them is 512
+   bytes. 3-byte BMP characters are the worst case, and the architect's 768 is right.
+
+2. **The surrogate guard could not loop forever at cap 256, but would at cap 1.**
+   `end = Math.max(offset + 1, end - 1)` makes it structurally impossible.
+
+3. **A line of exactly the cap emits a bare `'\n'` chunk** — correct, and it was the one
+   boundary the sliding sweep missed. Now covered, along with reassembly at every line
+   length from cap−2 to cap+2.
+
+Also noted and accepted, not changed: chunking puts large-message throughput at ~25 KB/s,
+so a 50 KB message holds the per-agent serializer for ~2s.
+
+The reviewer claim that the fork's `tools/` directory does not exist, and that the
+spec-250 explanation was therefore unconfirmed, is wrong — it sampled while the file was
+parked. `git -C /Users/chris/dev/t3code-codev status --short` reports `?? tools/`, and
+running the harness directly reproduces `DIRTY_FORK_CHECKOUT` with exit 1.
+
+`tower-routes.ts:997` (the raw write passthrough) is filed as #280, out of scope here.
