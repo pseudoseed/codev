@@ -1,7 +1,7 @@
 id: '250'
 title: t3code-is-the-front-end-privat
 protocol: spir
-phase: verify
+phase: verified
 plan_phases:
   - id: phase_1
     title: Two-identity vendoring harness
@@ -190,7 +190,7 @@ iteration: 1
 build_complete: true
 history: []
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-31T13:33:47.190Z'
+updated_at: '2026-08-31T13:33:49.043Z'
 context_refreshes:
   - boundary: enter:implement
     at: '2026-08-30T20:09:29.526Z'
