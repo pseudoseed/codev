@@ -112,6 +112,8 @@ const SUPPORTED = new Set([
   'maximum',
   'minLength',
   'maxLength',
+  'minItems',
+  'maxItems',
   '$ref',
   'description',
   'title',
@@ -214,8 +216,25 @@ function check(
     }
   }
 
-  if (Array.isArray(value) && schema.items) {
-    value.forEach((item, index) => check(item, schema.items as JsonSchema, `${path}/${index}`, out, defs, seen, excess));
+  if (Array.isArray(value)) {
+    /**
+     * Spec 250 phase 5. The generator emits these for a bounded array — the gate
+     * payload's one-to-five choices is the first schema in the vendored closure
+     * to have them — and an unimplemented keyword THROWS rather than passing, so
+     * without this every check of that payload raised `UnsupportedKeywordError`
+     * instead of returning a result. Implementing them makes the checker report
+     * on a constraint it previously refused to look at; it is not a loosening,
+     * and it changes nothing for any schema that does not carry them.
+     */
+    if (typeof schema.minItems === 'number' && value.length < schema.minItems) {
+      out.push({ path, expected: `minItems ${schema.minItems}`, actual: `length ${value.length}` });
+    }
+    if (typeof schema.maxItems === 'number' && value.length > schema.maxItems) {
+      out.push({ path, expected: `maxItems ${schema.maxItems}`, actual: `length ${value.length}` });
+    }
+    if (schema.items) {
+      value.forEach((item, index) => check(item, schema.items as JsonSchema, `${path}/${index}`, out, defs, seen, excess));
+    }
   }
 
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
