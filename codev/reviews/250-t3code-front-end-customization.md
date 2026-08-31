@@ -293,7 +293,14 @@ and said nothing about the four evidence runs, which is exactly how an acceptanc
 describing a fork that no longer exists.
 
 The Playwright suite was re-run for the same reason: its results describe the fork head they ran
-against, and round 1 had already flagged that staleness once.
+against, and round 1 had already flagged that staleness once. **32 passed at `2f64a1b0ee2b`.**
+
+The first attempt at that re-run came back 4 failed, 28 did not run — and it was mine. I carried
+`T3_HARNESS_PORT=3830` forward from the evidence runs, which need it because other sessions hold the
+default ports, into the Playwright command, whose documented form omits it. The fixture's fork server
+went to 3830 while the dev server on 5733 proxied to a port with nothing behind it, so the page served
+200 with no threads in it and every locator timed out on a working server. **A variable that fixes one
+tool can break the next one in the same shell.**
 
 - **N/A — criteria 6 and 9.** Codex is right that a runbook is not acceptance evidence. Both are the architect's rulings, both are disclosed as such in the PR body, the review and the evidence document, and neither is a change. Not chased.
 

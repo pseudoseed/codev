@@ -227,7 +227,7 @@ stated reason, not as passed and not left open.
 | Tree | Command | Result |
 |---|---|---|
 | Codev | `npm test -- --exclude='**/e2e/**'` | **7396 + 180 passed, 58 skipped, 0 failed**, exit 0. Earlier runs of the same command reported 7377 (with the two timeouts diagnosed below) and 7387; the count grew by the phase 11 review-response and regeneration tests |
-| Codev, e2e | `npx playwright test --config playwright.spec250.config.ts` at fork head `3786b840e1a4` | **32 passed** in 2.3m, across all 4 spec-250 spec files |
+| Codev, e2e | `npx playwright test --config playwright.spec250.config.ts` at fork head `2f64a1b0ee2b` | **32 passed** in 2.3m, across all 4 spec-250 spec files. Re-run at the new head after the review round moved the pin — the previous run described `3786b840e1a4` and describing the shipped fork is the whole point |
 | Fork, web | `apps/web && npx vp test run` | **2984 passed** |
 | Fork, server | `apps/server && npx vp test run` (whole server suite) | **2873 passed, 8 skipped, 1 failed** — the `entrypoint.test.ts` symlink one |
 | Fork, typecheck | `vp run --filter @t3tools/contracts --filter t3 --filter @t3tools/web typecheck` | clean |
