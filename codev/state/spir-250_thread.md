@@ -926,3 +926,40 @@ Also recorded: the architect explicitly agreed with three judgement calls rather
 silence stand for it — non-fatal provisioning, rotation over lookup, and declining the brittleness
 finding. And that two lanes disagreeing on severity is not a tie to split: opencode's
 REQUEST_CHANGES was right and treating it as blocking was right.
+
+## Phase 4, iteration 3 — both lanes APPROVE, phase closed
+
+opencode APPROVE with no key issues. claude APPROVE with three non-blocking findings. Fixed all
+three in phase, per the standing ruling that structural fixes are never follow-ups.
+
+The one that mattered: `OrchestrationRefusal` still hand-listed the same three tags that
+`dispatchErrorKind` had just been made the owner of. That is the one-list-in-two-places shape the
+exhaustive switch was installed to kill — **sitting one line below the switch**, in the same commit
+that installed it. Classifying a fourth refusal without also editing the `Extract` would have left
+the runtime correct and the type quietly wrong, which is worse than the original bug, because the
+compile-time mechanism above it would have looked like it covered the case.
+
+The general move, and it generalises past this file: **the fix for a list that must not drift is not
+a better guard on the copy, it is to stop having a copy.** The switch is now a `DISPATCH_ERROR_KIND`
+table under `as const satisfies { readonly [K in OrchestrationDispatchError["_tag"]]: ... }`.
+Missing member → missing key; extra key → excess property; and the refusal *type* is derived from the
+table's literal values, so there is no second place left to forget.
+
+Verified both directions: deleting the `CodevGateWriteError` row gives TS2741 naming the tag;
+flipping it to `"internal"` turns 2 engine tests red.
+
+The other two: a doc comment on the wire type still documented `CODEV_GATE_SCOPE_REQUIRED`, dropped
+back in iteration 1 — a contract disagreeing with itself, which a phase 6/8 consumer would have read
+as current. And the exact-indentation source assertion is now a whitespace-tolerant regex, verified
+to still fail on a bare registration and to survive a reformat.
+
+Fork `51b55d4899e4`, pushed. Typecheck green; server 2839 passed / 8 skipped / 1 pre-existing
+(entrypoint symlink, unmodified). 8b evidence regenerated at the new fork HEAD, `passed: true`,
+upstream re-verified clean at `082e6ea52186`.
+
+**What can a human see or do now that they could not before? Nothing yet.** Phases 1-6 are
+infrastructure and phase 4 is no exception: the gate block, the revision high-water mark, the
+isolated scope and the provisioned credential are all machinery with no rendered surface. Phase 7 is
+the first that renders.
+
+Porch has accepted phase 4 and moved to phase_5 iteration 1, opening with a context-refresh boundary.
