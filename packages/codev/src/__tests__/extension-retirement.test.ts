@@ -1,44 +1,95 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 /**
- * The root pack's file list, resolved lazily and only for the one test that needs it (#216).
- *
- * This used to write a real tarball in a `beforeAll` and then shell out to `tar -tzf` purely to
- * read a list of names. Three things were wrong with that, and #215 turned the combination red:
- *
- *  1. **The work far exceeded the assertion.** `npm pack --dry-run --json` returns the same
- *     list with no tarball written and no `tar` process. The root `package.json` is
- *     `files: ["*", …]`, so the pack sweeps the whole monorepo — 4,395 files and 27MB packed
- *     once `packages/codev` is built — and every byte of that was being compressed to disk and
- *     read back so four `startsWith` checks could run.
- *  2. **It ran for every test in the file.** Four of the five tests read files or `pnpm list`
- *     and need nothing from the pack. In `beforeAll` a slow fixture takes down tests that never
- *     depended on it: when the hook died, all five were reported skipped.
- *  3. **It had no explicit timeout,** so it ran on vitest's 10s default and crossed it by 544ms
- *     the first time CI had a built `dist/`, `dashboard-dist/` and `v2-dist/` present.
- *
- * Note the path shape: `--dry-run --json` yields paths **without** the `package/` prefix that
- * `tar -tzf` shows, so the assertion below matches on the bare repo-relative path.
+ * The only files `npm pack` reads rather than merely stats: the manifest it takes `files` from,
+ * and the two ignore-rule files it honours at every level. Everything else contributes nothing
+ * but its path, which is why the skeleton below can stub it empty.
  */
-function packedFiles(): string[] {
-  const raw = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+const RULE_FILES = new Set(['package.json', '.npmignore', '.gitignore']);
+
+/** Repo-relative paths of every file git tracks. `-z` so odd filenames survive the split. */
+function trackedPaths(): string[] {
+  return execFileSync('git', ['ls-files', '-z'], {
     cwd: workspaceRoot,
+    encoding: 'utf8',
+    maxBuffer: 1 << 28,
+  })
+    .split('\0')
+    .filter(Boolean);
+}
+
+/**
+ * Materialise the tracked file set as a standalone tree under the OS temp directory.
+ *
+ * `withContent: false` writes every path as an empty file except the rule files above, which are
+ * copied verbatim — enough for npm to apply the real packaging rules, and 55MB cheaper.
+ * `withContent: true` copies everything, and exists only so the test below can prove the two
+ * produce the same list.
+ */
+function buildFixture(label: string, withContent: boolean): string {
+  const root = mkdtempSync(join(tmpdir(), `codev-pack-${label}-`));
+  for (const rel of trackedPaths()) {
+    const dest = join(root, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    if (withContent || RULE_FILES.has(basename(rel))) copyFileSync(join(workspaceRoot, rel), dest);
+    else writeFileSync(dest, '');
+  }
+  return root;
+}
+
+function packListIn(root: string): string[] {
+  const raw = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+    cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: 1 << 28,
   });
   const start = raw.indexOf('[');
-  if (start === -1) throw new Error(`npm pack produced no JSON for the workspace root: ${raw.slice(0, 200)}`);
+  if (start === -1) throw new Error(`npm pack produced no JSON for ${root}: ${raw.slice(0, 200)}`);
   const files: string[] = (JSON.parse(raw.slice(start))[0]?.files ?? []).map((f: { path: string }) => f.path);
-  // An empty list would satisfy both `not.toContain` assertions below without proving anything.
-  if (files.length === 0) throw new Error('npm reports an empty tarball for the workspace root');
+  // An empty list would satisfy every `not.toContain` assertion below without proving anything.
+  if (files.length === 0) throw new Error(`npm reports an empty tarball for ${root}`);
   return files;
+}
+
+/**
+ * What the root package ships, derived from the repository rather than from the disk (#298).
+ *
+ * This used to run `npm pack --dry-run --json` with `cwd: workspaceRoot`, which walks the entire
+ * live working tree. Two things were wrong with reading the tree instead of the repo:
+ *
+ *  1. **Concurrent tests perturbed it.** Other suites in the same vitest run create and delete
+ *     scratch directories under the workspace root — `agent-farm/__tests__/pir-832-migration.test.ts`
+ *     does it once per test case, in `beforeEach`/`afterEach`. When the walk lstat'd a path that
+ *     had just been removed, npm exited non-zero and this test failed. Not flaky: five consecutive
+ *     full-suite runs, five failures, because the walk took ~62s with `dist/` present and the
+ *     scratch directory churned many times inside that window.
+ *  2. **It answered a question nobody asked.** The live list carried 43 files git does not
+ *     track — `.builder-*`, files under `.claude/hooks/`, and every package's
+ *     `node_modules/.bin/` shims — none of which say anything about what the package ships.
+ *
+ * Taking the paths from `git ls-files` fixes both. The packaging *rules* still come from npm, run
+ * against the fixture, rather than being reimplemented here — `apps/web/.npmignore` alone
+ * (`node_modules`, `src`, `*.config.*`, `tsconfig*`) plus npm's default excludes decide 55 tracked
+ * files, and a second copy of those rules is the copy that drifts.
+ *
+ * Note the path shape: `--dry-run --json` yields paths **without** the `package/` prefix that
+ * `tar -tzf` shows, so the assertions below match on the bare repo-relative path.
+ */
+function packedFiles(withContent = false): string[] {
+  const root = buildFixture(withContent ? 'full' : 'skeleton', withContent);
+  try {
+    return packListIn(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 describe('extension retirement', () => {
@@ -79,22 +130,52 @@ describe('extension retirement', () => {
     expect(names).not.toContain('@cluesmith/codev-streamdeck');
   });
 
-  /**
-   * 60s, deliberately, and not the 10s default that failed.
-   *
-   * The budget is set by what the pack actually has to walk, which grows with the repo: 4,395
-   * files today, ~4.7s warm on a developer machine, and it crossed 10s on a CI runner the first
-   * time the built output was present. 60s is roughly 12x the measured local cost — enough
-   * headroom that ordinary growth and a cold runner do not make this red again, and still short
-   * enough that a genuine hang fails rather than hanging the job.
-   */
   it('packs neither retired extension while retaining supported apps', () => {
     const files = packedFiles();
     expect(files).toContain('apps/web/package.json');
     expect(files).toContain('apps/v2/package.json');
     expect(files.some((file) => file.startsWith('apps/vscode/'))).toBe(false);
     expect(files.some((file) => file.startsWith('apps/streamdeck/'))).toBe(false);
-  }, 60_000);
+  }, 30_000);
+
+  /**
+   * The regression test for #298.
+   *
+   * A scratch directory under the workspace root, of exactly the shape other suites create, must
+   * not reach the pack list at all — if the list cannot see it while it exists, no concurrent
+   * create or delete of it can perturb the list either. Against the old live-tree walk this file
+   * was packed (the root `files` field is `["*", …]` and nothing gitignores it), so the assertion
+   * fails without the fix.
+   */
+  it('derives the pack list from the repository, not from whatever is on disk', () => {
+    const scratch = join(workspaceRoot, 'packages/codev/.test-bugfix-298');
+    mkdirSync(scratch, { recursive: true });
+    writeFileSync(join(scratch, 'state.db'), '');
+    try {
+      expect(packedFiles()).not.toContain('packages/codev/.test-bugfix-298/state.db');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  /**
+   * The skeleton stubs every non-rule file empty, which is only sound while npm decides inclusion
+   * from paths and rule files alone. Packing the same tracked set with its real contents must
+   * therefore yield an identical list; if a future ignore mechanism starts reading a file the
+   * skeleton blanks, the two diverge and this goes red rather than the skeleton silently
+   * answering a different question.
+   *
+   * The comparison is deliberately skeleton-against-git rather than skeleton-against-the-live-tree,
+   * and the next reader will ask why. Two reasons, both load-bearing. Packing the live tree is the
+   * walk that failed five consecutive full-suite runs, so asserting against it would reintroduce
+   * #298 inside the test written to close it. And the live-versus-git difference is not drift to
+   * guard against — it is the 43 untracked litter files, i.e. the bug. The one risk the placeholder
+   * trick actually adds is npm reading content from a file stubbed empty, and that is exactly what
+   * this compares.
+   */
+  it('packs the placeholder skeleton identically to the tracked tree with real contents', () => {
+    expect(packedFiles()).toEqual(packedFiles(true));
+  }, 120_000);
 
   it('marks the retained VS Code source unsupported', () => {
     const readme = readFileSync(join(workspaceRoot, 'apps/vscode/README.md'), 'utf8');
