@@ -146,6 +146,7 @@ against that file rather than against a layer it assembles.
 | 4 | `3d0e76776cd9` | `isRefusal` was deleting gate refusals — the phase 3 bug in the same function. Reason taxonomy split, projector gate coverage added, and the single gate-write credential named. |
 | 4 | `570cc29dc63c` | `dispatchErrorKind` makes an unclassified dispatch error a **compile error**, replacing the hand-written disjunction that shipped the same bug three times. |
 | 4 | `0254c84e1241` | The gate-writer credential is actually provisioned at server start. It had no production caller — costume one, in the phase that named it. |
+| 4 | `51b55d4899e4` | `OrchestrationRefusal` derived from the `DISPATCH_ERROR_KIND` table instead of hand-listing the same three tags a second time. The classification is one place; a missing member is a missing key. |
 
 ### Migration 900 is abandoned, and must stay abandoned
 
