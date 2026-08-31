@@ -20,7 +20,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -113,9 +113,44 @@ describe('spec 250: the vendored contract came from the fork', () => {
     for (const fragment of [pin.forkRepo, pin.commit, pin.repo, pin.upstreamBase, 'MIT License']) {
       expect(attribution, `ATTRIBUTION.md does not name ${fragment}`).toContain(fragment);
     }
-    // The header of the type declarations makes the same claim to a different reader.
-    expect(typeDeclarations).toContain(pin.forkRepo);
-    expect(typeDeclarations).toContain(pin.upstreamBase);
+  });
+
+  /**
+   * Derived from the directory, not from a list of files.
+   *
+   * The first cut of this named `ATTRIBUTION.md` and `types.d.ts`. There were
+   * three emitted provenance headers, the third came from a separate hand-written
+   * string in the generator, and correcting two left the one that ships — the
+   * runtime module — attributing a fork-only commit to `pingdotgg/t3code`. Review
+   * caught it; the enumeration is what let it through.
+   *
+   * The rule instead: **any** generated artifact naming the upstream repository
+   * must also name the fork and the base it branched from, whatever the file is
+   * called. A fourth artifact acquiring a header is covered before it exists.
+   */
+  it('no generated artifact names upstream alone', () => {
+    const artifacts = readdirSync(generated).filter((f) => !f.endsWith('.json'));
+    expect(artifacts.length, 'read no artifacts, so this test would pass against anything')
+      .toBeGreaterThan(2);
+
+    const claiming = artifacts.filter((file) =>
+      readFileSync(join(generated, file), 'utf8').includes(pin.repo),
+    );
+    expect(
+      claiming.length,
+      'no artifact carries a provenance line at all, which is not what this is checking for',
+    ).toBeGreaterThan(2);
+
+    for (const file of claiming) {
+      const text = readFileSync(join(generated, file), 'utf8');
+      expect(text, `${file} names ${pin.repo} without naming the fork it was generated from`)
+        .toContain(pin.forkRepo);
+      expect(
+        text,
+        `${file} names ${pin.repo} beside a commit that exists only in the fork, and does not `
+          + 'name the upstream base a reader could actually find there',
+      ).toContain(pin.upstreamBase);
+    }
   });
 
   /**
