@@ -190,6 +190,11 @@ vendored contract is what decides whether Codev depends on the customization.
 | 4 | `0254c84e1241` | The gate-writer credential is actually provisioned at server start. It had no production caller — costume one, in the phase that named it. |
 | 4 | `51b55d4899e4` | `OrchestrationRefusal` derived from the `DISPATCH_ERROR_KIND` table instead of hand-listing the same three tags a second time. The classification is one place; a missing member is a missing key. |
 | 6 | `804e56f8f864` | A refusal's `reason` did not survive the ws boundary — measured against a live fork server, not inferred. `OrchestrationDispatchCommandError` gains an optional `refusal` field; `CodevHierarchyInvalidReason` moves into the contract because it travels; four wrapping sites lift or forward it. |
+| 7 | `4633e0a7f498` | `apps/web/src/codev/hierarchy.ts` — the grouping, as a pure function over the two fields phase 2 added. Three buckets: architect subtrees, roleless threads kept flat, and orphans named with the reason they could not be placed. |
+| 7 | `90a5a2d3a312` | The call site: the sidebar's active list is ordered by the grouping and the tree is drawn from that order. `alsoVisible` added so a builder whose architect is pinned reads as `parent-elsewhere`, not `parent-missing`. |
+| 7 | `e19e2560dd7a` | The tree screenshotted at 390, 1440x900 and 1920, committed under `docs/codev/`. |
+| 7 | `a183f56ecec2` | The project level, the architect's role marker, and Settled's treatment for the orphan group in place of amber — the architect's review of the first screenshots. |
+| 7 | `48a9aa399e5d` | The three widths re-shot against those changes. |
 
 **Phase 5 added no row, and that is not an omission.** It regenerated the vendored contract in the
 Codev repository from `51b55d4899e4`; it changed nothing in the fork.
@@ -206,6 +211,60 @@ The first run of that test failed, and the failure was the point: every refusal 
 `OrchestrationDispatchCommandError` with the reason inside `message`, as English. Phase 3 fixed the
 ENGINE deleting discriminants; the ws layer was flattening them one hop further out, and every test
 beneath that hop was green.
+
+**Phase 7 is the first phase that renders, and its finding came from the compiler.**
+
+`hierarchy.ts` is pure, its tests build their own row type, and both of those are right for testing
+a grouping — and together they cannot tell you the module fits anything the sidebar holds. Two
+assignments from `SidebarThreadSummary` and `Thread` at the top of the test file are the check, and
+they failed before any call site existed:
+
+- the module keyed on `threadId`, the **command** spelling, while both read models call it `id`;
+- `role?: X` does not accept `undefined` under `exactOptionalPropertyTypes`, so the interface
+  described a shape no caller has until `| undefined` was written out.
+
+Neither is a runtime error. Both would have surfaced as `buildCodevHierarchy(threads)` quietly
+returning no hierarchy — which on screen reads as an empty workspace, not as a bug.
+
+**The section boundary is the fork's, and the renderer had to learn it.** t3code splits a project
+into Pinned / Active / Snoozed / Settled before any grouping runs, so the tree is built over ONE of
+those lists. A builder whose architect the user pinned is then looking at a list its parent is not
+in, and the first draft answered `parent-missing` — three rows below the architect the user can see.
+`buildCodevHierarchy` now takes `alsoVisible`, the rest of the sidebar, and answers
+`parent-elsewhere` instead. Role still outranks section: a non-architect parent stays
+`parent-not-architect` wherever it sits, because a section boundary must not change what a thread is.
+
+**Nothing changes for a project with no Codev roles.** `hasCodevHierarchy` is false there and the
+renderer takes the loop it has always had — same rows, same order, no wrappers, no headings. An
+empty tree's chrome would be new furniture in every upstream user's sidebar for a feature they do
+not have.
+
+**The order returned is also the ordered list.** `orderedThreads` is not only a render order:
+shift-range-select and jump-hint labels are assigned from it. A component that reordered rows while
+leaving that list alone would draw a correct tree whose keyboard reached the wrong rows — every row
+in the right place and nothing on screen to show it.
+
+**Three changes came from the architect's review of the first screenshots, and one of them was a
+criterion gap rather than taste.** Criterion 1 is three levels — project, architect, that
+architect's builders — and the render had two: the project was present only as a caption repeated
+on all eight cards, one string in the most prominent line of every row, with the thread's own name
+below it in lighter weight. It is a heading now, once, carrying the project's own favicon; rows
+under it drop the per-row label and rows outside it keep it, where it is the only thing saying
+which project they belong to. Architect subtrees are gathered by project so a project's run is
+contiguous, because a heading over a run another project interrupts is a heading that lies.
+
+The other two: nothing said which row was an architect — it was carried by one level of subtle
+indent plus test data that happened to be called "Architect beta", and real threads are called
+`builder/spir-250` — so the architect row is captioned in the slot the project label vacated, and
+builders are not, because a caption on every child of a labelled parent is a caption nobody reads.
+And the orphan group was amber, which says something is broken; an archived architect orphaning its
+builders is a state this project ruled LEGAL, so it wears Settled's treatment with the emphasis on
+the count.
+
+Verified in a browser against the fork's own web app, not only in unit tests:
+`packages/codev/src/__tests__/e2e/spec-250-hierarchy.spec.ts` in the Codev repository, run with
+`npx playwright test --config playwright.spec250.config.ts`. The fork's Vite dev server must be
+running; an absent one is reported as a skip carrying the command to start it, never as a pass.
 
 ### What the churn classifier could not decide, decided
 

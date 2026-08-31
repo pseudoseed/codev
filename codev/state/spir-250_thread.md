@@ -1097,3 +1097,68 @@ question is present, and should not read a truncated excerpt as complete; the ma
 
 Codev suite green: 7367 + 180 passed, 54 skipped, 0 failed. Fork suite 2845 passed, 8 skipped, 1
 pre-existing (entrypoint symlink).
+
+## Phase 7 — the sidebar draws the tree
+
+First phase that renders. Two fork commits: the grouping as a pure function, then the call site
+that orders the sidebar's active list by it and draws the nesting. A third commits the screenshots.
+
+**The finding came from the compiler, before a caller existed.** Two assignments from
+`SidebarThreadSummary` and `Thread` at the top of `hierarchy.test.ts` caught the module keying on
+`threadId` (the command spelling; both read models say `id`) and an interface that `exactOptionalPropertyTypes`
+rejects for every real thread. Neither throws. Both would have shipped as "the sidebar sees no
+hierarchy", which reads as an empty workspace rather than as a bug.
+
+**The section boundary was the design problem.** t3code splits a project into Pinned / Active /
+Snoozed / Settled before grouping runs, so the tree is built over one list. A builder whose
+architect is PINNED was reported `parent-missing` — a lie told to someone who can see the architect
+three rows up. `alsoVisible` fixes it with `parent-elsewhere`; role still outranks section.
+Reading that map with `get() !== undefined` was a second bug (a roleless thread's role IS
+`undefined`) and its test caught it; verified by reverting to `get`.
+
+**`orderedThreads` is the keyboard's order too.** Shift-range-select and jump hints read it, so the
+tree's order and that list are derived from one thing. A reorder that left it alone would put every
+row in the right place and send the keyboard to the wrong ones.
+
+**Playwright against the real stack.** `packages/codev/src/__tests__/e2e/spec-250-hierarchy.spec.ts`
+plus `playwright.spec250.config.ts`. Fixture restarts the fork server on empty data, seeds over the
+wire, mints a pairing credential per browser context (the bootstrap token is single-use and `ready`
+redacts it from the log after one read). The fork's Vite dev server is NOT started by the fixture —
+an absent one is a skip carrying the command, never a pass. 7 tests: 4 behavioural, 3 per-viewport.
+Falsified by forcing the no-hierarchy branch: eight rows still render, every hierarchy selector goes
+to zero.
+
+**Screenshots** committed to the fork at `docs/codev/spec-250/phase-7/`, 390 / 1440x900 / 1920, two
+per width. Writing them is opt-in (`SPEC_250_WRITE_SCREENSHOTS=1`) because `start-fork` refuses a
+dirty fork — a suite that wrote them every run passes once then skips forever. Measured, not
+eyeballed: no horizontal overflow, titles >= 13px, zero console errors after pairing.
+
+**No design reference exists for this tree.** Drawn in t3code's own idiom (its row cards, its
+divider token for the rail, the Snoozed/Settled shelf shape for the orphan heading); nothing ported
+from `apps/client`. Flagged to the architect for a ruling rather than assumed.
+
+Pin moved twice this phase and finally to `e19e2560dd7a`; contract regenerated, 16 patches re-cut,
+both evidence files re-collected at the final pin.
+
+**Architect review of the first screenshots, three changes, one a criterion gap.** Criterion 1 is
+three levels and the render had two — the project was only a caption repeated on all eight cards.
+Now a heading with the project's own favicon; rows under it drop the label, rows outside keep it.
+Architect rows are captioned "Architect" in the slot that label vacated (indent alone only works
+while the test data is called "Architect beta"; real threads are `builder/spir-250`). Orphan group
+moved from amber to Settled's muted treatment — an archived parent orphaning its builders is legal,
+and amber says broken.
+
+Worth naming: the suite was green and every criterion had an assertion, and a level of criterion 1
+was still missing. The tests and the render were built from the same reading of the plan. The
+screenshot is what exposed it.
+
+Answered the architect's scheduling question: live per-row working/turning status is t3code's own
+`resolveSidebarThreadStatus` and spec 250 does not touch it — rows read "now" because the fixture's
+threads have never taken a turn. The blocked-on-a-named-gate half is phase 8. No gap.
+
+Trap for later: the codev suite must run under the DEFAULT node, not the Node 22 the fork needs.
+A run with Node 22 on PATH fails 724 tests on a better-sqlite3 ABI mismatch, which looks like a
+regression and is not.
+
+Pin ended at `48a9aa399e5d` after four fork commits this phase; contract regenerated, 18 patches,
+both evidence files re-collected.

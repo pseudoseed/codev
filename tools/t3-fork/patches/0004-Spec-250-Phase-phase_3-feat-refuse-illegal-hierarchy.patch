@@ -1,7 +1,7 @@
 From e1b7f7b04af5aa869a552baa622fc9e526a00bb3 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 16:55:23 -0600
-Subject: [PATCH 04/13] [Spec 250][Phase: phase_3] feat: refuse illegal
+Subject: [PATCH 04/18] [Spec 250][Phase: phase_3] feat: refuse illegal
  hierarchy edges at write time
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

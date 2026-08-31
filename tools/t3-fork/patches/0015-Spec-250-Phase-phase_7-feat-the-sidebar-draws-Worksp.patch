@@ -1,0 +1,746 @@
+From 90a5a2d3a3123f8eae7d280ed46fd6e7b3640db1 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 23:22:52 -0600
+Subject: [PATCH 15/18] [Spec 250][Phase: phase_7] feat: the sidebar draws
+ Workspace > Architect > Builders
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The grouping was a function with nobody calling it. This is the call site: the
+sidebar's active list is ordered by it, and the tree is drawn from that order.
+
+**The section boundary was the thing this phase had to get right.** The sidebar
+splits a project into Pinned / Active / Snoozed / Settled BEFORE any grouping
+runs, so the tree is built over one of those lists. A builder whose architect the
+user has pinned is then looking at a list its parent is not in — and the first
+draft reported `parent-missing` for it, three rows below the architect the user
+can see. So the grouping now takes `alsoVisible`, the rest of the sidebar, and
+answers `parent-elsewhere` instead. Role still outranks section: a non-architect
+parent is `parent-not-architect` wherever it sits, because letting a section
+boundary change what a thread IS would make the reason a fact about the sidebar
+rather than about the data.
+
+Reading that lookup with `get() !== undefined` was a second bug, and its test
+caught it: a roleless thread's role IS `undefined`, so the value could not tell
+"not in another section" from "in another section, with no role" — which is the
+`parent-not-architect` case the branch exists to name. It reads `has` now.
+
+**The order returned IS the ordered list.** `orderedThreads` is not only a render
+order: shift-range-select and jump-hint labels are assigned from it. A component
+that reordered rows while leaving that list alone would draw a correct tree whose
+keyboard reached the wrong rows — every row in the right place, and nothing on
+screen to show it. So the entries come back in one order and the caller both
+renders in it and derives `orderedThreads` from it.
+
+Nothing changes for a project with no Codev roles. `hasHierarchy` is false there
+and the renderer takes the loop it has always had — same rows, same order, no
+wrappers, no headings. An empty tree's chrome is still new furniture in every
+upstream user's sidebar for a feature they do not have.
+
+Four orphan reasons get four sentences. One string for four states would be
+"I could not tell" spelled like an answer, and the reader opened that group to
+find out which of the four happened.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/codev/hierarchy.test.ts          |  62 +++++++
+ apps/web/src/codev/hierarchy.ts               |  64 ++++++-
+ apps/web/src/components/Sidebar.logic.test.ts | 172 ++++++++++++++++++
+ apps/web/src/components/Sidebar.logic.ts      | 116 ++++++++++++
+ apps/web/src/components/Sidebar.tsx           | 171 ++++++++++++++++-
+ 5 files changed, 574 insertions(+), 11 deletions(-)
+
+diff --git a/apps/web/src/codev/hierarchy.test.ts b/apps/web/src/codev/hierarchy.test.ts
+index 593839f25..2b19c7c55 100644
+--- a/apps/web/src/codev/hierarchy.test.ts
++++ b/apps/web/src/codev/hierarchy.test.ts
+@@ -257,6 +257,68 @@ describe("codev hierarchy: orphans are named, not dropped and not re-parented",
+   });
+ });
+ 
++/**
++ * The section boundary, which is the sidebar's and not the tree's.
++ *
++ * The sidebar splits a project into Pinned / Active / Snoozed / Settled before
++ * any of this runs, so the tree is built over ONE of those lists. A builder whose
++ * architect the user pinned would then be looking at a list its parent is not in
++ * — and `parent-missing` would be a lie told to someone who can see the architect
++ * three rows above. `alsoVisible` is how the caller declares the rest.
++ */
++describe("codev hierarchy: a parent in another section of the sidebar", () => {
++  it("says the architect is elsewhere, not that it is missing", () => {
++    const pinnedArchitect = architect("arch-pinned");
++    const result = buildCodevHierarchy([builder("b-1", "arch-pinned")], {
++      alsoVisible: [pinnedArchitect],
++    });
++    const orphan = onlyOrphan(result);
++    expect(orphan.reason).toBe("parent-elsewhere");
++    expect(orphan.parentThreadId).toBe("arch-pinned");
++  });
++
++  it("still says missing when the parent is in no section at all", () => {
++    const result = buildCodevHierarchy([builder("b-1", "arch-gone")], {
++      alsoVisible: [architect("arch-other")],
++    });
++    expect(onlyOrphan(result).reason).toBe("parent-missing");
++  });
++
++  /**
++   * Role outranks section. A non-architect parent is `parent-not-architect`
++   * wherever it sits — letting a section boundary change what a thread IS would
++   * make the reason a fact about the sidebar rather than about the data.
++   */
++  it("keeps a non-architect parent wrong rather than merely elsewhere", () => {
++    const result = buildCodevHierarchy([builder("b-1", "not-an-architect")], {
++      alsoVisible: [plain("not-an-architect")],
++    });
++    expect(onlyOrphan(result).reason).toBe("parent-not-architect");
++  });
++
++  it("does not return the threads it was only shown", () => {
++    const result = buildCodevHierarchy([builder("b-1", "arch-pinned")], {
++      alsoVisible: [architect("arch-pinned")],
++    });
++    const returned = [
++      ...result.architects.flatMap((subtree) => [subtree.architect, ...subtree.builders]),
++      ...result.unmanaged,
++      ...result.orphaned.map((orphan) => orphan.thread),
++    ].map((thread) => thread.id);
++    // Rendering them here would render them twice: they already have a row in
++    // the section the caller is drawing them in.
++    expect(returned).toEqual(["b-1"]);
++  });
++
++  it("nests normally when the architect is in the same list, shown or not", () => {
++    const result = buildCodevHierarchy([architect("arch-1"), builder("b-1", "arch-1")], {
++      alsoVisible: [architect("arch-1")],
++    });
++    expect(at(result.architects, 0).builders.map((b) => b.id)).toEqual(["b-1"]);
++    expect(result.orphaned).toEqual([]);
++  });
++});
++
+ describe("codev hierarchy: everything is accounted for", () => {
+   it("places every thread exactly once across a mixed project", () => {
+     accountsForEveryThread([
+diff --git a/apps/web/src/codev/hierarchy.ts b/apps/web/src/codev/hierarchy.ts
+index b8319156e..8cccea6c5 100644
+--- a/apps/web/src/codev/hierarchy.ts
++++ b/apps/web/src/codev/hierarchy.ts
+@@ -66,12 +66,18 @@ export interface CodevHierarchyFields {
+  * Why a builder could not be placed under an architect.
+  *
+  * `parent-missing` is the ordinary one: the architect is archived, deleted, or
+- * simply not in this project's slice. `parent-not-architect` and `no-parent` are
+- * states phase 3 refuses at write time, so they cannot arise from a server that
+- * accepted the thread — they are carried anyway, because a renderer that assumes
+- * an impossible state is impossible has no way to show one when it happens.
++ * simply not in this project's slice. `parent-elsewhere` is the one that keeps
++ * the other three honest — see `alsoVisible` below. `parent-not-architect` and
++ * `no-parent` are states phase 3 refuses at write time, so they cannot arise
++ * from a server that accepted the thread — they are carried anyway, because a
++ * renderer that assumes an impossible state is impossible has no way to show one
++ * when it happens.
+  */
+-export type OrphanReason = "parent-missing" | "parent-not-architect" | "no-parent";
++export type OrphanReason =
++  | "parent-missing"
++  | "parent-elsewhere"
++  | "parent-not-architect"
++  | "no-parent";
+ 
+ export interface OrphanedBuilder<T> {
+   readonly thread: T;
+@@ -91,21 +97,50 @@ export interface CodevThreadHierarchy<T> {
+   readonly orphaned: readonly OrphanedBuilder<T>[];
+ }
+ 
++/**
++ * Threads the caller can see but is not grouping.
++ *
++ * The sidebar splits a project into Pinned, Active, Snoozed and Settled before
++ * anything here runs, and the tree is built over ONE of those lists. So a builder
++ * whose architect the user has pinned would be looking at a list its parent is
++ * not in — and `parent-missing` would then be a lie told to a human who can see
++ * the architect three rows above.
++ *
++ * `alsoVisible` is the rest of the sidebar. A parent found there is reported as
++ * `parent-elsewhere`, which is the difference between "your architect is gone"
++ * and "your architect is in another section". Leaving it out is safe and is what
++ * the unit tests do; leaving it out at the CALL SITE is the bug it exists to
++ * prevent.
++ */
++export interface CodevHierarchyContext<T extends CodevHierarchyFields> {
++  readonly alsoVisible?: readonly T[] | undefined;
++}
++
+ /**
+  * Group a flat list of threads into the three-level tree.
+  *
+  * Every input thread appears exactly once in the result. That is the property the
+  * tests are written around: a renderer that drops a thread loses a running agent
+- * from the only place a human looks for one.
++ * from the only place a human looks for one. Threads passed as `alsoVisible` are
++ * NOT in the result — they belong to whichever list the caller is rendering them
++ * in, and returning them here would render them twice.
+  */
+ export function buildCodevHierarchy<T extends CodevHierarchyFields>(
+   threads: readonly T[],
++  context: CodevHierarchyContext<T> = {},
+ ): CodevThreadHierarchy<T> {
+   const architectIds = new Set<string>();
+   for (const thread of threads) {
+     if (thread.role === "architect") architectIds.add(thread.id);
+   }
+   const present = new Set(threads.map((thread) => thread.id));
++  // Role, not just presence: an architect the user pinned is `parent-elsewhere`,
++  // but a NON-architect parent stays `parent-not-architect` wherever it sits.
++  // Collapsing the two would let a section boundary change what a thread is.
++  const elsewhereRoleById = new Map<string, CodevHierarchyFields["role"]>();
++  for (const thread of context.alsoVisible ?? []) {
++    if (!present.has(thread.id)) elsewhereRoleById.set(thread.id, thread.role);
++  }
+ 
+   const buildersByArchitect = new Map<string, T[]>();
+   const unmanaged: T[] = [];
+@@ -128,7 +163,22 @@ export function buildCodevHierarchy<T extends CodevHierarchyFields>(
+       continue;
+     }
+     if (!present.has(parentThreadId)) {
+-      orphaned.push({ thread, reason: "parent-missing", parentThreadId });
++      // `has`, not `get() !== undefined`. A roleless thread's role IS
++      // `undefined`, so reading the value cannot tell "not in another section"
++      // from "in another section, with no role" — and the second is exactly the
++      // `parent-not-architect` case this branch exists to name.
++      if (!elsewhereRoleById.has(parentThreadId)) {
++        orphaned.push({ thread, reason: "parent-missing", parentThreadId });
++        continue;
++      }
++      orphaned.push({
++        thread,
++        reason:
++          elsewhereRoleById.get(parentThreadId) === "architect"
++            ? "parent-elsewhere"
++            : "parent-not-architect",
++        parentThreadId,
++      });
+       continue;
+     }
+     if (!architectIds.has(parentThreadId)) {
+diff --git a/apps/web/src/components/Sidebar.logic.test.ts b/apps/web/src/components/Sidebar.logic.test.ts
+index ba75f2eaa..b4bd5d443 100644
+--- a/apps/web/src/components/Sidebar.logic.test.ts
++++ b/apps/web/src/components/Sidebar.logic.test.ts
+@@ -4,7 +4,9 @@ import {
+   animatePinnedLayoutChanges,
+   archiveSelectedThreadEntries,
+   buildBulkTitleRegenerationContextMenuItem,
++  buildCodevSidebarOrder,
+   buildMultiSelectThreadContextMenuItems,
++  describeCodevOrphanReason,
+   createThreadJumpHintVisibilityController,
+   getSidebarThreadIdsToPrewarm,
+   getVisibleSidebarThreadIds,
+@@ -1683,3 +1685,173 @@ describe("sortLogicalProjectsForSidebar", () => {
+     ).toEqual(["logical-newer", "logical-older"]);
+   });
+ });
++
++/**
++ * Codev customization (spec 250), phase 7 — the sidebar's order, tested over the
++ * sidebar's OWN thread type.
++ *
++ * `makeThread` builds a real `Thread`, not a row type invented for this file.
++ * The grouping's unit tests deliberately use their own minimal row (that is what
++ * makes them about grouping), and the cost of that is they cannot tell you the
++ * module fits anything the sidebar actually holds. These can, and that is the
++ * only reason they are here rather than there.
++ */
++describe("buildCodevSidebarOrder", () => {
++  const architectThread = (id: string, title = id) =>
++    makeThread({ id: ThreadId.make(id), title, role: "architect" });
++  const builderThread = (id: string, parent: string | null, title = id) =>
++    makeThread({
++      id: ThreadId.make(id),
++      title,
++      role: "builder",
++      parentThreadId: parent === null ? null : ThreadId.make(parent),
++    });
++  const plainThread = (id: string, title = id) => makeThread({ id: ThreadId.make(id), title });
++
++  it("leaves a project with no Codev roles exactly as it found it", () => {
++    const threads = [plainThread("a"), plainThread("b"), plainThread("c")];
++    const order = buildCodevSidebarOrder(threads);
++    expect(order.hasHierarchy).toBe(false);
++    expect(order.entries.map((entry) => entry.kind)).toEqual([
++      "unmanaged",
++      "unmanaged",
++      "unmanaged",
++    ]);
++    // Same threads, same order. The renderer's no-hierarchy branch draws this
++    // list directly, so "unchanged for upstream" is this assertion.
++    expect(order.entries.map((entry) => entry.thread)).toEqual(threads);
++  });
++
++  it("puts each architect above the builders that name it", () => {
++    const order = buildCodevSidebarOrder([
++      builderThread("b-2", "arch-1"),
++      architectThread("arch-1"),
++      builderThread("b-1", "arch-1"),
++    ]);
++    expect(order.hasHierarchy).toBe(true);
++    expect(order.entries.map((entry) => [entry.kind, entry.thread.id])).toEqual([
++      ["architect", "arch-1"],
++      // Input order within the subtree, because the caller already sorted.
++      ["builder", "b-2"],
++      ["builder", "b-1"],
++    ]);
++  });
++
++  it("renders two architects as two subtrees, each owning its own builders", () => {
++    const order = buildCodevSidebarOrder([
++      architectThread("arch-a"),
++      architectThread("arch-b"),
++      builderThread("a-1", "arch-a"),
++      builderThread("b-1", "arch-b"),
++      builderThread("b-2", "arch-b"),
++    ]);
++    expect(order.entries.map((entry) => [entry.kind, entry.thread.id])).toEqual([
++      ["architect", "arch-a"],
++      ["builder", "a-1"],
++      ["architect", "arch-b"],
++      ["builder", "b-1"],
++      ["builder", "b-2"],
++    ]);
++    const [first] = order.entries;
++    expect(first?.kind === "architect" ? first.builderCount : null).toBe(1);
++  });
++
++  it("keeps an architect with no builders as its own subtree", () => {
++    const order = buildCodevSidebarOrder([architectThread("arch-empty")]);
++    const [only] = order.entries;
++    expect(only?.kind).toBe("architect");
++    expect(only?.kind === "architect" ? only.builderCount : null).toBe(0);
++  });
++
++  it("puts roleless threads below the tree, claimed by nothing in it", () => {
++    const order = buildCodevSidebarOrder([
++      plainThread("upstream-1"),
++      architectThread("arch-1"),
++      builderThread("b-1", "arch-1"),
++      plainThread("upstream-2"),
++    ]);
++    expect(order.entries.map((entry) => [entry.kind, entry.thread.id])).toEqual([
++      ["architect", "arch-1"],
++      ["builder", "b-1"],
++      ["unmanaged", "upstream-1"],
++      ["unmanaged", "upstream-2"],
++    ]);
++  });
++
++  /**
++   * Orphans last. They are what a human reads when something has gone wrong, and
++   * above the tree they would make every ordinary sidebar open with its
++   * exceptions first.
++   */
++  it("puts orphans last, each carrying the reason and the parent it named", () => {
++    const order = buildCodevSidebarOrder([
++      builderThread("lost", "arch-gone"),
++      architectThread("arch-1"),
++      builderThread("b-1", "arch-1"),
++      plainThread("upstream-1"),
++    ]);
++    expect(order.entries.map((entry) => entry.kind)).toEqual([
++      "architect",
++      "builder",
++      "unmanaged",
++      "orphan",
++    ]);
++    const orphan = order.entries.at(-1);
++    expect(orphan?.kind === "orphan" ? orphan.reason : null).toBe("parent-missing");
++    expect(orphan?.kind === "orphan" ? orphan.parentThreadId : null).toBe("arch-gone");
++  });
++
++  /**
++   * THE SECTION BOUNDARY, at the call site's shape.
++   *
++   * The sidebar builds this over ONE of Pinned / Active / Snoozed / Settled. A
++   * builder whose architect is pinned is therefore looking at a list its parent
++   * is not in, and "its architect is not in this project" would be a lie told to
++   * someone who can see the architect three rows above.
++   */
++  it("distinguishes an architect in another sidebar section from a missing one", () => {
++    const pinnedArchitect = architectThread("arch-pinned");
++    const order = buildCodevSidebarOrder(
++      [builderThread("b-1", "arch-pinned"), builderThread("lost", "arch-gone")],
++      [pinnedArchitect],
++    );
++    const reasons = order.entries.map((entry) => (entry.kind === "orphan" ? entry.reason : null));
++    expect(reasons).toEqual(["parent-elsewhere", "parent-missing"]);
++    // The pinned architect keeps its row in the pinned block and gains none
++    // here: two rows for one thread is worse than the problem it solves.
++    expect(order.entries.map((entry) => entry.thread.id)).toEqual(["b-1", "lost"]);
++  });
++
++  it("accounts for every thread exactly once", () => {
++    const threads = [
++      plainThread("upstream-1"),
++      architectThread("arch-a"),
++      builderThread("a-1", "arch-a"),
++      architectThread("arch-b"),
++      builderThread("b-1", "arch-b"),
++      builderThread("lost", "arch-gone"),
++      builderThread("solo", null),
++      architectThread("arch-empty"),
++    ];
++    const order = buildCodevSidebarOrder(threads);
++    expect(order.entries.map((entry) => entry.thread.id).toSorted()).toEqual(
++      threads.map((thread) => thread.id).toSorted(),
++    );
++  });
++});
++
++describe("describeCodevOrphanReason", () => {
++  /**
++   * Four reasons, four sentences, no repeats.
++   *
++   * One string for four states would be "I could not tell" spelled like an
++   * answer — the reader opened this group to find out WHICH thing happened.
++   */
++  it("gives every reason its own words", () => {
++    const sentences = (
++      ["parent-missing", "parent-elsewhere", "parent-not-architect", "no-parent"] as const
++    ).map(describeCodevOrphanReason);
++    expect(new Set(sentences).size).toBe(4);
++    expect(sentences.every((sentence) => sentence.length > 0)).toBe(true);
++  });
++});
+diff --git a/apps/web/src/components/Sidebar.logic.ts b/apps/web/src/components/Sidebar.logic.ts
+index 8067fdd59..db8ef1a56 100644
+--- a/apps/web/src/components/Sidebar.logic.ts
++++ b/apps/web/src/components/Sidebar.logic.ts
+@@ -13,6 +13,12 @@ import type { ThreadRouteTarget } from "../threadRoutes";
+ import { cn } from "../lib/utils";
+ import { isLatestTurnSettled } from "../session-logic";
+ import { resolveServerBackedAppStageLabel } from "../branding.logic";
++import {
++  buildCodevHierarchy,
++  hasCodevHierarchy,
++  type CodevHierarchyFields,
++  type OrphanReason,
++} from "../codev/hierarchy";
+ 
+ export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
+ export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 200;
+@@ -959,3 +965,113 @@ export function sortScopedProjectsForSidebar<
+       left.id.localeCompare(right.id),
+   );
+ }
++
++/**
++ * Codev customization (spec 250), phase 7 — the sidebar's Workspace > Architect >
++ * Builders order, as a function.
++ *
++ * `buildCodevHierarchy` answers "what is the tree"; this answers "in what order
++ * does the sidebar draw it, and what does each row need to know about its place".
++ * The component applies what this returns and decides nothing itself, so the
++ * ordering claims are settled here rather than through a rendered DOM.
++ *
++ * ## Why the ORDER is returned, and not just the groups
++ *
++ * The sidebar's ordered thread list is not only a render order. It is also the
++ * range shift-click selects over and the sequence jump-hint labels are assigned
++ * from (`orderedThreads` / `jumpLabelByKey`). A component that reordered rows
++ * while leaving that list alone would draw a tree whose shift-select ran in the
++ * old order — every row in the right place and the keyboard reaching the wrong
++ * ones, which no screenshot shows.
++ *
++ * So the entries come back in one order, the caller renders in it AND derives
++ * the ordered list from it, and the two cannot drift.
++ */
++export type CodevSidebarEntry<T> =
++  | { readonly kind: "architect"; readonly thread: T; readonly builderCount: number }
++  | { readonly kind: "builder"; readonly thread: T; readonly architectId: string }
++  | { readonly kind: "unmanaged"; readonly thread: T }
++  | {
++      readonly kind: "orphan";
++      readonly thread: T;
++      readonly reason: OrphanReason;
++      readonly parentThreadId: string | null;
++    };
++
++export interface CodevSidebarOrder<T> {
++  /**
++   * False when nothing in the list carries a Codev role.
++   *
++   * The caller renders exactly what it rendered before spec 250 in that case,
++   * and `entries` is the untouched input as `unmanaged`. Every upstream user's
++   * sidebar has to be unchanged for a feature they do not have — an empty tree's
++   * chrome is still new furniture.
++   */
++  readonly hasHierarchy: boolean;
++  readonly entries: readonly CodevSidebarEntry<T>[];
++}
++
++/**
++ * Order one section's threads into architects, their builders, the untouched
++ * flat list, and then the orphans.
++ *
++ * Orphans go LAST on purpose. They are the section a human reads when something
++ * has gone wrong, and putting them above the working tree would make every
++ * ordinary sidebar open with its exceptions first.
++ */
++export function buildCodevSidebarOrder<T extends CodevHierarchyFields>(
++  threads: readonly T[],
++  alsoVisible: readonly T[] = [],
++): CodevSidebarOrder<T> {
++  if (!hasCodevHierarchy(threads)) {
++    return {
++      hasHierarchy: false,
++      entries: threads.map((thread) => ({ kind: "unmanaged", thread }) as const),
++    };
++  }
++  const hierarchy = buildCodevHierarchy(threads, { alsoVisible });
++  const entries: CodevSidebarEntry<T>[] = [];
++  for (const subtree of hierarchy.architects) {
++    entries.push({
++      kind: "architect",
++      thread: subtree.architect,
++      builderCount: subtree.builders.length,
++    });
++    for (const builder of subtree.builders) {
++      entries.push({ kind: "builder", thread: builder, architectId: subtree.architect.id });
++    }
++  }
++  for (const thread of hierarchy.unmanaged) {
++    entries.push({ kind: "unmanaged", thread });
++  }
++  for (const orphan of hierarchy.orphaned) {
++    entries.push({
++      kind: "orphan",
++      thread: orphan.thread,
++      reason: orphan.reason,
++      parentThreadId: orphan.parentThreadId,
++    });
++  }
++  return { hasHierarchy: true, entries };
++}
++
++/**
++ * What the orphan group says about one row, in words a human can act on.
++ *
++ * Each reason gets its OWN sentence. A single "could not be placed" would spend
++ * the group's whole purpose: the reader is there to find out which of four
++ * different things happened, and one string for four states is the shape of
++ * "I could not tell" spelled like an answer.
++ */
++export function describeCodevOrphanReason(reason: OrphanReason): string {
++  switch (reason) {
++    case "parent-missing":
++      return "its architect is not in this project";
++    case "parent-elsewhere":
++      return "its architect is pinned, snoozed, or settled";
++    case "parent-not-architect":
++      return "the thread it names as parent is not an architect";
++    case "no-parent":
++      return "it names no architect";
++  }
++}
+diff --git a/apps/web/src/components/Sidebar.tsx b/apps/web/src/components/Sidebar.tsx
+index 63681a548..f066f59b8 100644
+--- a/apps/web/src/components/Sidebar.tsx
++++ b/apps/web/src/components/Sidebar.tsx
+@@ -125,6 +125,9 @@ import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
+ import {
+   animatePinnedLayoutChanges,
+   buildBulkTitleRegenerationContextMenuItem,
++  buildCodevSidebarOrder,
++  describeCodevOrphanReason,
++  type CodevSidebarEntry,
+   formatWorkingDurationLabel,
+   firstValidTimestampMs,
+   hasUnseenCompletion,
+@@ -2240,9 +2243,39 @@ export default function Sidebar() {
+     return routeThread === undefined ? [] : [routeThread];
+   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
+ 
++  /**
++   * Codev customization (spec 250), phase 7 — the active section's order.
++   *
++   * `alsoVisible` is the rest of the sidebar, and it is not optional in spirit:
++   * without it a builder whose architect the user PINNED reports its parent as
++   * missing, three rows below the architect the user can see. The whole grouping
++   * runs over one section, so the other sections have to be declared.
++   */
++  const codevActiveOrder = useMemo(
++    () =>
++      buildCodevSidebarOrder(activeThreads, [
++        ...pinnedThreads,
++        ...snoozedThreads,
++        ...settledThreads,
++      ]),
++    [activeThreads, pinnedThreads, snoozedThreads, settledThreads],
++  );
++  // The tree's order IS the ordered list. Shift-range-select and jump-hint
++  // labels are assigned from `orderedThreads`, so a reordered render with the
++  // old list behind it puts every row in the right place and the keyboard on
++  // the wrong ones.
++  const orderedActiveThreads = useMemo(
++    () => codevActiveOrder.entries.map((entry) => entry.thread),
++    [codevActiveOrder],
++  );
+   const orderedThreads = useMemo(
+-    () => [...pinnedThreads, ...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
+-    [pinnedThreads, activeThreads, visibleSnoozedThreads, renderedSettledThreads],
++    () => [
++      ...pinnedThreads,
++      ...orderedActiveThreads,
++      ...visibleSnoozedThreads,
++      ...renderedSettledThreads,
++    ],
++    [pinnedThreads, orderedActiveThreads, visibleSnoozedThreads, renderedSettledThreads],
+   );
+   const orderedThreadKeys = useMemo(
+     () =>
+@@ -3832,8 +3865,138 @@ export default function Sidebar() {
+                       />,
+                     );
+                   }
+-                  for (const thread of activeThreads) {
+-                    items.push(renderThreadRow(thread, "active"));
++                  // Codev customization (spec 250), phase 7 — Workspace >
++                  // Architect > Builders.
++                  //
++                  // `hasHierarchy` is false for every project that carries no
++                  // Codev role, and this branch is then the loop it has always
++                  // been: same rows, same order, no wrappers, no headings. An
++                  // upstream sidebar must not grow furniture for a feature it
++                  // does not have.
++                  if (!codevActiveOrder.hasHierarchy) {
++                    for (const entry of codevActiveOrder.entries) {
++                      items.push(renderThreadRow(entry.thread, "active"));
++                    }
++                  } else {
++                    const entries = codevActiveOrder.entries;
++                    const codevRowKey = (thread: EnvironmentThreadShell) =>
++                      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
++                    let renderedArchitectCount = 0;
++                    const unmanaged: EnvironmentThreadShell[] = [];
++                    const orphans: Extract<
++                      CodevSidebarEntry<EnvironmentThreadShell>,
++                      { kind: "orphan" }
++                    >[] = [];
++                    for (let index = 0; index < entries.length; index += 1) {
++                      const entry = entries[index];
++                      if (entry === undefined) continue;
++                      if (entry.kind === "unmanaged") {
++                        unmanaged.push(entry.thread);
++                        continue;
++                      }
++                      if (entry.kind === "orphan") {
++                        orphans.push(entry);
++                        continue;
++                      }
++                      // Builders were consumed by their architect below.
++                      if (entry.kind === "builder") continue;
++                      renderedArchitectCount += 1;
++                      const builders: EnvironmentThreadShell[] = [];
++                      for (let next = index + 1; next < entries.length; next += 1) {
++                        const following = entries[next];
++                        if (following === undefined || following.kind !== "builder") break;
++                        builders.push(following.thread);
++                      }
++                      items.push(
++                        <li
++                          key={`codev-architect-${codevRowKey(entry.thread)}`}
++                          data-testid="sidebar-codev-architect"
++                          data-codev-architect-thread-id={entry.thread.id}
++                          data-codev-builder-count={builders.length}
++                          className="list-none"
++                        >
++                          <ul role="list" className="flex flex-col gap-px">
++                            {renderThreadRow(entry.thread, "active")}
++                            {builders.length > 0 ? (
++                              <li className="list-none">
++                                {/* The rail is the nesting. Builder rows are the
++                                    same cards as every other row — an indent and
++                                    a hairline say "owned by the row above"
++                                    without inventing a second row design that
++                                    would have to be kept in step with the
++                                    first. */}
++                                <ul
++                                  role="list"
++                                  aria-label={`Builders of ${entry.thread.title}`}
++                                  data-testid="sidebar-codev-builders"
++                                  className="ml-2.5 flex flex-col gap-px border-l border-sidebar-border/60 pl-1.5"
++                                >
++                                  {builders.map((builder) =>
++                                    renderThreadRow(builder, "active"),
++                                  )}
++                                </ul>
++                              </li>
++                            ) : null}
++                          </ul>
++                        </li>,
++                      );
++                    }
++                    // Threads Codev did not create keep the flat presentation
++                    // they have always had, below the tree and claimed by
++                    // nothing in it. The divider is the whole separation: a
++                    // heading over them would name a group that is really just
++                    // "everything else".
++                    if (unmanaged.length > 0 && renderedArchitectCount > 0) {
++                      items.push(
++                        <li
++                          key="codev-unmanaged-divider"
++                          aria-hidden
++                          data-testid="sidebar-codev-unmanaged-divider"
++                          className="mx-2.5 my-1.5 h-px list-none bg-sidebar-border/60"
++                        />,
++                      );
++                    }
++                    for (const thread of unmanaged) {
++                      items.push(renderThreadRow(thread, "active"));
++                    }
++                    if (orphans.length > 0) {
++                      items.push(
++                        <li
++                          key="codev-orphan-heading"
++                          data-thread-selection-safe
++                          data-testid="sidebar-codev-orphan-heading"
++                          className="list-none"
++                        >
++                          <div className="mb-1 mt-3 flex w-full items-center gap-2 px-2.5">
++                            <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
++                              Unattributed builders ({orphans.length})
++                            </span>
++                            <span className="h-px flex-1 bg-amber-500/20 dark:bg-amber-400/15" />
++                          </div>
++                        </li>,
++                      );
++                      for (const orphan of orphans) {
++                        items.push(
++                          <li
++                            key={`codev-orphan-${codevRowKey(orphan.thread)}`}
++                            data-testid="sidebar-codev-orphan"
++                            data-codev-orphan-reason={orphan.reason}
++                            className="list-none"
++                          >
++                            <ul role="list" className="flex flex-col gap-px">
++                              {renderThreadRow(orphan.thread, "active")}
++                            </ul>
++                            {/* The reason, per row, in words. Four states share
++                                this group and a reader is here to find out which
++                                one happened; one sentence for all four would be
++                                "I could not tell" spelled like an answer. */}
++                            <p className="px-2.5 pb-1 text-[11px] text-sidebar-muted-foreground/70">
++                              Orphaned: {describeCodevOrphanReason(orphan.reason)}
++                            </p>
++                          </li>,
++                        );
++                      }
++                    }
+                   }
+                   // Snoozed shelf: between the inbox and Settled — out of the
+                   // way, never gone. The header always renders while anything

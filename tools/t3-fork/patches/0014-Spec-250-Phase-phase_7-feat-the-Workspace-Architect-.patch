@@ -1,0 +1,514 @@
+From 4633e0a7f4982785a43b265f23280d17d139df07 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 23:10:42 -0600
+Subject: [PATCH 14/18] [Spec 250][Phase: phase_7] feat: the Workspace >
+ Architect > Builders grouping, as a function
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+t3code's model is Project to Thread, flat. Phase 2 put the two fields that express
+three levels on the thread record; this turns a flat list of shells into the tree
+the sidebar renders.
+
+COMPOSED, not folded in. `sidebarProjectGrouping.ts` groups ENVIRONMENTS —
+local-only / remote-only / mixed, with a WSL sandbox distinguished from a real
+remote. That is a different axis from architect-to-builder nesting, and tangling
+the two would join two questions that have nothing to say to each other. This runs
+over the threads inside a group that module has already formed.
+
+Three buckets, and none is a guess. An architect with no builders is still a
+subtree, because the moment a human most wants to see one is just after spawning
+it. A thread with no role keeps the flat presentation it has always had and nothing
+in the tree claims it — inventing a role for a thread Codev did not create turns
+"we do not know" into an assertion. A builder whose architect is not here is named
+as orphaned, with the id it named and the reason, because dropping it hides a
+running agent and re-parenting it to the nearest architect is a guess rendered as a
+fact.
+
+It does not re-parent an orphan even when exactly one architect is on screen, where
+the guess would look right nearly every time — and be wrong on the one occasion
+someone is trying to work out what happened.
+
+`parent-not-architect` and `no-parent` are states phase 3 refuses at write time.
+They are still carried, because "cannot exist" is a claim about the server and not
+about the screen, and a renderer that assumes an impossible state is impossible has
+no way to show one when it happens.
+
+**The seam is checked by the compiler, and it caught two things.** Every test here
+builds its own row type, which is the right way to test grouping and the wrong way
+to learn whether it fits anything real. Two assignments from `SidebarThreadSummary`
+and `Thread` fixed that:
+
+- the module keyed on `threadId`, the COMMAND spelling, while both read models call
+  it `id` — and the tests passed against a row type that agreed with the mistake;
+- `role?: X` does not accept `undefined` under `exactOptionalPropertyTypes`, so the
+  interface described a shape no caller has until `| undefined` was written out.
+
+Neither would have surfaced until the call site, where it reads as "the sidebar
+sees no hierarchy" rather than as a type error.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/codev/hierarchy.test.ts | 274 +++++++++++++++++++++++++++
+ apps/web/src/codev/hierarchy.ts      | 170 +++++++++++++++++
+ 2 files changed, 444 insertions(+)
+ create mode 100644 apps/web/src/codev/hierarchy.test.ts
+ create mode 100644 apps/web/src/codev/hierarchy.ts
+
+diff --git a/apps/web/src/codev/hierarchy.test.ts b/apps/web/src/codev/hierarchy.test.ts
+new file mode 100644
+index 000000000..593839f25
+--- /dev/null
++++ b/apps/web/src/codev/hierarchy.test.ts
+@@ -0,0 +1,274 @@
++/**
++ * Codev customization (spec 250), phase 7 — the grouping, tested as a function.
++ *
++ * The component applies what this returns, so every claim about the shape of the
++ * tree is settled here rather than through a rendered DOM. The one property every
++ * test leans on: **every input thread appears exactly once in the result.** A
++ * renderer that drops a thread loses a running agent from the only place a human
++ * looks for one, and "it is not in the tree" and "it does not exist" look the same
++ * on screen.
++ */
++
++import { describe, expect, it } from "vite-plus/test";
++
++import type { SidebarThreadSummary, Thread } from "../types";
++import { buildCodevHierarchy, hasCodevHierarchy, type CodevHierarchyFields } from "./hierarchy";
++
++/**
++ * THE SEAM, checked by the compiler.
++ *
++ * Every test below builds its own `Row`, which is the right way to test the
++ * grouping and the wrong way to find out whether it fits anything real. The first
++ * draft of this module keyed on `threadId` — the COMMAND spelling — while both
++ * read models call it `id`, and every test passed against a row type that
++ * happened to agree with the mistake.
++ *
++ * These two assignments are the check. They compile only if the sidebar's actual
++ * thread types satisfy the module's input, so a rename on either side is a build
++ * error here rather than a `buildCodevHierarchy(threads)` that silently sees no
++ * hierarchy at the call site.
++ */
++const _sidebarRowsFit: (rows: readonly SidebarThreadSummary[]) => unknown = buildCodevHierarchy;
++const _threadsFit: (rows: readonly Thread[]) => unknown = buildCodevHierarchy;
++void _sidebarRowsFit;
++void _threadsFit;
++
++interface Row extends CodevHierarchyFields {
++  readonly title: string;
++}
++
++const architect = (id: string, title = id): Row => ({ id, title, role: "architect" });
++const builder = (id: string, parentThreadId: string | null, title = id): Row => ({
++  id,
++  title,
++  role: "builder",
++  parentThreadId,
++});
++const plain = (id: string, title = id): Row => ({ id, title });
++
++/**
++ * An element, asserted rather than indexed.
++ *
++ * Same reason as `onlyOrphan`: under `noUncheckedIndexedAccess` a bare index is
++ * `T | undefined`, and a test that reaches through one is asserting the length by
++ * accident. This says out loud that the element is expected to be there.
++ */
++function at<T>(items: readonly T[], index: number): T {
++  const item = items[index];
++  if (!item) throw new Error(`expected an element at index ${index}, saw ${items.length}`);
++  return item;
++}
++
++/**
++ * The single orphan, asserted rather than indexed.
++ *
++ * The suite runs under `noUncheckedIndexedAccess`, so `orphaned[0]` is
++ * `T | undefined` and a test that reaches through it is asserting the length by
++ * accident. This says the length out loud and hands back a value that exists.
++ */
++function onlyOrphan(result: ReturnType<typeof buildCodevHierarchy<Row>>) {
++  expect(result.orphaned).toHaveLength(1);
++  const orphan = result.orphaned[0];
++  if (!orphan) throw new Error("unreachable: length asserted above");
++  return orphan;
++}
++
++/** Every input appears exactly once, somewhere. */
++function accountsForEveryThread(input: readonly Row[]): void {
++  const result = buildCodevHierarchy(input);
++  const seen = [
++    ...result.architects.flatMap((subtree) => [subtree.architect, ...subtree.builders]),
++    ...result.unmanaged,
++    ...result.orphaned.map((entry) => entry.thread),
++  ].map((thread) => thread.id);
++  expect([...seen].sort()).toEqual(input.map((thread) => thread.id).sort());
++  expect(new Set(seen).size, "a thread appeared in two buckets").toBe(seen.length);
++}
++
++describe("codev hierarchy: one architect and its builders", () => {
++  const rows = [architect("arch-1"), builder("b-1", "arch-1"), builder("b-2", "arch-1"), builder("b-3", "arch-1")];
++
++  it("nests three builders under their architect", () => {
++    const result = buildCodevHierarchy(rows);
++    expect(result.architects).toHaveLength(1);
++    expect(at(result.architects, 0).architect.id).toBe("arch-1");
++    expect(at(result.architects, 0).builders.map((b) => b.id)).toEqual(["b-1", "b-2", "b-3"]);
++    expect(result.unmanaged).toEqual([]);
++    expect(result.orphaned).toEqual([]);
++    accountsForEveryThread(rows);
++  });
++
++  /**
++   * An architect that has spawned nothing is still a subtree.
++   *
++   * Dropping it would make an architect appear only once it had children, so the
++   * moment a human most wants to see it — just after spawning it, before it has
++   * done anything — is the moment it is invisible.
++   */
++  it("keeps an architect with no builders", () => {
++    const result = buildCodevHierarchy([architect("arch-alone")]);
++    expect(result.architects).toHaveLength(1);
++    expect(at(result.architects, 0).builders).toEqual([]);
++  });
++});
++
++describe("codev hierarchy: two architects in one project", () => {
++  const rows = [
++    architect("arch-a"),
++    architect("arch-b"),
++    builder("a-1", "arch-a"),
++    builder("b-1", "arch-b"),
++    builder("a-2", "arch-a"),
++  ];
++
++  it("renders two subtrees, each owning its own builders", () => {
++    const result = buildCodevHierarchy(rows);
++    expect(result.architects.map((s) => s.architect.id)).toEqual(["arch-a", "arch-b"]);
++    expect(at(result.architects, 0).builders.map((b) => b.id)).toEqual(["a-1", "a-2"]);
++    expect(at(result.architects, 1).builders.map((b) => b.id)).toEqual(["b-1"]);
++    accountsForEveryThread(rows);
++  });
++
++  /**
++   * INPUT ORDER, not an order this module invents.
++   *
++   * The caller has already sorted — by pin, by recency, by whatever the user
++   * chose — and re-sorting here would override that silently, which is the kind
++   * of change nobody can find the cause of.
++   */
++  it("preserves the order it was given, for architects and for builders", () => {
++    const reversed = buildCodevHierarchy([...rows].reverse());
++    expect(reversed.architects.map((s) => s.architect.id)).toEqual(["arch-b", "arch-a"]);
++    expect(at(reversed.architects, 1).builders.map((b) => b.id)).toEqual(["a-2", "a-1"]);
++  });
++});
++
++describe("codev hierarchy: threads Codev did not create", () => {
++  /**
++   * The deliverable: they keep the EXISTING flat presentation, in their own
++   * section, and nothing in the tree claims them.
++   */
++  it("puts a thread with no role in unmanaged, untouched", () => {
++    const rows = [plain("upstream-1"), architect("arch-1"), builder("b-1", "arch-1"), plain("upstream-2")];
++    const result = buildCodevHierarchy(rows);
++    expect(result.unmanaged.map((t) => t.id)).toEqual(["upstream-1", "upstream-2"]);
++    expect(at(result.architects, 0).builders.map((b) => b.id)).toEqual(["b-1"]);
++    accountsForEveryThread(rows);
++  });
++
++  /**
++   * `undefined` and `null` are one fact, not two.
++   *
++   * The wire spells an unset optional both ways — `Schema.optional(NullOr(...))`
++   * on the read models — so a UI that told them apart would be showing the reader
++   * a difference between two spellings.
++   */
++  it("treats an absent role and an explicit null role identically", () => {
++    const result = buildCodevHierarchy([
++      { id: "absent", title: "absent" },
++      { id: "explicit", title: "explicit", role: null, parentThreadId: null },
++    ]);
++    expect(result.unmanaged.map((t) => t.id)).toEqual(["absent", "explicit"]);
++    expect(result.orphaned).toEqual([]);
++  });
++
++  /**
++   * A project with no Codev threads must look exactly as it did before spec 250.
++   *
++   * An empty "Architects" heading above the flat list would be new furniture in
++   * every upstream user's sidebar for a feature they do not have.
++   */
++  it("reports no hierarchy for a purely upstream project", () => {
++    expect(hasCodevHierarchy([plain("a"), plain("b")])).toBe(false);
++    expect(hasCodevHierarchy([plain("a"), architect("arch")])).toBe(true);
++    expect(hasCodevHierarchy([builder("b", "gone")])).toBe(true);
++    expect(hasCodevHierarchy([])).toBe(false);
++  });
++});
++
++describe("codev hierarchy: orphans are named, not dropped and not re-parented", () => {
++  /**
++   * The ordinary case: the architect was archived, deleted, or is simply not in
++   * this slice. The builder is still running and a human still needs to find it.
++   */
++  it("reports a builder whose architect is not present", () => {
++    const rows = [architect("arch-1"), builder("b-1", "arch-1"), builder("lost", "arch-gone")];
++    const result = buildCodevHierarchy(rows);
++    const lost = onlyOrphan(result);
++    expect(lost.thread.id).toBe("lost");
++    expect(lost.reason).toBe("parent-missing");
++    // The id it named, so a human can go looking rather than guess.
++    expect(lost.parentThreadId).toBe("arch-gone");
++    accountsForEveryThread(rows);
++  });
++
++  /**
++   * NOT re-parented to the only architect available.
++   *
++   * With exactly one architect on screen, attaching the orphan to it would look
++   * right nearly every time and be a guess every time. The one occasion it is
++   * wrong is the occasion a human is trying to work out what happened.
++   */
++  it("does not attach an orphan to the only architect in sight", () => {
++    const result = buildCodevHierarchy([architect("arch-1"), builder("lost", "arch-gone")]);
++    expect(at(result.architects, 0).builders).toEqual([]);
++    expect(result.orphaned).toHaveLength(1);
++  });
++
++  /**
++   * States phase 3 refuses at write time.
++   *
++   * A server that accepted the thread cannot produce either, so this asserts the
++   * renderer INVENTS NO FALLBACK for them rather than asserting they happen. The
++   * plan asks for exactly this: a state that cannot exist still needs a rendering,
++   * because "cannot exist" is a claim about the server and not about the screen.
++   */
++  it("reports a builder whose parent is not an architect, without nesting it", () => {
++    const rows = [architect("arch-1"), builder("b-1", "arch-1"), builder("nested", "b-1")];
++    const result = buildCodevHierarchy(rows);
++    expect(at(result.architects, 0).builders.map((b) => b.id)).toEqual(["b-1"]);
++    const nested = onlyOrphan(result);
++    expect(nested.reason).toBe("parent-not-architect");
++    accountsForEveryThread(rows);
++  });
++
++  it("reports a builder with no parent at all", () => {
++    const result = buildCodevHierarchy([builder("solo", null)]);
++    expect(result.orphaned).toHaveLength(1);
++    const solo = onlyOrphan(result);
++    expect(solo.reason).toBe("no-parent");
++    expect(solo.parentThreadId).toBeNull();
++  });
++
++  /**
++   * A builder whose parent lives in another project.
++   *
++   * Phase 3 refuses this at write time too, and from the renderer's side it is
++   * indistinguishable from an archived parent — the sidebar is given one project's
++   * threads, so a cross-project parent is simply not in the list. It lands in
++   * `parent-missing`, which is the honest answer: this module cannot see the other
++   * project and must not claim to know why the parent is absent.
++   */
++  it("reports a cross-project parent as missing, because that is what it can see", () => {
++    const result = buildCodevHierarchy([architect("arch-1"), builder("cross", "arch-elsewhere")]);
++    const cross = onlyOrphan(result);
++    expect(cross.reason).toBe("parent-missing");
++    expect(cross.parentThreadId).toBe("arch-elsewhere");
++  });
++});
++
++describe("codev hierarchy: everything is accounted for", () => {
++  it("places every thread exactly once across a mixed project", () => {
++    accountsForEveryThread([
++      plain("upstream-1"),
++      architect("arch-a"),
++      builder("a-1", "arch-a"),
++      architect("arch-b"),
++      builder("b-1", "arch-b"),
++      builder("lost", "arch-gone"),
++      builder("solo", null),
++      plain("upstream-2"),
++      architect("arch-empty"),
++    ]);
++  });
++});
+diff --git a/apps/web/src/codev/hierarchy.ts b/apps/web/src/codev/hierarchy.ts
+new file mode 100644
+index 000000000..b8319156e
+--- /dev/null
++++ b/apps/web/src/codev/hierarchy.ts
+@@ -0,0 +1,170 @@
++/**
++ * Codev customization (spec 250), phase 7 — Workspace > Architect > Builders.
++ *
++ * t3code's model is Project to Thread, flat. Codev's is three levels, and phase 2
++ * put the two fields that express it on the thread record. This turns a flat list
++ * of shells into the tree the sidebar renders.
++ *
++ * ## It is pure, and it composes rather than extends
++ *
++ * `sidebarProjectGrouping.ts` groups ENVIRONMENTS — `local-only` / `remote-only` /
++ * `mixed`, with `allRemoteMembersAreDesktopLocal` separating a WSL sandbox from a
++ * real remote. That is a different axis from architect-to-builder nesting, and
++ * folding this into it would tangle two questions that have nothing to say to each
++ * other. This runs over the threads INSIDE a group that module has already formed.
++ *
++ * ## Three buckets, and none of them is a guess
++ *
++ * A thread lands in exactly one of:
++ *
++ *   architects   `role: "architect"`, each carrying the builders that name it.
++ *                An architect with no builders is still a subtree: "this architect
++ *                has spawned nothing yet" is a real and readable state.
++ *   unmanaged    no role. Upstream t3code threads are the common case, and they
++ *                keep the flat presentation they have always had. NOTHING in the
++ *                tree claims them — inventing a role for a thread Codev did not
++ *                create would turn "we do not know" into an assertion.
++ *   orphaned     a builder whose architect is not here. Named, with the reason,
++ *                because the alternatives are worse: dropping it hides a running
++ *                agent, and re-parenting it to the nearest architect is a guess
++ *                rendered as a fact.
++ *
++ * ## Input order is preserved
++ *
++ * The caller has already sorted — by pin, by recency, by whatever the user chose —
++ * and re-sorting here would silently override that. Architects appear in the order
++ * they arrived; each architect's builders likewise.
++ */
++
++/**
++ * The two fields phase 2 added, and the id they are keyed by.
++ *
++ * `id`, not `threadId`. Both read models — `OrchestrationThread` and
++ * `OrchestrationThreadShell` — call it `id`; only the COMMANDS say `threadId`.
++ * The first draft of this module keyed on `threadId` and its tests defined their
++ * own row type that happened to have one, so the module compiled and passed
++ * against a shape no caller has. Caught by reading the contract before wiring the
++ * call site, which is the only place it would have surfaced.
++ */
++export interface CodevHierarchyFields {
++  readonly id: string;
++  /**
++   * `| undefined` is written out, and it is load-bearing.
++   *
++   * The web app compiles with `exactOptionalPropertyTypes`, under which `role?: X`
++   * means "may be absent" and NOT "may be undefined" — so a real thread, whose
++   * type is `X | null | undefined`, does not satisfy it. The compile-time seam
++   * check in the test file is what surfaced that; without the explicit `undefined`
++   * this interface described a shape no caller has.
++   */
++  readonly role?: "architect" | "builder" | null | undefined;
++  /** Names the PARENT's `id`. The command field keeps its `threadId` spelling. */
++  readonly parentThreadId?: string | null | undefined;
++}
++
++/**
++ * Why a builder could not be placed under an architect.
++ *
++ * `parent-missing` is the ordinary one: the architect is archived, deleted, or
++ * simply not in this project's slice. `parent-not-architect` and `no-parent` are
++ * states phase 3 refuses at write time, so they cannot arise from a server that
++ * accepted the thread — they are carried anyway, because a renderer that assumes
++ * an impossible state is impossible has no way to show one when it happens.
++ */
++export type OrphanReason = "parent-missing" | "parent-not-architect" | "no-parent";
++
++export interface OrphanedBuilder<T> {
++  readonly thread: T;
++  readonly reason: OrphanReason;
++  /** The parent it named, when it named one. Shown so a human can go looking. */
++  readonly parentThreadId: string | null;
++}
++
++export interface ArchitectSubtree<T> {
++  readonly architect: T;
++  readonly builders: readonly T[];
++}
++
++export interface CodevThreadHierarchy<T> {
++  readonly architects: readonly ArchitectSubtree<T>[];
++  readonly unmanaged: readonly T[];
++  readonly orphaned: readonly OrphanedBuilder<T>[];
++}
++
++/**
++ * Group a flat list of threads into the three-level tree.
++ *
++ * Every input thread appears exactly once in the result. That is the property the
++ * tests are written around: a renderer that drops a thread loses a running agent
++ * from the only place a human looks for one.
++ */
++export function buildCodevHierarchy<T extends CodevHierarchyFields>(
++  threads: readonly T[],
++): CodevThreadHierarchy<T> {
++  const architectIds = new Set<string>();
++  for (const thread of threads) {
++    if (thread.role === "architect") architectIds.add(thread.id);
++  }
++  const present = new Set(threads.map((thread) => thread.id));
++
++  const buildersByArchitect = new Map<string, T[]>();
++  const unmanaged: T[] = [];
++  const orphaned: OrphanedBuilder<T>[] = [];
++
++  for (const thread of threads) {
++    // Absent and null are the same answer here — "Codev did not create this" —
++    // and they arrive as both because the wire spells an unset optional either
++    // way. Distinguishing them in the UI would be distinguishing two spellings of
++    // one fact.
++    if (thread.role !== "architect" && thread.role !== "builder") {
++      unmanaged.push(thread);
++      continue;
++    }
++    if (thread.role === "architect") continue;
++
++    const parentThreadId = thread.parentThreadId ?? null;
++    if (parentThreadId === null) {
++      orphaned.push({ thread, reason: "no-parent", parentThreadId: null });
++      continue;
++    }
++    if (!present.has(parentThreadId)) {
++      orphaned.push({ thread, reason: "parent-missing", parentThreadId });
++      continue;
++    }
++    if (!architectIds.has(parentThreadId)) {
++      // The parent is here and is not an architect. Phase 3 refuses this at write
++      // time, so a server that accepted the thread cannot produce it — and the
++      // renderer still does not fall back to nesting it under a non-architect,
++      // because a fallback for an impossible state is a fallback nobody will ever
++      // read the code for again.
++      orphaned.push({ thread, reason: "parent-not-architect", parentThreadId });
++      continue;
++    }
++    const siblings = buildersByArchitect.get(parentThreadId);
++    if (siblings) siblings.push(thread);
++    else buildersByArchitect.set(parentThreadId, [thread]);
++  }
++
++  const architects: ArchitectSubtree<T>[] = [];
++  for (const thread of threads) {
++    if (thread.role !== "architect") continue;
++    architects.push({
++      architect: thread,
++      builders: buildersByArchitect.get(thread.id) ?? [],
++    });
++  }
++
++  return { architects, unmanaged, orphaned };
++}
++
++/**
++ * Does this list carry any Codev hierarchy at all?
++ *
++ * The sidebar uses it to decide whether to render the tree chrome. A project with
++ * no architects and no builders must look exactly as it did before spec 250 — an
++ * empty "Architects" heading above the flat list would be new furniture in every
++ * upstream user's sidebar for a feature they do not have.
++ */
++export function hasCodevHierarchy<T extends CodevHierarchyFields>(threads: readonly T[]): boolean {
++  return threads.some((thread) => thread.role === "architect" || thread.role === "builder");
++}

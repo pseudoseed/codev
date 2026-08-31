@@ -720,6 +720,148 @@ builder lands on the fork with `role: "builder"` and its architect's thread id, 
 reaching `pending` appears on the thread within one publish cycle, and a client that dispatches an
 illegal edge gets back a discriminant it can branch on instead of a sentence it would have to parse.
 
+## Phase 7 — Workspace to architect to builder, in t3code's own sidebar
+
+### The seam check found two defects before a call site existed
+
+`hierarchy.ts` is a pure function and its tests build their own row type. Both of those are right —
+that is what makes them tests of the grouping — and together they cannot tell you the module fits
+anything the sidebar holds. Two assignments at the top of the test file are the whole check:
+
+```ts
+const _sidebarRowsFit: (rows: readonly SidebarThreadSummary[]) => unknown = buildCodevHierarchy;
+const _threadsFit: (rows: readonly Thread[]) => unknown = buildCodevHierarchy;
+```
+
+They failed, twice, on a module whose own suite was green:
+
+- it keyed on `threadId`, the **command** spelling, while both read models call it `id`;
+- `role?: X` does not accept `undefined` under `exactOptionalPropertyTypes`, so the interface
+  described a shape no caller has until `| undefined` was written out.
+
+Neither is a runtime error and neither would have thrown. Both would have shipped as
+`buildCodevHierarchy(threads)` quietly returning no hierarchy, which on screen reads as an empty
+workspace rather than as a bug. This is the "assert the call site, not the module" rule working
+**prospectively** rather than forensically: the previous five instances were found after the code
+shipped, by running it; this one was found before a caller existed, by the compiler.
+
+### The section boundary, and the reason that was a lie
+
+t3code splits a project into Pinned / Active / Snoozed / Settled before any grouping runs, so the
+tree is built over ONE of those lists. A builder whose architect the user has pinned is therefore
+looking at a list its parent is not in — and the first draft answered `parent-missing`, three rows
+below the architect the user can see.
+
+`buildCodevHierarchy` now takes `alsoVisible`, the rest of the sidebar, and answers
+`parent-elsewhere`. Role still outranks section: a non-architect parent stays
+`parent-not-architect` wherever it sits, because letting a section boundary change what a thread IS
+would make the reason a fact about the sidebar rather than about the data.
+
+Reading that lookup was itself a bug, and its test caught it. `elsewhereRoleById.get(id) !==
+undefined` cannot distinguish "not in another section" from "in another section, with no role" —
+because a roleless thread's role *is* `undefined`, and the second of those is exactly the
+`parent-not-architect` case the branch exists to name. It reads `has` now. Verified by reverting to
+`get`: the test fails.
+
+### The render order is also the keyboard's order
+
+`orderedThreads` is not only a render order. Shift-range-select and jump-hint labels are both
+assigned from it. A component that reordered rows into a tree while leaving that list alone would
+draw every row in the right place and send the keyboard to the wrong ones — a defect no screenshot
+shows and no component test that renders one list would see. So `buildCodevSidebarOrder` returns one
+order, and the caller renders in it **and** derives `orderedThreads` from it.
+
+### Nothing changes for a project with no Codev roles
+
+`hasCodevHierarchy` is false there, and the renderer takes the loop it has always had: same rows,
+same order, no wrappers, no headings, no divider. An empty tree's chrome would be new furniture in
+every upstream user's sidebar for a feature they do not have. Asserted directly — the no-hierarchy
+branch returns the input list unchanged, in input order.
+
+### Four reasons, four sentences
+
+The orphan group carries a sentence per row rather than one "could not be placed". A reader opens
+that group to find out which of four things happened, and one string for four states is the shape of
+"I could not tell" spelled like an answer — the same rule that produced `parent-elsewhere` in the
+first place.
+
+### The e2e is a browser against the real stack, and it proved it can fail
+
+`packages/codev/src/__tests__/e2e/spec-250-hierarchy.spec.ts` drives the FORK's web app against a
+server built from the fork's source, with threads created over the wire. Not a component harness: a
+component test supplies the shells itself, which is the step whose absence is the risk.
+
+The orphan is made the way a real one is made — an architect archived after its builder exists — and
+not by writing an illegal edge, because phase 3 refuses those at write time and a fixture that
+produced one would be testing a state the server cannot reach.
+
+Verified to fail: with the render branch forced to the no-hierarchy path, all eight rows still
+render and every hierarchy selector goes to zero. The assertions fail; they do not pass on a flat
+list.
+
+### Screenshots are the deliverable, and there is no reference to compare them to
+
+Committed to the fork at `docs/codev/spec-250/phase-7/`, at 390, 1440x900 and 1920, two per width
+(the page, and the sidebar list at its full height — the sidebar is its own scroll container, so a
+900px window clips the orphan group). Measured at every width rather than eyeballed: no horizontal
+overflow, every thread title at or above 13px, zero console errors after pairing.
+
+**There is no mockup or design reference for this tree.** The nesting is drawn in t3code's own
+idiom — the same row cards, an indent and a hairline rail in the token the sidebar's other dividers
+use, and a group heading in the shape of the existing Snoozed and Settled shelves. Nothing was
+ported from `apps/client`. But "it matches the host app's conventions" is a claim about the
+conventions, not a ruling on the appearance, and a green suite cannot make that ruling. Raised to
+the architect with the screenshots rather than assumed.
+
+### Writing the screenshots had to become opt-in
+
+`t3-server.mjs start-fork` refuses a dirty fork checkout. A suite that wrote new PNG bytes into the
+fork on every run therefore passes once and SKIPS forever, each run leaving behind the modification
+that stops the next one — and the skip is correct behaviour, which is what makes it easy to miss.
+Ordinary runs write into Playwright's output directory; `SPEC_250_WRITE_SCREENSHOTS=1` refreshes the
+committed copies deliberately.
+
+### The screenshots found a criterion gap the tests could not
+
+The suite was green, every acceptance criterion had an assertion behind it, and the render was
+still missing one of criterion 1's three levels. "Project, architect, that architect's builders" —
+the tree had architect and builders, and the project was present only as a caption repeated on all
+eight cards. Every test that could have caught it was written against the two levels that existed.
+
+That is the project's own lesson arriving on schedule: a green suite cannot detect design
+infidelity, and here it could not detect a missing *requirement* either, because the tests and the
+render were built from the same reading of the plan. The screenshot is what made the gap visible,
+and it took a human looking at it.
+
+Two more came from the same review. Nothing said which row was an architect — it was carried by one
+level of subtle indent plus test data that happened to be called "Architect beta" and "Builder alpha
+one", and real threads are called `builder/spir-250`. And the orphan group was amber, which says
+something is broken, on a state this project deliberately ruled legal.
+
+All three are fixed, and the assertions now exist for the first two: a project heading above the
+tree, no row inside the tree repeating the project name, rows outside it still carrying it, the
+architect row captioned and its builders not. The third is a colour, and the screenshot is its
+evidence.
+
+### Live per-row status is t3code's, and it is not a gap
+
+Every row in the screenshots reads "now" with no working/turning indicator, which looks like spec
+146 criterion 3 going unowned. It is not. `resolveSidebarThreadStatus` already returns
+`approval` / `input` / `working` / `monitoring` / `failed` / `ready` from `session.status` and
+`backgroundLiveness`, and the sidebar already renders it as a pill — spec 250 does not touch any of
+it. The fixture's threads read "now" because they have never taken a turn: nothing is running on
+them, so `ready` is the correct answer. The half spec 250 owes is **blocked on a named gate**, which
+is phase 8's criterion 3.
+
+### What can a human see or do now that they could not before
+
+**This is the first phase with a non-empty answer.** Open t3code's sidebar and the threads Codev
+created are a tree: the project as a heading, each architect below it captioned as one and above the builders
+that name it, two architects side by side as two subtrees, threads Codev did not create in the flat
+list they have always had, and a builder whose architect is gone named as orphaned with the reason
+it could not be placed — instead of one flat list in which none of those things is distinguishable
+from the others.
+
 ## Flaky Tests
 
 `apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint` fails in the fork.

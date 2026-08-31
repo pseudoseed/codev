@@ -1,0 +1,448 @@
+From a183f56ecec2c039fb0b2b33a2ea75b7316bce76 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 23:50:54 -0600
+Subject: [PATCH 17/18] [Spec 250][Phase: phase_7] feat: the project level, the
+ role marker, and an orphan group that is not a warning
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Three changes from the architect's review of the first screenshots. One of them
+is a criterion gap; two are the tree saying out loud what it had been leaving to
+the test data.
+
+**The project level was missing, and criterion 1 asks for three.** Project,
+architect, that architect's builders — the render had two. The project was
+present only as a caption repeated on all eight cards: one string, eight times,
+in the most prominent line of every row, with the thing a human actually scans
+for sitting below it in lighter weight. It is a heading now, once, carrying the
+project's own favicon so it reads as t3code's project rather than as a new kind
+of shelf. Rows under it drop the per-row label; rows NOT under it keep it, where
+it is the only thing saying which project they belong to.
+
+Architect subtrees are gathered by project so a project's run is contiguous — a
+heading over a run another project interrupts is a heading that lies. Projects
+keep the order their first architect arrived in; architects keep their order
+within a project. The key is passed IN rather than read off a field, because
+`projectId` alone is not a project: two environments can carry the same id, and
+the sidebar already scopes every project lookup by `environmentId:projectId`.
+Without a key there is no project level at all and `startsProject` is false —
+a heading the caller cannot title would render as the word "Project" above
+every tree.
+
+**Nothing said which row was an architect.** It was conveyed by one level of
+subtle indent plus test data that happened to be called "Architect beta" and
+"Builder alpha one". Real threads are called `builder/spir-250`, and at that
+point the indent is the entire signal. The role takes the same slot as the
+project label — the slot answering "what is this row, before you read its name",
+and empty on a row under a project heading. Builders get no label: they are the
+rows indented under one, and a caption on every child of a labelled parent is a
+caption nobody reads.
+
+**The orphan group was amber, and amber says something is broken.** An archived
+architect orphaning its builders is a state we ruled LEGAL. It takes Settled's
+treatment now — a non-default state that is not a fault, which is exactly what
+this is — with the emphasis moved to the count, because the count is the part
+worth noticing.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/components/Sidebar.logic.test.ts |  85 +++++++++++++-
+ apps/web/src/components/Sidebar.logic.ts      |  79 +++++++++++--
+ apps/web/src/components/Sidebar.tsx           | 106 +++++++++++++++---
+ 3 files changed, 243 insertions(+), 27 deletions(-)
+
+diff --git a/apps/web/src/components/Sidebar.logic.test.ts b/apps/web/src/components/Sidebar.logic.test.ts
+index b4bd5d443..cb8531674 100644
+--- a/apps/web/src/components/Sidebar.logic.test.ts
++++ b/apps/web/src/components/Sidebar.logic.test.ts
+@@ -1813,7 +1813,7 @@ describe("buildCodevSidebarOrder", () => {
+     const pinnedArchitect = architectThread("arch-pinned");
+     const order = buildCodevSidebarOrder(
+       [builderThread("b-1", "arch-pinned"), builderThread("lost", "arch-gone")],
+-      [pinnedArchitect],
++      { alsoVisible: [pinnedArchitect] },
+     );
+     const reasons = order.entries.map((entry) => (entry.kind === "orphan" ? entry.reason : null));
+     expect(reasons).toEqual(["parent-elsewhere", "parent-missing"]);
+@@ -1855,3 +1855,86 @@ describe("describeCodevOrphanReason", () => {
+     expect(sentences.every((sentence) => sentence.length > 0)).toBe(true);
+   });
+ });
++
++/**
++ * The PROJECT level, which is the first of criterion 1's three.
++ *
++ * A key is passed in rather than read off a field because `projectId` alone is
++ * not a project: two environments can carry the same id, and the sidebar already
++ * scopes every project lookup by `environmentId:projectId`.
++ */
++describe("buildCodevSidebarOrder: the project level", () => {
++  const inProject = (projectId: string, thread: Thread): Thread => ({
++    ...thread,
++    projectId: ProjectId.make(projectId),
++  });
++  const architectIn = (projectId: string, id: string) =>
++    inProject(projectId, makeThread({ id: ThreadId.make(id), title: id, role: "architect" }));
++  const builderIn = (projectId: string, id: string, parent: string) =>
++    inProject(
++      projectId,
++      makeThread({
++        id: ThreadId.make(id),
++        title: id,
++        role: "builder",
++        parentThreadId: ThreadId.make(parent),
++      }),
++    );
++  const projectKeyOf = (thread: Thread) => `${thread.environmentId}:${thread.projectId}`;
++
++  it("marks the first architect of each project and no others", () => {
++    const order = buildCodevSidebarOrder(
++      [
++        architectIn("project-a", "arch-a1"),
++        architectIn("project-b", "arch-b1"),
++        architectIn("project-a", "arch-a2"),
++      ],
++      { projectKeyOf },
++    );
++    expect(
++      order.entries.map((entry) =>
++        entry.kind === "architect" ? [entry.thread.id, entry.startsProject] : null,
++      ),
++    ).toEqual([
++      ["arch-a1", true],
++      // Contiguous: a project's subtrees are gathered so a heading never covers
++      // a run that another project interrupts.
++      ["arch-a2", false],
++      ["arch-b1", true],
++    ]);
++  });
++
++  it("keeps each architect's builders with it across the regrouping", () => {
++    const order = buildCodevSidebarOrder(
++      [
++        architectIn("project-a", "arch-a1"),
++        builderIn("project-a", "a1-one", "arch-a1"),
++        architectIn("project-b", "arch-b1"),
++        builderIn("project-b", "b1-one", "arch-b1"),
++        architectIn("project-a", "arch-a2"),
++        builderIn("project-a", "a2-one", "arch-a2"),
++      ],
++      { projectKeyOf },
++    );
++    expect(order.entries.map((entry) => entry.thread.id)).toEqual([
++      "arch-a1",
++      "a1-one",
++      "arch-a2",
++      "a2-one",
++      "arch-b1",
++      "b1-one",
++    ]);
++  });
++
++  /**
++   * Without a key there is no project level, and `startsProject` is false rather
++   * than true-for-the-first. A heading the caller cannot title is worse than no
++   * heading: it would render as the word "Project" above every tree.
++   */
++  it("claims no project level when the caller did not say how to key one", () => {
++    const order = buildCodevSidebarOrder([architectIn("project-a", "arch-a1")]);
++    const [only] = order.entries;
++    expect(only?.kind === "architect" ? only.startsProject : null).toBe(false);
++    expect(only?.kind === "architect" ? only.projectKey : "unset").toBeNull();
++  });
++});
+diff --git a/apps/web/src/components/Sidebar.logic.ts b/apps/web/src/components/Sidebar.logic.ts
+index db8ef1a56..ef4e26ea2 100644
+--- a/apps/web/src/components/Sidebar.logic.ts
++++ b/apps/web/src/components/Sidebar.logic.ts
+@@ -988,7 +988,25 @@ export function sortScopedProjectsForSidebar<
+  * the ordered list from it, and the two cannot drift.
+  */
+ export type CodevSidebarEntry<T> =
+-  | { readonly kind: "architect"; readonly thread: T; readonly builderCount: number }
++  | {
++      readonly kind: "architect";
++      readonly thread: T;
++      readonly builderCount: number;
++      /**
++       * The project this subtree belongs to, and whether it opens that project.
++       *
++       * Criterion 1 is three levels — project, architect, that architect's
++       * builders — and the project level is a HEADING, not a label repeated on
++       * every row. Eight rows each captioned with the same project name spend
++       * the most prominent line of every card on one string, and push the thing
++       * a human is scanning for into the line below it.
++       *
++       * `null` when the caller did not say how to key projects, which is what
++       * the grouping's own unit tests do.
++       */
++      readonly projectKey: string | null;
++      readonly startsProject: boolean;
++    }
+   | { readonly kind: "builder"; readonly thread: T; readonly architectId: string }
+   | { readonly kind: "unmanaged"; readonly thread: T }
+   | {
+@@ -998,6 +1016,20 @@ export type CodevSidebarEntry<T> =
+       readonly parentThreadId: string | null;
+     };
+ 
++export interface CodevSidebarOrderOptions<T extends CodevHierarchyFields> {
++  /** The rest of the sidebar — see `CodevHierarchyContext`. */
++  readonly alsoVisible?: readonly T[] | undefined;
++  /**
++   * A stable key per project. Supplying it groups architect subtrees by project
++   * and marks the first subtree of each, so the caller can draw the heading.
++   *
++   * Passed as a function rather than read off a field because `projectId` alone
++   * is not a project: two environments can carry the same id, and the sidebar
++   * already scopes everything by `environmentId:projectId`.
++   */
++  readonly projectKeyOf?: ((thread: T) => string) | undefined;
++}
++
+ export interface CodevSidebarOrder<T> {
+   /**
+    * False when nothing in the list carries a Codev role.
+@@ -1021,7 +1053,7 @@ export interface CodevSidebarOrder<T> {
+  */
+ export function buildCodevSidebarOrder<T extends CodevHierarchyFields>(
+   threads: readonly T[],
+-  alsoVisible: readonly T[] = [],
++  options: CodevSidebarOrderOptions<T> = {},
+ ): CodevSidebarOrder<T> {
+   if (!hasCodevHierarchy(threads)) {
+     return {
+@@ -1029,16 +1061,41 @@ export function buildCodevSidebarOrder<T extends CodevHierarchyFields>(
+       entries: threads.map((thread) => ({ kind: "unmanaged", thread }) as const),
+     };
+   }
+-  const hierarchy = buildCodevHierarchy(threads, { alsoVisible });
+-  const entries: CodevSidebarEntry<T>[] = [];
++  const hierarchy = buildCodevHierarchy(threads, { alsoVisible: options.alsoVisible });
++  const projectKeyOf = options.projectKeyOf;
++  // Architects are re-ordered so a project's subtrees are contiguous, because a
++  // heading over a run that another project interrupts is a heading that lies.
++  // Projects keep the order their FIRST architect arrived in, and architects
++  // keep their order within a project — the caller's sort still decides both.
++  const architectsByProject = new Map<string, typeof hierarchy.architects>();
++  const projectOrder: string[] = [];
+   for (const subtree of hierarchy.architects) {
+-    entries.push({
+-      kind: "architect",
+-      thread: subtree.architect,
+-      builderCount: subtree.builders.length,
+-    });
+-    for (const builder of subtree.builders) {
+-      entries.push({ kind: "builder", thread: builder, architectId: subtree.architect.id });
++    const key = projectKeyOf === undefined ? "" : projectKeyOf(subtree.architect);
++    const existing = architectsByProject.get(key);
++    if (existing === undefined) {
++      projectOrder.push(key);
++      architectsByProject.set(key, [subtree]);
++    } else {
++      architectsByProject.set(key, [...existing, subtree]);
++    }
++  }
++
++  const entries: CodevSidebarEntry<T>[] = [];
++  for (const projectKey of projectOrder) {
++    const subtrees = architectsByProject.get(projectKey) ?? [];
++    let first = true;
++    for (const subtree of subtrees) {
++      entries.push({
++        kind: "architect",
++        thread: subtree.architect,
++        builderCount: subtree.builders.length,
++        projectKey: projectKeyOf === undefined ? null : projectKey,
++        startsProject: projectKeyOf !== undefined && first,
++      });
++      first = false;
++      for (const builder of subtree.builders) {
++        entries.push({ kind: "builder", thread: builder, architectId: subtree.architect.id });
++      }
+     }
+   }
+   for (const thread of hierarchy.unmanaged) {
+diff --git a/apps/web/src/components/Sidebar.tsx b/apps/web/src/components/Sidebar.tsx
+index f066f59b8..3c56f1e34 100644
+--- a/apps/web/src/components/Sidebar.tsx
++++ b/apps/web/src/components/Sidebar.tsx
+@@ -729,6 +729,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+   projectCwd: string | null;
+   projectFaviconPath: string | null;
+   projectTitle: string | null;
++  /**
++   * Codev customization (spec 250). The row's place in the hierarchy, in words.
++   *
++   * It takes the same slot as `projectTitle` because it answers the same
++   * question that slot exists to answer — "what is this row, before you read its
++   * name" — and because a row under a project HEADING has no project label to
++   * show there. Without it the tree is one level of indent plus whatever the
++   * threads happen to be called, and real threads are called `builder/spir-250`.
++   */
++  codevRoleLabel?: string | null | undefined;
+   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
+   timestampFormat: TimestampFormat;
+   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
+@@ -1423,14 +1433,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+                 faviconPath={props.projectFaviconPath}
+                 className="size-4 shrink-0"
+               />
+-              {props.projectTitle ? (
++              {props.projectTitle ?? props.codevRoleLabel ? (
+                 <span
+                   className={cn(
+                     "min-w-0 flex-1 truncate text-secondary-label text-xs",
+                     shouldRecede ? "font-normal" : "font-medium",
+                   )}
+                 >
+-                  {props.projectTitle}
++                  {props.projectTitle ?? props.codevRoleLabel}
+                 </span>
+               ) : (
+                 <span className="flex-1" />
+@@ -2253,11 +2263,13 @@ export default function Sidebar() {
+    */
+   const codevActiveOrder = useMemo(
+     () =>
+-      buildCodevSidebarOrder(activeThreads, [
+-        ...pinnedThreads,
+-        ...snoozedThreads,
+-        ...settledThreads,
+-      ]),
++      buildCodevSidebarOrder(activeThreads, {
++        alsoVisible: [...pinnedThreads, ...snoozedThreads, ...settledThreads],
++        // `environmentId:projectId`, the key the sidebar already uses for every
++        // project lookup. `projectId` alone is not a project: two environments
++        // can carry the same id.
++        projectKeyOf: (thread) => `${thread.environmentId}:${thread.projectId}`,
++      }),
+     [activeThreads, pinnedThreads, snoozedThreads, settledThreads],
+   );
+   // The tree's order IS the ordered list. Shift-range-select and jump-hint
+@@ -3695,6 +3707,13 @@ export default function Sidebar() {
+                     thread: EnvironmentThreadShell,
+                     section: "pinned" | "active" | "snoozed" | "settled",
+                     sortable?: SortablePinnedRowBag,
++                    // Codev customization (spec 250). Rows drawn under a project
++                    // HEADING drop their per-row project label — it is the same
++                    // string as the heading two lines above, repeated once per
++                    // row in the most prominent position on the card. Rows NOT
++                    // under a heading keep it; there it is the only thing saying
++                    // which project they belong to.
++                    codev?: { readonly underProjectHeading?: boolean; readonly roleLabel?: string },
+                   ) => {
+                     const threadKey = scopedThreadKey(
+                       scopeThreadRef(thread.environmentId, thread.id),
+@@ -3769,10 +3788,13 @@ export default function Sidebar() {
+                           ) ?? null
+                         }
+                         projectTitle={
+-                          projectDisplayNameByKey.get(
+-                            `${thread.environmentId}:${thread.projectId}`,
+-                          ) ?? null
++                          codev?.underProjectHeading === true
++                            ? null
++                            : (projectDisplayNameByKey.get(
++                                `${thread.environmentId}:${thread.projectId}`,
++                              ) ?? null)
+                         }
++                        codevRoleLabel={codev?.roleLabel ?? null}
+                         providerEntryByInstanceId={
+                           providerEntriesByEnvironment.get(thread.environmentId) ??
+                           EMPTY_PROVIDER_ENTRIES
+@@ -3907,6 +3929,40 @@ export default function Sidebar() {
+                         if (following === undefined || following.kind !== "builder") break;
+                         builders.push(following.thread);
+                       }
++                      // The PROJECT level, which is the first of criterion 1's
++                      // three. It replaces the project name repeated on every
++                      // card below it: one heading, once, in the place a heading
++                      // goes — carrying the project's own favicon so it reads as
++                      // t3code's project rather than as a new kind of shelf.
++                      if (entry.startsProject) {
++                        // `as const` keeps the template-literal type the
++                        // project maps are keyed by; a widened `string` does not
++                        // index them.
++                        const projectKey =
++                          `${entry.thread.environmentId}:${entry.thread.projectId}` as const;
++                        items.push(
++                          <li
++                            key={`codev-project-${projectKey}`}
++                            data-thread-selection-safe
++                            data-testid="sidebar-codev-project-heading"
++                            data-codev-project-key={projectKey}
++                            className="list-none"
++                          >
++                            <div className="mb-1 mt-3 flex w-full items-center gap-2 px-2.5">
++                              <ProjectFavicon
++                                environmentId={entry.thread.environmentId}
++                                cwd={projectCwdByKey.get(projectKey) ?? ""}
++                                faviconPath={projectFaviconPathByKey.get(projectKey) ?? null}
++                                className="size-4 shrink-0"
++                              />
++                              <span className="min-w-0 truncate text-xs font-medium text-sidebar-foreground">
++                                {projectDisplayNameByKey.get(projectKey) ?? "Project"}
++                              </span>
++                              <span className="h-px flex-1 bg-sidebar-border/60" />
++                            </div>
++                          </li>,
++                        );
++                      }
+                       items.push(
+                         <li
+                           key={`codev-architect-${codevRowKey(entry.thread)}`}
+@@ -3916,7 +3972,14 @@ export default function Sidebar() {
+                           className="list-none"
+                         >
+                           <ul role="list" className="flex flex-col gap-px">
+-                            {renderThreadRow(entry.thread, "active")}
++                            {renderThreadRow(entry.thread, "active", undefined, {
++                              underProjectHeading: entry.projectKey !== null,
++                              // The role, said out loud. One level of indent plus
++                              // a thread called `builder/spir-250` is not a tree
++                              // anybody can read; the test data that happens to
++                              // be named "Architect beta" was doing this job.
++                              roleLabel: "Architect",
++                            })}
+                             {builders.length > 0 ? (
+                               <li className="list-none">
+                                 {/* The rail is the nesting. Builder rows are the
+@@ -3931,8 +3994,14 @@ export default function Sidebar() {
+                                   data-testid="sidebar-codev-builders"
+                                   className="ml-2.5 flex flex-col gap-px border-l border-sidebar-border/60 pl-1.5"
+                                 >
++                                  {/* No role label on builders: they are the
++                                      rows indented under one, and a caption on
++                                      every child of a labelled parent is a
++                                      caption nobody reads. */}
+                                   {builders.map((builder) =>
+-                                    renderThreadRow(builder, "active"),
++                                    renderThreadRow(builder, "active", undefined, {
++                                      underProjectHeading: entry.projectKey !== null,
++                                    }),
+                                   )}
+                                 </ul>
+                               </li>
+@@ -3968,10 +4037,17 @@ export default function Sidebar() {
+                           className="list-none"
+                         >
+                           <div className="mb-1 mt-3 flex w-full items-center gap-2 px-2.5">
+-                            <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
+-                              Unattributed builders ({orphans.length})
++                            {/* Settled's treatment, not a warning's. An
++                                archived architect orphaning its builders is a
++                                LEGAL state we ruled on deliberately, and amber
++                                says something is broken. The count carries the
++                                emphasis, because the count is the part worth
++                                noticing. */}
++                            <span className="text-xs font-medium text-muted-foreground/50">
++                              Unattributed builders{" "}
++                              <span className="text-secondary-label">({orphans.length})</span>
+                             </span>
+-                            <span className="h-px flex-1 bg-amber-500/20 dark:bg-amber-400/15" />
++                            <span className="h-px flex-1 bg-sidebar-border/60" />
+                           </div>
+                         </li>,
+                       );
