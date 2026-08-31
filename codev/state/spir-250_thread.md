@@ -1736,3 +1736,46 @@ else through. **`.codev/config.json` was deliberately not edited: it is a symlin
 changed the forge for every builder and the architect to work around one oversized PR.** The
 equivalence was checked rather than assumed — the shim's diff reports 130 changed files, which is
 what `gh pr view 266 --json changedFiles` reports.
+
+---
+
+## The PR review round, and the rebuttal that did not survive it
+
+**Claude APPROVE, opencode COMMENT.** No blocking findings. Three items accepted.
+
+The one that matters: **the phase 11 rebuttal about the evidence collector test was too broad, and
+being too broad hid a real race.** The argument was "the test's value is that it drives the
+collector against its REAL committed inputs, so pointing it at fixture copies would test a copy."
+True — of **one** test in a file of six, the one asserting the committed numbers still match the
+runs. The other five work by *damaging* an input, and a damaged input has no reason to be the
+committed one. I had written one argument and applied it to the whole file.
+
+What that concealed: `spec-250-vendoring-identities.test.ts` reads
+`codev/research/250-criterion-8b-evidence.json` **in its module body**. Vitest runs files in
+parallel workers. So a worker collecting that file while this one held the mutation fails on
+corrupted data — in a file that has nothing to do with the collector, with nothing in its own output
+to explain why. I had not gone looking for other readers of the paths I was mutating.
+
+The fix reuses the phase 11 technique rather than inventing one: the collector resolves its root
+from `import.meta.url`, so a **copy of the script under a `mkdtempSync` root reads that tree's
+inputs** — which is exactly how the drill regenerates the contract without moving the pin. No flag
+added to the tool to suit a test, nothing tracked written, and a killed run now leaves a temp
+directory instead of a mutated repository.
+
+**Falsifiability was not optional here, and I nearly assumed it.** Three of the five refusal tests
+assert exit 3, and `MISSING_RUN` — a scratch root missing one input — is *also* exit 3. A fixture
+that was subtly incomplete would have passed them for exactly the reason this project got wrong five
+times. Removing all five mutations: **5 failed, 1 passed.** Every refusal test fails without its
+damage and the happy path still passes, so the collector genuinely runs in the scratch root.
+
+### #268, which is sharper than the finding that prompted it
+
+Claude noticed `status.yaml` `history` records 9 rounds against ~20 on disk and called it a
+recording gap. Checking every recorded round against its verdicts, it is not a gap — it is a rule:
+**a round is recorded if and only if at least one lane did not approve.** No exception in either
+direction across 20 rounds. Phases 7, 8 and 9 are absent entirely, and they are precisely the three
+where both lanes approved on round 1.
+
+So a phase reviewed cleanly reads identically to a phase never reviewed, and `history` understates
+review effort *selectively*, biased toward the phases that went badly. That is this project's own
+recurring defect living in the protocol's state file. Filed rather than hand-edited.

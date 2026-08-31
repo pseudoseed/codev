@@ -3,7 +3,8 @@
 ## Summary
 
 t3code became Codev's front end through a private fork (`pseudoseed/t3code@codev`), across **11
-plan phases** landed as **106 `[Spec 250]` commits** on one branch — 130 files, ~40.6k insertions.
+plan phases** landed as **106 `[Spec 250]` commits** on one branch — 167 commits in total, the
+remainder being porch bookkeeping — across 130 files and ~40.6k insertions.
 The fork gained a thread hierarchy (`parentThreadId` + `role`), a porch gate block with a
 server-allocated revision, nested Workspace > Architect > Builders rendering in t3code's own
 sidebar, a builder tile grid, and gate approval driven from t3code over a same-origin proxy.
@@ -83,13 +84,21 @@ Lanes: **Claude** and **opencode** on every implementation phase, plus **codex**
 round. The **Gemini/agy lane produced no output for this project** and is absent from every
 round rather than recorded as an approval. No `CONSULT_ERROR` was raised in any round.
 
-Across **21 rounds** — 20 on implementation phases, 1 on the plan. Full per-round responses are
+Across **22 rounds** — 20 on implementation phases, 1 on the plan, 1 on the PR. Full per-round responses are
 committed under
-`codev/projects/250-t3code-is-the-front-end-privat/` as `*-rebuttals.md`. The **43 raw lane outputs
+`codev/projects/250-t3code-is-the-front-end-privat/` as `*-rebuttals.md`. The **45 raw lane outputs
 are `.txt` and gitignored** (`.gitignore:69`, `codev/projects/*/*.txt`) — they sit in the builder
 worktree and do not travel with the PR, so the rebuttals are the durable record and the verdicts
 below were transcribed from the raw files while they were still on disk. What follows is the
 disposition of each round.
+
+**Almost nothing was rebutted, and one rebuttal did not survive.** Across the 22 rounds, four
+items were answered rather than changed — one brittleness note in phase 4, one deliberate deferral
+in phase 9, and the drill's regeneration in phase 11 (deferred twice with reasons, then closed
+after the last round). The fourth, the evidence collector's file mutation, was **rebutted in phase
+11 and accepted in the review round**: the argument was sound for one of the six tests and had been
+applied to all six. Every other finding was accepted and fixed; six rebuttals say in as many words
+that no finding in their round was a false positive.
 
 ### Plan Phase (Round 1)
 
@@ -125,6 +134,7 @@ corrected in the plan.
 - **Claude**: `FORK.md` overstates "nothing re-derives it"; a test heading says "the seventh readers" over six. → **Addressed**, both.
 - **Claude (round 2)**: `--since` bypassed the ref-resolution guard; no direct test for the `NO_UPSTREAM_MOVEMENT` named zero. → **Addressed**, both.
 - Items each lane flagged as *unverifiable from its session* are listed in the rebuttal rather than counted as findings.
+- **N/A**: both lanes brushed against `pin.commit` moving to the fork head and neither asked for a change. The plan puts it at phase 5, so phases 2-4 run with the fork checkout ahead of `pin.commit` and bare `verify` reports `FORK_CHECKOUT_MISMATCH` in that window. Plan sequencing, not a phase 1 defect; flagged to the architect rather than resolved in-phase.
 
 ### Phase 2 (Round 1 — Claude REQUEST_CHANGES, opencode COMMENT; Round 2 — both APPROVE)
 
@@ -154,7 +164,8 @@ The longest round chain in the project, because one defect kept reappearing in d
 
 ### Phase 5 (Round 1 — Claude REQUEST_CHANGES, opencode COMMENT; Round 2 — both APPROVE)
 
-- **Blocking**: `codev.gateWrite` would have been vendored as **nothing at all** — the generator iterates `pin.methods`, and the entry's source was wrong. → **Addressed**; the test that let it through was replaced with one that asserts the generated output, not the input.
+- **Blocking, Claude**: `packages/types/src/t3/generated/schema.ts:2` named `51b55d4899e4` as a `pingdotgg/t3code` commit. That commit exists only in `pseudoseed/t3code` — the shipping module claimed upstream provenance for a fork commit, while `ATTRIBUTION.md` and `types.d.ts` had already been corrected. → **Addressed, and fixed one level up**: the three headers were three separate emissions of one claim and the third was a hand-written string elsewhere in `generate.mjs`, so correcting it in place would have left the shape that produced the miss. There is now a single `PROVENANCE` constant every emitter reads.
+- Also closed in this phase, from the plan round: `codev.gateWrite` would have been vendored as **nothing at all**, because `generate.mjs` iterates `pin.methods` rather than the contract. The test that let it through asserted the input; it was replaced with one that asserts the generated output.
 - **Round 2, one non-blocking note**. → **Addressed**.
 
 ### Phase 6 (Round 1 — Claude APPROVE, opencode REQUEST_CHANGES; Round 2 — both APPROVE)
@@ -182,23 +193,45 @@ in not noticing); the width was measured two ways; orphans were dropped from the
 is 256px, not 232; two things the DOM was asserting that were not true; `--codev-pane-body` set and
 consumed nowhere; the route computed the same grouping twice.
 
+- One item **Rebutted**: "`BuilderPane` has no props for phase and messages, so phase 10 has to change the component." True, and intended — the architect ruled that pane content comes from `codev-agent` over the same-origin proxy in phase 10, with the fork's contract left unextended. Adding empty props in phase 9 would have been guessing the shape of data the phase cannot fetch.
+
 ### Phase 10 (Round 1 — Claude APPROVE, opencode REQUEST_CHANGES; Round 2 — Claude COMMENT, opencode APPROVE)
 
 - **opencode, blocking**: the vitest e2e reported a **PASS on a run that never happened**. → **Addressed**, and it is the single most valuable finding of the project: a green suite that never executed is indistinguishable from a green suite that did, unless something asserts the run occurred.
 - **Claude, non-blocking**: `UPSTREAM_TIMEOUT_MS` claimed more than the mechanism gives — an idle timeout does not bound a trickling upstream. → **Addressed** by correcting the claim in `agentProxy.ts` rather than the mechanism; the limitation is stated, not hidden.
 - **Both lanes**: `data-codev-approval-state` was coarser than its own words. → **Addressed**.
-- **Round 2, Claude**: the same-origin assertion was a **prefix match**, so `https://evil-example.com` would satisfy `https://example.com`. → **Addressed**.
+- **Round 2, Claude**: the same-origin assertion was a **prefix match** (`url.startsWith(origin)`), and the agent host's ephemeral port can prefix-match the fixed web-app origin — `http://localhost:5733` is a prefix of `:57330`-`:57339`, ten ports inside macOS's ephemeral range, so about **0.06% of runs** would have counted a genuinely cross-origin request as same-origin and passed the phase's central security assertion anyway. → **Addressed**. A rare false pass is worse than a common one: 0.06% is exactly the rate at which nobody ever sees it fail.
 - **Round 2, Claude, non-blocking**: `blob:` alongside `data:`. → **Addressed**.
 
 ### Phase 11 (Round 1 — Claude REQUEST_CHANGES, opencode COMMENT; Round 2 — Claude APPROVE, opencode COMMENT)
 
-- **Claude, binding**: the drill's `ok` outcome **claimed** the contract regenerated and `shape-check` held, while the clean branch ran neither and both failure states were unreachable. → **Addressed** by making the drill actually regenerate in a second throwaway, not by narrowing the claim. Both new checks were verified capable of failing.
+- **Claude, binding**: the drill's `ok` outcome **claimed** the contract regenerated and `shape-check` held, while the clean branch ran neither and both failure states were unreachable. → **Addressed**, but not in the round that raised it. **Both** rounds' rebuttals recorded it as *not changed*, with a stated reason — `generate.mjs` refuses any checkout whose `HEAD` is not `pin.commit`, so regenerating appeared to require moving the pin, which the phase-11 amendment forbids, and loosening the guard would have traded a real invariant for two outcome labels. It closed **after** iteration 2 (commit `4178aa4b5`), once the guard could be **satisfied rather than bypassed**: `git merge-tree` gives the merged tree an identity inside a throwaway clone, and a scratch copy of the codegen tool resolves a scratch `pin.json` naming it. The real `pin.json` is neither read nor written. The claim was fixed by making it true, not by narrowing it, and both new checks were verified capable of failing.
 - **Claude**: the criterion 9 `shape-check` row described the current pin, not the rebase result. → **Addressed**.
 - **Claude**: churn `104 / 5` was hand-typed. → **Addressed** — the whole measurement block is now generated by `collect-spec-250-evidence.mjs`, with `--check` in the suite.
 - **Claude**: the regression run excluded `**/e2e/**`, so criteria 1, 2, 3, 5, 5b rested on phase 7-10 runs rather than a run at the final fork head. → **Addressed**: 32 Playwright tests re-run at `3786b840e1a4`.
 - **Round 2, opencode**: my own tests would have failed a *correct* zero-movement drill. → **Addressed**.
 - **Round 2**: a comment outlived the test it described by one commit; the churn classification was hand-typed prose; `contractRegeneration` was not in "every result". → **Addressed**, all three.
 - **Round 2, Claude**: `spec-250-evidence-collector.test.ts` mutates two committed files and restores them in a `finally`. → **Rebutted**: the mutation is the only way to prove `--check` can fail, the restore is unconditional, and the alternative (a fixture copy) tests a copy rather than the committed file the check actually reads. Reasoning in `250-phase_11-iter2-rebuttals.md`.
+
+### Review Phase (Round 1 — Claude APPROVE, opencode COMMENT)
+
+The PR review. Neither lane raised a blocking finding; three items were accepted and one round of
+fixes landed. Responses in `250-review-iter1-rebuttals.md`.
+
+**Before either lane could run, both refused**, and correctly: `gh pr diff 266` returns HTTP 406
+because GitHub caps the diff media type at 20,000 lines and this PR is 43,714. Both printed "a
+reviewer cannot tell an empty diff from a failed fetch" — and both **exited 0** while printing it.
+Filed as **#267**. Worked around with a `gh` shim serving `git diff origin/main...builder/spir-250`,
+verified to produce the same 130 changed files the PR reports.
+
+#### Claude
+- **Concern**: `spec-250-evidence-collector.test.ts` mutates committed tracked files and restores them in a `finally`; a killed run leaves a dirty tree plus a stray backup, and parallel workers on the same paths would race. → **Addressed**, reversing the phase 11 round 2 rebuttal in part. That rebuttal's point held for **one** of the six tests — the one asserting the committed numbers still match the runs — and not for the five that work by *damaging* an input. The race is real and I had not checked for it: `spec-250-vendoring-identities.test.ts` reads `250-criterion-8b-evidence.json` in its **module body**, so a worker collecting it during the mutation fails on corrupted data with nothing in its output to explain why. The five damage cases now run a **copy of the collector under a `mkdtempSync` root**, the same `import.meta.url` technique the rebase drill uses — no flag added to the tool, nothing tracked written. Verified capable of failing, which this one needed: three of them assert exit 3 and `MISSING_RUN` is also exit 3, so an incomplete fixture would have passed them for the wrong reason. Removing all five mutations gives **5 failed, 1 passed**.
+- **Concern**: the PR body says 166 commits, the review says 105 — reconcile or label what each counts. → **Addressed**. Both were also stale, taken against a local `main` behind `origin/main`. The branch is **167 commits, 106 of them `[Spec 250]`**, and both places now say which they count.
+- **Concern**: `status.yaml` `history` records 9 review rounds while lane files exist for roughly 20. → **Addressed** by filing **#268**, not by editing the file. The pattern is exact rather than merely a gap: **a round is recorded if and only if at least one lane did not approve.** Phases 7, 8 and 9 — the three where both lanes approved on round 1 — are absent entirely, and every terminal approving round is missing. So a phase reviewed cleanly is indistinguishable from one never reviewed, and `history` understates review effort selectively, biased toward the phases that went badly.
+- **Concern**: the product change lives in the private fork and is not reviewable from this diff; branch freshness and a live test run were unverified (no shell). → **N/A / checked**: the fork boundary was ruled at plan time and is stated in the PR body; the branch and counts were checked here with `git log` and `gh pr view`.
+
+#### opencode
+- **Concern**: criterion 6 is UNMET; criterion 9 is met only under the plan's amended reading; #264 is filed and unfixed on the approval path. → **N/A** — all three are already stated in the review, the evidence document and the PR body in those words. Recorded as independent confirmation, not as findings.
 
 ## Lessons Learned
 
@@ -288,6 +321,7 @@ plan-level amendment recorded only in a review is invisible to anyone reading th
 - **Demotion, to respect the 10-lesson cap** (during the project) — "when stuck, get an outside model's perspective and build a minimal repro" moved to `lessons-learned.md`, with **the trigger itself kept hot**, folded into the consultation lesson. A threshold only works if it is always-on: a stuck agent does not go and read the cold file, which is the whole reason it was hot.
 - **Routed: cold** — `lessons-learned.md`, Critical: naming a hazard in a spec does not prevent it; only a test that can fail does — with the `classify-churn` account, and the general rule that a test written while two values are equal cannot tell you which one the code reads.
 - **Routed: cold** — `lessons-learned.md`, Testing: a test whose work grows with the repository looks flaky before it looks under-budgeted, and the two have opposite remedies; and harness/screenshot runs poisoning the suite that follows them (issue #263).
+- **Routed: cold** — `lessons-learned.md`, Testing, from the review round: a rebuttal is scoped to the tests its argument actually covers. The phase 11 rebuttal was sound for one test in a file of six and had been applied to all six, and applying it that widely also concealed a cross-file race nobody had looked for.
 
 ## Flaky Tests
 
@@ -336,6 +370,7 @@ gratuitous divergence on a fork that has to rebase.
 - **Issue #263** — a harness run poisons the next suite run. Filed, not fixed here.
 - **Issue #264** — a spurious "gate approved, run `porch next`" message reaches a builder from its own Playwright fixture. Filed, and the architect ruled it out of scope for this spec. It fired twice in this worktree; both times `porch status` showed no pending gate. **Any gate-approval message should be checked against `porch status` before acting on it.**
 - **Issue #265** — root `npm test` filters to `@cluesmith/codev`, so nothing local runs the frozen `apps/client` suite. That is how it stayed red from phase 5 to phase 11 without anyone noticing.
+- **Issue #268** — porch records only *failing* consultation rounds in `status.yaml` `history`: 9 recorded against 20 that ran, with phases 7, 8 and 9 absent entirely because both lanes approved them on the first round. A phase reviewed cleanly reads exactly like a phase never reviewed.
 - **Issue #267** — `consult --type pr` cannot review a PR over GitHub's 20,000-line diff cap, and exits 0 when it refuses. Hit on this PR: `gh pr diff 266` returns HTTP 406 at 43,714 diff lines, both lanes correctly refused to review a 0-byte diff, and both returned exit 0 — so a caller checking the exit status sees a successful consultation with no output. Filed with a `pr-diff` fallback to `git diff <base>...<head>`, which has no cap and was verified to produce the same 130 changed files.
 - **Issue #251** — folding the two t3code subscriptions per watched thread. Pre-existing, unrelated to this spec, noted because phase 6 touched the neighbourhood.
 - **The architect has not ruled on the pane internals.** 12 screenshots at `docs/codev/spec-250/phase-10/` in the fork. The tests and measurements pass; what the panes *look like* is a human call and has not been made.
