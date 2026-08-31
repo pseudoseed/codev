@@ -181,10 +181,10 @@ gates:
         UNMET: criterion 6 (iPad over the tailnet) — runbook written, ruled to ship unmet
         UNRULED: the phase-10 pane screenshots, 12 images in the fork
 iteration: 1
-build_complete: false
+build_complete: true
 history: []
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-31T13:32:49.569Z'
+updated_at: '2026-08-31T13:33:45.119Z'
 context_refreshes:
   - boundary: enter:implement
     at: '2026-08-30T20:09:29.526Z'
