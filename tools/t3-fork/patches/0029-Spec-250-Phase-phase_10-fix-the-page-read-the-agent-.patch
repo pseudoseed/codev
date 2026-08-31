@@ -1,0 +1,121 @@
+From 79db4c7b8f07c8a27d5b0d183ad016c09ddd92cf Mon Sep 17 00:00:00 2001
+From: pseudo <aws@pseudoseed.com>
+Date: Mon, 31 Aug 2026 03:58:30 -0600
+Subject: [PATCH 29/31] [Spec 250][Phase: phase_10] fix: the page read the
+ agent store once and then froze
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The hand-rolled subscription — a useState tick pushed from a listener set —
+rendered the first snapshot and never followed the store again. Pairing
+succeeded, the credential reached browser storage, the poll ran, and the
+panel still said this browser holds no credential.
+
+useSyncExternalStore is the primitive for this shape, and the snapshot is
+replaced rather than mutated so its identity is the change signal.
+---
+ apps/web/src/codev/useCodevAgent.ts | 59 ++++++++++++++++++++---------
+ 1 file changed, 42 insertions(+), 17 deletions(-)
+
+diff --git a/apps/web/src/codev/useCodevAgent.ts b/apps/web/src/codev/useCodevAgent.ts
+index 0d028f4a8..7eca56e5a 100644
+--- a/apps/web/src/codev/useCodevAgent.ts
++++ b/apps/web/src/codev/useCodevAgent.ts
+@@ -13,7 +13,7 @@
+  * customization that is meant to stay narrow.
+  */
+ 
+-import { useCallback, useEffect, useState } from "react";
++import { useCallback, useSyncExternalStore } from "react";
+ 
+ import {
+   AGENT_STATE_POLL_MS,
+@@ -61,10 +61,35 @@ const listeners = new Set<() => void>();
+ let polling: ReturnType<typeof setInterval> | null = null;
+ let inFlight = false;
+ 
++/**
++ * The snapshot `useSyncExternalStore` compares by reference.
++ *
++ * Replaced on every announcement and never mutated in place — that identity IS
++ * the change signal, so a store that mutated `store` and kept the same object
++ * would render once and then sit frozen while the data underneath it moved.
++ */
++let snapshot: CodevAgentAccess["snapshot"] = readSnapshot();
++
++function readSnapshot(): { readonly pairingRead: PairingRead; readonly state: CodevAgentState } {
++  return { pairingRead: store.pairingRead, state: store.state };
++}
++
+ function announce(): void {
++  snapshot = readSnapshot();
+   for (const listener of listeners) listener();
+ }
+ 
++function subscribe(listener: () => void): () => void {
++  listeners.add(listener);
++  ensurePolling();
++  return () => {
++    listeners.delete(listener);
++    // The last consumer leaving stops the poll. A background interval on a page
++    // nobody is reading is a request every five seconds forever.
++    if (listeners.size === 0) stopPolling();
++  };
++}
++
+ async function refreshOnce(): Promise<void> {
+   if (inFlight) return;
+   const pairing = store.pairingRead.kind === "paired" ? store.pairingRead.pairing : null;
+@@ -98,25 +123,24 @@ export interface CodevAgentAccess {
+   readonly pairing: CodevPairing | null;
+   readonly pairingRead: PairingRead;
+   readonly state: CodevAgentState;
++  readonly snapshot: { readonly pairingRead: PairingRead; readonly state: CodevAgentState };
+   readonly refresh: () => void;
+   readonly pair: (pairing: CodevPairing) => { readonly ok: true } | { readonly ok: false; readonly message: string };
+   readonly unpair: () => void;
+ }
+ 
++/**
++ * `useSyncExternalStore`, not a hand-rolled subscription.
++ *
++ * The first version kept a `useState` tick and pushed to it from a listener set,
++ * and the page rendered once and then never again: the store moved and nothing
++ * on screen followed it. This is the primitive React provides for exactly this
++ * shape — an external, mutable store several components read — and it is the one
++ * that gets subscribe-before-first-read and tearing right rather than very
++ * nearly right.
++ */
+ export function useCodevAgent(): CodevAgentAccess {
+-  const [, setTick] = useState(0);
+-
+-  useEffect(() => {
+-    const listener = (): void => setTick((value) => value + 1);
+-    listeners.add(listener);
+-    ensurePolling();
+-    return () => {
+-      listeners.delete(listener);
+-      // The last consumer leaving stops the poll. A background interval on a page
+-      // nobody is reading is a request every five seconds forever.
+-      if (listeners.size === 0) stopPolling();
+-    };
+-  }, []);
++  const current = useSyncExternalStore(subscribe, () => snapshot, () => snapshot);
+ 
+   const pair = useCallback((pairing: CodevPairing) => {
+     const written = writePairing(pairing);
+@@ -135,9 +159,10 @@ export function useCodevAgent(): CodevAgentAccess {
+   }, []);
+ 
+   return {
+-    pairing: store.pairingRead.kind === "paired" ? store.pairingRead.pairing : null,
+-    pairingRead: store.pairingRead,
+-    state: store.state,
++    pairing: current.pairingRead.kind === "paired" ? current.pairingRead.pairing : null,
++    pairingRead: current.pairingRead,
++    state: current.state,
++    snapshot: current,
+     refresh: () => void refreshOnce(),
+     pair,
+     unpair,

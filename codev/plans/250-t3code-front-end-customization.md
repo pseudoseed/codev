@@ -1119,6 +1119,20 @@ This repository:
       (`pairing/redeem`, spending a `machine-credential` token), then `openHumanSession`
       (`approval.ts:152`) — a distinct single-use token exchange presenting through
       `x-codev-human-session` — then capability issue and nonce mint, then the gate approval.
+- [ ] **Pane content lands here too, at the architect's direction, and the fork's contract is
+      NOT extended for it.** Phase 9 shipped panes reading "Phase not read here yet — published
+      by codev-agent", which was the true sentence at the time. `codev-agent` has published the
+      porch phase and the last three messages workspace-scoped since phase 6 —
+      `GET /api/agent/v1/workspaces/<b64>/state`, ONE request for the whole grid — and this
+      phase's proxy is the way to reach it. So the panes read it here rather than in a later
+      phase, and the plan records that because the file list below was written before the ruling.
+
+      Three files beyond the list above: `apps/web/src/codev/agentState.ts` (the wire shape,
+      hand-mirrored and refused rather than half-read), `useCodevAgent.ts` (one poll for the whole
+      page), and `GateApproval.tsx` (kept out of `GatePanel.tsx` so the read-only panel stays a
+      pure function of the thread and its tests acquire no network). The project id the approval
+      needs comes from that same snapshot, which is the other reason the two arrived together: a
+      project id on the gate block would be a second copy of a fact `codev-agent` already owns.
 - [ ] Tests for this phase.
 
 #### Acceptance Criteria

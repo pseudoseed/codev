@@ -1,7 +1,7 @@
 From 36038cdcb28382ad09d4612c5d86bab337c9ebfe Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Mon, 31 Aug 2026 02:05:17 -0600
-Subject: [PATCH 22/27] [Spec 250][Phase: phase_9] feat: four to six builders
+Subject: [PATCH 22/31] [Spec 250][Phase: phase_9] feat: four to six builders
  watchable at once, inside t3code's chrome
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

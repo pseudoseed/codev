@@ -1,0 +1,4415 @@
+From 0b90c36682a4cbc569938b94e52845a9a7d00aee Mon Sep 17 00:00:00 2001
+From: pseudo <aws@pseudoseed.com>
+Date: Mon, 31 Aug 2026 03:41:21 -0600
+Subject: [PATCH 28/31] [Spec 250][Phase: phase_10] feat: approve a gate from
+ t3code, over a same-origin proxy
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The gate is approved from t3code's web app over codev-agent's existing
+capability path, and the panes finally read the phase and messages
+codev-agent has been publishing since phase 6.
+
+The proxy's upstream is SERVER-configured (T3CODE_CODEV_AGENT_ORIGINS) and
+the browser selects among the entries by id. A proxy that forwards to an
+origin the browser names is an SSRF primitive, and a route-path allowlist
+does not constrain the host.
+
+t3code's own session gates USE of the proxy and is never forwarded:
+`authorization` and `cookie` are absent from the forward set, which is an
+allowlist rather than a denylist because this hop sees credentials. The
+Connection header's own named tokens are subtracted from that allowlist
+too, since that header names headers that are themselves hop-by-hop.
+
+Unreachable and silent keep separate signals, and a redirect from the
+configured origin is refused rather than passed on — handed to the page,
+the browser would follow it cross-origin.
+
+The approval record comes from the server. Four outcomes survive the port:
+approved, refused, unconfirmed and sessionEnded.
+---
+ apps/server/src/codev/agentProxy.test.ts     | 413 +++++++++++
+ apps/server/src/codev/agentProxy.ts          | 679 +++++++++++++++++++
+ apps/server/src/http.ts                      |   8 +-
+ apps/server/src/server.ts                    |   9 +
+ apps/web/src/codev/BuilderGrid.tsx           |  24 +-
+ apps/web/src/codev/BuilderPane.tsx           | 154 ++++-
+ apps/web/src/codev/GateApproval.tsx          | 269 ++++++++
+ apps/web/src/codev/GatePanel.test.tsx        |   1 +
+ apps/web/src/codev/GatePanel.tsx             |  22 +-
+ apps/web/src/codev/PairingPanel.tsx          | 216 ++++++
+ apps/web/src/codev/agentState.test.ts        | 244 +++++++
+ apps/web/src/codev/agentState.ts             | 271 ++++++++
+ apps/web/src/codev/approval.test.ts          | 451 ++++++++++++
+ apps/web/src/codev/approval.ts               | 631 +++++++++++++++++
+ apps/web/src/codev/pairing.test.ts           | 225 ++++++
+ apps/web/src/codev/pairing.ts                | 285 ++++++++
+ apps/web/src/codev/useCodevAgent.ts          | 145 ++++
+ apps/web/src/routes/_chat.codev-builders.tsx |  22 +-
+ packages/shared/package.json                 |   4 +
+ packages/shared/src/codevAgentProxy.ts       |  19 +
+ 20 files changed, 4054 insertions(+), 38 deletions(-)
+ create mode 100644 apps/server/src/codev/agentProxy.test.ts
+ create mode 100644 apps/server/src/codev/agentProxy.ts
+ create mode 100644 apps/web/src/codev/GateApproval.tsx
+ create mode 100644 apps/web/src/codev/PairingPanel.tsx
+ create mode 100644 apps/web/src/codev/agentState.test.ts
+ create mode 100644 apps/web/src/codev/agentState.ts
+ create mode 100644 apps/web/src/codev/approval.test.ts
+ create mode 100644 apps/web/src/codev/approval.ts
+ create mode 100644 apps/web/src/codev/pairing.test.ts
+ create mode 100644 apps/web/src/codev/pairing.ts
+ create mode 100644 apps/web/src/codev/useCodevAgent.ts
+ create mode 100644 packages/shared/src/codevAgentProxy.ts
+
+diff --git a/apps/server/src/codev/agentProxy.test.ts b/apps/server/src/codev/agentProxy.test.ts
+new file mode 100644
+index 000000000..3d97e5c91
+--- /dev/null
++++ b/apps/server/src/codev/agentProxy.test.ts
+@@ -0,0 +1,413 @@
++/**
++ * Codev customization (spec 250), phase 10 — the same-origin proxy.
++ *
++ * The assertions worth naming, because they are the ones a plausible-looking
++ * port fails:
++ *
++ *  - a request whose `Connection` header NAMES a forwarded header. A port that
++ *    strips only the fixed hop-by-hop list forwards it, and the header it
++ *    forwards is a machine credential.
++ *  - `authorization` and `cookie` do not travel. t3code's own session is not
++ *    approval authority, and handing it to another server is the failure the
++ *    allowlist exists to make impossible rather than merely unlikely.
++ *  - unreachable and silent keep separate signals, and both are driven against
++ *    real sockets rather than asserted from a mock — a closed port and a server
++ *    that accepts and never answers.
++ *  - a redirect from the configured origin is refused, not passed on. Passed on,
++ *    the browser would follow it cross-origin.
++ *  - unconfigured, all-rejected, and configured-with-rejections are three
++ *    answers with three signals.
++ */
++
++// @effect-diagnostics nodeBuiltinImport:off
++import * as NodeHttp from "node:http";
++import * as NodeNet from "node:net";
++import { afterEach, describe, expect, it } from "vite-plus/test";
++
++import {
++  CODEV_AGENT_ORIGINS_ENV,
++  CODEV_AGENT_PROXY_PREFIX,
++  forwardableHeaders,
++  isAbsoluteRequestPath,
++  matchProxiedAgentRoute,
++  originProblem,
++  proxyToAgent,
++  readCodevAgentTargets,
++  splitProxyPath,
++} from "./agentProxy.ts";
++
++const servers: NodeHttp.Server[] = [];
++const sockets: NodeNet.Server[] = [];
++
++afterEach(() => {
++  for (const server of servers.splice(0)) server.close();
++  for (const socket of sockets.splice(0)) socket.close();
++});
++
++function listen(server: NodeHttp.Server): Promise<string> {
++  servers.push(server);
++  return new Promise((resolve) => {
++    server.listen(0, "127.0.0.1", () => {
++      const address = server.address();
++      resolve(`http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`);
++    });
++  });
++}
++
++describe("codev agent targets (spec 250, phase 10)", () => {
++  it("says nothing is configured, and names the variable that would configure it", () => {
++    const read = readCodevAgentTargets({});
++    expect(read.ok).toBe(false);
++    if (read.ok) return;
++    expect(read.signal).toBe("CODEV_AGENTS_UNCONFIGURED");
++    expect(read.message).toContain(CODEV_AGENT_ORIGINS_ENV);
++  });
++
++  it("reads id=origin entries", () => {
++    const read = readCodevAgentTargets({
++      [CODEV_AGENT_ORIGINS_ENV]: "local=http://127.0.0.1:4100, mesh=https://box.example.ts.net",
++    });
++    expect(read.ok).toBe(true);
++    if (!read.ok) return;
++    expect(read.targets).toEqual([
++      { id: "local", origin: "http://127.0.0.1:4100" },
++      { id: "mesh", origin: "https://box.example.ts.net" },
++    ]);
++    expect(read.rejected).toEqual([]);
++  });
++
++  /**
++   * The distinction the whole union exists for. An operator who configured
++   * nothing and one whose every entry was rejected both end up with no targets,
++   * and they need opposite next actions.
++   */
++  it("distinguishes 'configured nothing' from 'everything configured was rejected'", () => {
++    const read = readCodevAgentTargets({ [CODEV_AGENT_ORIGINS_ENV]: "local=ftp://host" });
++    expect(read.ok).toBe(false);
++    if (read.ok) return;
++    expect(read.signal).toBe("CODEV_AGENTS_ALL_REJECTED");
++    expect(read.rejected).toHaveLength(1);
++    expect(read.rejected[0]?.problem).toContain("ftp:");
++  });
++
++  it("reports a rejected entry alongside the ones it accepted, rather than dropping it", () => {
++    const read = readCodevAgentTargets({
++      [CODEV_AGENT_ORIGINS_ENV]: "local=http://127.0.0.1:4100,broken=notaurl",
++    });
++    expect(read.ok).toBe(true);
++    if (!read.ok) return;
++    expect(read.targets.map((target) => target.id)).toEqual(["local"]);
++    expect(read.rejected).toEqual([{ entry: "broken=notaurl", problem: "origin is not a URL" }]);
++  });
++
++  it("refuses a repeated id rather than silently keeping one of them", () => {
++    const read = readCodevAgentTargets({
++      [CODEV_AGENT_ORIGINS_ENV]: "local=http://127.0.0.1:4100,local=http://127.0.0.1:4200",
++    });
++    expect(read.ok).toBe(true);
++    if (!read.ok) return;
++    expect(read.targets).toHaveLength(1);
++    expect(read.rejected[0]?.problem).toContain('repeats the id "local"');
++  });
++
++  it("refuses an id containing a slash, which would widen the proxy prefix", () => {
++    const read = readCodevAgentTargets({
++      [CODEV_AGENT_ORIGINS_ENV]: "a/b=http://127.0.0.1:4100",
++    });
++    expect(read.ok).toBe(false);
++    if (read.ok) return;
++    expect(read.rejected[0]?.problem).toContain("containing /");
++  });
++});
++
++describe("codev agent origin rules (spec 250, phase 10)", () => {
++  it("accepts loopback http and any https", () => {
++    expect(originProblem("http://127.0.0.1:4100")).toBeNull();
++    expect(originProblem("http://localhost:4100")).toBeNull();
++    expect(originProblem("https://box.example.ts.net")).toBeNull();
++  });
++
++  it("refuses plaintext http to a non-loopback host, which would leak the credential", () => {
++    expect(originProblem("http://box.example.ts.net")).toContain("in the clear");
++  });
++
++  it("refuses a scheme that is not http or https", () => {
++    expect(originProblem("file:///etc/passwd")).toContain("only http: and https:");
++  });
++
++  it("refuses credentials in the URL", () => {
++    expect(originProblem("https://user:pass@box.example.ts.net")).toContain("credentials in the URL");
++  });
++
++  it("refuses an origin carrying a path, query or fragment", () => {
++    expect(originProblem("https://box.example.ts.net/agent")).toContain("bare origin");
++    expect(originProblem("https://box.example.ts.net/?x=1")).toContain("bare origin");
++  });
++});
++
++describe("codev agent route allowlist (spec 250, phase 10)", () => {
++  it("carries the approval ceremony and the workspace state read", () => {
++    const carried: ReadonlyArray<readonly ["GET" | "POST", string]> = [
++      ["POST", "/api/agent/v1/pairing/redeem"],
++      ["POST", "/api/agent/v1/human-sessions"],
++      ["GET", "/api/agent/v1/session"],
++      ["POST", "/api/agent/v1/approval-capabilities"],
++      ["POST", "/api/agent/v1/approval-nonces"],
++      ["POST", "/api/agent/v1/workspaces/d29ya3NwYWNl/gates/approve"],
++      ["POST", "/api/agent/v1/workspaces/d29ya3NwYWNl/gates/approvals"],
++      ["GET", "/api/agent/v1/workspaces/d29ya3NwYWNl/gates/approvals/op-1"],
++      ["GET", "/api/agent/v1/workspaces/d29ya3NwYWNl/state"],
++    ];
++    for (const [method, path] of carried) {
++      expect(matchProxiedAgentRoute(method, path), `${method} ${path}`).not.toBeNull();
++    }
++  });
++
++  /**
++   * Absent on purpose, each for its own reason: the stream is SSE and this proxy
++   * buffers; revocation is an operator act at a terminal, and a browser that
++   * could revoke could deny a human their own gate.
++   */
++  it("does not carry the stream or either revocation route", () => {
++    expect(matchProxiedAgentRoute("GET", "/api/agent/v1/workspaces/d29ya3NwYWNl/stream")).toBeNull();
++    expect(matchProxiedAgentRoute("DELETE", "/api/agent/v1/machines/alpha")).toBeNull();
++    expect(
++      matchProxiedAgentRoute("DELETE", "/api/agent/v1/approval-capabilities/machine/alpha"),
++    ).toBeNull();
++  });
++
++  it("refuses a carried path under the wrong method", () => {
++    expect(matchProxiedAgentRoute("GET", "/api/agent/v1/pairing/redeem")).toBeNull();
++    expect(matchProxiedAgentRoute("POST", "/api/agent/v1/workspaces/w/state")).toBeNull();
++  });
++
++  it("refuses anything outside the agent prefix", () => {
++    expect(matchProxiedAgentRoute("GET", "/api/orchestration/threads")).toBeNull();
++    expect(matchProxiedAgentRoute("GET", "/")).toBeNull();
++  });
++
++  it("does not let an extra path segment slip past a pattern", () => {
++    expect(
++      matchProxiedAgentRoute("GET", "/api/agent/v1/workspaces/one/two/state"),
++    ).toBeNull();
++  });
++});
++
++describe("codev agent proxy path split (spec 250, phase 10)", () => {
++  it("splits the target id from the upstream path", () => {
++    expect(splitProxyPath(`${CODEV_AGENT_PROXY_PREFIX}/local/api/agent/v1/session`)).toEqual({
++      targetId: "local",
++      rest: "/api/agent/v1/session",
++    });
++  });
++
++  it("refuses a prefix that names no target", () => {
++    expect(splitProxyPath(CODEV_AGENT_PROXY_PREFIX)).toBeNull();
++    expect(splitProxyPath(`${CODEV_AGENT_PROXY_PREFIX}/local`)).toBeNull();
++    expect(splitProxyPath("/api/observability/v1/traces")).toBeNull();
++  });
++
++  /**
++   * The SSRF shape the configured-target rule exists to close: a URL arriving
++   * where a path belongs. It has its own answer rather than falling off the end
++   * of the allowlist, because "this is not a path" and "this path is not
++   * carried" send a reader to two different places.
++   */
++  it("recognises a URL arriving in place of a path", () => {
++    expect(isAbsoluteRequestPath("/http://169.254.169.254/latest/meta-data")).toBe(true);
++    expect(isAbsoluteRequestPath("//169.254.169.254/latest/meta-data")).toBe(true);
++    expect(isAbsoluteRequestPath("/api/agent/v1/session")).toBe(false);
++  });
++});
++
++describe("codev agent proxy headers (spec 250, phase 10)", () => {
++  it("forwards what codev-agent needs and sets the upstream host", () => {
++    expect(
++      forwardableHeaders(
++        {
++          accept: "application/json",
++          "content-type": "application/json",
++          "x-codev-machine-credential": "cred-1.secret",
++          "x-codev-human-session": "sess-1",
++          host: "t3code.example",
++        },
++        "127.0.0.1:4100",
++      ),
++    ).toEqual({
++      accept: "application/json",
++      "content-type": "application/json",
++      "x-codev-machine-credential": "cred-1.secret",
++      "x-codev-human-session": "sess-1",
++      host: "127.0.0.1:4100",
++    });
++  });
++
++  /**
++   * THE ONE A FIXED-LIST PORT FAILS.
++   *
++   * `Connection` names headers that are themselves hop-by-hop for this
++   * connection. A port that strips only the fixed list — or one that trusts its
++   * allowlist alone — forwards whatever `Connection` points at, and here it
++   * points at the machine credential.
++   */
++  it("strips a forwarded header that the request's own Connection header names", () => {
++    const forwarded = forwardableHeaders(
++      {
++        connection: "keep-alive, X-Codev-Machine-Credential",
++        "x-codev-machine-credential": "cred-1.secret",
++        accept: "application/json",
++      },
++      "127.0.0.1:4100",
++    );
++    expect(forwarded["x-codev-machine-credential"]).toBeUndefined();
++    expect(forwarded.accept).toBe("application/json");
++    expect(forwarded.connection).toBeUndefined();
++  });
++
++  /**
++   * t3code's own session does not travel. Being signed into t3code is not
++   * approval authority, and forwarding its bearer would hand another server
++   * t3code's identity.
++   */
++  it("never forwards t3code's own session", () => {
++    const forwarded = forwardableHeaders(
++      {
++        authorization: "Bearer t3code-session",
++        cookie: "t3code_session=abc",
++        "x-codev-machine-credential": "cred-1.secret",
++      },
++      "127.0.0.1:4100",
++    );
++    expect(forwarded.authorization).toBeUndefined();
++    expect(forwarded.cookie).toBeUndefined();
++    expect(forwarded["x-codev-machine-credential"]).toBe("cred-1.secret");
++  });
++
++  it("drops every header nobody put on the list", () => {
++    const forwarded = forwardableHeaders(
++      { "x-forwarded-for": "10.0.0.1", "user-agent": "curl", referer: "https://elsewhere" },
++      "127.0.0.1:4100",
++    );
++    expect(Object.keys(forwarded)).toEqual(["host"]);
++  });
++});
++
++describe("codev agent proxy hop (spec 250, phase 10)", () => {
++  it("carries status, body and content type back", async () => {
++    const origin = await listen(
++      NodeHttp.createServer((_request, response) => {
++        response.writeHead(201, { "content-type": "application/json" });
++        response.end(JSON.stringify({ signal: "PAIRING_TOKEN_ACCEPTED" }));
++      }),
++    );
++    const outcome = await proxyToAgent({
++      origin,
++      path: "/api/agent/v1/pairing/redeem",
++      method: "POST",
++      headers: { "content-type": "application/json" },
++      body: new TextEncoder().encode("{}"),
++    });
++    expect(outcome.kind).toBe("answered");
++    if (outcome.kind !== "answered") return;
++    expect(outcome.status).toBe(201);
++    expect(outcome.contentType).toBe("application/json");
++    expect(JSON.parse(new TextDecoder().decode(outcome.body))).toEqual({
++      signal: "PAIRING_TOKEN_ACCEPTED",
++    });
++  });
++
++  it("sends only the forwardable headers upstream", async () => {
++    let received: NodeHttp.IncomingHttpHeaders = {};
++    const origin = await listen(
++      NodeHttp.createServer((request, response) => {
++        received = request.headers;
++        response.writeHead(200, { "content-type": "application/json" });
++        response.end("{}");
++      }),
++    );
++    await proxyToAgent({
++      origin,
++      path: "/api/agent/v1/session",
++      method: "GET",
++      headers: {
++        authorization: "Bearer t3code-session",
++        cookie: "t3code_session=abc",
++        "x-codev-machine-credential": "cred-1.secret",
++      },
++      body: undefined,
++    });
++    expect(received.authorization).toBeUndefined();
++    expect(received.cookie).toBeUndefined();
++    expect(received["x-codev-machine-credential"]).toBe("cred-1.secret");
++  });
++
++  /**
++   * Refused rather than passed on. Handed to the page, the browser would follow
++   * it — to whatever origin `Location` names, cross-origin, with the request's
++   * credentials — which is the escape the configured-target rule closes one hop
++   * earlier.
++   */
++  it("refuses a redirect instead of following or forwarding it", async () => {
++    const origin = await listen(
++      NodeHttp.createServer((_request, response) => {
++        response.writeHead(302, { location: "http://169.254.169.254/latest/meta-data" });
++        response.end();
++      }),
++    );
++    const outcome = await proxyToAgent({
++      origin,
++      path: "/api/agent/v1/session",
++      method: "GET",
++      headers: {},
++      body: undefined,
++    });
++    expect(outcome.kind).toBe("redirect");
++    if (outcome.kind !== "redirect") return;
++    expect(outcome.status).toBe(302);
++    expect(outcome.location).toBe("http://169.254.169.254/latest/meta-data");
++  });
++
++  /** Refused the connection. */
++  it("reports an unreachable host as its own signal", async () => {
++    const server = NodeHttp.createServer(() => {});
++    const origin = await listen(server);
++    await new Promise<void>((resolve) => server.close(() => resolve()));
++    const outcome = await proxyToAgent({
++      origin,
++      path: "/api/agent/v1/session",
++      method: "GET",
++      headers: {},
++      body: undefined,
++    });
++    expect(outcome.kind).toBe("unreachable");
++  });
++
++  /**
++   * Accepted the connection and said nothing. A DIFFERENT signal from
++   * unreachable: reporting a silent host as a dead one sends an operator to
++   * check whether it is running, which it is.
++   */
++  it("reports a silent host as its own signal, distinct from unreachable", async () => {
++    const socket = NodeNet.createServer(() => {
++      /* accept and never answer */
++    });
++    sockets.push(socket);
++    const port = await new Promise<number>((resolve) => {
++      socket.listen(0, "127.0.0.1", () => {
++        const address = socket.address();
++        resolve(typeof address === "object" && address ? address.port : 0);
++      });
++    });
++    const outcome = await proxyToAgent({
++      origin: `http://127.0.0.1:${port}`,
++      path: "/api/agent/v1/session",
++      method: "GET",
++      headers: {},
++      body: undefined,
++      timeoutMs: 150,
++    });
++    expect(outcome.kind).toBe("silent");
++    if (outcome.kind !== "silent") return;
++    expect(outcome.timeoutMs).toBe(150);
++  });
++});
+diff --git a/apps/server/src/codev/agentProxy.ts b/apps/server/src/codev/agentProxy.ts
+new file mode 100644
+index 000000000..1219e44cb
+--- /dev/null
++++ b/apps/server/src/codev/agentProxy.ts
+@@ -0,0 +1,679 @@
++/**
++ * Codev customization (spec 250), phase 10 — the same-origin proxy to `codev-agent`.
++ *
++ * ## Why a proxy at all
++ *
++ * Approving a porch gate is `codev-agent`'s capability path, and `codev-agent`
++ * runs on its own origin. A page that called it directly would make a
++ * cross-origin request from t3code's app, which is the thing the spec set out
++ * not to do. So the page calls THIS server, on the origin it was loaded from,
++ * and this server makes the one hop.
++ *
++ * The guarantee is structural, not a header. t3code sends
++ * `Content-Security-Policy` on `.svg` asset responses only (`../http.ts`), and
++ * `apps/web/index.html` carries no CSP meta tag — there is no page-level CSP and
++ * therefore no `connect-src` directive to keep closed. What holds is that the
++ * page never *makes* a cross-origin request, and the test that proves it watches
++ * the network rather than parsing a header that does not exist. Adding a
++ * page-level CSP is deliberately NOT done here: it would change how every t3code
++ * page loads, which is far wider than this spec's diff, to obtain a guarantee we
++ * already have.
++ *
++ * ## The upstream target is CONFIGURED, never named by the browser
++ *
++ * A server proxy that forwards to an origin the browser supplies is an SSRF
++ * primitive, and a route-path allowlist does not constrain the *host*. So the
++ * operator configures the permitted `codev-agent` origins in this server's own
++ * environment and the browser selects among them by id. A URL arriving in the
++ * request path is refused rather than normalised.
++ *
++ * ## What it does not forward, and why that is the point
++ *
++ * t3code's own browser session — `authorization`, `cookie` — is never handed to
++ * `codev-agent`. Being signed into t3code is not approval authority: the machine
++ * credential and the human session are, and they are the only credentials this
++ * proxy carries. Forwarding t3code's bearer to another server would give that
++ * server t3code's identity, which nobody asked it for.
++ *
++ * That is why the forward set is an ALLOWLIST rather than a denylist. A denylist
++ * forwards every header nobody thought of, and this hop sees credentials.
++ *
++ * ## Two failure signals, not one
++ *
++ * `packages/codev/src/agent-farm/servers/client-static.ts` learned this and it is
++ * ported deliberately: a machine that refused the connection and one that
++ * accepted it and then said nothing are different facts wanting different next
++ * actions. One signal for both sends an operator to check whether a running
++ * server is running.
++ */
++
++// @effect-diagnostics nodeBuiltinImport:off
++import * as Effect from "effect/Effect";
++import * as Option from "effect/Option";
++import { HttpRouter, HttpServerRequest, HttpServerResponse, HttpServerRespondable } from "effect/unstable/http";
++import { AuthOrchestrationOperateScope, AuthOrchestrationReadScope } from "@t3tools/contracts";
++import * as NodeHttp from "node:http";
++import * as NodeHttps from "node:https";
++
++import {
++  CODEV_AGENT_PROXY_PREFIX,
++  CODEV_AGENT_TARGETS_PATH,
++} from "@t3tools/shared/codevAgentProxy";
++
++import { authenticateRawRouteWithScope } from "../http.ts";
++
++/** The operator's list of permitted `codev-agent` origins, `id=origin`, comma separated. */
++export const CODEV_AGENT_ORIGINS_ENV = "T3CODE_CODEV_AGENT_ORIGINS";
++
++export { CODEV_AGENT_PROXY_PREFIX, CODEV_AGENT_TARGETS_PATH };
++
++/** The one upstream prefix this proxy will dial. Everything else is refused. */
++const AGENT_ROUTE_PREFIX = "/api/agent/v1";
++
++export interface CodevAgentTarget {
++  /** Stable, operator-chosen. What the browser sends; never a URL. */
++  readonly id: string;
++  /** The `codev-agent` origin. Server-side only — it is not sent to the page. */
++  readonly origin: string;
++}
++
++export interface CodevAgentTargetRejection {
++  readonly entry: string;
++  readonly problem: string;
++}
++
++/**
++ * Three answers, three signals.
++ *
++ * "Nobody configured this", "everything configured was rejected" and "here are
++ * the targets, and these entries were rejected" are three situations wanting
++ * three different next actions from an operator. Collapsing the first two into an
++ * empty list is the defect `client-static.ts` documents at length: a mount
++ * showing nothing with no stated reason reads as broken rather than as
++ * unconfigured.
++ */
++export type CodevAgentTargetsRead =
++  | {
++      readonly ok: false;
++      readonly signal: "CODEV_AGENTS_UNCONFIGURED";
++      readonly message: string;
++      readonly rejected: readonly CodevAgentTargetRejection[];
++    }
++  | {
++      readonly ok: false;
++      readonly signal: "CODEV_AGENTS_ALL_REJECTED";
++      readonly message: string;
++      readonly rejected: readonly CodevAgentTargetRejection[];
++    }
++  | {
++      readonly ok: true;
++      readonly targets: readonly CodevAgentTarget[];
++      readonly rejected: readonly CodevAgentTargetRejection[];
++    };
++
++/**
++ * Loopback, where plaintext never leaves the host.
++ *
++ * Written out rather than shared with `../http.ts`'s `isLoopbackHostname`: that
++ * one normalises a `Host` header, this one reads a parsed URL's hostname, and the
++ * two would drift under one signature.
++ */
++function isLoopback(hostname: string): boolean {
++  const bare = hostname.replace(/^\[(.*)\]$/, "$1").toLowerCase();
++  return bare === "localhost" || bare === "127.0.0.1" || bare === "::1";
++}
++
++/**
++ * Why an origin is checked before it is dialled.
++ *
++ * Ported from `client-static.ts`, whose comment names the two failures this
++ * catches — an `https://` origin dialled with `http.request` reaching port 80 in
++ * cleartext and reporting a configuration mistake as a dead machine, and an
++ * `http://` origin to a NON-loopback host sending a machine credential in the
++ * clear over whatever network is in between. Two more are added here because the
++ * value is operator configuration rather than a curated file: credentials in the
++ * URL, and a URL that is not a bare origin.
++ */
++export function originProblem(origin: string): string | null {
++  let url: URL;
++  try {
++    url = new URL(origin);
++  } catch {
++    return "is not a URL";
++  }
++  if (url.protocol !== "http:" && url.protocol !== "https:") {
++    return `uses ${url.protocol}, and only http: and https: can be proxied`;
++  }
++  if (url.protocol === "http:" && !isLoopback(url.hostname)) {
++    return (
++      "is plaintext http: to a non-loopback host, which would send a machine credential in the "
++      + "clear. Use https: for a remote machine."
++    );
++  }
++  if (url.username !== "" || url.password !== "") {
++    return "carries credentials in the URL, which this proxy will not forward";
++  }
++  if (url.pathname !== "/" || url.search !== "" || url.hash !== "") {
++    return "is not a bare origin — drop the path, query and fragment";
++  }
++  return null;
++}
++
++/**
++ * Parse `id=origin,id=origin` from the operator's environment.
++ *
++ * An entry that cannot be used is REPORTED, not skipped. An operator who typed a
++ * bad origin and one who configured nothing need opposite next actions, and a
++ * silently-dropped entry gives them the same empty list.
++ */
++export function readCodevAgentTargets(
++  environment: Readonly<Record<string, string | undefined>> = process.env,
++): CodevAgentTargetsRead {
++  const raw = (environment[CODEV_AGENT_ORIGINS_ENV] ?? "").trim();
++  if (raw === "") {
++    return {
++      ok: false,
++      signal: "CODEV_AGENTS_UNCONFIGURED",
++      message:
++        `No codev-agent targets are configured. Set ${CODEV_AGENT_ORIGINS_ENV} to a comma-separated `
++        + "list of id=origin entries, for example local=http://127.0.0.1:4100",
++      rejected: [],
++    };
++  }
++
++  const targets: CodevAgentTarget[] = [];
++  const rejected: CodevAgentTargetRejection[] = [];
++  const seen = new Set<string>();
++  for (const entry of raw.split(",").map((part) => part.trim()).filter((part) => part !== "")) {
++    const separator = entry.indexOf("=");
++    if (separator <= 0) {
++      rejected.push({ entry, problem: "is not id=origin" });
++      continue;
++    }
++    const id = entry.slice(0, separator).trim();
++    const origin = entry.slice(separator + 1).trim();
++    // A `/` in an id would let one entry's id widen the proxy prefix into another
++    // path segment, and the route split reads exactly one segment.
++    if (id === "" || id.includes("/")) {
++      rejected.push({ entry, problem: "has an empty id, or one containing /" });
++      continue;
++    }
++    if (seen.has(id)) {
++      // Silently keeping the first would make the operator's second entry a
++      // no-op they cannot see. Which one wins is not the point; being told is.
++      rejected.push({ entry, problem: `repeats the id "${id}", which an earlier entry already used` });
++      continue;
++    }
++    const problem = originProblem(origin);
++    if (problem !== null) {
++      rejected.push({ entry, problem: `origin ${problem}` });
++      continue;
++    }
++    seen.add(id);
++    targets.push({ id, origin });
++  }
++
++  if (targets.length === 0) {
++    return {
++      ok: false,
++      signal: "CODEV_AGENTS_ALL_REJECTED",
++      message:
++        `${CODEV_AGENT_ORIGINS_ENV} is set and no entry in it could be used. This is not the same as `
++        + "having configured nothing; each rejected entry is listed with its reason.",
++      rejected,
++    };
++  }
++  return { ok: true, targets, rejected };
++}
++
++interface ProxiedRoute {
++  readonly id: string;
++  readonly method: "GET" | "POST";
++  readonly pathname?: string;
++  readonly pattern?: RegExp;
++}
++
++/**
++ * The `codev-agent` routes this proxy will carry, and only these.
++ *
++ * Hand-mirrored from `packages/codev/src/agent-farm/servers/agent-auth.ts` rather
++ * than imported — that module reaches `node:fs` and `better-sqlite3` through its
++ * import graph, and the fork does not depend on the Codev package.
++ *
++ * Three of `codev-agent`'s routes are deliberately ABSENT:
++ *
++ *   `workspace-stream`     an SSE stream. This proxy buffers, so carrying it
++ *                          would deliver a stream that is live on the wire and
++ *                          empty in the page. The grid reads `workspace-state`.
++ *   `machine-credential-revoke`
++ *   `approval-capability-revoke-machine`
++ *                          revocation is `afx pair revoke`, an operator act at a
++ *                          terminal. A browser that could revoke could deny a
++ *                          human their own gate.
++ */
++export const PROXIED_AGENT_ROUTES: readonly ProxiedRoute[] = [
++  { id: "pairing-redeem", method: "POST", pathname: `${AGENT_ROUTE_PREFIX}/pairing/redeem` },
++  { id: "human-session-issue", method: "POST", pathname: `${AGENT_ROUTE_PREFIX}/human-sessions` },
++  { id: "session-probe", method: "GET", pathname: `${AGENT_ROUTE_PREFIX}/session` },
++  { id: "approval-capability-issue", method: "POST", pathname: `${AGENT_ROUTE_PREFIX}/approval-capabilities` },
++  { id: "approval-nonce-mint", method: "POST", pathname: `${AGENT_ROUTE_PREFIX}/approval-nonces` },
++  {
++    id: "gate-approve",
++    method: "POST",
++    pattern: /^\/api\/agent\/v1\/workspaces\/[^/]+\/gates\/approve$/,
++  },
++  {
++    id: "approval-submit",
++    method: "POST",
++    pattern: /^\/api\/agent\/v1\/workspaces\/[^/]+\/gates\/approvals$/,
++  },
++  {
++    id: "approval-operation",
++    method: "GET",
++    pattern: /^\/api\/agent\/v1\/workspaces\/[^/]+\/gates\/approvals\/[^/]+$/,
++  },
++  { id: "workspace-state", method: "GET", pattern: /^\/api\/agent\/v1\/workspaces\/[^/]+\/state$/ },
++];
++
++export function matchProxiedAgentRoute(method: string, pathname: string): ProxiedRoute | null {
++  for (const route of PROXIED_AGENT_ROUTES) {
++    if (route.method !== method) continue;
++    if (route.pathname !== undefined && route.pathname === pathname) return route;
++    if (route.pattern?.test(pathname)) return route;
++  }
++  return null;
++}
++
++/**
++ * Headers a proxy must not copy from one connection onto another.
++ *
++ * RFC 9110 hop-by-hop: they describe THIS connection, not the message, and
++ * forwarding them lets a client dictate framing on a socket it does not own.
++ */
++const HOP_BY_HOP = new Set([
++  "connection",
++  "keep-alive",
++  "proxy-authenticate",
++  "proxy-authorization",
++  "te",
++  "trailer",
++  "transfer-encoding",
++  "upgrade",
++]);
++
++/**
++ * Everything `codev-agent` needs from the browser, and nothing else.
++ *
++ * `authorization` and `cookie` are absent on purpose and that absence is the
++ * deliverable: t3code's own browser session is not approval authority and is
++ * never handed to another server.
++ */
++const FORWARDED = new Set([
++  "accept",
++  "content-type",
++  "x-codev-machine-credential",
++  "x-codev-pairing-token",
++  "x-codev-human-session",
++  "x-codev-approval-receipt",
++]);
++
++/**
++ * What survives the hop.
++ *
++ * The allowlist is the primary control, and `Connection`'s own listed tokens are
++ * subtracted from it anyway. That is not belt and braces: `Connection` names
++ * headers that are themselves hop-by-hop, so a request declaring
++ * `Connection: x-codev-machine-credential` is asking for that header to be
++ * connection-scoped — and an allowlist alone would forward it. A port that
++ * hardcodes only the fixed list satisfies the sentence "strips hop-by-hop
++ * headers" and is wrong in exactly this case.
++ */
++export function forwardableHeaders(
++  headers: Readonly<Record<string, string | readonly string[] | undefined>>,
++  hostHeader: string,
++): Record<string, string> {
++  const connectionTokens = new Set(
++    String(headers.connection ?? "")
++      .split(",")
++      .map((token) => token.trim().toLowerCase())
++      .filter((token) => token !== ""),
++  );
++  const out: Record<string, string> = {};
++  for (const [name, value] of Object.entries(headers)) {
++    const lower = name.toLowerCase();
++    if (!FORWARDED.has(lower)) continue;
++    if (HOP_BY_HOP.has(lower) || connectionTokens.has(lower)) continue;
++    if (value === undefined) continue;
++    out[lower] = Array.isArray(value) ? value.join(", ") : String(value);
++  }
++  // The upstream's host, not the browser's. Set last so nothing above can win.
++  out.host = hostHeader;
++  return out;
++}
++
++/**
++ * Bound on how long the upstream may take to produce response headers.
++ *
++ * Every route this proxy carries is a bounded request/response, so unlike
++ * `client-static.ts` this is a bound on the whole exchange rather than on headers
++ * alone — there is no SSE stream here that is meant to outlive it. An approval
++ * SUBMIT returns at once and is polled; it is the poll that waits, one request at
++ * a time.
++ */
++export const UPSTREAM_TIMEOUT_MS = 15_000;
++
++export type ProxyOutcome =
++  | {
++      readonly kind: "answered";
++      readonly status: number;
++      readonly contentType: string | undefined;
++      readonly body: Uint8Array;
++    }
++  /**
++   * The upstream answered with a redirect, which is REFUSED rather than passed on.
++   *
++   * Handing a 3xx back to the page would have the browser follow it — to whatever
++   * origin the `Location` names, cross-origin, with the request's credentials.
++   * That is the escape the configured-target allowlist exists to close, arriving
++   * one hop later. Refusing it server-side is the only place it can be refused.
++   */
++  | { readonly kind: "redirect"; readonly status: number; readonly location: string | undefined }
++  | { readonly kind: "unreachable"; readonly detail: string }
++  | { readonly kind: "silent"; readonly timeoutMs: number };
++
++/**
++ * One hop, buffered, with redirects unfollowed.
++ *
++ * `node:http` rather than Effect's `HttpClient` for two reasons that are the
++ * phase's own deliverables: it does not follow redirects, and its `error` event
++ * and its request timeout are separately observable — which is what lets an
++ * unreachable host and a silent one keep their own signals.
++ */
++export function proxyToAgent(input: {
++  readonly origin: string;
++  readonly path: string;
++  readonly method: "GET" | "POST";
++  readonly headers: Readonly<Record<string, string | readonly string[] | undefined>>;
++  readonly body: Uint8Array | undefined;
++  readonly timeoutMs?: number;
++}): Promise<ProxyOutcome> {
++  const target = new URL(input.origin);
++  const transport = target.protocol === "https:" ? NodeHttps : NodeHttp;
++  const timeoutMs = input.timeoutMs ?? UPSTREAM_TIMEOUT_MS;
++  const headers = forwardableHeaders(input.headers, target.host);
++  if (input.body !== undefined) headers["content-length"] = String(input.body.byteLength);
++
++  return new Promise<ProxyOutcome>((resolve) => {
++    let settled = false;
++    const settle = (outcome: ProxyOutcome): void => {
++      if (settled) return;
++      settled = true;
++      resolve(outcome);
++    };
++
++    const upstream = transport.request(
++      {
++        host: target.hostname,
++        // '' for a default port, which `request` reads as "the module's default" —
++        // 443 for https, 80 for http. Correct for both only because the module varies.
++        port: target.port,
++        path: input.path,
++        method: input.method,
++        headers,
++      },
++      (answer) => {
++        const status = answer.statusCode ?? 502;
++        if (status >= 300 && status < 400) {
++          answer.resume();
++          upstream.destroy();
++          const location = answer.headers.location;
++          settle({
++            kind: "redirect",
++            status,
++            location: Array.isArray(location) ? location[0] : location,
++          });
++          return;
++        }
++        const chunks: Buffer[] = [];
++        answer.on("data", (chunk: Buffer) => chunks.push(chunk));
++        answer.on("end", () => {
++          const contentType = answer.headers["content-type"];
++          settle({
++            kind: "answered",
++            status,
++            contentType: Array.isArray(contentType) ? contentType[0] : contentType,
++            body: new Uint8Array(Buffer.concat(chunks)),
++          });
++        });
++        answer.on("aborted", () =>
++          settle({ kind: "unreachable", detail: "the connection was aborted mid-response" }),
++        );
++        answer.on("error", (error: Error) => settle({ kind: "unreachable", detail: error.message }));
++      },
++    );
++
++    upstream.setTimeout(timeoutMs, () => {
++      /*
++       * A SEPARATE SIGNAL FROM `unreachable`, because these are different facts
++       * wanting different next actions: one host refused the connection, the
++       * other accepted it and then said nothing. Reporting a silent host as a
++       * dead one sends an operator to check whether it is running, which it is.
++       */
++      upstream.destroy();
++      settle({ kind: "silent", timeoutMs });
++    });
++    upstream.on("error", (error: Error) => settle({ kind: "unreachable", detail: error.message }));
++    if (input.body !== undefined) upstream.write(input.body);
++    upstream.end();
++  });
++}
++
++/** `/api/codev/agent/<id><rest>` split into its two halves, or null. */
++export function splitProxyPath(pathname: string): { readonly targetId: string; readonly rest: string } | null {
++  if (!pathname.startsWith(`${CODEV_AGENT_PROXY_PREFIX}/`)) return null;
++  const suffix = pathname.slice(`${CODEV_AGENT_PROXY_PREFIX}/`.length);
++  const separator = suffix.indexOf("/");
++  if (separator <= 0) return null;
++  return { targetId: suffix.slice(0, separator), rest: suffix.slice(separator) };
++}
++
++/**
++ * A path segment that is trying to be a URL.
++ *
++ * Refused with its own signal rather than left to fall off the end of the route
++ * allowlist. The allowlist would refuse it either way, but "this is not a path"
++ * and "this path is not carried" are different answers, and normalising a URL
++ * into a path is how a proxy acquires a target its operator never configured.
++ */
++export function isAbsoluteRequestPath(rest: string): boolean {
++  return /^\/+[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rest) || rest.startsWith("//");
++}
++
++/**
++ * `jsonUnsafe`, not `json`, and the reason is which failures are possible.
++ *
++ * `json` can fail to encode and hands back an Effect that must be handled; every
++ * body here is an object this module built out of strings, so there is nothing to
++ * handle and an error channel for it would be a branch no test could reach.
++ */
++const refusal = (
++  status: number,
++  signal: string,
++  message: string,
++  extra: Record<string, unknown> = {},
++): HttpServerResponse.HttpServerResponse =>
++  HttpServerResponse.setHeader(
++    HttpServerResponse.jsonUnsafe({ signal, message, ...extra }, { status }),
++    "Cache-Control",
++    "no-store",
++  );
++
++/**
++ * Which targets exist, by id. Their origins do not travel to the page.
++ *
++ * The page selects by id, so it has no use for the origin, and a page that never
++ * holds one cannot be talked into naming one. The read's reason for being empty
++ * DOES travel, because a picker with no entries and no explanation reads as a
++ * broken feature rather than an unconfigured one.
++ */
++export const codevAgentTargetsRouteLayer = HttpRouter.add(
++  "GET",
++  CODEV_AGENT_TARGETS_PATH,
++  Effect.gen(function* () {
++    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
++    const read = readCodevAgentTargets();
++    const body = read.ok
++      ? { targets: read.targets.map((target) => ({ id: target.id })), rejected: read.rejected }
++      : { signal: read.signal, message: read.message, targets: [], rejected: read.rejected };
++    // 200 WITH A STATED REASON, not an error status: a configuration problem is
++    // something a person acts on, and a 500 renders as a server having a bad
++    // minute, which is a different situation with a different fix.
++    return HttpServerResponse.setHeader(
++      HttpServerResponse.jsonUnsafe(body, { status: 200 }),
++      "Cache-Control",
++      "no-store",
++    );
++  }).pipe(
++    Effect.catchTags({
++      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
++      EnvironmentInternalError: HttpServerRespondable.toResponse,
++      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
++    }),
++  ),
++);
++
++const proxyHandler = (method: "GET" | "POST") =>
++  Effect.gen(function* () {
++    /*
++     * t3code's own session gates USE OF THE PROXY, and does nothing else.
++     *
++     * Without it this server is an open hop to a loopback service for anyone who
++     * can reach it. It is emphatically not approval authority — `codev-agent`
++     * still requires the machine credential and the human session, and neither
++     * of those is derived from being signed in here.
++     */
++    yield* authenticateRawRouteWithScope(
++      method === "GET" ? AuthOrchestrationReadScope : AuthOrchestrationOperateScope,
++    );
++    const request = yield* HttpServerRequest.HttpServerRequest;
++    const url = HttpServerRequest.toURL(request);
++    if (Option.isNone(url)) {
++      return refusal(400, "CODEV_AGENT_REQUEST_MALFORMED", "the request URL could not be read");
++    }
++
++    const split = splitProxyPath(url.value.pathname);
++    if (split === null) {
++      return refusal(
++        404,
++        "CODEV_AGENT_PATH_NOT_ALLOWED",
++        `a proxied request is ${CODEV_AGENT_PROXY_PREFIX}/<target-id>/<agent-path>; this named no target`,
++      );
++    }
++    if (isAbsoluteRequestPath(split.rest)) {
++      return refusal(
++        400,
++        "CODEV_AGENT_PATH_ABSOLUTE",
++        "the proxied path is a URL rather than a path. The upstream is chosen by configured id; "
++          + "an origin named in the request is refused, not normalised.",
++      );
++    }
++
++    const read = readCodevAgentTargets();
++    if (!read.ok) {
++      return refusal(503, read.signal, read.message, { rejected: read.rejected });
++    }
++    const target = read.targets.find((candidate) => candidate.id === split.targetId);
++    if (target === undefined) {
++      return refusal(
++        404,
++        "CODEV_AGENT_UNKNOWN_TARGET",
++        `no codev-agent target "${split.targetId}" is configured on this server`,
++      );
++    }
++
++    const route = matchProxiedAgentRoute(method, split.rest);
++    if (route === null) {
++      return refusal(
++        404,
++        "CODEV_AGENT_PATH_NOT_ALLOWED",
++        `this proxy does not carry ${method} ${split.rest}`,
++      );
++    }
++
++    const body =
++      method === "POST"
++        ? yield* request.arrayBuffer.pipe(
++            Effect.map((buffer) => new Uint8Array(buffer)),
++            Effect.orElseSucceed(() => null),
++          )
++        : undefined;
++    if (body === null) {
++      return refusal(400, "CODEV_AGENT_REQUEST_MALFORMED", "the request body could not be read");
++    }
++
++    const outcome = yield* Effect.promise(() =>
++      proxyToAgent({
++        origin: target.origin,
++        path: `${split.rest}${url.value.search}`,
++        method,
++        headers: request.headers,
++        body,
++      }),
++    );
++
++    if (outcome.kind === "redirect") {
++      return refusal(
++        502,
++        "CODEV_AGENT_REDIRECT_REFUSED",
++        `${target.id} answered ${outcome.status} with a redirect`
++          + `${outcome.location === undefined ? "" : ` to ${outcome.location}`}. Redirects are not `
++          + "followed and not passed on: the page would follow it to an origin nobody configured.",
++      );
++    }
++    if (outcome.kind === "silent") {
++      return refusal(
++        504,
++        "CODEV_AGENT_UPSTREAM_TIMEOUT",
++        `${target.id} accepted the connection and sent no response within ${outcome.timeoutMs}ms`,
++      );
++    }
++    if (outcome.kind === "unreachable") {
++      return refusal(
++        502,
++        "CODEV_AGENT_UPSTREAM_GONE",
++        `${target.id} did not answer: ${outcome.detail}`,
++      );
++    }
++
++    /*
++     * The upstream's status and body travel; its HEADERS do not, beyond the
++     * content type. A proxy that copied them would carry `set-cookie` from one
++     * origin onto another, and every route here answers JSON.
++     */
++    return HttpServerResponse.setHeader(
++      HttpServerResponse.uint8Array(outcome.body, {
++        status: outcome.status,
++        contentType: outcome.contentType ?? "application/json",
++      }),
++      "Cache-Control",
++      "no-store",
++    );
++  }).pipe(
++    Effect.catchTags({
++      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
++      EnvironmentInternalError: HttpServerRespondable.toResponse,
++      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
++    }),
++  );
++
++export const codevAgentProxyGetRouteLayer = HttpRouter.add(
++  "GET",
++  `${CODEV_AGENT_PROXY_PREFIX}/*`,
++  proxyHandler("GET"),
++);
++
++export const codevAgentProxyPostRouteLayer = HttpRouter.add(
++  "POST",
++  `${CODEV_AGENT_PROXY_PREFIX}/*`,
++  proxyHandler("POST"),
++);
+diff --git a/apps/server/src/http.ts b/apps/server/src/http.ts
+index c3104e7bc..be90e8397 100644
+--- a/apps/server/src/http.ts
++++ b/apps/server/src/http.ts
+@@ -109,7 +109,13 @@ export function resolveDevRedirectUrl(devUrl: URL, requestUrl: URL): string {
+   return redirectUrl.toString();
+ }
+ 
+-const authenticateRawRouteWithScope = (
++/**
++ * Codev customization (spec 250), phase 10 — exported so `codev/agentProxy.ts`
++ * gates its route the same way this file's own raw routes are gated. Exported
++ * rather than duplicated: a second copy of an authentication helper is a second
++ * place for it to drift.
++ */
++export const authenticateRawRouteWithScope = (
+   scope: typeof AuthOrchestrationReadScope | typeof AuthOrchestrationOperateScope,
+ ) =>
+   Effect.gen(function* () {
+diff --git a/apps/server/src/server.ts b/apps/server/src/server.ts
+index 0c299bfc5..5b4ddafae 100644
+--- a/apps/server/src/server.ts
++++ b/apps/server/src/server.ts
+@@ -19,6 +19,11 @@ import {
+   browserApiCorsLayer,
+   httpCompressionLayer,
+ } from "./http.ts";
++import {
++  codevAgentProxyGetRouteLayer,
++  codevAgentProxyPostRouteLayer,
++  codevAgentTargetsRouteLayer,
++} from "./codev/agentProxy.ts";
+ import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
+ import { fixPath } from "./os-jank.ts";
+ import { websocketRpcRouteLayer } from "./ws.ts";
+@@ -459,6 +464,10 @@ export const makeRoutesLayer = Layer.mergeAll(
+       Layer.provide(environmentAuthenticatedAuthLayer),
+     ),
+     otlpTracesProxyRouteLayer,
++    // Codev customization (spec 250), phase 10: the same-origin hop to codev-agent.
++    codevAgentTargetsRouteLayer,
++    codevAgentProxyGetRouteLayer,
++    codevAgentProxyPostRouteLayer,
+     assetRouteLayer,
+     attachmentUploadRouteLayer,
+     staticAndDevRouteLayer,
+diff --git a/apps/web/src/codev/BuilderGrid.tsx b/apps/web/src/codev/BuilderGrid.tsx
+index 0a5d44610..37703bd16 100644
+--- a/apps/web/src/codev/BuilderGrid.tsx
++++ b/apps/web/src/codev/BuilderGrid.tsx
+@@ -17,6 +17,7 @@
+ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+ 
+ import { cn } from "~/lib/utils";
++import type { PaneContent } from "./agentState";
+ import { BuilderPane, type BuilderPaneStatus, type BuilderPaneThread } from "./BuilderPane";
+ import {
+   architectPlacement,
+@@ -87,8 +88,16 @@ export function BuilderGrid(props: {
+    */
+   readonly architect: BuilderPaneThread | null;
+   readonly statusFor: (thread: BuilderPaneThread) => BuilderPaneStatus;
++  /**
++   * What codev-agent said about each thread.
++   *
++   * A function of the thread rather than content baked into it, for the same
++   * reason `statusFor` is: the grid stays a layout component and the caller keeps
++   * one read of the workspace for every pane on screen.
++   */
++  readonly contentFor: (thread: BuilderPaneThread) => PaneContent;
+ }) {
+-  const { threads, architect, statusFor } = props;
++  const { threads, architect, statusFor, contentFor } = props;
+   const { ref, width } = useMeasuredWidth();
+   const [page, setPage] = useState(0);
+   const [architectExpanded, setArchitectExpanded] = useState(false);
+@@ -144,7 +153,12 @@ export function BuilderGrid(props: {
+             className="min-w-0"
+           >
+             {visible.map((thread) => (
+-              <BuilderPane key={thread.id} thread={thread} status={statusFor(thread)} />
++              <BuilderPane
++                key={thread.id}
++                thread={thread}
++                status={statusFor(thread)}
++                content={contentFor(thread)}
++              />
+             ))}
+           </div>
+           {architect === null || placement === "tile" ? null : (
+@@ -163,7 +177,11 @@ export function BuilderGrid(props: {
+               className="shrink-0"
+             >
+               {architectExpanded ? (
+-                <BuilderPane thread={architect} status={statusFor(architect)} />
++                <BuilderPane
++                  thread={architect}
++                  status={statusFor(architect)}
++                  content={contentFor(architect)}
++                />
+               ) : (
+                 <div className="flex min-w-0 items-baseline gap-2 rounded-xl border border-sidebar-border/60 bg-card px-3 py-2 text-[13px]">
+                   <span className="min-w-0 truncate font-medium text-card-foreground">
+diff --git a/apps/web/src/codev/BuilderPane.tsx b/apps/web/src/codev/BuilderPane.tsx
+index 0faa6fe5b..e93ec3eb5 100644
+--- a/apps/web/src/codev/BuilderPane.tsx
++++ b/apps/web/src/codev/BuilderPane.tsx
+@@ -9,28 +9,29 @@
+  * only what the SHELL carries — the list every sidebar row is already built from
+  * — and opening the pane is a link to the real thread.
+  *
+- * ## Two of the four things are PUBLISHED, and this page cannot reach them yet
++ * ## Two of the four things come from codev-agent, not from the thread
+  *
+- * The plan asks for a porch phase and the last three messages. Neither is on the
+- * thread — Codev writes `role`, `parentThreadId`, `codevGate` and `gateRevision`
+- * and nothing else, and `latestTurn` is ids and timestamps with no message text.
+- * But both ARE published, by `codev-agent`, workspace-scoped, in one request for
+- * the whole grid rather than one per pane: `GET /api/agent/v1/workspaces/<b64>/state`
+- * carries `porch.phase` and the last three messages per identity. That is where
+- * `apps/client` reads them, and it is why the plan's ban on six continuous
++ * The porch phase and the last three messages are not on the thread — Codev
++ * writes `role`, `parentThreadId`, `codevGate` and `gateRevision` and nothing
++ * else, and `latestTurn` is ids and timestamps with no message text. Both are
++ * published by `codev-agent`, workspace-scoped, in ONE request for the whole grid
++ * rather than one per pane, which is why the plan's ban on six continuous
+  * subscriptions was never in tension with showing them.
+  *
+- * This page does not read it yet: the same-origin proxy that lets it is phase
+- * 10's deliverable. So these two lines say **that** — not that the data does not
+- * exist. "The phase was never published" and "this page cannot see the phase"
+- * are different facts, one of them is false, and writing the false one is the
+- * defect this project has caught repeatedly.
++ * Phase 9 said so and could not reach it; phase 10's same-origin proxy is the way
++ * in, and `content` is what comes back. Every branch that cannot show a phase
++ * says WHICH cannot: not paired, the agent could not be reached, or the agent
++ * answered and does not publish this thread. "The phase was never published",
++ * "this browser cannot ask" and "the agent has no project for this thread" are
++ * three different facts, and a blank line for all three would be a claim about
++ * the builder rather than about what reached the browser.
+  */
+ 
+ import { Link } from "@tanstack/react-router";
+ import { GavelIcon } from "lucide-react";
+ 
+ import { cn } from "~/lib/utils";
++import type { PaneContent } from "./agentState";
+ import { resolveCodevGateState, type CodevGateFields } from "./gateState";
+ import { MIN_BODY_PX, MIN_PANE_H, MIN_PANE_W } from "./layout";
+ 
+@@ -51,8 +52,10 @@ export interface BuilderPaneStatus {
+ export function BuilderPane(props: {
+   readonly thread: BuilderPaneThread;
+   readonly status: BuilderPaneStatus;
++  /** What codev-agent said about this thread, or why it could not say. */
++  readonly content: PaneContent;
+ }) {
+-  const { thread, status } = props;
++  const { thread, status, content } = props;
+   const gate = resolveCodevGateState(thread);
+   // Role-prefixed, because a grid of six panes is read by scanning the corner of
+   // each one and `builder/` there is the difference between "one of the six" and
+@@ -115,17 +118,19 @@ export function BuilderPane(props: {
+         way to meet it; narrowing the assertion to "body text only" would have
+         been the other way.
+       */}
+-      <p data-testid="codev-pane-phase" className="flex min-w-0 items-center gap-1">
++      <p
++        data-testid="codev-pane-phase"
++        data-codev-pane-content={content.kind}
++        className="flex min-w-0 items-center gap-1"
++      >
+         {gate.kind === "none" ? (
++          <PhaseLine content={content} />
++        ) : (
+           /*
+-            NOT "phase not published" — it is published, and this page cannot
+-            read it until phase 10 wires the same-origin proxy. The distinction
+-            is the whole reason this line has words in it at all.
++            A GATE OUTRANKS THE PHASE ON THIS LINE, and it always did. A human
++            scanning a grid is looking for who is waiting on them; the phase is
++            what they read once they have found it.
+           */
+-          <span className="text-muted-foreground/70">
+-            Phase not read here yet — published by codev-agent
+-          </span>
+-        ) : (
+           <>
+             <GavelIcon aria-hidden className="size-3 shrink-0 text-rose-600 dark:text-rose-300/90" />
+             <span className="min-w-0 truncate font-medium text-rose-600 dark:text-rose-300/90">
+@@ -139,14 +144,7 @@ export function BuilderPane(props: {
+         data-testid="codev-pane-messages"
+         className="min-h-0 flex-1 overflow-auto rounded-md bg-muted/30 p-2 text-muted-foreground"
+       >
+-        {/*
+-          The fourth thing the plan asks for. `codev-agent` publishes it in the
+-          same workspace-scoped request as the phase; this page is not wired to
+-          that yet. A blank box would read as "this builder has said nothing",
+-          which is a claim about the builder rather than about what reached the
+-          browser — and it would be wrong.
+-        */}
+-        Messages not read here yet — published by codev-agent.
++        <MessageLines content={content} />
+       </div>
+ 
+       <footer className="flex min-w-0 items-baseline gap-2 text-muted-foreground">
+@@ -167,3 +165,99 @@ export function BuilderPane(props: {
+     </article>
+   );
+ }
++
++/**
++ * The phase line, and every branch names what it could not do.
++ *
++ * `absent` deserves its own words rather than the unavailable ones: the agent
++ * answered, and it does not publish this thread. That is ordinary for a thread
++ * Codev did not create, and reporting it as an unreachable agent would send a
++ * reader to look at a server that is fine.
++ */
++function PhaseLine({ content }: { readonly content: PaneContent }) {
++  if (content.kind === "unpaired") {
++    return (
++      <span className="text-muted-foreground/70">Phase needs a codev-agent credential</span>
++    );
++  }
++  if (content.kind === "unavailable") {
++    return <span className="text-muted-foreground/70">Phase unavailable — {content.signal}</span>;
++  }
++  if (content.kind === "absent") {
++    return <span className="text-muted-foreground/70">Not published by codev-agent</span>;
++  }
++  if (content.porch === null) {
++    // Read, and there is no porch project. Not the same as "could not read".
++    return <span className="text-muted-foreground/70">No porch project</span>;
++  }
++  return (
++    <>
++      <span className="min-w-0 truncate font-medium text-card-foreground">
++        {content.porch.phase}
++      </span>
++      {content.porch.currentPlanPhase === null ? null : (
++        <span className="min-w-0 truncate text-muted-foreground">
++          {content.porch.currentPlanPhase}
++        </span>
++      )}
++    </>
++  );
++}
++
++/**
++ * The last three messages, or why there are none to show.
++ *
++ * An empty box is a claim that this builder has said nothing. It is only true in
++ * one of these branches, and that branch says it in words.
++ */
++function MessageLines({ content }: { readonly content: PaneContent }) {
++  if (content.kind === "unpaired") {
++    return <span data-testid="codev-pane-messages-note">Pair this browser to read messages.</span>;
++  }
++  if (content.kind === "unavailable") {
++    return (
++      <span data-testid="codev-pane-messages-note">Messages unavailable — {content.signal}.</span>
++    );
++  }
++  if (content.kind === "absent") {
++    return <span data-testid="codev-pane-messages-note">codev-agent does not publish this thread.</span>;
++  }
++  if (content.messageLog === "unreadable") {
++    /* The agent could not open the message store. NOT "no messages" — that is a
++       claim about the builder, and this is a fact about the agent. */
++    return <span data-testid="codev-pane-messages-note">codev-agent could not read the message log.</span>;
++  }
++  if (content.messages.length === 0) {
++    return (
++      <span data-testid="codev-pane-messages-note">
++        {content.messageLog === "unknown"
++          ? /* An agent that predates the field HAS messages it is not sending. */
++            "This codev-agent does not send messages."
++          : "No messages."}
++      </span>
++    );
++  }
++  return (
++    <ol className="flex min-w-0 flex-col gap-1">
++      {content.messages.map((entry) => (
++        <li key={entry.id} data-testid="codev-pane-message" className="flex min-w-0 flex-col">
++          <span className="min-w-0 truncate font-medium text-card-foreground">
++            {entry.from}
++            {entry.held === true ? " · held" : ""}
++          </span>
++          <span className="min-w-0 break-words">
++            {entry.body}
++            {entry.truncated === true ? (
++              /* The agent cut this body at its limit. A truncated message that
++                 renders without saying so is one misreported as complete. */
++              <span data-testid="codev-pane-message-truncated" className="text-muted-foreground/70">
++                {" "}
++                […truncated]
++              </span>
++            ) : null}
++          </span>
++        </li>
++      ))}
++    </ol>
++  );
++}
+diff --git a/apps/web/src/codev/GateApproval.tsx b/apps/web/src/codev/GateApproval.tsx
+new file mode 100644
+index 000000000..486991ed5
+--- /dev/null
++++ b/apps/web/src/codev/GateApproval.tsx
+@@ -0,0 +1,269 @@
++/**
++ * Codev customization (spec 250), phase 10 — approving the gate, from t3code.
++ *
++ * ## Four outcomes get four renderings, and that is the whole point of the file
++ *
++ * approved, refused, **unconfirmed**, **session ended**. Two of those are answers
++ * that are not "no", and rendering them in the refusal's red is how a human ends
++ * up approving twice at the one moment a duplicate costs something. So:
++ *
++ *   approved        stated with the SERVER's timestamp, machine and session id.
++ *                   Never this browser's clock, never the stored machine label.
++ *   refused         the agent's own signal and words.
++ *   unconfirmed     "could not tell", in the informational treatment, with what
++ *                   to go and look at. Never the refusal styling.
++ *   session ended   the session is dropped and a token field comes back, because
++ *                   what this person needs is a new session, not a retry.
++ *
++ * ## Where `projectId` comes from, and why it is not on the gate
++ *
++ * `codev-agent` publishes the porch projection — project id included — for every
++ * identity in the workspace, and this page already reads it for the builder
++ * panes. Putting a project id on the thread's gate block as well would be a
++ * second copy of a fact the agent already owns, and the two could disagree. So
++ * the button is enabled only when the agent has said which project this thread
++ * is, and says so plainly when it has not.
++ */
++
++import { useState } from "react";
++
++import { Button } from "../components/ui/button";
++import { Input } from "../components/ui/input";
++import { approveGate, openHumanSession, type ApprovalOutcome, type ApprovalProgress, type HumanSession } from "./approval";
++import { PairingPanel } from "./PairingPanel";
++import { useCodevAgent } from "./useCodevAgent";
++
++function porchProjectFor(
++  state: ReturnType<typeof useCodevAgent>["state"],
++  threadId: string,
++): { readonly projectId: string } | null {
++  if (state.kind !== "read") return null;
++  const identity = state.snapshot.identities.find((candidate) => candidate.threadId === threadId);
++  const porch = identity?.porch;
++  return porch === undefined ? null : { projectId: porch.projectId };
++}
++
++export function GateApproval(props: {
++  readonly threadId: string;
++  readonly gateName: string;
++  readonly fetchImpl?: typeof globalThis.fetch;
++}) {
++  const { threadId, gateName } = props;
++  const fetchImpl = props.fetchImpl ?? globalThis.fetch.bind(globalThis);
++  const agent = useCodevAgent();
++
++  const [pairingOpen, setPairingOpen] = useState(false);
++  const [sessionToken, setSessionToken] = useState("");
++  const [session, setSession] = useState<HumanSession | null>(null);
++  const [busy, setBusy] = useState(false);
++  const [progress, setProgress] = useState<ApprovalProgress | null>(null);
++  const [outcome, setOutcome] = useState<ApprovalOutcome | null>(null);
++  const [problem, setProblem] = useState<string | null>(null);
++
++  const pairing = agent.pairing;
++  const project = porchProjectFor(agent.state, threadId);
++
++  async function approve(): Promise<void> {
++    if (pairing === null || project === null) return;
++    setBusy(true);
++    setProblem(null);
++    setOutcome(null);
++    setProgress(null);
++    try {
++      /*
++       * A SESSION IS OPENED PER APPROVAL when there is not one in hand, and it
++       * costs its own single-use token. That is the ceremony, not an accident of
++       * this UI: the machine credential says which browser, the session token
++       * makes this particular act a distinct recorded one.
++       */
++      let live = session;
++      if (live === null) {
++        const opened = await openHumanSession(fetchImpl, pairing, sessionToken.trim());
++        if (!opened.ok) {
++          setProblem(`${opened.signal}: ${opened.message}`);
++          return;
++        }
++        live = opened.session;
++        setSession(live);
++        setSessionToken("");
++      }
++      const result = await approveGate(
++        fetchImpl,
++        pairing,
++        live,
++        { projectId: project.projectId, gateName },
++        setProgress,
++      );
++      setOutcome(result);
++      if (!result.ok && result.sessionEnded === true) {
++        // Dropped rather than kept, so what comes back is a token field and not
++        // an Approve button that can only ever fail.
++        setSession(null);
++      }
++      agent.refresh();
++    } finally {
++      setBusy(false);
++      setProgress(null);
++    }
++  }
++
++  if (pairingOpen) {
++    return (
++      <div data-testid="codev-gate-approval" className="mx-auto w-full max-w-3xl">
++        <PairingPanel
++          fetchImpl={fetchImpl}
++          onPaired={(next) => {
++            const stored = agent.pair(next);
++            if (stored.ok) setPairingOpen(false);
++            return stored;
++          }}
++          onCancel={() => setPairingOpen(false)}
++        />
++      </div>
++    );
++  }
++
++  return (
++    <section
++      data-testid="codev-gate-approval"
++      data-codev-approval-state={
++        outcome === null ? "idle" : outcome.ok ? "approved" : outcome.unconfirmed === true ? "unconfirmed" : "refused"
++      }
++      className="mx-auto flex w-full max-w-3xl min-w-0 flex-col gap-2 text-sm"
++    >
++      {pairing === null ? (
++        <div className="flex min-w-0 flex-col gap-1">
++          <p data-testid="codev-gate-approval-unpaired" className="text-muted-foreground text-xs">
++            {agent.pairingRead.kind === "unreadable"
++              ? /* NOT "not paired". The store could not be read, so whether this
++                   browser holds a credential is unknown, and sending someone to
++                   spend a fresh token is the wrong next action. */
++                `Whether this browser is paired is unknown: ${agent.pairingRead.message}`
++              : "This browser holds no codev-agent credential, so it cannot approve yet."}
++          </p>
++          <div>
++            <Button
++              type="button"
++              size="sm"
++              data-testid="codev-gate-approval-pair"
++              onClick={() => setPairingOpen(true)}
++            >
++              Pair this browser
++            </Button>
++          </div>
++        </div>
++      ) : project === null ? (
++        <p data-testid="codev-gate-approval-no-project" className="text-muted-foreground text-xs">
++          {agent.state.kind === "read"
++            ? "codev-agent publishes no porch project for this thread, so there is nothing to approve here."
++            : `codev-agent has not been read yet: ${agent.state.message}`}
++        </p>
++      ) : (
++        <div className="flex min-w-0 flex-col gap-2">
++          {session === null ? (
++            <div className="flex min-w-0 flex-col gap-1">
++              <label
++                htmlFor="codev-gate-session-token"
++                className="font-medium text-muted-foreground text-xs"
++              >
++                Session token —{" "}
++                <code className="font-mono">afx pair issue --purpose client-session</code>
++              </label>
++              <Input
++                id="codev-gate-session-token"
++                data-testid="codev-gate-session-token"
++                value={sessionToken}
++                onChange={(event) => setSessionToken(event.target.value)}
++                autoComplete="off"
++                spellCheck={false}
++              />
++            </div>
++          ) : null}
++          <div className="flex shrink-0 flex-wrap items-center gap-2">
++            <Button
++              type="button"
++              size="sm"
++              data-testid="codev-gate-approve"
++              disabled={busy || (session === null && sessionToken.trim() === "")}
++              onClick={() => void approve()}
++            >
++              {busy ? "Approving…" : `Approve ${gateName}`}
++            </Button>
++            <span data-testid="codev-gate-approval-machine" className="text-muted-foreground text-xs">
++              as {pairing.machine} on {pairing.targetId}
++            </span>
++            <Button type="button" size="sm" variant="ghost" onClick={agent.unpair}>
++              Forget credential
++            </Button>
++          </div>
++        </div>
++      )}
++
++      {progress === null ? null : (
++        /*
++          The SERVER's own phase and check names, never a guess made here. A
++          button that says "Approving…" for four minutes with nothing behind it
++          is indistinguishable from one that is stuck.
++        */
++        <p data-testid="codev-gate-approval-progress" className="text-muted-foreground text-xs">
++          {progress.state === "running" ? "Running" : "Submitted"} as {progress.operationId}
++          {progress.phase === undefined ? "" : ` — phase ${progress.phase}`}
++          {progress.checks === undefined || progress.checks.length === 0
++            ? ""
++            : ` — checks: ${progress.checks.join(", ")}`}
++        </p>
++      )}
++
++      {problem === null ? null : (
++        <p data-testid="codev-gate-approval-problem" className="text-destructive-foreground text-xs">
++          {problem}
++        </p>
++      )}
++
++      {outcome === null ? null : outcome.ok ? (
++        <div data-testid="codev-gate-approval-approved" className="flex min-w-0 flex-col gap-0.5 text-xs">
++          <p className="font-medium text-emerald-700 dark:text-emerald-300">
++            {outcome.alreadyApproved === true
++              ? /* Someone else may have approved it, on another machine. Reported
++                   as what it is rather than as "you approved this". */
++                `${gateName} was already approved`
++              : `${gateName} approved`}
++            {" · "}
++            {outcome.approvedAt} · {outcome.machine} ·{" "}
++            {outcome.sessionId === null ? "session unknown" : `session ${outcome.sessionId}`}
++          </p>
++          {outcome.authority === undefined ? null : (
++            <p className="text-muted-foreground">authority: {outcome.authority}</p>
++          )}
++          {outcome.delivery === undefined ? null : (
++            /* A SUCCESS WITH A CAVEAT, never a failure: none of the delivery
++               states means the gate is unapproved, and they want three different
++               remedies. */
++            <p className="text-amber-700 dark:text-amber-300">
++              {outcome.delivery}
++              {outcome.deliveryMessage === undefined ? "" : ` — ${outcome.deliveryMessage}`}
++            </p>
++          )}
++        </div>
++      ) : outcome.unconfirmed === true ? (
++        /*
++          "I COULD NOT TELL" IS NOT "NO", and it does not get the refusal's red.
++          The gate may well be approved; this text sends the reader to check
++          rather than to approve again.
++        */
++        <p data-testid="codev-gate-approval-unconfirmed" className="text-info text-xs">
++          Could not tell — {outcome.signal}: {outcome.message}
++        </p>
++      ) : outcome.sessionEnded === true ? (
++        <p data-testid="codev-gate-approval-session-ended" className="text-amber-700 text-xs dark:text-amber-300">
++          The session ended — {outcome.signal}: {outcome.message} Mint another session token and try
++          again.
++        </p>
++      ) : (
++        <p data-testid="codev-gate-approval-refused" className="text-destructive-foreground text-xs">
++          {outcome.signal}: {outcome.message}
++        </p>
++      )}
++    </section>
++  );
++}
+diff --git a/apps/web/src/codev/GatePanel.test.tsx b/apps/web/src/codev/GatePanel.test.tsx
+index bccd995ab..7dd598fbc 100644
+--- a/apps/web/src/codev/GatePanel.test.tsx
++++ b/apps/web/src/codev/GatePanel.test.tsx
+@@ -24,6 +24,7 @@ const render = (overrides: Record<string, unknown> | null) =>
+   renderToStaticMarkup(
+     <GatePanel
+       thread={{
++        id: "thread-1",
+         codevGate:
+           overrides === null
+             ? null
+diff --git a/apps/web/src/codev/GatePanel.tsx b/apps/web/src/codev/GatePanel.tsx
+index df0eb4f8b..45b5cda70 100644
+--- a/apps/web/src/codev/GatePanel.tsx
++++ b/apps/web/src/codev/GatePanel.tsx
+@@ -26,6 +26,7 @@ import { GavelIcon } from "lucide-react";
+ 
+ import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
+ import { formatRelativeTimeLabel } from "../timestampFormat";
++import { GateApproval } from "./GateApproval";
+ import { resolveCodevGateState, type CodevGateFields, type CodevGateState } from "./gateState";
+ 
+ function RequestedAt({ requestedAt }: { readonly requestedAt: string }) {
+@@ -48,10 +49,25 @@ function RequestedAt({ requestedAt }: { readonly requestedAt: string }) {
+  * the derivation wrong: there is one `resolveCodevGateState` and both this and
+  * the sidebar row go through it.
+  */
+-export function GatePanel({ thread }: { readonly thread: CodevGateFields | null | undefined }) {
++export function GatePanel({
++  thread,
++}: {
++  readonly thread: (CodevGateFields & { readonly id: string }) | null | undefined;
++}) {
+   const state = resolveCodevGateState(thread);
+-  if (state.kind === "none") return null;
+-  return <GatePanelBody state={state} />;
++  if (state.kind === "none" || thread === null || thread === undefined) return null;
++  return (
++    <div className="flex min-w-0 flex-col gap-2">
++      <GatePanelBody state={state} />
++      {/*
++        Phase 10. The panel above says what is being asked; this says yes to it,
++        over codev-agent's capability path and this server's same-origin proxy.
++        Kept as its own component so the read-only panel stays a pure function of
++        the thread and its tests do not acquire a network.
++      */}
++      <GateApproval threadId={thread.id} gateName={state.gateName} />
++    </div>
++  );
+ }
+ 
+ export function GatePanelBody({ state }: { readonly state: CodevGateState }) {
+diff --git a/apps/web/src/codev/PairingPanel.tsx b/apps/web/src/codev/PairingPanel.tsx
+new file mode 100644
+index 000000000..6c575cef2
+--- /dev/null
++++ b/apps/web/src/codev/PairingPanel.tsx
+@@ -0,0 +1,216 @@
++/**
++ * Codev customization (spec 250), phase 10 — pairing this browser with a codev-agent.
++ *
++ * ## t3code gains an entry POINT, not authority
++ *
++ * Everything here travels the ceremony that already exists and is already tested:
++ * `afx pair issue --purpose machine-credential` mints the token this form spends,
++ * and `afx pair revoke <machine>` takes the result away. Nothing in t3code decides
++ * who may approve. Being signed into t3code buys you this form and nothing else.
++ *
++ * ## Four fields, and each one is a thing this browser genuinely does not know
++ *
++ *   target         which configured codev-agent. Chosen from the server's list by
++ *                  id; the origins are the server's and never reach this page.
++ *   machine        the name this credential is issued for, and the name
++ *                  `afx pair revoke` takes back.
++ *   workspace      the absolute workspace path on that host. It identifies which
++ *                  workspace this browser is approving in, and there is no way to
++ *                  derive it from here — t3code's own project path is a different
++ *                  machine's filesystem in the general case.
++ *   token          the one secret a human retypes. Single-use, minutes long.
++ *
++ * ## The token field is not a password field, and that is on purpose
++ *
++ * It is transcribed from a terminal, single-use, and expires in minutes. Masking
++ * it would stop the one person who needs to check they typed it correctly while
++ * protecting a value that is worthless a minute later.
++ */
++
++import { useEffect, useId, useState } from "react";
++
++import { Button } from "../components/ui/button";
++import { Input } from "../components/ui/input";
++import { Label } from "../components/ui/label";
++import { fetchAgentTargets, redeemPairing, type CodevPairing } from "./pairing";
++
++export function PairingPanel(props: {
++  readonly onPaired: (pairing: CodevPairing) => { readonly ok: true } | { readonly ok: false; readonly message: string };
++  readonly onCancel?: () => void;
++  readonly fetchImpl?: typeof globalThis.fetch;
++}) {
++  const { onPaired, onCancel } = props;
++  const fetchImpl = props.fetchImpl ?? globalThis.fetch.bind(globalThis);
++  const ids = useId();
++
++  const [targets, setTargets] = useState<readonly string[] | null>(null);
++  const [targetsProblem, setTargetsProblem] = useState<string | null>(null);
++  const [targetId, setTargetId] = useState("");
++  const [machine, setMachine] = useState("");
++  const [workspacePath, setWorkspacePath] = useState("");
++  const [token, setToken] = useState("");
++  const [busy, setBusy] = useState(false);
++  const [problem, setProblem] = useState<string | null>(null);
++
++  useEffect(() => {
++    let live = true;
++    void fetchAgentTargets(fetchImpl).then((read) => {
++      if (!live) return;
++      if (read.ok) {
++        setTargets(read.targets.map((target) => target.id));
++        setTargetId((current) => (current === "" ? (read.targets[0]?.id ?? "") : current));
++        setTargetsProblem(null);
++        return;
++      }
++      /*
++       * AN EMPTY LIST ALWAYS CARRIES ITS REASON.
++       *
++       * A picker with no entries and no explanation reads as a broken feature.
++       * "Nobody configured a codev-agent on this server" and "this server could
++       * not be asked" send a reader to two different places.
++       */
++      setTargets([]);
++      setTargetsProblem(read.message);
++    });
++    return () => {
++      live = false;
++    };
++  }, [fetchImpl]);
++
++  const ready =
++    targetId.trim() !== "" && machine.trim() !== "" && workspacePath.trim() !== "" && token.trim() !== "";
++
++  async function submit(): Promise<void> {
++    setBusy(true);
++    setProblem(null);
++    try {
++      const outcome = await redeemPairing(fetchImpl, {
++        targetId: targetId.trim(),
++        machine: machine.trim(),
++        token: token.trim(),
++        workspacePath: workspacePath.trim(),
++      });
++      if (!outcome.ok) {
++        // The agent's own signal and words, verbatim. A refusal reworded here
++        // would be this page guessing at a decision another server made.
++        setProblem(`${outcome.signal}: ${outcome.message}`);
++        return;
++      }
++      const stored = onPaired(outcome.pairing);
++      if (!stored.ok) {
++        /*
++         * The credential was issued and this browser cannot keep it. Saying
++         * "pairing failed" would send the human to spend another token on a
++         * problem another token will not fix — the token is already spent.
++         */
++        setProblem(
++          `the agent issued a credential and this browser could not store it (${stored.message}). `
++            + "That token is spent; mint another once storage works.",
++        );
++        return;
++      }
++      setToken("");
++    } finally {
++      setBusy(false);
++    }
++  }
++
++  return (
++    <form
++      data-testid="codev-pairing-panel"
++      className="flex min-w-0 flex-col gap-3 rounded-lg border border-sidebar-border/60 bg-card p-3 text-sm"
++      onSubmit={(event) => {
++        event.preventDefault();
++        if (ready && !busy) void submit();
++      }}
++    >
++      <div className="flex min-w-0 flex-col gap-1">
++        <p className="font-medium text-card-foreground">Pair this browser with codev-agent</p>
++        <p data-testid="codev-pairing-explainer" className="text-muted-foreground text-xs">
++          Approving a gate needs a machine credential of its own. Mint a token with{" "}
++          <code className="font-mono">afx pair issue --purpose machine-credential</code> and paste it
++          below. Signing into t3code does not grant approval; this credential does, and{" "}
++          <code className="font-mono">afx pair revoke</code> takes it away.
++        </p>
++      </div>
++
++      <div className="flex min-w-0 flex-col gap-1">
++        <Label htmlFor={`${ids}-target`}>codev-agent</Label>
++        {targets !== null && targets.length === 0 ? (
++          <p data-testid="codev-pairing-no-targets" className="text-muted-foreground text-xs">
++            {targetsProblem ?? "this server proxies to no codev-agent, and did not say why"}
++          </p>
++        ) : (
++          <select
++            id={`${ids}-target`}
++            data-testid="codev-pairing-target"
++            value={targetId}
++            onChange={(event) => setTargetId(event.target.value)}
++            className="h-8 min-w-0 rounded-md border border-input bg-popover px-2 text-sm"
++          >
++            {targets === null ? <option value="">Loading…</option> : null}
++            {(targets ?? []).map((id) => (
++              <option key={id} value={id}>
++                {id}
++              </option>
++            ))}
++          </select>
++        )}
++      </div>
++
++      <div className="flex min-w-0 flex-col gap-1">
++        <Label htmlFor={`${ids}-machine`}>Machine name</Label>
++        <Input
++          id={`${ids}-machine`}
++          data-testid="codev-pairing-machine"
++          value={machine}
++          onChange={(event) => setMachine(event.target.value)}
++          placeholder="ipad"
++          autoComplete="off"
++        />
++      </div>
++
++      <div className="flex min-w-0 flex-col gap-1">
++        <Label htmlFor={`${ids}-workspace`}>Workspace path</Label>
++        <Input
++          id={`${ids}-workspace`}
++          data-testid="codev-pairing-workspace"
++          value={workspacePath}
++          onChange={(event) => setWorkspacePath(event.target.value)}
++          placeholder="/Users/you/dev/your-workspace"
++          autoComplete="off"
++          spellCheck={false}
++        />
++      </div>
++
++      <div className="flex min-w-0 flex-col gap-1">
++        <Label htmlFor={`${ids}-token`}>Pairing token</Label>
++        <Input
++          id={`${ids}-token`}
++          data-testid="codev-pairing-token"
++          value={token}
++          onChange={(event) => setToken(event.target.value)}
++          autoComplete="off"
++          spellCheck={false}
++        />
++      </div>
++
++      {problem === null ? null : (
++        <p data-testid="codev-pairing-problem" className="text-destructive-foreground text-xs">
++          {problem}
++        </p>
++      )}
++
++      <div className="flex shrink-0 items-center gap-2">
++        <Button type="submit" size="sm" disabled={!ready || busy} data-testid="codev-pairing-submit">
++          {busy ? "Pairing…" : "Pair"}
++        </Button>
++        {onCancel === undefined ? null : (
++          <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
++            Cancel
++          </Button>
++        )}
++      </div>
++    </form>
++  );
++}
+diff --git a/apps/web/src/codev/agentState.test.ts b/apps/web/src/codev/agentState.test.ts
+new file mode 100644
+index 000000000..0a59790a7
+--- /dev/null
++++ b/apps/web/src/codev/agentState.test.ts
+@@ -0,0 +1,244 @@
++/**
++ * Codev customization (spec 250), phase 10 — what codev-agent published, read here.
++ *
++ * The claims:
++ *
++ *  - a payload this build cannot read is REFUSED, and refusal is reported as
++ *    "could not read", never as an empty workspace. A half-understood snapshot
++ *    would put a phase on screen that nothing published.
++ *  - the four "cannot show a phase" branches are four different facts and none of
++ *    them is a blank line. `unpaired` is fixed in a form, `unavailable` is a
++ *    server to look at, `absent` is ordinary, and `porch: null` means the agent
++ *    answered and there is no project.
++ *  - the message log's three states survive to the pane. An agent that predates
++ *    the field HAS messages it is not sending, and that is not "no messages".
++ */
++
++import { describe, expect, it } from "vite-plus/test";
++
++import {
++  readWorkspaceState,
++  resolvePaneContent,
++  validateAgentSnapshot,
++  type AgentStateRead,
++} from "./agentState";
++import type { CodevPairing } from "./pairing";
++
++const pairing: CodevPairing = {
++  targetId: "local",
++  machine: "ipad",
++  credential: "cred-1.secret",
++  workspacePath: "/Users/chris/dev/codev",
++};
++
++const snapshotBody = {
++  schemaVersion: 1,
++  workspacePath: "/Users/chris/dev/codev",
++  generatedAt: "2026-08-31T05:00:00.000Z",
++  protocol: {
++    messageLog: "available",
++    identities: [
++      {
++        backing: "thread",
++        threadId: "thread-1",
++        role: "builder",
++        workspacePath: "/Users/chris/dev/codev",
++        management: "managed",
++        porch: {
++          projectId: "250",
++          title: "t3code is the front end",
++          protocol: "SPIR",
++          phase: "implement",
++          currentPlanPhase: "phase_10",
++          gates: {},
++          artifactRoot: "codev",
++          statusPath: "codev/projects/250/status.yaml",
++        },
++        messages: [
++          { id: "m3", from: "architect", at: "t3", body: "third" },
++          { id: "m2", from: "architect", at: "t2", body: "second", truncated: true },
++          { id: "m1", from: "architect", at: "t1", body: "first" },
++          { id: "m0", from: "architect", at: "t0", body: "zeroth" },
++        ],
++      },
++    ],
++  },
++};
++
++describe("codev agent snapshot validation (spec 250, phase 10)", () => {
++  it("reads the fields the grid needs", () => {
++    const snapshot = validateAgentSnapshot(snapshotBody);
++    expect(snapshot).not.toBeNull();
++    expect(snapshot?.identities[0]?.porch?.phase).toBe("implement");
++    expect(snapshot?.messageLog).toBe("available");
++  });
++
++  /**
++   * The mirror is kept honest by REFUSAL, not by hope. This module cannot import
++   * the agent's own types, so the only thing standing between a changed wire
++   * shape and a fabricated phase is this check.
++   */
++  it("refuses a payload missing what this build reads", () => {
++    expect(validateAgentSnapshot({ protocol: { identities: [] } })).toBeNull();
++    expect(validateAgentSnapshot({ ...snapshotBody, protocol: {} })).toBeNull();
++    expect(
++      validateAgentSnapshot({
++        ...snapshotBody,
++        protocol: { identities: [{ role: "builder", porch: { projectId: "250" } }] },
++      }),
++    ).toBeNull();
++  });
++
++  /** An agent that GAINS a field still validates; only a missing one refuses. */
++  it("tolerates fields this build does not read", () => {
++    expect(
++      validateAgentSnapshot({
++        ...snapshotBody,
++        somethingNew: true,
++        protocol: { ...snapshotBody.protocol, alsoNew: 1 },
++      }),
++    ).not.toBeNull();
++  });
++});
++
++describe("codev workspace state read (spec 250, phase 10)", () => {
++  it("reads over the same-origin proxy with the machine credential", async () => {
++    let seen = "";
++    let headers: Record<string, string> = {};
++    const read = await readWorkspaceState(
++      (async (input: RequestInfo | URL, init?: RequestInit) => {
++        seen = String(input);
++        headers = (init?.headers ?? {}) as Record<string, string>;
++        return new Response(JSON.stringify(snapshotBody), { status: 200 });
++      }) as typeof globalThis.fetch,
++      pairing,
++    );
++    expect(read.kind).toBe("read");
++    expect(seen).toBe(
++      "/api/codev/agent/local/api/agent/v1/workspaces/L1VzZXJzL2NocmlzL2Rldi9jb2Rldg/state",
++    );
++    expect(headers["x-codev-machine-credential"]).toBe("cred-1.secret");
++  });
++
++  it("reports a refusal with the agent's own signal", async () => {
++    const read = await readWorkspaceState(
++      async () =>
++        new Response(JSON.stringify({ signal: "MACHINE_CREDENTIAL_REVOKED", message: "revoked" }), {
++          status: 401,
++        }),
++      pairing,
++    );
++    expect(read).toEqual({
++      kind: "unreachable",
++      signal: "MACHINE_CREDENTIAL_REVOKED",
++      message: "revoked",
++    });
++  });
++
++  /** A 200 this build cannot read is NOT an empty workspace, and says so. */
++  it("reports an unreadable 200 as unreadable, never as an empty workspace", async () => {
++    const read = await readWorkspaceState(
++      async () => new Response(JSON.stringify({ hello: "world" }), { status: 200 }),
++      pairing,
++    );
++    expect(read.kind).toBe("unreadable");
++    if (read.kind !== "unreadable") return;
++    expect(read.message).toContain("could not read");
++  });
++});
++
++describe("pane content (spec 250, phase 10)", () => {
++  const read: AgentStateRead = {
++    kind: "read",
++    snapshot: validateAgentSnapshot(snapshotBody) as NonNullable<
++      ReturnType<typeof validateAgentSnapshot>
++    >,
++  };
++
++  it("carries the phase, the plan phase and the last three messages, newest first", () => {
++    const content = resolvePaneContent(read, "thread-1");
++    expect(content.kind).toBe("known");
++    if (content.kind !== "known") return;
++    expect(content.porch?.phase).toBe("implement");
++    expect(content.porch?.currentPlanPhase).toBe("phase_10");
++    expect(content.messages.map((entry) => entry.id)).toEqual(["m3", "m2", "m1"]);
++    expect(content.messages[1]?.truncated).toBe(true);
++  });
++
++  /**
++   * Four ways of not having a phase, and each one names itself. A blank line for
++   * all four would be a claim about the builder rather than about what reached
++   * the browser.
++   */
++  it("keeps unpaired, unavailable and absent as three different answers", () => {
++    expect(
++      resolvePaneContent({ kind: "unpaired", message: "no credential" }, "thread-1").kind,
++    ).toBe("unpaired");
++    expect(
++      resolvePaneContent(
++        { kind: "unreachable", signal: "CODEV_AGENT_UPSTREAM_GONE", message: "gone" },
++        "thread-1",
++      ).kind,
++    ).toBe("unavailable");
++    expect(resolvePaneContent(read, "thread-missing").kind).toBe("absent");
++  });
++
++  it("distinguishes an unreadable message log from a builder that has said nothing", () => {
++    const unreadable = resolvePaneContent(
++      {
++        kind: "read",
++        snapshot: validateAgentSnapshot({
++          ...snapshotBody,
++          protocol: {
++            ...snapshotBody.protocol,
++            messageLog: "unreadable",
++            identities: [{ ...snapshotBody.protocol.identities[0], messages: undefined }],
++          },
++        }) as NonNullable<ReturnType<typeof validateAgentSnapshot>>,
++      },
++      "thread-1",
++    );
++    expect(unreadable.kind).toBe("known");
++    if (unreadable.kind !== "known") return;
++    expect(unreadable.messageLog).toBe("unreadable");
++    expect(unreadable.messages).toEqual([]);
++  });
++
++  /** An agent predating the field HAS messages it is not sending. */
++  it("reports an absent messageLog as unknown rather than as available", () => {
++    const older = resolvePaneContent(
++      {
++        kind: "read",
++        snapshot: validateAgentSnapshot({
++          ...snapshotBody,
++          protocol: {
++            identities: snapshotBody.protocol.identities,
++          },
++        }) as NonNullable<ReturnType<typeof validateAgentSnapshot>>,
++      },
++      "thread-1",
++    );
++    expect(older.kind).toBe("known");
++    if (older.kind !== "known") return;
++    expect(older.messageLog).toBe("unknown");
++  });
++
++  it("says the agent published no porch project rather than showing an empty phase", () => {
++    const content = resolvePaneContent(
++      {
++        kind: "read",
++        snapshot: validateAgentSnapshot({
++          ...snapshotBody,
++          protocol: {
++            ...snapshotBody.protocol,
++            identities: [{ ...snapshotBody.protocol.identities[0], porch: undefined }],
++          },
++        }) as NonNullable<ReturnType<typeof validateAgentSnapshot>>,
++      },
++      "thread-1",
++    );
++    expect(content.kind).toBe("known");
++    if (content.kind !== "known") return;
++    expect(content.porch).toBeNull();
++  });
++});
+diff --git a/apps/web/src/codev/agentState.ts b/apps/web/src/codev/agentState.ts
+new file mode 100644
+index 000000000..1a229be7d
+--- /dev/null
++++ b/apps/web/src/codev/agentState.ts
+@@ -0,0 +1,271 @@
++/**
++ * Codev customization (spec 250), phase 10 — what `codev-agent` publishes, read here at last.
++ *
++ * Phase 9's panes said "Phase not read here yet — published by codev-agent",
++ * which was the true sentence at the time: `codev-agent` has always published the
++ * porch phase and the last messages, workspace-scoped, in ONE request for the
++ * whole grid, and this page had no way to reach it. The same-origin proxy is that
++ * way, so this is the module that replaces the sentence with the data.
++ *
++ * ## One request for the grid, not one per pane
++ *
++ * `GET /api/agent/v1/workspaces/<b64>/state` answers for every identity in the
++ * workspace at once. That is why the plan's ban on six continuous subscriptions
++ * was never in tension with showing this: six panes cost one request.
++ *
++ * The SSE stream beside it is deliberately not proxied — the proxy buffers, and a
++ * buffered stream is live on the wire and empty in the page. So this polls, and
++ * the interval is a stated number rather than a hidden one.
++ *
++ * ## The wire shape is hand-mirrored, and the mirror is kept honest by refusal
++ *
++ * `agent-routes.ts` lives in the Codev package and reaches `node:fs` and
++ * `better-sqlite3` through its import graph, so this cannot import it — the same
++ * reason `apps/client/src/connection/types.ts` mirrors it. A payload this build
++ * does not recognise is REFUSED rather than rendered: a half-understood snapshot
++ * would put a phase on screen that nothing published.
++ *
++ * ## "I could not tell" is spelled differently from "no", in three places
++ *
++ * Not paired, could not reach the agent, and reached it and could not read the
++ * answer are three facts with three different next actions. A pane that showed a
++ * blank line for all three would be claiming the builder has no phase, which is a
++ * claim about the builder rather than about what reached the browser.
++ */
++
++import { agentUrl, encodeWorkspacePath, machineHeaders, type CodevPairing } from "./pairing";
++
++/** The porch projection, as `codev-agent` publishes it. */
++export interface CodevAgentPorch {
++  readonly projectId: string;
++  readonly title: string;
++  readonly protocol: string;
++  readonly phase: string;
++  readonly currentPlanPhase: string | null;
++}
++
++/** One message addressed to an agent, newest first. */
++export interface CodevAgentMessage {
++  readonly id: string;
++  readonly from: string;
++  readonly at: string;
++  readonly body: string;
++  /**
++   * NOT COSMETIC. A body cut at the agent's limit that renders without saying so
++   * is a message misreported as complete.
++   */
++  readonly truncated?: true;
++  readonly held?: true;
++}
++
++export interface CodevAgentIdentity {
++  readonly threadId?: string;
++  readonly role: "architect" | "builder" | "unmanaged";
++  readonly porch?: CodevAgentPorch;
++  /** Absent means none was published. Whether any could be READ is `messageLog`. */
++  readonly messages?: readonly CodevAgentMessage[];
++}
++
++export interface CodevAgentSnapshot {
++  readonly workspacePath: string;
++  readonly generatedAt: string;
++  readonly identities: readonly CodevAgentIdentity[];
++  /**
++   * Whether the message log was readable at all.
++   *
++   * Absent is a THIRD situation: an agent predating the field has messages it is
++   * not sending. An `unreadable` one could not open the store. An `available` one
++   * answered, possibly with nothing. Three facts, three words.
++   */
++  readonly messageLog?: "available" | "unreadable";
++}
++
++function isRecord(value: unknown): value is Record<string, unknown> {
++  return typeof value === "object" && value !== null && !Array.isArray(value);
++}
++
++function str(value: unknown): value is string {
++  return typeof value === "string";
++}
++
++function porch(value: unknown): value is CodevAgentPorch {
++  return (
++    isRecord(value) &&
++    str(value.projectId) &&
++    str(value.title) &&
++    str(value.protocol) &&
++    str(value.phase) &&
++    (value.currentPlanPhase === null || str(value.currentPlanPhase))
++  );
++}
++
++function message(value: unknown): value is CodevAgentMessage {
++  return (
++    isRecord(value) &&
++    str(value.id) &&
++    str(value.from) &&
++    str(value.at) &&
++    str(value.body) &&
++    (value.truncated === undefined || value.truncated === true) &&
++    (value.held === undefined || value.held === true)
++  );
++}
++
++function identity(value: unknown): value is CodevAgentIdentity {
++  return (
++    isRecord(value) &&
++    (value.threadId === undefined || str(value.threadId)) &&
++    (value.role === "architect" || value.role === "builder" || value.role === "unmanaged") &&
++    (value.porch === undefined || porch(value.porch)) &&
++    (value.messages === undefined ||
++      (Array.isArray(value.messages) && value.messages.every(message)))
++  );
++}
++
++/**
++ * The snapshot, or null.
++ *
++ * Deliberately narrower than the wire: this validates the fields the grid reads
++ * and ignores the rest, so an agent that GAINS a field still validates. What it
++ * refuses is a payload missing what this build needs — and a refusal is reported
++ * as "could not read", never as an empty workspace.
++ */
++export function validateAgentSnapshot(value: unknown): CodevAgentSnapshot | null {
++  if (!isRecord(value)) return null;
++  const protocol = value.protocol;
++  if (!isRecord(protocol)) return null;
++  if (!str(value.workspacePath) || !str(value.generatedAt)) return null;
++  if (!Array.isArray(protocol.identities) || !protocol.identities.every(identity)) return null;
++  const messageLog = protocol.messageLog;
++  if (messageLog !== undefined && messageLog !== "available" && messageLog !== "unreadable") {
++    return null;
++  }
++  return {
++    workspacePath: value.workspacePath,
++    generatedAt: value.generatedAt,
++    identities: protocol.identities,
++    ...(messageLog === undefined ? {} : { messageLog }),
++  };
++}
++
++export type AgentStateRead =
++  | { readonly kind: "read"; readonly snapshot: CodevAgentSnapshot }
++  /** The request did not produce an answer this page could use. */
++  | { readonly kind: "unreachable"; readonly signal: string; readonly message: string }
++  /** It answered 200 and this build could not read the payload. Not "empty". */
++  | { readonly kind: "unreadable"; readonly signal: string; readonly message: string };
++
++/** One read of the whole workspace, over the same-origin proxy. */
++export async function readWorkspaceState(
++  fetchImpl: typeof globalThis.fetch,
++  pairing: CodevPairing,
++): Promise<AgentStateRead> {
++  const url = agentUrl(
++    pairing.targetId,
++    `/api/agent/v1/workspaces/${encodeURIComponent(encodeWorkspacePath(pairing.workspacePath))}/state`,
++  );
++  let response: Response;
++  try {
++    response = await fetchImpl(url, {
++      headers: { accept: "application/json", ...machineHeaders(pairing) },
++    });
++  } catch (error) {
++    return {
++      kind: "unreachable",
++      signal: "CODEV_AGENT_STATE_UNREACHABLE",
++      message: `codev-agent could not be reached: ${(error as Error).message}`,
++    };
++  }
++  let body: unknown;
++  try {
++    body = await response.json();
++  } catch {
++    body = null;
++  }
++  const fields = isRecord(body) ? body : {};
++  if (response.status !== 200) {
++    return {
++      kind: "unreachable",
++      signal: str(fields.signal) ? fields.signal : `HTTP_${response.status}`,
++      message: str(fields.message)
++        ? fields.message
++        : `codev-agent answered ${response.status} for this workspace`,
++    };
++  }
++  const snapshot = validateAgentSnapshot(body);
++  if (snapshot === null) {
++    return {
++      kind: "unreadable",
++      signal: "CODEV_AGENT_STATE_UNREADABLE",
++      message:
++        "codev-agent answered with a snapshot this build does not understand. Nothing here says "
++        + "the workspace is empty; it says this page could not read the answer.",
++    };
++  }
++  return { kind: "read", snapshot };
++}
++
++/**
++ * How often the grid re-reads.
++ *
++ * One request for every pane, so this is one request per interval regardless of
++ * how many builders are on screen. Five seconds is chosen for a screen someone is
++ * WATCHING: a phase that changed thirty seconds ago and still reads as the old
++ * one is the staleness this page exists to remove. It is not a stream and does
++ * not pretend to be — `generatedAt` travels so the pane can say how old it is.
++ */
++export const AGENT_STATE_POLL_MS = 5_000;
++
++/** How many messages a pane shows. The plan's number, kept in one place. */
++export const PANE_MESSAGE_COUNT = 3;
++
++/**
++ * What one pane can say, and every branch is a different fact.
++ *
++ * The three "cannot" branches are not interchangeable. `unpaired` is something a
++ * human fixes in ten seconds; `unavailable` is a server to go and look at;
++ * `absent` says the agent answered and does not publish this thread, which is
++ * ordinary for a thread Codev did not create.
++ */
++export type PaneContent =
++  | { readonly kind: "unpaired"; readonly message: string }
++  | { readonly kind: "unavailable"; readonly signal: string; readonly message: string }
++  | { readonly kind: "absent"; readonly message: string }
++  | {
++      readonly kind: "known";
++      readonly porch: CodevAgentPorch | null;
++      readonly messages: readonly CodevAgentMessage[];
++      /**
++       * Whether the message log could be read at all.
++       *
++       * `unknown` is an agent that predates the field; `unreadable` is one that
++       * could not open the store. Neither is "this builder has said nothing", and
++       * rendering an empty box for them would be a claim about the builder.
++       */
++      readonly messageLog: "available" | "unreadable" | "unknown";
++      readonly generatedAt: string;
++    };
++
++export function resolvePaneContent(
++  read: AgentStateRead | { readonly kind: "unpaired"; readonly message: string },
++  threadId: string,
++): PaneContent {
++  if (read.kind === "unpaired") return read;
++  if (read.kind !== "read") {
++    return { kind: "unavailable", signal: read.signal, message: read.message };
++  }
++  const found = read.snapshot.identities.find((candidate) => candidate.threadId === threadId);
++  if (found === undefined) {
++    return {
++      kind: "absent",
++      message: "codev-agent does not publish this thread",
++    };
++  }
++  return {
++    kind: "known",
++    porch: found.porch ?? null,
++    messages: (found.messages ?? []).slice(0, PANE_MESSAGE_COUNT),
++    messageLog: read.snapshot.messageLog ?? "unknown",
++    generatedAt: read.snapshot.generatedAt,
++  };
++}
+diff --git a/apps/web/src/codev/approval.test.ts b/apps/web/src/codev/approval.test.ts
+new file mode 100644
+index 000000000..5d08f1941
+--- /dev/null
++++ b/apps/web/src/codev/approval.test.ts
+@@ -0,0 +1,451 @@
++/**
++ * Codev customization (spec 250), phase 10 — the approval walk.
++ *
++ * FOUR OUTCOMES, and the two that a shorter port drops are the ones tested
++ * hardest here. `unconfirmed` and `sessionEnded` are both answers that are not
++ * "no", and each has its own way of being lost:
++ *
++ *   - a 200 whose body this page cannot read is UNCONFIRMED. A port that filled
++ *     `approvedAt` from the browser clock and `machine` from stored state would
++ *     report a complete approval record made of nothing, and would pass a naive
++ *     assertion while recording fiction. That is the test named "server-sourced".
++ *   - a 401 anywhere on the path is `sessionEnded`. Sessions idle out after 30
++ *     minutes, so this is ordinary; folding it into refusal leaves a human with an
++ *     Approve button they can only escape by reloading.
++ */
++
++import { describe, expect, it } from "vite-plus/test";
++
++import { approveGate, openHumanSession, type HumanSession } from "./approval";
++import type { CodevPairing } from "./pairing";
++
++const pairing: CodevPairing = {
++  targetId: "local",
++  machine: "ipad",
++  credential: "cred-1.secret",
++  workspacePath: "/Users/chris/dev/codev",
++};
++
++const session: HumanSession = {
++  sessionId: "sess-1",
++  presentation: "sess-1.secret",
++  expiresAt: "2026-08-31T06:00:00.000Z",
++};
++
++const gate = { projectId: "250", gateName: "plan-approval" } as const;
++
++type Reply = { readonly status: number; readonly body: unknown };
++
++/**
++ * A fetch driven by a path table.
++ *
++ * Keyed on the path so a test states only the step it is about; every other step
++ * takes its ordinary success. A missing key is a loud failure rather than a
++ * silent 404 that would make an unrelated branch pass.
++ */
++function fakeFetch(
++  replies: Readonly<Record<string, Reply>>,
++  seen?: string[],
++): typeof globalThis.fetch {
++  return (async (input: RequestInfo | URL) => {
++    const url = String(input);
++    seen?.push(url);
++    const key = Object.keys(replies).find((candidate) => url.endsWith(candidate));
++    if (key === undefined) throw new Error(`no reply configured for ${url}`);
++    const reply = replies[key] as Reply;
++    return new Response(JSON.stringify(reply.body), { status: reply.status });
++  }) as typeof globalThis.fetch;
++}
++
++const CAPABILITY = {
++  "/approval-capabilities": { status: 201, body: { presentation: "cap.secret", capabilityId: "cap-1" } },
++  "/approval-nonces": { status: 201, body: { nonce: "nonce-1" } },
++} as const;
++
++describe("openHumanSession (spec 250, phase 10)", () => {
++  it("spends a client-session token alongside the machine credential", async () => {
++    const seen: string[] = [];
++    const result = await openHumanSession(
++      fakeFetch(
++        {
++          "/human-sessions": {
++            status: 201,
++            body: { sessionId: "sess-1", presentation: "sess-1.secret", expiresAt: "later" },
++          },
++        },
++        seen,
++      ),
++      pairing,
++      "tok-2",
++    );
++    expect(result.ok).toBe(true);
++    // Same-origin: a path on this server, never the agent's own origin.
++    expect(seen[0]).toBe("/api/codev/agent/local/api/agent/v1/human-sessions");
++  });
++
++  it("refuses a 201 that named no session rather than inventing one", async () => {
++    const result = await openHumanSession(
++      fakeFetch({ "/human-sessions": { status: 201, body: {} } }),
++      pairing,
++      "tok-2",
++    );
++    expect(result.ok).toBe(false);
++  });
++});
++
++describe("approveGate (spec 250, phase 10)", () => {
++  it("approves over the asynchronous route and reports the SERVER's record", async () => {
++    const outcome = await approveGate(
++      fakeFetch({
++        ...CAPABILITY,
++        "/gates/approvals": {
++          status: 202,
++          body: { operationId: "op-1", receipt: "rcpt", projectId: "250", gateName: "plan-approval" },
++        },
++        "/gates/approvals/op-1": {
++          status: 200,
++          body: {
++            state: "succeeded",
++            projectId: "250",
++            gateName: "plan-approval",
++            record: {
++              approvedAt: "2026-08-31T05:30:00.000Z",
++              machine: "ipad",
++              sessionId: "sess-1",
++              authority: "chris",
++            },
++          },
++        },
++      }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome).toEqual({
++      ok: true,
++      approvedAt: "2026-08-31T05:30:00.000Z",
++      machine: "ipad",
++      sessionId: "sess-1",
++      authority: "chris",
++    });
++  });
++
++  /**
++   * THE ONE A NAIVE PORT PASSES WHILE RECORDING FICTION.
++   *
++   * The agent answered 200 with nothing this page can read. Filling the record
++   * from local state — this browser's clock, the stored machine, the session in
++   * hand — would render a complete approval every word of which was made up here.
++   */
++  it("reports a success it cannot read as unconfirmed, never as an approval", async () => {
++    const outcome = await approveGate(
++      fakeFetch({
++        ...CAPABILITY,
++        "/gates/approvals": {
++          status: 202,
++          body: { operationId: "op-1", receipt: "rcpt", projectId: "250", gateName: "plan-approval" },
++        },
++        "/gates/approvals/op-1": {
++          status: 200,
++          body: { state: "succeeded", projectId: "250", gateName: "plan-approval", record: {} },
++        },
++      }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(false);
++    if (outcome.ok) return;
++    expect(outcome.unconfirmed).toBe(true);
++    expect(outcome.signal).toBe("GATE_APPROVAL_UNCONFIRMED");
++    // Nothing invented: the message says to go and look, and names no timestamp.
++    expect(outcome.message).toContain("status.yaml");
++  });
++
++  it("reports a refusal as a refusal, with the agent's own words", async () => {
++    const outcome = await approveGate(
++      fakeFetch({
++        ...CAPABILITY,
++        "/gates/approvals": {
++          status: 202,
++          body: { operationId: "op-1", receipt: "rcpt", projectId: "250", gateName: "plan-approval" },
++        },
++        "/gates/approvals/op-1": {
++          status: 200,
++          body: {
++            state: "refused",
++            projectId: "250",
++            gateName: "plan-approval",
++            code: "GATE_NOT_PENDING",
++            message: "that gate is not pending",
++          },
++        },
++      }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome).toEqual({
++      ok: false,
++      signal: "GATE_NOT_PENDING",
++      message: "that gate is not pending",
++      sessionEnded: false,
++    });
++  });
++
++  /** Ordinary, not exceptional: sessions idle out after 30 minutes. */
++  it("reports a 401 as sessionEnded rather than as a refusal", async () => {
++    const outcome = await approveGate(
++      fakeFetch({
++        ...CAPABILITY,
++        "/gates/approvals": { status: 401, body: { signal: "HUMAN_SESSION_REQUIRED" } },
++      }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(false);
++    if (outcome.ok) return;
++    expect(outcome.sessionEnded).toBe(true);
++    expect(outcome.unconfirmed).toBeUndefined();
++  });
++
++  it("reports an interrupted host as unconfirmed, because the gate may be approved", async () => {
++    const outcome = await approveGate(
++      fakeFetch({
++        ...CAPABILITY,
++        "/gates/approvals": {
++          status: 202,
++          body: { operationId: "op-1", receipt: "rcpt", projectId: "250", gateName: "plan-approval" },
++        },
++        "/gates/approvals/op-1": {
++          status: 200,
++          body: {
++            state: "interrupted",
++            projectId: "250",
++            gateName: "plan-approval",
++            message: "the host stopped mid-approval",
++          },
++        },
++      }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(false);
++    if (outcome.ok) return;
++    expect(outcome.unconfirmed).toBe(true);
++    expect(outcome.signal).toBe("APPROVAL_OPERATION_INTERRUPTED");
++  });
++
++  /**
++   * Single-flight is PROJECT-wide, so an operation for this project is not the
++   * same claim as an operation for this gate. A record naming another gate must
++   * not settle this one in either direction.
++   */
++  it("refuses to read another gate's operation as this gate's answer", async () => {
++    const outcome = await approveGate(
++      fakeFetch({
++        ...CAPABILITY,
++        "/gates/approvals": {
++          status: 202,
++          body: { operationId: "op-1", receipt: "rcpt", projectId: "250", gateName: "spec-approval" },
++        },
++      }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(false);
++    if (outcome.ok) return;
++    expect(outcome.unconfirmed).toBe(true);
++    expect(outcome.message).toContain("spec-approval");
++  });
++
++  it("refuses a 202 without a receipt, which is not a durable operation", async () => {
++    const outcome = await approveGate(
++      fakeFetch({
++        ...CAPABILITY,
++        "/gates/approvals": {
++          status: 202,
++          body: { operationId: "op-1", projectId: "250", gateName: "plan-approval" },
++        },
++      }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(false);
++    if (outcome.ok) return;
++    expect(outcome.unconfirmed).toBe(true);
++    expect(outcome.message).toContain("receipt");
++  });
++
++  it("treats a 5xx on the submit as unconfirmed, because the operation is recorded first", async () => {
++    const outcome = await approveGate(
++      fakeFetch({ ...CAPABILITY, "/gates/approvals": { status: 503, body: {} } }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(false);
++    if (outcome.ok) return;
++    expect(outcome.unconfirmed).toBe(true);
++  });
++
++  it("treats an in-flight conflict as unconfirmed rather than as this gate's refusal", async () => {
++    const outcome = await approveGate(
++      fakeFetch({
++        ...CAPABILITY,
++        "/gates/approvals": { status: 409, body: { operationId: "op-other" } },
++      }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(false);
++    if (outcome.ok) return;
++    expect(outcome.signal).toBe("APPROVAL_ALREADY_IN_FLIGHT");
++    expect(outcome.unconfirmed).toBe(true);
++  });
++
++  /**
++   * A current host with no operation store answers 501, and the synchronous route
++   * still approves everything it ever could.
++   */
++  it("falls back to the synchronous route on 501 and still reads the record from the server", async () => {
++    const outcome = await approveGate(
++      fakeFetch({
++        ...CAPABILITY,
++        "/gates/approvals": { status: 501, body: {} },
++        "/gates/approve": {
++          status: 200,
++          body: {
++            signal: "GATE_APPROVED",
++            approvedAt: "2026-08-31T05:30:00.000Z",
++            machine: "ipad",
++            sessionId: "sess-1",
++          },
++        },
++      }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome).toEqual({
++      ok: true,
++      approvedAt: "2026-08-31T05:30:00.000Z",
++      machine: "ipad",
++      sessionId: "sess-1",
++    });
++  });
++
++  /**
++   * NULLABLE ON PURPOSE. An approval recorded before session ids existed is a
++   * real approval with an unknown approver; inventing this session's id would be
++   * a lie about who approved it.
++   */
++  it("keeps sessionId null when the server did not name one", async () => {
++    const outcome = await approveGate(
++      fakeFetch({
++        ...CAPABILITY,
++        "/gates/approvals": { status: 501, body: {} },
++        "/gates/approve": {
++          status: 200,
++          body: { signal: "GATE_APPROVED", approvedAt: "2026-08-31T05:30:00.000Z", machine: "ipad" },
++        },
++      }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(true);
++    if (!outcome.ok) return;
++    expect(outcome.sessionId).toBeNull();
++  });
++
++  it("reports a delivery caveat as a success with a caveat, not as a failure", async () => {
++    const outcome = await approveGate(
++      fakeFetch({
++        ...CAPABILITY,
++        "/gates/approvals": { status: 501, body: {} },
++        "/gates/approve": {
++          status: 200,
++          body: {
++            signal: "GATE_APPROVED",
++            approvedAt: "2026-08-31T05:30:00.000Z",
++            machine: "ipad",
++            delivery: "committed-not-pushed",
++            deliveryMessage: "the commit is local",
++          },
++        },
++      }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(true);
++    if (!outcome.ok) return;
++    expect(outcome.delivery).toBe("committed-not-pushed");
++    expect(outcome.deliveryMessage).toBe("the commit is local");
++  });
++
++  it("refuses when the capability was not issued, without minting a nonce", async () => {
++    const seen: string[] = [];
++    const outcome = await approveGate(
++      fakeFetch(
++        { "/approval-capabilities": { status: 403, body: { signal: "CAPABILITY_REFUSED" } } },
++        seen,
++      ),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(false);
++    if (outcome.ok) return;
++    expect(outcome.signal).toBe("CAPABILITY_REFUSED");
++    expect(seen.some((url) => url.includes("approval-nonces"))).toBe(false);
++  });
++
++  it("carries the receipt in a header, never in the URL", async () => {
++    const seen: string[] = [];
++    let pollHeaders: Record<string, string> = {};
++    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
++      const url = String(input);
++      seen.push(url);
++      if (url.includes("/gates/approvals/op-1")) {
++        pollHeaders = (init?.headers ?? {}) as Record<string, string>;
++        return new Response(
++          JSON.stringify({
++            state: "succeeded",
++            projectId: "250",
++            gateName: "plan-approval",
++            record: { approvedAt: "t", machine: "ipad" },
++          }),
++          { status: 200 },
++        );
++      }
++      if (url.includes("/gates/approvals")) {
++        return new Response(
++          JSON.stringify({
++            operationId: "op-1",
++            receipt: "rcpt-secret",
++            projectId: "250",
++            gateName: "plan-approval",
++          }),
++          { status: 202 },
++        );
++      }
++      if (url.includes("/approval-capabilities")) {
++        return new Response(JSON.stringify({ presentation: "cap.secret", capabilityId: "cap-1" }), {
++          status: 201,
++        });
++      }
++      return new Response(JSON.stringify({ nonce: "nonce-1" }), { status: 201 });
++    }) as typeof globalThis.fetch;
++
++    await approveGate(fetchImpl, pairing, session, gate);
++    expect(pollHeaders["x-codev-approval-receipt"]).toBe("rcpt-secret");
++    expect(seen.every((url) => !url.includes("rcpt-secret"))).toBe(true);
++  });
++});
+diff --git a/apps/web/src/codev/approval.ts b/apps/web/src/codev/approval.ts
+new file mode 100644
+index 000000000..0de6f7435
+--- /dev/null
++++ b/apps/web/src/codev/approval.ts
+@@ -0,0 +1,631 @@
++/**
++ * Codev customization (spec 250), phase 10 — approving a porch gate from t3code.
++ *
++ * Ported from `apps/client/src/gate/approval.ts`, which is frozen. The ceremony
++ * is unchanged because it is `codev-agent`'s, not this page's; what changes is
++ * that every request goes to THIS origin and the fork's server makes the one hop.
++ *
++ * ## The ceremony, named in full
++ *
++ *   1. `pairing/redeem`      spends a `machine-credential` token for this
++ *                            browser's credential. Lives in `pairing.ts`; done
++ *                            once, not per approval.
++ *   2. `openHumanSession`    spends a distinct single-use `client-session` token
++ *                            alongside the machine credential, and yields a
++ *                            presentation carried in `x-codev-human-session`.
++ *   3. capability + nonce     the capability is the act a human gate exists to
++ *                            require; the nonce binds it to ONE gate.
++ *   4. the approval itself    submitted asynchronously and polled, because a
++ *                            phase's checks will not fit inside one request.
++ *
++ * NONE OF THEM ESTABLISHES THAT A HUMAN IS PRESENT. Minting a pairing token
++ * needs only write access to the pairing store, and every agent on that host runs
++ * as the same user. What the chain carries instead is a stated `authority`,
++ * recorded and never verified — see `codev/resources/146-approval-threat-model.md`.
++ *
++ * ## Four outcomes, not two
++ *
++ * approved, refused, **unconfirmed** and **`sessionEnded`**. The last two are the
++ * ones a shorter port drops, and each drop has the same shape: an answer that is
++ * not "no" being spelled like "no".
++ *
++ *   `unconfirmed`   the server answered and this page could not read it. The
++ *                   gate may well be approved, so rendering it as a refusal sends
++ *                   a human to approve twice at the one point where a duplicate
++ *                   costs something.
++ *   `sessionEnded`  ordinary, not exceptional: sessions idle out after 30
++ *                   minutes. Folding it into refusal tells someone their approval
++ *                   failed when what they need is to open a session again.
++ */
++
++import { agentUrl, machineHeaders, encodeWorkspacePath, APPROVAL_RECEIPT_HEADER, HUMAN_SESSION_HEADER, PAIRING_TOKEN_HEADER, type CodevPairing } from "./pairing";
++
++export interface HumanSession {
++  readonly sessionId: string;
++  /** Presented in `x-codev-human-session`. Never stored anywhere durable. */
++  readonly presentation: string;
++  readonly expiresAt: string;
++}
++
++export type ApprovalOutcome =
++  | {
++      readonly ok: true;
++      readonly approvedAt: string;
++      readonly machine: string;
++      /**
++       * NULLABLE ON PURPOSE. An approval recorded before session ids existed is a
++       * real approval with an unknown approver, and reporting "unknown" is right
++       * where inventing this session's id would be a lie.
++       */
++      readonly sessionId: string | null;
++      /**
++       * The gate was ALREADY approved before this request — a definite answer,
++       * but about whoever actually approved it, who may be someone else on
++       * another machine. Never presented as "you approved this".
++       */
++      readonly alreadyApproved?: boolean;
++      /** What the pairing token behind the approving capability claimed. */
++      readonly authority?: string;
++      /**
++       * How far the approval travelled, when it did not travel all the way. A
++       * success with a caveat, never a failure: none of these means the gate is
++       * unapproved, and they want three different remedies.
++       */
++      readonly delivery?: ApprovalDelivery;
++      readonly deliveryMessage?: string;
++    }
++  | {
++      readonly ok: false;
++      readonly signal: string;
++      readonly message: string;
++      /** "I could not tell", which must never be rendered as "no". */
++      readonly unconfirmed?: boolean;
++      /** The session is gone. The panel drops it and offers pairing again. */
++      readonly sessionEnded?: boolean;
++    };
++
++/** What the server says while an approval runs. Never invented by this page. */
++export interface ApprovalProgress {
++  readonly state: "submitted" | "running";
++  readonly operationId: string;
++  /** The phase the server says it is running in, when it has said. */
++  readonly phase?: string;
++  /** The check names the server says it will run. */
++  readonly checks?: readonly string[];
++}
++
++interface Json {
++  readonly status: number;
++  readonly body: Record<string, unknown>;
++}
++
++async function send(
++  fetchImpl: typeof globalThis.fetch,
++  url: string,
++  headers: Record<string, string>,
++  body: unknown,
++): Promise<Json> {
++  const response = await fetchImpl(url, {
++    method: "POST",
++    headers: { "content-type": "application/json", accept: "application/json", ...headers },
++    body: JSON.stringify(body),
++  });
++  let parsed: unknown;
++  try {
++    parsed = await response.json();
++  } catch {
++    parsed = {};
++  }
++  return {
++    status: response.status,
++    body: (parsed !== null && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>,
++  };
++}
++
++function text(body: Record<string, unknown>, key: string): string | undefined {
++  const value = body[key];
++  return typeof value === "string" ? value : undefined;
++}
++
++/** Signals that mean "this session is over", as distinct from "this was refused". */
++const SESSION_ENDED = new Set([
++  "HUMAN_SESSION_REQUIRED",
++  "HUMAN_SESSION_REVOKED",
++  "APPROVAL_ISSUANCE_REQUIRES_HUMAN_SESSION",
++]);
++
++function refusal(
++  result: Json,
++  fallback: string,
++): { ok: false; signal: string; message: string; sessionEnded: boolean } {
++  const signal = text(result.body, "signal") ?? `HTTP_${result.status}`;
++  return {
++    ok: false,
++    signal,
++    message: text(result.body, "message") ?? fallback,
++    // A 401 on any step means the session went away mid-ceremony; sessions idle
++    // out after 30 minutes, so this is ordinary rather than exceptional.
++    sessionEnded: SESSION_ENDED.has(signal) || result.status === 401,
++  };
++}
++
++function api(pairing: CodevPairing, path: string): string {
++  return agentUrl(pairing.targetId, `/api/agent/v1${path}`);
++}
++
++/**
++ * Exchange a `client-session` pairing token for a paired human session.
++ *
++ * The token makes each session a distinct, single-use, recorded act. It does NOT
++ * make "a human is present" a fact. The machine credential is required alongside
++ * it so a revoked browser cannot open a session — that part is a real control,
++ * and it is what `afx pair revoke` acts on.
++ */
++export async function openHumanSession(
++  fetchImpl: typeof globalThis.fetch,
++  pairing: CodevPairing,
++  pairingToken: string,
++): Promise<
++  { ok: true; session: HumanSession } | { ok: false; signal: string; message: string }
++> {
++  const result = await send(
++    fetchImpl,
++    api(pairing, "/human-sessions"),
++    { ...machineHeaders(pairing), [PAIRING_TOKEN_HEADER]: pairingToken },
++    {},
++  );
++  const presentation = text(result.body, "presentation");
++  const sessionId = text(result.body, "sessionId");
++  if (result.status !== 201 || presentation === undefined || sessionId === undefined) {
++    return refusal(result, "the agent did not issue a human session");
++  }
++  return {
++    ok: true,
++    session: { sessionId, presentation, expiresAt: text(result.body, "expiresAt") ?? "" },
++  };
++}
++
++const POLL_INTERVAL_MS = 1_000;
++const POLL_LIMIT_MS = 30 * 60_000;
++const TERMINAL_STATES = new Set(["succeeded", "refused", "failed", "interrupted"]);
++
++/**
++ * Issue a capability, mint a nonce for one gate, and spend both.
++ *
++ * The three are one act from the human's point of view. A capability outlives one
++ * approval, but re-issuing per approval is cheap and keeps nothing long-lived in
++ * the page.
++ */
++export async function approveGate(
++  fetchImpl: typeof globalThis.fetch,
++  pairing: CodevPairing,
++  session: HumanSession,
++  gate: { readonly projectId: string; readonly gateName: string },
++  /**
++   * OPTIONAL BUT NOT DECORATIVE. Phase checks take minutes, and a button that
++   * says "Approving…" for four minutes with nothing behind it is
++   * indistinguishable from one that is stuck. What is reported is the server's
++   * own phase and check names, never a guess made here.
++   */
++  onProgress?: (progress: ApprovalProgress) => void,
++): Promise<ApprovalOutcome> {
++  const authed = { ...machineHeaders(pairing), [HUMAN_SESSION_HEADER]: session.presentation };
++
++  const issued = await send(fetchImpl, api(pairing, "/approval-capabilities"), authed, {
++    principalKind: "human-client",
++  });
++  const capability = text(issued.body, "presentation");
++  const capabilityId = text(issued.body, "capabilityId");
++  if (issued.status !== 201 || capability === undefined || capabilityId === undefined) {
++    return refusal(issued, "the agent did not issue an approval capability");
++  }
++
++  const minted = await send(fetchImpl, api(pairing, "/approval-nonces"), authed, {
++    projectId: gate.projectId,
++    gateName: gate.gateName,
++    capabilityId,
++  });
++  const nonce = text(minted.body, "nonce");
++  if (minted.status !== 201 || nonce === undefined) {
++    return refusal(minted, "the agent did not mint an approval nonce");
++  }
++
++  const workspace = encodeURIComponent(encodeWorkspacePath(pairing.workspacePath));
++
++  /*
++   * THE ASYNCHRONOUS ROUTE FIRST, because it is the only one that works on an
++   * ordinary project: the synchronous route refuses any project whose phase
++   * declares checks, since an HTTP request will not hold a connection open for a
++   * repository's test suite.
++   *
++   * A SUBMIT THAT NEVER COMPLETED IS NOT A REFUSAL. There is no way to know from
++   * here whether the server received it, and that is what `unconfirmed` is for.
++   */
++  let submitted: Json;
++  try {
++    submitted = await send(
++      fetchImpl,
++      api(pairing, `/workspaces/${workspace}/gates/approvals`),
++      authed,
++      { projectId: gate.projectId, gateName: gate.gateName, capability, nonce },
++    );
++  } catch (error) {
++    return {
++      ok: false,
++      unconfirmed: true,
++      signal: "GATE_APPROVAL_UNCONFIRMED",
++      message:
++        `the request to approve ${gate.gateName} did not complete (${(error as Error).message}), so `
++        + "whether the agent received it is unknown. It may already be running — check before "
++        + "approving again.",
++    };
++  }
++
++  /*
++   * NARROW ON THE SIGNAL, NOT ON THE STATUS. A host predating the async route
++   * answers 404 `AGENT_ROUTE_NOT_FOUND`; a current one with no operation store
++   * answers 501. Other 404s are real answers — an unknown workspace, a workspace
++   * this host does not serve — and treating those as "no async route here" would
++   * run the synchronous path against a host that would have refused outright.
++   */
++  const unrouted =
++    submitted.status === 404 && text(submitted.body, "signal") === "AGENT_ROUTE_NOT_FOUND";
++  if (submitted.status !== 501 && !unrouted) {
++    return await pollApproval(fetchImpl, pairing, authed, workspace, submitted, gate, onProgress);
++  }
++
++  const approved = await send(
++    fetchImpl,
++    api(pairing, `/workspaces/${workspace}/gates/approve`),
++    authed,
++    { projectId: gate.projectId, gateName: gate.gateName, capability, nonce },
++  );
++  if (approved.status !== 200) {
++    return refusal(approved, "the gate was not approved");
++  }
++
++  /*
++   * EVERY PIECE OF EVIDENCE COMES FROM THE SERVER OR THE ANSWER IS NOT A YES.
++   *
++   * Filling `approvedAt` from this browser's clock, `machine` from the stored
++   * label and `sessionId` from the session in hand would make an empty body — or
++   * the proxy's own 200 — render as a complete approval record, every word of it
++   * manufactured here. Criterion 4 asks porch to record exactly those three, so a
++   * port that invents them passes a naive assertion while reporting fiction.
++   */
++  return readSynchronousApproval(approved);
++}
++
++function readSynchronousApproval(approved: Json): ApprovalOutcome {
++  const signal = text(approved.body, "signal");
++  const approvedAt = text(approved.body, "approvedAt");
++  const machine = text(approved.body, "machine");
++  const sessionId = text(approved.body, "sessionId") ?? null;
++  const alreadyApproved = signal === "GATE_ALREADY_APPROVED";
++  if ((signal !== "GATE_APPROVED" && !alreadyApproved) || approvedAt === undefined || machine === undefined) {
++    return {
++      ok: false,
++      unconfirmed: true,
++      signal: "GATE_APPROVAL_UNCONFIRMED",
++      message:
++        "the agent answered 200 but not with a result this page can read, so whether the gate was "
++        + "approved is unknown. Check status.yaml before approving again.",
++    };
++  }
++  const delivery = readDelivery(text(approved.body, "delivery"));
++  const deliveryMessage = text(approved.body, "deliveryMessage");
++  const authority = text(approved.body, "authority");
++  return {
++    ok: true,
++    approvedAt,
++    machine,
++    sessionId,
++    ...(alreadyApproved ? { alreadyApproved: true } : {}),
++    ...(authority === undefined ? {} : { authority }),
++    ...(delivery === undefined
++      ? {}
++      : { delivery, ...(deliveryMessage === undefined ? {} : { deliveryMessage }) }),
++  };
++}
++
++export type ApprovalDelivery = "written-not-committed" | "committed-not-pushed" | "unknown";
++
++/** A delivery word this build does not know is dropped, never passed through. */
++function readDelivery(raw: string | undefined): ApprovalDelivery | undefined {
++  return raw === "written-not-committed" || raw === "committed-not-pushed" || raw === "unknown"
++    ? raw
++    : undefined;
++}
++
++/**
++ * Follow one submitted approval to its end.
++ *
++ * ## Why giving up is reported as UNCONFIRMED, never as a refusal
++ *
++ * This page stopping does not stop porch. If it gives up waiting, the approval is
++ * still running and may well succeed — so reporting "not approved" would be the
++ * very failure the asynchronous path exists to prevent, reintroduced in the
++ * client. The bound exists so a tab does not poll forever; what it produces is
++ * "I could not tell", with the operation id to look up.
++ */
++async function pollApproval(
++  fetchImpl: typeof globalThis.fetch,
++  pairing: CodevPairing,
++  authed: Record<string, string>,
++  workspace: string,
++  submitted: Json,
++  gate: { readonly projectId: string; readonly gateName: string },
++  onProgress?: (progress: ApprovalProgress) => void,
++): Promise<ApprovalOutcome> {
++  /*
++   * A 5xx ON THE SUBMIT MAY HAVE CREATED THE OPERATION: the record is written
++   * BEFORE the 202. A 4xx is a definite answer about the request itself and
++   * stays a refusal.
++   */
++  if (submitted.status >= 500) {
++    return {
++      ok: false,
++      unconfirmed: true,
++      signal: "GATE_APPROVAL_UNCONFIRMED",
++      message:
++        `the agent answered ${submitted.status} to the request to approve ${gate.gateName}. The `
++        + "operation is recorded before the response is written, so it may be running — check "
++        + "before approving again.",
++    };
++  }
++  if (submitted.status === 409) {
++    /*
++     * A CONFLICT IS NOT A REFUSAL OF THIS GATE. Another session's approval for
++     * this project is running and may be about to succeed; this page cannot poll
++     * it and must not claim to know its outcome.
++     */
++    const running = text(submitted.body, "operationId");
++    return {
++      ok: false,
++      unconfirmed: true,
++      signal: "APPROVAL_ALREADY_IN_FLIGHT",
++      message:
++        `an approval for this project is already running${running === undefined ? "" : ` as operation ${running}`}`
++        + ", started by another session. This gate may be approved by that run, so nothing here "
++        + "says it was not — wait for it, and check the gate before submitting again.",
++    };
++  }
++  const operationId = text(submitted.body, "operationId");
++  if (submitted.status !== 202 || operationId === undefined) {
++    return refusal(submitted, "the agent did not accept the approval");
++  }
++
++  /*
++   * A 202 WITHOUT A RECEIPT IS NOT A DURABLE OPERATION.
++   *
++   * Human sessions live in the host's memory, so the restart that resolves an
++   * operation to `interrupted` destroys the session that submitted it. The
++   * receipt, presented from the same machine, is the second way in. Accepting a
++   * 202 without one silently gives that up — it works right up until the restart
++   * the receipt exists for.
++   */
++  const receipt = text(submitted.body, "receipt");
++  if (receipt === undefined) {
++    return {
++      ok: false,
++      unconfirmed: true,
++      signal: "GATE_APPROVAL_UNCONFIRMED",
++      message:
++        `the agent accepted approval ${operationId} without a receipt, so this page cannot read the `
++        + "outcome if the host restarts. The approval may be running; check the gate rather than "
++        + "submitting again.",
++    };
++  }
++  // IN A HEADER, NEVER IN THE URL. It is a bearer secret, and URLs are logged by
++  // things that were not asked.
++  const polling = { ...authed, [APPROVAL_RECEIPT_HEADER]: receipt };
++
++  /*
++   * THE OPERATION MUST BE THIS GATE'S, AND THIS PAGE CHECKS RATHER THAN ASSUMES.
++   *
++   * Single-flight is PROJECT-wide, so "an operation for this project" is not the
++   * same claim as "an operation for this gate". REQUIRED AND EQUAL, not "equal if
++   * present": a body that says nothing about which gate it describes is precisely
++   * the body that must not settle one.
++   */
++  const identityMismatch = (body: Record<string, unknown>): string | null => {
++    const project = text(body, "projectId");
++    const named = text(body, "gateName");
++    if (project === undefined) return `no project id, so it cannot be shown to describe ${gate.projectId}`;
++    if (project !== gate.projectId) return `project ${project} rather than ${gate.projectId}`;
++    if (named === undefined) return `no gate name, so it cannot be shown to describe ${gate.gateName}`;
++    if (named !== gate.gateName) return `gate ${named} rather than ${gate.gateName}`;
++    return null;
++  };
++  const submittedMismatch = identityMismatch(submitted.body);
++  if (submittedMismatch !== null) {
++    return {
++      ok: false,
++      unconfirmed: true,
++      signal: "GATE_APPROVAL_UNCONFIRMED",
++      message:
++        `the agent answered the request to approve ${gate.gateName} with an operation for `
++        + `${submittedMismatch}. Nothing here says whether ${gate.gateName} was approved; it was not `
++        + "reported as approved on the strength of another gate's record.",
++    };
++  }
++
++  const url = api(pairing, `/workspaces/${workspace}/gates/approvals/${encodeURIComponent(operationId)}`);
++  const deadline = Date.now() + POLL_LIMIT_MS;
++  while (Date.now() < deadline) {
++    /*
++     * A POLL THAT CANNOT READ THE STATE SAYS NOTHING ABOUT THE APPROVAL. A 503 is
++     * the agent's own "the operation store could not be read", not "your gate was
++     * refused". Retried until the deadline and then reported as unconfirmed.
++     */
++    let polled: Json;
++    try {
++      const response = await fetchImpl(url, { headers: { accept: "application/json", ...polling } });
++      let parsed: unknown;
++      try {
++        parsed = await response.json();
++      } catch {
++        parsed = {};
++      }
++      polled = {
++        status: response.status,
++        body: (parsed !== null && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>,
++      };
++    } catch {
++      await new Promise((wait) => setTimeout(wait, POLL_INTERVAL_MS));
++      continue;
++    }
++
++    /*
++     * TWO DEFINITE ANSWERS, and only two. 403 says this session may not read this
++     * operation; 401 says the session is gone. Neither changes by retrying, and
++     * the 401 must mean `sessionEnded` here exactly as it does on the synchronous
++     * path — otherwise a dead session leaves an Approve button a human can only
++     * escape by reloading.
++     */
++    if (polled.status === 403 || polled.status === 401) {
++      return refusal(polled, "this session can no longer read that approval");
++    }
++    /*
++     * 404 IS DEFINITE TOO, and re-asking cannot change it. Reported as
++     * UNCONFIRMED rather than refused, because both facts are true and neither is
++     * a verdict on the gate: it WAS accepted, and the host no longer knows it.
++     */
++    if (polled.status === 404) {
++      return {
++        ok: false,
++        unconfirmed: true,
++        signal: "GATE_APPROVAL_UNCONFIRMED",
++        message:
++          `the agent accepted approval ${operationId} and now does not know it. Whether the gate was `
++          + "approved is unknown; check before approving again.",
++      };
++    }
++    if (polled.status !== 200) {
++      await new Promise((wait) => setTimeout(wait, POLL_INTERVAL_MS));
++      continue;
++    }
++
++    // AND AGAIN ON EVERY POLL, because the record read is the one reported.
++    const polledMismatch = identityMismatch(polled.body);
++    if (polledMismatch !== null) {
++      return {
++        ok: false,
++        unconfirmed: true,
++        signal: "GATE_APPROVAL_UNCONFIRMED",
++        message:
++          `operation ${operationId} describes ${polledMismatch}, so it cannot say whether `
++          + `${gate.gateName} was approved. Check the gate rather than treating this as an answer.`,
++      };
++    }
++
++    const state = text(polled.body, "state");
++    if (state !== undefined && TERMINAL_STATES.has(state)) return terminalOutcome(polled, state, gate);
++    if (state === "submitted" || state === "running") {
++      const phase = text(polled.body, "phase");
++      onProgress?.({
++        state,
++        operationId,
++        ...(phase === undefined ? {} : { phase }),
++        ...(Array.isArray(polled.body.checks)
++          ? {
++              checks: (polled.body.checks as unknown[]).filter(
++                (check): check is string => typeof check === "string",
++              ),
++            }
++          : {}),
++      });
++    } else {
++      // A state this build does not know is not a reason to claim an outcome.
++      return {
++        ok: false,
++        unconfirmed: true,
++        signal: "GATE_APPROVAL_UNCONFIRMED",
++        message:
++          `the agent reported approval state "${String(state)}", which this page does not recognise. `
++          + `Look up operation ${operationId} before approving again.`,
++      };
++    }
++    await new Promise((wait) => setTimeout(wait, POLL_INTERVAL_MS));
++  }
++
++  return {
++    ok: false,
++    unconfirmed: true,
++    signal: "GATE_APPROVAL_UNCONFIRMED",
++    message:
++      `this page stopped waiting after ${Math.round(POLL_LIMIT_MS / 60_000)} minutes, but that does `
++      + `not stop the approval — operation ${operationId} may still be running or may have `
++      + "succeeded. Look it up before approving again.",
++  };
++}
++
++/** Turn a settled operation into the outcome a human reads. */
++function terminalOutcome(
++  polled: Json,
++  state: string,
++  gate: { readonly projectId: string; readonly gateName: string },
++): ApprovalOutcome {
++  if (state === "refused") {
++    return {
++      ok: false,
++      signal: text(polled.body, "code") ?? "GATE_APPROVAL_REFUSED",
++      message: text(polled.body, "message") ?? `${gate.gateName} was not approved`,
++      sessionEnded: false,
++    };
++  }
++  if (state === "failed") {
++    return {
++      ok: false,
++      signal: "GATE_APPROVAL_FAILED",
++      message: text(polled.body, "message") ?? "the approval failed and the agent gave no reason",
++      sessionEnded: false,
++    };
++  }
++  if (state === "interrupted") {
++    /*
++     * NOT A FAILURE. The host stopped while the work ran, and the gate may well be
++     * approved — the agent has read `status.yaml` and its message says which it
++     * found. Reporting this as "not approved" would send a human to approve
++     * something already approved, which is the reason this state exists.
++     */
++    return {
++      ok: false,
++      unconfirmed: true,
++      signal: "APPROVAL_OPERATION_INTERRUPTED",
++      message:
++        text(polled.body, "message")
++        ?? "the host stopped while this approval was running; check status.yaml before retrying",
++    };
++  }
++
++  const record = polled.body.record;
++  const fields = (record !== null && typeof record === "object" ? record : {}) as Record<string, unknown>;
++  const approvedAt = typeof fields.approvedAt === "string" ? fields.approvedAt : undefined;
++  const machine = typeof fields.machine === "string" ? fields.machine : undefined;
++  if (approvedAt === undefined || machine === undefined) {
++    // The same rule as the synchronous path: a success this page cannot read is
++    // UNCONFIRMED, never a refusal, because the gate may be approved.
++    return {
++      ok: false,
++      unconfirmed: true,
++      signal: "GATE_APPROVAL_UNCONFIRMED",
++      message:
++        "the agent reported the approval succeeded but not with a result this page can read, so "
++        + "whether the gate was approved is unknown. Check status.yaml before approving again.",
++    };
++  }
++  const delivery = readDelivery(typeof fields.delivery === "string" ? fields.delivery : undefined);
++  const deliveryMessage = typeof fields.deliveryMessage === "string" ? fields.deliveryMessage : undefined;
++  return {
++    ok: true,
++    approvedAt,
++    machine,
++    sessionId: typeof fields.sessionId === "string" ? fields.sessionId : null,
++    ...(fields.outcome === "already-approved" ? { alreadyApproved: true } : {}),
++    ...(typeof fields.authority === "string" ? { authority: fields.authority } : {}),
++    ...(delivery === undefined
++      ? {}
++      : { delivery, ...(deliveryMessage === undefined ? {} : { deliveryMessage }) }),
++  };
++}
+diff --git a/apps/web/src/codev/pairing.test.ts b/apps/web/src/codev/pairing.test.ts
+new file mode 100644
+index 000000000..b7231a8bb
+--- /dev/null
++++ b/apps/web/src/codev/pairing.test.ts
+@@ -0,0 +1,225 @@
++/**
++ * Codev customization (spec 250), phase 10 — what this browser holds.
++ *
++ * The claims worth naming:
++ *
++ *  - an unreadable store is NOT an unpaired one. A private window throws on
++ *    access, and answering "unpaired" would send someone to spend a single-use
++ *    token over a condition another token does not fix.
++ *  - every URL this module builds is a PATH on this origin. There is no absolute
++ *    URL for the page to hold, which is the same-origin property stated as code
++ *    rather than as a comment.
++ *  - an empty target list always carries a reason.
++ */
++
++import { describe, expect, it } from "vite-plus/test";
++
++import {
++  agentUrl,
++  encodeWorkspacePath,
++  fetchAgentTargets,
++  machineHeaders,
++  PAIRING_STORAGE_KEY,
++  readPairing,
++  redeemPairing,
++  writePairing,
++  type CodevPairing,
++} from "./pairing";
++
++const pairing: CodevPairing = {
++  targetId: "local",
++  machine: "ipad",
++  credential: "cred-1.secret",
++  workspacePath: "/Users/chris/dev/codev",
++};
++
++function memoryStorage(seed: Record<string, string> = {}): Storage {
++  const map = new Map(Object.entries(seed));
++  return {
++    get length() {
++      return map.size;
++    },
++    clear: () => map.clear(),
++    getItem: (key: string) => map.get(key) ?? null,
++    key: (index: number) => [...map.keys()][index] ?? null,
++    removeItem: (key: string) => void map.delete(key),
++    setItem: (key: string, value: string) => void map.set(key, value),
++  } as Storage;
++}
++
++function throwingStorage(): Storage {
++  return {
++    get length() {
++      return 0;
++    },
++    clear: () => {},
++    getItem: () => {
++      throw new Error("site data is blocked");
++    },
++    key: () => null,
++    removeItem: () => {},
++    setItem: () => {
++      throw new Error("site data is blocked");
++    },
++  } as unknown as Storage;
++}
++
++describe("codev pairing storage (spec 250, phase 10)", () => {
++  it("round-trips a pairing", () => {
++    const storage = memoryStorage();
++    expect(writePairing(pairing, storage)).toEqual({ ok: true });
++    expect(readPairing(storage)).toEqual({ kind: "paired", pairing });
++  });
++
++  it("reports an empty store as unpaired", () => {
++    expect(readPairing(memoryStorage())).toEqual({ kind: "unpaired" });
++  });
++
++  /**
++   * THE ONE THAT MATTERS. A store that throws on access is "I could not tell",
++   * and spelling it "unpaired" sends a human to spend a token they already have
++   * a credential for.
++   */
++  it("reports a store that throws as unreadable, never as unpaired", () => {
++    const read = readPairing(throwingStorage());
++    expect(read.kind).toBe("unreadable");
++    if (read.kind !== "unreadable") return;
++    expect(read.message).toContain("site data is blocked");
++  });
++
++  it("reports an unparseable stored value as unreadable rather than absent", () => {
++    const read = readPairing(memoryStorage({ [PAIRING_STORAGE_KEY]: "{not json" }));
++    expect(read.kind).toBe("unreadable");
++  });
++
++  it("reports a stored value missing fields this build needs as unreadable", () => {
++    const read = readPairing(
++      memoryStorage({ [PAIRING_STORAGE_KEY]: JSON.stringify({ targetId: "local" }) }),
++    );
++    expect(read.kind).toBe("unreadable");
++  });
++
++  it("says so when the credential could not be stored, rather than reporting success", () => {
++    expect(writePairing(pairing, throwingStorage())).toEqual({
++      ok: false,
++      message: expect.stringContaining("site data is blocked"),
++    });
++  });
++});
++
++describe("codev agent URLs (spec 250, phase 10)", () => {
++  /**
++   * The same-origin property, as a test rather than a comment: every URL is a
++   * path, so there is no origin in the page for anything to redirect or be
++   * talked into naming.
++   */
++  it("builds paths on this origin and never an absolute URL", () => {
++    const url = agentUrl("local", "/api/agent/v1/session");
++    expect(url).toBe("/api/codev/agent/local/api/agent/v1/session");
++    expect(url.startsWith("/")).toBe(true);
++    expect(() => new URL(url)).toThrow();
++  });
++
++  it("escapes a target id rather than letting it add a path segment", () => {
++    expect(agentUrl("a/b", "/api/agent/v1/session")).toBe(
++      "/api/codev/agent/a%2Fb/api/agent/v1/session",
++    );
++  });
++
++  it("encodes a workspace path as base64url, matching the agent's decoder", () => {
++    expect(encodeWorkspacePath("/Users/chris/dev/codev")).toBe(
++      "L1VzZXJzL2NocmlzL2Rldi9jb2Rldg",
++    );
++  });
++
++  it("sends the machine credential and nothing else", () => {
++    expect(machineHeaders(pairing)).toEqual({ "x-codev-machine-credential": "cred-1.secret" });
++  });
++});
++
++describe("codev agent target list (spec 250, phase 10)", () => {
++  it("reads the ids this server will proxy to", async () => {
++    const read = await fetchAgentTargets(
++      async () => new Response(JSON.stringify({ targets: [{ id: "local" }] }), { status: 200 }),
++    );
++    expect(read).toEqual({ ok: true, targets: [{ id: "local" }] });
++  });
++
++  it("carries the reason an empty list is empty", async () => {
++    const read = await fetchAgentTargets(
++      async () =>
++        new Response(
++          JSON.stringify({
++            signal: "CODEV_AGENTS_UNCONFIGURED",
++            message: "No codev-agent targets are configured.",
++            targets: [],
++          }),
++          { status: 200 },
++        ),
++    );
++    expect(read).toEqual({
++      ok: false,
++      signal: "CODEV_AGENTS_UNCONFIGURED",
++      message: "No codev-agent targets are configured.",
++    });
++  });
++
++  it("reports a server that could not be asked separately from one with nothing configured", async () => {
++    const read = await fetchAgentTargets(async () => {
++      throw new Error("network down");
++    });
++    expect(read).toEqual({
++      ok: false,
++      signal: "CODEV_AGENT_TARGETS_UNREACHABLE",
++      message: expect.stringContaining("network down"),
++    });
++  });
++});
++
++describe("codev pairing redemption (spec 250, phase 10)", () => {
++  it("spends the token at the agent and keeps what it issued", async () => {
++    let seen: { url: string; init: RequestInit | undefined } | null = null;
++    const outcome = await redeemPairing(
++      async (url, init) => {
++        seen = { url: String(url), init };
++        return new Response(
++          JSON.stringify({ signal: "PAIRING_TOKEN_ACCEPTED", machine: "ipad", credential: "c.s" }),
++          { status: 201 },
++        );
++      },
++      { targetId: "local", machine: "ipad", token: "tok-1", workspacePath: "/w" },
++    );
++    expect(outcome).toEqual({
++      ok: true,
++      pairing: { targetId: "local", machine: "ipad", credential: "c.s", workspacePath: "/w" },
++    });
++    expect(seen).not.toBeNull();
++    const request = seen as unknown as { url: string; init: RequestInit };
++    expect(request.url).toBe("/api/codev/agent/local/api/agent/v1/pairing/redeem");
++    expect((request.init.headers as Record<string, string>)["x-codev-pairing-token"]).toBe("tok-1");
++  });
++
++  /** The agent's own words, not a refusal reworded here. */
++  it("reports the agent's refusal verbatim", async () => {
++    const outcome = await redeemPairing(
++      async () =>
++        new Response(JSON.stringify({ signal: "PAIRING_TOKEN_SPENT", message: "already redeemed" }), {
++          status: 401,
++        }),
++      { targetId: "local", machine: "ipad", token: "tok-1", workspacePath: "/w" },
++    );
++    expect(outcome).toEqual({
++      ok: false,
++      signal: "PAIRING_TOKEN_SPENT",
++      message: "already redeemed",
++    });
++  });
++
++  it("refuses a 201 that carried no credential rather than storing nothing as a pairing", async () => {
++    const outcome = await redeemPairing(
++      async () => new Response(JSON.stringify({ signal: "PAIRING_TOKEN_ACCEPTED" }), { status: 201 }),
++      { targetId: "local", machine: "ipad", token: "tok-1", workspacePath: "/w" },
++    );
++    expect(outcome.ok).toBe(false);
++  });
++});
+diff --git a/apps/web/src/codev/pairing.ts b/apps/web/src/codev/pairing.ts
+new file mode 100644
+index 000000000..acbd70c99
+--- /dev/null
++++ b/apps/web/src/codev/pairing.ts
+@@ -0,0 +1,285 @@
++/**
++ * Codev customization (spec 250), phase 10 — what this browser holds, and how it got it.
++ *
++ * ## Two halves, and neither one alone approves anything
++ *
++ * A **machine credential**, redeemed once from a `machine-credential` pairing
++ * token, identifies this browser to `codev-agent` and is revocable on its own
++ * (`afx pair revoke <machine>`). A **`client-session`** token, spent per session
++ * through `openHumanSession`, makes each session a distinct recorded act. They
++ * are different secrets with different lifetimes, obtained from two separate
++ * `afx pair issue` mints, and the approval path needs both.
++ *
++ * Neither is t3code's own session. Being signed into t3code is not approval
++ * authority — the proxy refuses to forward `authorization` and `cookie` at all,
++ * so it could not be even by accident.
++ *
++ * ## Where the credential lives, and why that is worse than `apps/client`
++ *
++ * `apps/client` reads an operator-written `~/.agent-farm/client-machines.json` at
++ * mode 0600. A page in a browser has no equivalent, so this holds the credential
++ * in per-origin browser storage, and that is strictly more exposed: an XSS on
++ * this page reaches it, and the proxy sees every credential it forwards.
++ *
++ * The trade is deliberate and is bounded by what the credential IS. It is scoped
++ * to one machine name and revocable on its own, and it is emphatically never
++ * Tower's shared key, which cannot be revoked for one machine without rotating
++ * it for all. So the worst case is one revocable machine, not host-wide access.
++ *
++ * ## Storage can throw, and an unreadable store is not an empty one
++ *
++ * Private windows and blocked site data make `localStorage` throw on ACCESS, not
++ * merely return null. A read that swallowed that would report "not paired" to
++ * someone who is, and send them to spend a token they did not need. So the read
++ * answers with three cases and the panel says which.
++ */
++
++import { CODEV_AGENT_PROXY_PREFIX, CODEV_AGENT_TARGETS_PATH } from "@t3tools/shared/codevAgentProxy";
++
++export const MACHINE_CREDENTIAL_HEADER = "x-codev-machine-credential";
++export const PAIRING_TOKEN_HEADER = "x-codev-pairing-token";
++export const HUMAN_SESSION_HEADER = "x-codev-human-session";
++/** The approval receipt. A header, not a query parameter: URLs are logged. */
++export const APPROVAL_RECEIPT_HEADER = "x-codev-approval-receipt";
++
++/** Versioned, so a later shape change is a miss rather than a misread. */
++export const PAIRING_STORAGE_KEY = "codev.pairing.v1";
++
++/** What this browser holds for one `codev-agent`. */
++export interface CodevPairing {
++  /** The configured target's id. NEVER a URL — the server owns the origins. */
++  readonly targetId: string;
++  /** The machine name this credential was issued for. */
++  readonly machine: string;
++  /** `<credentialId>.<secret>`. Never logged. */
++  readonly credential: string;
++  /** Absolute workspace path on that machine, identifying what is approved in. */
++  readonly workspacePath: string;
++}
++
++export type PairingRead =
++  | { readonly kind: "paired"; readonly pairing: CodevPairing }
++  | { readonly kind: "unpaired" }
++  /** The store could not be read. NOT "unpaired" — the answer is unknown. */
++  | { readonly kind: "unreadable"; readonly message: string };
++
++function wellFormed(value: unknown): value is CodevPairing {
++  if (typeof value !== "object" || value === null) return false;
++  const entry = value as Record<string, unknown>;
++  return (
++    typeof entry.targetId === "string" &&
++    entry.targetId.length > 0 &&
++    typeof entry.machine === "string" &&
++    entry.machine.length > 0 &&
++    typeof entry.credential === "string" &&
++    entry.credential.length > 0 &&
++    typeof entry.workspacePath === "string" &&
++    entry.workspacePath.length > 0
++  );
++}
++
++export function readPairing(storage: Storage | undefined = globalThis.localStorage): PairingRead {
++  if (storage === undefined) {
++    return { kind: "unreadable", message: "this browser exposes no local storage" };
++  }
++  let raw: string | null;
++  try {
++    raw = storage.getItem(PAIRING_STORAGE_KEY);
++  } catch (error) {
++    return {
++      kind: "unreadable",
++      message: `browser storage could not be read (${(error as Error).message}); whether this `
++        + "browser is paired is unknown",
++    };
++  }
++  if (raw === null) return { kind: "unpaired" };
++  let parsed: unknown;
++  try {
++    parsed = JSON.parse(raw);
++  } catch {
++    // A stored value this build cannot parse is not a pairing, and saying
++    // "unpaired" would be right about what is usable and wrong about what is
++    // there. Naming it lets a human clear it rather than wonder.
++    return { kind: "unreadable", message: "the stored pairing is not readable JSON" };
++  }
++  if (!wellFormed(parsed)) {
++    return { kind: "unreadable", message: "the stored pairing is missing fields this build needs" };
++  }
++  return { kind: "paired", pairing: parsed };
++}
++
++export function writePairing(
++  pairing: CodevPairing,
++  storage: Storage | undefined = globalThis.localStorage,
++): { readonly ok: true } | { readonly ok: false; readonly message: string } {
++  if (storage === undefined) return { ok: false, message: "this browser exposes no local storage" };
++  try {
++    storage.setItem(PAIRING_STORAGE_KEY, JSON.stringify(pairing));
++    return { ok: true };
++  } catch (error) {
++    return { ok: false, message: `browser storage could not be written (${(error as Error).message})` };
++  }
++}
++
++export function clearPairing(storage: Storage | undefined = globalThis.localStorage): void {
++  try {
++    storage?.removeItem(PAIRING_STORAGE_KEY);
++  } catch {
++    /* a store that will not clear is one the read already reports as unreadable */
++  }
++}
++
++/** base64url of the absolute path, matching `decodeWorkspacePath` on the agent. */
++export function encodeWorkspacePath(workspacePath: string): string {
++  const bytes = new TextEncoder().encode(workspacePath);
++  let binary = "";
++  for (const byte of bytes) binary += String.fromCharCode(byte);
++  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
++}
++
++/**
++ * The URL for one `codev-agent` call, on THIS origin.
++ *
++ * The target is named by its configured id and the origin never appears. That is
++ * the whole same-origin property: there is no absolute URL for the page to hold,
++ * so there is none for it to be talked into using.
++ */
++export function agentUrl(targetId: string, path: string): string {
++  return `${CODEV_AGENT_PROXY_PREFIX}/${encodeURIComponent(targetId)}${path}`;
++}
++
++export function machineHeaders(pairing: CodevPairing): Record<string, string> {
++  return { [MACHINE_CREDENTIAL_HEADER]: pairing.credential };
++}
++
++export interface CodevAgentTargetSummary {
++  readonly id: string;
++}
++
++export type AgentTargetsRead =
++  | { readonly ok: true; readonly targets: readonly CodevAgentTargetSummary[] }
++  | { readonly ok: false; readonly signal: string; readonly message: string };
++
++/**
++ * Which targets this server will proxy to.
++ *
++ * An empty list ALWAYS carries its reason. A picker with no entries and no
++ * explanation reads as a broken feature; "nobody configured one" and "the server
++ * could not be asked" are different situations with different next actions.
++ */
++export async function fetchAgentTargets(
++  fetchImpl: typeof globalThis.fetch,
++): Promise<AgentTargetsRead> {
++  let response: Response;
++  try {
++    response = await fetchImpl(CODEV_AGENT_TARGETS_PATH, { headers: { accept: "application/json" } });
++  } catch (error) {
++    return {
++      ok: false,
++      signal: "CODEV_AGENT_TARGETS_UNREACHABLE",
++      message: `this server could not be asked which codev-agents it proxies to: ${(error as Error).message}`,
++    };
++  }
++  let body: Record<string, unknown> = {};
++  try {
++    const parsed: unknown = await response.json();
++    if (parsed !== null && typeof parsed === "object") body = parsed as Record<string, unknown>;
++  } catch {
++    /* an unreadable body is handled by the shape check below */
++  }
++  if (response.status !== 200) {
++    return {
++      ok: false,
++      signal: typeof body.signal === "string" ? body.signal : `HTTP_${response.status}`,
++      message:
++        typeof body.message === "string"
++          ? body.message
++          : `this server answered ${response.status} when asked which codev-agents it proxies to`,
++    };
++  }
++  const raw = Array.isArray(body.targets) ? body.targets : [];
++  const targets = raw
++    .filter((entry): entry is { id: string } =>
++      entry !== null && typeof entry === "object" && typeof (entry as { id?: unknown }).id === "string",
++    )
++    .map((entry) => ({ id: entry.id }));
++  if (targets.length === 0) {
++    return {
++      ok: false,
++      signal: typeof body.signal === "string" ? body.signal : "CODEV_AGENTS_UNCONFIGURED",
++      message:
++        typeof body.message === "string"
++          ? body.message
++          : "this server proxies to no codev-agent, and did not say why",
++    };
++  }
++  return { ok: true, targets };
++}
++
++export type PairingOutcome =
++  | { readonly ok: true; readonly pairing: CodevPairing }
++  | { readonly ok: false; readonly signal: string; readonly message: string };
++
++/**
++ * Spend a `machine-credential` pairing token for this browser's credential.
++ *
++ * Single-use and minutes-long: it is the one secret a human retypes. The token
++ * is spent at the agent, not here, so a refusal is the agent's own signal rather
++ * than a guess made in the page.
++ */
++export async function redeemPairing(
++  fetchImpl: typeof globalThis.fetch,
++  input: {
++    readonly targetId: string;
++    readonly machine: string;
++    readonly token: string;
++    readonly workspacePath: string;
++  },
++): Promise<PairingOutcome> {
++  let response: Response;
++  try {
++    response = await fetchImpl(agentUrl(input.targetId, "/api/agent/v1/pairing/redeem"), {
++      method: "POST",
++      headers: {
++        "content-type": "application/json",
++        accept: "application/json",
++        [PAIRING_TOKEN_HEADER]: input.token,
++      },
++      body: JSON.stringify({ machine: input.machine }),
++    });
++  } catch (error) {
++    return {
++      ok: false,
++      signal: "CODEV_PAIRING_UNREACHABLE",
++      message: `the pairing request did not complete: ${(error as Error).message}`,
++    };
++  }
++  let body: Record<string, unknown> = {};
++  try {
++    const parsed: unknown = await response.json();
++    if (parsed !== null && typeof parsed === "object") body = parsed as Record<string, unknown>;
++  } catch {
++    /* handled below: a redemption with no readable credential is a refusal */
++  }
++  const credential = typeof body.credential === "string" ? body.credential : undefined;
++  const machine = typeof body.machine === "string" ? body.machine : input.machine;
++  if (response.status !== 201 || credential === undefined) {
++    return {
++      ok: false,
++      signal: typeof body.signal === "string" ? body.signal : `HTTP_${response.status}`,
++      message:
++        typeof body.message === "string"
++          ? body.message
++          : "the agent did not issue a machine credential for this browser",
++    };
++  }
++  return {
++    ok: true,
++    pairing: {
++      targetId: input.targetId,
++      machine,
++      credential,
++      workspacePath: input.workspacePath,
++    },
++  };
++}
+diff --git a/apps/web/src/codev/useCodevAgent.ts b/apps/web/src/codev/useCodevAgent.ts
+new file mode 100644
+index 000000000..0d028f4a8
+--- /dev/null
++++ b/apps/web/src/codev/useCodevAgent.ts
+@@ -0,0 +1,145 @@
++/**
++ * Codev customization (spec 250), phase 10 — one `codev-agent` read for the whole page.
++ *
++ * Every consumer — the grid's panes and the gate panel's Approve — needs the same
++ * workspace snapshot, and `codev-agent` answers for the whole workspace in one
++ * request. So this holds one poll and hands the result to all of them, rather
++ * than each component fetching its own copy and the page asking the agent the
++ * same question six times.
++ *
++ * It is a module-level store rather than a React context on purpose: `GatePanel`
++ * renders inside `ChatView` and the grid renders inside its own route, and
++ * threading a provider through both would be a change to t3code's tree for a
++ * customization that is meant to stay narrow.
++ */
++
++import { useCallback, useEffect, useState } from "react";
++
++import {
++  AGENT_STATE_POLL_MS,
++  readWorkspaceState,
++  type AgentStateRead,
++} from "./agentState";
++import { clearPairing, readPairing, writePairing, type CodevPairing, type PairingRead } from "./pairing";
++
++export type CodevAgentState =
++  | AgentStateRead
++  /** No credential in this browser. A pairing form fixes it; a server does not. */
++  | { readonly kind: "unpaired"; readonly message: string };
++
++interface Store {
++  pairingRead: PairingRead;
++  state: CodevAgentState;
++}
++
++function unpairedState(pairingRead: PairingRead): CodevAgentState {
++  if (pairingRead.kind === "unreadable") {
++    // NOT "unpaired". The store could not be read, so whether this browser holds
++    // a credential is unknown — and sending someone to spend a fresh token over
++    // an unreadable store is the wrong next action.
++    return {
++      kind: "unreachable",
++      signal: "CODEV_PAIRING_UNREADABLE",
++      message: pairingRead.message,
++    };
++  }
++  return {
++    kind: "unpaired",
++    message: "this browser is not paired with a codev-agent",
++  };
++}
++
++const initialPairing = readPairing();
++const store: Store = {
++  pairingRead: initialPairing,
++  state: initialPairing.kind === "paired"
++    ? { kind: "unreachable", signal: "CODEV_AGENT_STATE_PENDING", message: "reading codev-agent…" }
++    : unpairedState(initialPairing),
++};
++
++const listeners = new Set<() => void>();
++let polling: ReturnType<typeof setInterval> | null = null;
++let inFlight = false;
++
++function announce(): void {
++  for (const listener of listeners) listener();
++}
++
++async function refreshOnce(): Promise<void> {
++  if (inFlight) return;
++  const pairing = store.pairingRead.kind === "paired" ? store.pairingRead.pairing : null;
++  if (pairing === null) {
++    store.state = unpairedState(store.pairingRead);
++    announce();
++    return;
++  }
++  inFlight = true;
++  try {
++    store.state = await readWorkspaceState(globalThis.fetch.bind(globalThis), pairing);
++  } finally {
++    inFlight = false;
++  }
++  announce();
++}
++
++function ensurePolling(): void {
++  if (polling !== null) return;
++  void refreshOnce();
++  polling = setInterval(() => void refreshOnce(), AGENT_STATE_POLL_MS);
++}
++
++function stopPolling(): void {
++  if (polling === null) return;
++  clearInterval(polling);
++  polling = null;
++}
++
++export interface CodevAgentAccess {
++  readonly pairing: CodevPairing | null;
++  readonly pairingRead: PairingRead;
++  readonly state: CodevAgentState;
++  readonly refresh: () => void;
++  readonly pair: (pairing: CodevPairing) => { readonly ok: true } | { readonly ok: false; readonly message: string };
++  readonly unpair: () => void;
++}
++
++export function useCodevAgent(): CodevAgentAccess {
++  const [, setTick] = useState(0);
++
++  useEffect(() => {
++    const listener = (): void => setTick((value) => value + 1);
++    listeners.add(listener);
++    ensurePolling();
++    return () => {
++      listeners.delete(listener);
++      // The last consumer leaving stops the poll. A background interval on a page
++      // nobody is reading is a request every five seconds forever.
++      if (listeners.size === 0) stopPolling();
++    };
++  }, []);
++
++  const pair = useCallback((pairing: CodevPairing) => {
++    const written = writePairing(pairing);
++    if (!written.ok) return written;
++    store.pairingRead = { kind: "paired", pairing };
++    announce();
++    void refreshOnce();
++    return { ok: true as const };
++  }, []);
++
++  const unpair = useCallback(() => {
++    clearPairing();
++    store.pairingRead = { kind: "unpaired" };
++    store.state = unpairedState(store.pairingRead);
++    announce();
++  }, []);
++
++  return {
++    pairing: store.pairingRead.kind === "paired" ? store.pairingRead.pairing : null,
++    pairingRead: store.pairingRead,
++    state: store.state,
++    refresh: () => void refreshOnce(),
++    pair,
++    unpair,
++  };
++}
+diff --git a/apps/web/src/routes/_chat.codev-builders.tsx b/apps/web/src/routes/_chat.codev-builders.tsx
+index 4196870c7..e291effd4 100644
+--- a/apps/web/src/routes/_chat.codev-builders.tsx
++++ b/apps/web/src/routes/_chat.codev-builders.tsx
+@@ -11,8 +11,10 @@
+ import { createFileRoute } from "@tanstack/react-router";
+ import { useMemo } from "react";
+ 
++import { resolvePaneContent } from "../codev/agentState";
+ import { BuilderGrid } from "../codev/BuilderGrid";
+ import type { BuilderPaneStatus, BuilderPaneThread } from "../codev/BuilderPane";
++import { useCodevAgent } from "../codev/useCodevAgent";
+ import { buildCodevSidebarOrder, resolveSidebarThreadStatus } from "../components/Sidebar.logic";
+ import { useThreadShells } from "../state/entities";
+ 
+@@ -34,6 +36,14 @@ const STATUS_LABELS: Record<ReturnType<typeof resolveSidebarThreadStatus>, Build
+ 
+ function CodevBuilderGridRoute() {
+   const threads = useThreadShells();
++  /*
++   * ONE READ FOR THE WHOLE GRID.
++   *
++   * `codev-agent` answers for every identity in the workspace in one request, so
++   * six panes cost one poll rather than six subscriptions — which is what the
++   * plan's ban on six live transcripts was protecting.
++   */
++  const agent = useCodevAgent();
+ 
+   /**
+    * Architect first, then its builders — the same order the sidebar draws.
+@@ -86,6 +96,11 @@ function CodevBuilderGridRoute() {
+     };
+   }, [threads]);
+ 
++  const contentFor = useMemo(
++    () => (thread: BuilderPaneThread) => resolvePaneContent(agent.state, thread.id),
++    [agent.state],
++  );
++
+   const statusFor = useMemo(
+     () => (thread: BuilderPaneThread) => {
+       const shell = threads.find((candidate) => candidate.id === thread.id);
+@@ -135,7 +150,12 @@ function CodevBuilderGridRoute() {
+           No Codev agents in this workspace yet.
+         </p>
+       ) : (
+-        <BuilderGrid threads={gridThreads} architect={architect} statusFor={statusFor} />
++        <BuilderGrid
++          threads={gridThreads}
++          architect={architect}
++          statusFor={statusFor}
++          contentFor={contentFor}
++        />
+       )}
+     </div>
+   );
+diff --git a/packages/shared/package.json b/packages/shared/package.json
+index eeaa5f59e..8d0684abe 100644
+--- a/packages/shared/package.json
++++ b/packages/shared/package.json
+@@ -3,6 +3,10 @@
+   "private": true,
+   "type": "module",
+   "exports": {
++    "./codevAgentProxy": {
++      "types": "./src/codevAgentProxy.ts",
++      "import": "./src/codevAgentProxy.ts"
++    },
+     "./themePalettes": {
+       "types": "./src/themePalettes.ts",
+       "import": "./src/themePalettes.ts"
+diff --git a/packages/shared/src/codevAgentProxy.ts b/packages/shared/src/codevAgentProxy.ts
+new file mode 100644
+index 000000000..d0a39f9ff
+--- /dev/null
++++ b/packages/shared/src/codevAgentProxy.ts
+@@ -0,0 +1,19 @@
++/**
++ * Codev customization (spec 250), phase 10 — the two paths the proxy lives at.
++ *
++ * Two consumers must agree on these, and drift between them is silent: the
++ * server registers routes here (`apps/server/src/codev/agentProxy.ts`) and the
++ * web app builds its URLs from them (`apps/web/src/codev/pairing.ts`). A prefix
++ * only one side knows produces a 404 that reads as a broken feature rather than
++ * as a mismatch — the same reason `devProxy.ts` next door holds its list once.
++ *
++ * They sit under `/api` deliberately: `DEV_PROXIED_PATH_PREFIXES` already
++ * carries `/api`, so browser dev reaches them through the Vite proxy and the
++ * page stays same-origin without a second entry to keep in step.
++ */
++
++/** `${CODEV_AGENT_PROXY_PREFIX}/<target-id>/<agent-path>`. */
++export const CODEV_AGENT_PROXY_PREFIX = "/api/codev/agent";
++
++/** Which `codev-agent` targets this server is configured to reach, by id. */
++export const CODEV_AGENT_TARGETS_PATH = "/api/codev/agent-targets";

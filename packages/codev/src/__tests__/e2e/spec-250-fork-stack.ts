@@ -173,19 +173,32 @@ async function probeWebApp(): Promise<string | null> {
 }
 
 /**
- * Start the fork server on empty data and return a browser-usable stack.
+ * Start the fork SERVER on empty data, without requiring the web app.
  *
- * Every failure returns a REASON rather than throwing, because every one of them
- * means "this run cannot tell you anything" and not "the sidebar is wrong".
+ * Split out of `startForkStack` in phase 10. Phases 7-9 were about what a browser
+ * renders, so a missing Vite dev server made a run meaningless. Phase 10's proxy
+ * is an HTTP surface on the fork's own server, and a test that drives it over
+ * `fetch` needs no page at all — requiring one would skip a run that could have
+ * answered.
+ *
+ * The server reads its codev-agent allowlist from `T3CODE_CODEV_AGENT_ORIGINS` in
+ * its OWN environment, and the harness spawns it with `process.env`. So a caller
+ * configures the proxy by setting that variable before calling — the same act an
+ * operator performs, rather than a fixture-only back door.
+ *
+ * Every failure returns a REASON rather than throwing: each one means "this run
+ * cannot tell you anything", not "the thing under test is wrong".
  */
-export async function startForkStack(): Promise<ForkStack> {
+export async function startForkServer(): Promise<
+  ForkStackUnavailable | Omit<ForkStackReady, "webUrl">
+> {
   const forkRoot = harnessEnv().T3CODE_FORK_ROOT;
   if (forkRoot === undefined || !existsSync(forkRoot)) {
     return {
       available: false,
       reason:
         `T3CODE_FORK_ROOT is ${forkRoot ?? "unset"}, which does not exist. This spec is ABOUT ` +
-        `the fork's web app; there is nothing to fall back to.`,
+        `the fork; there is nothing to fall back to.`,
     };
   }
   if (process.env.T3_NODE === undefined) {
@@ -194,15 +207,6 @@ export async function startForkStack(): Promise<ForkStack> {
       reason:
         "T3_NODE is unset. The fork server runs under its own interpreter and does not inherit " +
         "one from PATH.",
-    };
-  }
-  const webProblem = await probeWebApp();
-  if (webProblem !== null) {
-    return {
-      available: false,
-      reason:
-        `${webProblem}. Start it with: T3CODE_SINGLE_ORIGIN_DEV=1 T3CODE_PORT=3811 PORT=5733 ` +
-        `npx vp dev, from the fork's apps/web.`,
     };
   }
 
@@ -255,11 +259,32 @@ export async function startForkStack(): Promise<ForkStack> {
   const access = (await tokenResponse.json()) as { readonly access_token: string };
   return {
     available: true,
-    webUrl: webAppUrl(),
     serverBase,
     accessToken: access.access_token,
     gateWriterToken: readGateWriterToken(),
   };
+}
+
+/**
+ * Start the fork server AND require its web app, for the specs that render pages.
+ *
+ * The web app is probed FIRST, before anything is started: an absent Vite is a
+ * skip with instructions, and starting a server for a run that cannot proceed
+ * leaves a process behind for nothing.
+ */
+export async function startForkStack(): Promise<ForkStack> {
+  const webProblem = await probeWebApp();
+  if (webProblem !== null) {
+    return {
+      available: false,
+      reason:
+        `${webProblem}. Start it with: T3CODE_SINGLE_ORIGIN_DEV=1 T3CODE_PORT=3811 PORT=5733 ` +
+        `npx vp dev, from the fork's apps/web.`,
+    };
+  }
+  const server = await startForkServer();
+  if (!server.available) return server;
+  return { ...server, webUrl: webAppUrl() };
 }
 
 /**
@@ -369,7 +394,21 @@ async function connect(
   const clientModule = await import("@cluesmith/t3-client/client");
   const authModule = await import("@cluesmith/t3-client/auth");
   const ticket = await authModule.issueWebSocketTicket(stack.serverBase, accessToken);
-  const socket = new WebSocket(authModule.webSocketUrl(stack.serverBase, ticket.ticket));
+  /*
+   * `ws` when the runtime has no global WebSocket, which Node 20 does not.
+   *
+   * The fork's own tooling wants Node 22, and `better-sqlite3` in this repository
+   * is built for Node 20 — so a phase-10 run that needs both a codev-agent and
+   * this socket cannot simply pick one interpreter. The polyfill is narrower than
+   * the alternative (a child process per agent host) and it is the same protocol
+   * either way; `globalThis.WebSocket` is preferred whenever it exists, so a Node
+   * 22 run is byte-for-byte what it always was.
+   */
+  const WebSocketImpl: typeof WebSocket =
+    typeof globalThis.WebSocket === "function"
+      ? globalThis.WebSocket
+      : ((await import("ws")).default as unknown as typeof WebSocket);
+  const socket = new WebSocketImpl(authModule.webSocketUrl(stack.serverBase, ticket.ticket));
   await new Promise<void>((resolveOpen, rejectOpen) => {
     socket.addEventListener("open", () => resolveOpen(), { once: true });
     socket.addEventListener("error", () => rejectOpen(new Error("socket error")), { once: true });
@@ -636,4 +675,137 @@ export async function seedTiling(stack: ForkStackReady): Promise<SeededTiling> {
 
   close();
   return { projectId, projectTitle, architectTitle, builderTitles };
+}
+
+/**
+ * Spec 250, phase 10 — threads whose IDS are returned, so a `codev-agent` can be
+ * seeded to publish about them.
+ *
+ * `seedHierarchy` and `seedTiling` return titles, because those specs read the
+ * sidebar and the grid by what a human sees. This one has a second consumer: the
+ * agent host, whose identities carry `thread_id` and must line up with the
+ * threads t3code is showing, or every pane truthfully reports "codev-agent does
+ * not publish this thread" and the phase's content is never rendered.
+ */
+export interface SeededApproval {
+  readonly projectId: string;
+  readonly architectThreadId: string;
+  readonly architectTitle: string;
+  readonly builderThreadId: string;
+  readonly builderTitle: string;
+  /** A second builder, with no porch project, so "absent" is rendered too. */
+  readonly unmanagedThreadId: string;
+  readonly unmanagedTitle: string;
+  readonly gate: {
+    readonly name: string;
+    readonly question: string;
+    readonly recommendedLabel: string;
+  };
+}
+
+export async function seedApproval(stack: ForkStackReady): Promise<SeededApproval> {
+  const { client, close } = await connect(stack, stack.accessToken);
+  const projectId = uniqueId();
+  const forkRoot = harnessEnv().T3CODE_FORK_ROOT ?? "";
+  await client.call("orchestration.dispatchCommand", {
+    type: "project.create",
+    commandId: uniqueId(),
+    projectId,
+    title: "spec 250 approval",
+    workspaceRoot: forkRoot,
+    defaultModelSelection: { instanceId: "codex", model: "gpt-5.6-luna" },
+    createdAt: new Date().toISOString(),
+  });
+
+  const createThread = async (fields: Record<string, unknown>): Promise<void> => {
+    await client.call("orchestration.dispatchCommand", {
+      type: "thread.create",
+      commandId: uniqueId(),
+      modelSelection: { instanceId: "codex", model: "gpt-5.6-luna" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: forkRoot,
+      createdAt: new Date().toISOString(),
+      projectId,
+      ...fields,
+    });
+  };
+
+  const architectThreadId = uniqueId();
+  const architectTitle = "Architect main";
+  await createThread({ threadId: architectThreadId, title: architectTitle, role: "architect" });
+
+  const builderThreadId = uniqueId();
+  const builderTitle = "Builder at a gate";
+  await createThread({
+    threadId: builderThreadId,
+    title: builderTitle,
+    role: "builder",
+    parentThreadId: architectThreadId,
+  });
+
+  /*
+   * A builder codev-agent knows nothing about.
+   *
+   * "The agent answered and does not publish this thread" is a real, ordinary
+   * state and its own branch in the pane. Without one seeded, that branch is
+   * never rendered and the screenshots would show a grid where every pane
+   * happens to resolve.
+   */
+  const unmanagedThreadId = uniqueId();
+  const unmanagedTitle = "Builder codev-agent does not know";
+  await createThread({
+    threadId: unmanagedThreadId,
+    title: unmanagedTitle,
+    role: "builder",
+    parentThreadId: architectThreadId,
+  });
+
+  const gate = {
+    name: "pr",
+    question: "Approve the plan, or send it back for another round?",
+    recommendedLabel: "Approve",
+  } as const;
+
+  // Through `codev.gateWrite`, with the server's own credential, on its own
+  // connection — the same RPC and scope `codev-agent` uses. See `seedHierarchy`.
+  if (stack.gateWriterToken === null) {
+    throw new Error(
+      "the fork server wrote no gate-writer credential, so this fixture cannot write a gate",
+    );
+  }
+  const gateWriter = await connect(stack, stack.gateWriterToken);
+  await gateWriter.client.call("codev.gateWrite", {
+    type: "codev.gate.set",
+    commandId: uniqueId(),
+    threadId: builderThreadId,
+    createdAt: new Date().toISOString(),
+    gate: {
+      gateName: gate.name,
+      requestedAt: new Date().toISOString(),
+      question: gate.question,
+      choices: [
+        {
+          label: gate.recommendedLabel,
+          consequence: "Implementation starts on the plan as written.",
+          recommended: true,
+        },
+        { label: "Send it back", consequence: "The plan is revised first." },
+      ],
+    },
+  });
+  gateWriter.close();
+  close();
+
+  return {
+    projectId,
+    architectThreadId,
+    architectTitle,
+    builderThreadId,
+    builderTitle,
+    unmanagedThreadId,
+    unmanagedTitle,
+    gate,
+  };
 }

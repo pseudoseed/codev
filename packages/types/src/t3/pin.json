@@ -2,7 +2,7 @@
   "_comment": "The pinned t3code contract. Edited only by the refresh procedure in tools/t3-codegen/REFRESH.md. Spec 146.",
   "_identities": "Spec 250: two identities, not one. `commit` keeps its spec 146 meaning (the commit the generated artifacts came from) and that source is the FORK from phase 5 onward. `upstreamBase` is the pingdotgg commit the fork branched from, and the pin the read-only upstream clone must stay on. They are equal until the fork diverges, which is deliberate: while they are equal every two-identity assertion has a known answer.",
   "repo": "https://github.com/pingdotgg/t3code",
-  "commit": "8d4b878f31374be4b570b5de3a3466d7e3c26278",
+  "commit": "e0476d49aec1d3b8f066525527942c9cdf0b7bb9",
   "upstreamBase": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
   "forkRepo": "https://github.com/pseudoseed/t3code.git",
   "forkBranch": "codev",

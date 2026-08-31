@@ -1,0 +1,69 @@
+From fe10e0c0b07f480f48c2d2cf006cac64d6dac0bb Mon Sep 17 00:00:00 2001
+From: pseudo <aws@pseudoseed.com>
+Date: Mon, 31 Aug 2026 04:02:21 -0600
+Subject: [PATCH 31/31] [Spec 250][Phase: phase_10] fix: the empty-thread
+ placeholder printed across the gate panel
+
+On a thread with no turns yet, "Send a message to start the conversation." is
+centred over the whole content column and lands on top of "Waiting on you:
+<gate>". It has done that since phase 8; the panel-only screenshots did not
+show it and the full-page one did.
+
+Hidden rather than moved, through the prop upstream already has for it,
+because it is also wrong advice: a thread waiting on a human approval is not
+waiting for a message.
+---
+ apps/web/src/components/ChatView.tsx | 26 +++++++++++++++++++++++++-
+ 1 file changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/apps/web/src/components/ChatView.tsx b/apps/web/src/components/ChatView.tsx
+index cb00a51c8..39728d4ab 100644
+--- a/apps/web/src/components/ChatView.tsx
++++ b/apps/web/src/components/ChatView.tsx
+@@ -121,6 +121,7 @@ import {
+   resolvePlanFollowUpSubmission,
+ } from "../proposedPlan";
+ import { GatePanel } from "../codev/GatePanel";
++import { isCodevGatePending, resolveCodevGateState } from "../codev/gateState";
+ import {
+   DEFAULT_INTERACTION_MODE,
+   DEFAULT_RUNTIME_MODE,
+@@ -2705,6 +2706,12 @@ function ChatViewContent(props: ChatViewProps) {
+     draftHeroDockRequested,
+     backgroundSubmissionPending,
+   });
++  /*
++    Codev customization (spec 250), phase 10. One derivation, from the one
++    resolver both the sidebar row and the panel already go through — not a second
++    read of `codevGate` that could disagree with what the panel decided to draw.
++  */
++  const hasCodevPendingGate = isCodevGatePending(resolveCodevGateState(activeThread));
+   const [
+     attachDraftHeroTransitionGroupRef,
+     attachDraftHeroComposerAnchorRef,
+@@ -6941,7 +6948,24 @@ function ChatViewContent(props: ChatViewProps) {
+                 liveFollowEnabled={timelineLiveFollowEnabled}
+                 onIsAtEndChange={onIsAtEndChange}
+                 onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
+-                hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
++                /*
++                  Codev customization (spec 250), phase 10 — and the third
++                  condition is ours.
++
++                  On a thread with no turns yet, this placeholder is centred over
++                  the whole content column and lands on top of the gate panel: the
++                  words "Send a message to start the conversation." print across
++                  "Waiting on you: <gate>". It has been doing that since phase 8
++                  and the panel-only screenshots did not show it.
++
++                  Hidden rather than moved, because it is also WRONG ADVICE there.
++                  A thread waiting on a human approval is not waiting for a
++                  message, and telling someone to start a conversation is telling
++                  them to do the one thing that will not clear the gate.
++                */
++                hideEmptyPlaceholder={
++                  isDraftHeroState || threadDetailLoading || hasCodevPendingGate
++                }
+                 topFadeEnabled={!hasTimelineTopBanner}
+                 loadEarlier={loadEarlierTurns}
+               />

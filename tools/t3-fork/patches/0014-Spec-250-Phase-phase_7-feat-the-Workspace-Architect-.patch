@@ -1,7 +1,7 @@
 From 4633e0a7f4982785a43b265f23280d17d139df07 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 23:10:42 -0600
-Subject: [PATCH 14/27] [Spec 250][Phase: phase_7] feat: the Workspace >
+Subject: [PATCH 14/31] [Spec 250][Phase: phase_7] feat: the Workspace >
  Architect > Builders grouping, as a function
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

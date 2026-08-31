@@ -1,7 +1,7 @@
 From 36717ab7ecfcd3e2262580c6c3b56d68a67d4929 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Mon, 31 Aug 2026 02:07:28 -0600
-Subject: [PATCH 24/27] [Spec 250][Phase: phase_9] fix: the sidebar toggle sat
+Subject: [PATCH 24/31] [Spec 250][Phase: phase_9] fix: the sidebar toggle sat
  on the first pane's title at 390
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

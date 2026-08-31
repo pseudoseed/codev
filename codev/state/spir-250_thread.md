@@ -1331,3 +1331,76 @@ COLLAPSED fits four columns, so the architect gets a tile there. That is the rul
 
 Rebuttals at `codev/projects/250-t3code-is-the-front-end-privat/250-phase_9-iter1-rebuttals.md`.
 Pin at `8d4b878f3137`, 27 patches. 26 e2e green, fork web 2938.
+
+## Phase 10 — approval from t3code over the same-origin proxy
+
+The proxy is `apps/server/src/codev/agentProxy.ts`, at `/api/codev/agent/<target-id>/<agent-path>`.
+**Its upstream is server-configured** (`T3CODE_CODEV_AGENT_ORIGINS`, `id=origin` entries) and the
+browser selects by **id**, never by URL — the plan's own most consequential item, because a proxy
+forwarding to a browser-named origin is an SSRF primitive and a route-path allowlist does not
+constrain the host.
+
+**The forward set is an allowlist, not a denylist**, and `Connection`'s own named tokens are
+subtracted from it anyway. Both matter: an allowlist alone forwards a header a request declares
+connection-scoped, and that header is the machine credential. `authorization` and `cookie` never
+travel — t3code's session gates USE of the proxy and is not approval authority.
+
+Deliberately not carried: the SSE stream (this proxy buffers), and both revocation routes (`afx
+pair revoke` is the operator path; a browser that could revoke could deny a human their gate).
+A 3xx from the configured origin is **refused**, not passed on — forwarded, the browser follows it
+cross-origin.
+
+**Pane content landed here too**, per the architect's ruling: `codev-agent` already published the
+porch phase and the last three messages workspace-scoped in one request, and the panes now read it.
+The fork's contract was not extended. Phase 9's "not read here yet" wording is gone; every branch
+that still cannot show a phase names which — unpaired, unavailable, absent, or no porch project.
+
+**Three defects the browser caught and no unit test could.**
+
+1. **The page read the agent store once and froze.** Pairing succeeded, the credential reached
+   browser storage, the poll ran — and the panel still said this browser holds no credential. The
+   hand-rolled `useState` tick pushed from a listener set never followed the store.
+   `useSyncExternalStore` with a replaced (never mutated) snapshot. This cost the most time in the
+   phase and every unit test was green throughout.
+2. **A gated pane dropped the phase it had just gained** — the gate replaced the phase line, which
+   was right when there was no phase and wrong the moment one existed.
+3. **`Send a message to start the conversation.` printed across `Waiting on you: <gate>`** on a
+   thread with no turns. Present since **phase 8**; the phase 8 panel-only screenshot could not show
+   it and the full-page one did, unnoticed. Hidden through upstream's own `hideEmptyPlaceholder`,
+   which is also the honest fix: a thread at a gate is not waiting for a message.
+
+**Tests.** Fork: 28 `agentProxy` unit tests (real sockets for both failure signals and for the
+redirect refusal), 43 web unit tests across `pairing`/`approval`/`agentState`. Codev: a 7-test
+vitest e2e driving the REAL fork server's proxy in front of a real `agent-routes` host, ending in a
+real `status.yaml` — criterion 4 — plus the SSRF refusals and `afx pair revoke`. Playwright: 6 tests
+against the live web app, recording **every request the page issues** and asserting each is
+same-origin, which is what replaces the CSP assertion the plan's first draft proposed against a
+header t3code does not send.
+
+**Falsifiability.** Reverting the `Connection`-token subtraction, the header allowlist, the redirect
+refusal, the credentials-in-URL rule and the anchored route pattern fails 5 unit tests. Pointing the
+configured allowlist at a dead port fails 4 of the 7 e2e tests, which is what proves the ceremony
+goes through the configured proxy and nothing else.
+
+**Traps.** The Playwright run needs the DEFAULT node (v20): `better-sqlite3` is built for it, and
+the agent host is in-process. That collides with `@cluesmith/t3-client`'s need for a global
+`WebSocket`, so the fixture polyfills from `ws` when the global is absent. And `start-fork` refuses
+a dirty fork, so the fork cannot be instrumented for a browser debugging session — the store bug had
+to be found by elimination and fixed by using the right primitive.
+
+Pin at `e0476d49aec1`, 31 patches. Both evidence files re-collected at the pin.
+
+**Filed #264 while phase 10's suites ran — a SAFETY defect, not noise.** The builder received
+"Gate pr approved — please run `porch next` to advance." for a gate nobody approved in this project.
+`porch approve` sends the bare PROJECT ID as the `afx send` target (`porch/index.ts:1267`); the
+workspace is taken from the SENDING process's cwd (`send.ts:96-113`); the agent is then TAIL-matched
+against builder ids with leading zeros stripped (`tower-messages.ts:387-392`, `:510-511`). So `250`
+from a Playwright fixture's temp workspace addressed `spir-250` in this one. Neither hop carries the
+identity of the workspace whose `status.yaml` was written.
+
+Porch state was unchanged — verified twice, and `porch next 250` still returned phase_10. The
+correct response on receipt is to verify against porch and refuse to advance; #264 records that as
+the mitigation as well as the defect. `notifyTerminal` no-ops under vitest (`notify.ts:62`), which
+is why the sibling vitest e2e performs the same approval silently and only the Playwright run fires
+it. **Not fixed here** — it is porch/tower, and folding it in would put an unrelated change in a
+fork PR.

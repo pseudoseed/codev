@@ -1,7 +1,7 @@
 From 804e56f8f864025fc5f9bedc1fcb4fbe23d2b87f Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 22:12:03 -0600
-Subject: [PATCH 13/27] [Spec 250][Phase: phase_6] fix: a refusal's
+Subject: [PATCH 13/31] [Spec 250][Phase: phase_6] fix: a refusal's
  discriminant did not survive the ws boundary
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

@@ -1,0 +1,53 @@
+From 75150bfcf382444a7a1deaa2a72f24ed9d844e70 Mon Sep 17 00:00:00 2001
+From: pseudo <aws@pseudoseed.com>
+Date: Mon, 31 Aug 2026 03:59:37 -0600
+Subject: [PATCH 30/31] [Spec 250][Phase: phase_10] fix: a gated pane dropped
+ the phase it had just gained
+
+The gate replaced the phase line, which was right when there was no phase to
+show and wrong the moment codev-agent's projection arrived: a reader who has
+found the pane that wants them still needs to know what it was doing. The
+gate leads in rose with its gavel; the phase follows in ordinary weight.
+---
+ apps/web/src/codev/BuilderPane.tsx | 22 +++++++++++++---------
+ 1 file changed, 13 insertions(+), 9 deletions(-)
+
+diff --git a/apps/web/src/codev/BuilderPane.tsx b/apps/web/src/codev/BuilderPane.tsx
+index e93ec3eb5..2f040620f 100644
+--- a/apps/web/src/codev/BuilderPane.tsx
++++ b/apps/web/src/codev/BuilderPane.tsx
+@@ -123,21 +123,25 @@ export function BuilderPane(props: {
+         data-codev-pane-content={content.kind}
+         className="flex min-w-0 items-center gap-1"
+       >
+-        {gate.kind === "none" ? (
+-          <PhaseLine content={content} />
+-        ) : (
+-          /*
+-            A GATE OUTRANKS THE PHASE ON THIS LINE, and it always did. A human
+-            scanning a grid is looking for who is waiting on them; the phase is
+-            what they read once they have found it.
+-          */
++        {/*
++          THE GATE LEADS AND THE PHASE FOLLOWS. Both, not one.
++
++          Phase 9 had only the gate to show, so a gated pane replaced the phase
++          line with it. Now that the phase is real, replacing it would drop the
++          one thing that says WHERE the builder got to — and a reader who has
++          found the pane that wants them still has to know what it was doing.
++          The gate keeps the rose and the gavel, so it is still what the eye
++          lands on; the phase sits after it in the ordinary weight.
++        */}
++        {gate.kind === "none" ? null : (
+           <>
+             <GavelIcon aria-hidden className="size-3 shrink-0 text-rose-600 dark:text-rose-300/90" />
+-            <span className="min-w-0 truncate font-medium text-rose-600 dark:text-rose-300/90">
++            <span className="shrink-0 truncate font-medium text-rose-600 dark:text-rose-300/90">
+               {gate.gateName}
+             </span>
+           </>
+         )}
++        <PhaseLine content={content} />
+       </p>
+ 
+       <div

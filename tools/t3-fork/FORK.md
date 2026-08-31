@@ -224,6 +224,33 @@ vendored contract is what decides whether Codev depends on the customization.
 | 9 | `b97ef30dea2b` | Re-shot with the strip. |
 | 9 | `0065abc29ed7` | The pane's role prefix cannot be clipped: it is the only thing distinguishing an architect tile from a builder tile when every architect takes one. |
 | 9 | `aeebd7f2b9c2` | Re-shot with a long title in the grid, which is what makes the prefix test able to fail. |
+| 9 | `8d4b878f3137` | Re-shot after the 3-way review fixes: a sidebar entry point to the grid, and one width measurement instead of two. |
+| 10 | `0b90c36682a4` | `apps/server/src/codev/agentProxy.ts` — the same-origin proxy to `codev-agent`, with a server-configured origin allowlist. Web side: `pairing.ts`, `approval.ts`, `agentState.ts`, `useCodevAgent.ts`, `PairingPanel.tsx`, `GateApproval.tsx`, and the panes reading the porch phase and messages `codev-agent` had been publishing since phase 6. `packages/shared/src/codevAgentProxy.ts` holds the two paths both sides must agree on. |
+| 10 | `79db4c7b8f07` | The page read the agent store once and froze. The hand-rolled `useState` tick never followed the store; `useSyncExternalStore` does. Found by the browser, invisible to every unit test. |
+| 10 | `75150bfcf382` | A gated pane dropped the phase it had just gained: the gate replaced the phase line rather than leading it. |
+| 10 | `fe10e0c0b07f` | `Send a message to start the conversation.` printed across `Waiting on you: <gate>` on a thread with no turns. Present since phase 8; the panel-only screenshots did not show it. Hidden through upstream's own `hideEmptyPlaceholder`, because it is also wrong advice at a gate. |
+| 10 | `e0476d49aec1` | The pairing form, the approve control and the grid screenshotted at the three widths. |
+
+### The proxy's upstream is the OPERATOR's, and the browser cannot name one
+
+Phase 10 gives the fork's server a reverse proxy to `codev-agent` at
+`/api/codev/agent/<target-id>/<agent-path>`, so t3code's page reaches the approval
+ceremony without ever making a cross-origin request. There is no page-level CSP in t3code to
+lean on — `Content-Security-Policy` appears on `.svg` asset responses only — so the guarantee
+is structural: the page holds no absolute URL, and the e2e watches the network rather than
+parsing a header that is not sent.
+
+**Configure it with `T3CODE_CODEV_AGENT_ORIGINS`,** a comma-separated list of `id=origin`
+entries, e.g. `local=http://127.0.0.1:4100`. Unset means the proxy carries nothing and SAYS SO;
+an entry that cannot be used is reported rather than dropped. The browser selects a target by
+**id**, never by URL — a proxy that forwards to an origin the browser names is an SSRF
+primitive, and a route-path allowlist does not constrain the host.
+
+Three things it deliberately does not do: it does not carry the SSE stream (it buffers, and a
+buffered stream is live on the wire and empty in the page); it does not carry either revocation
+route (`afx pair revoke` is the operator path, and a browser that could revoke could deny a
+human their own gate); and it does not forward `authorization` or `cookie`, because t3code's own
+session is not approval authority and no other server should be handed t3code's identity.
 
 **Phase 5 added no row, and that is not an omission.** It regenerated the vendored contract in the
 Codev repository from `51b55d4899e4`; it changed nothing in the fork.
