@@ -1,7 +1,7 @@
 id: '250'
 title: t3code-is-the-front-end-privat
 protocol: spir
-phase: implement
+phase: review
 plan_phases:
   - id: phase_1
     title: Two-identity vendoring harness
@@ -35,8 +35,8 @@ plan_phases:
     status: complete
   - id: phase_11
     title: 'Acceptance run: tailnet iPad and the rebase drill'
-    status: in_progress
-current_plan_phase: phase_11
+    status: complete
+current_plan_phase: null
 gates:
   spec-approval:
     status: approved
@@ -100,8 +100,8 @@ gates:
     status: pending
   verify-approval:
     status: pending
-iteration: 2
-build_complete: true
+iteration: 1
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -230,7 +230,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/spir-250/codev/projects/250-t3code-is-the-front-end-privat/250-phase_11-iter1-opencode.txt
         stated: true
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-31T11:33:40.225Z'
+updated_at: '2026-08-31T11:47:09.000Z'
 context_refreshes:
   - boundary: enter:implement
     at: '2026-08-30T20:09:29.526Z'
@@ -265,3 +265,5 @@ context_refreshes:
   - boundary: plan-phase:phase_11
     at: '2026-08-31T10:38:24.893Z'
     acknowledged_at: '2026-08-31T10:40:39.570Z'
+  - boundary: enter:review
+    at: '2026-08-31T11:47:09.000Z'
