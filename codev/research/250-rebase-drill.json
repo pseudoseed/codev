@@ -50,10 +50,53 @@
     ],
     "conflicted": [],
     "regenerationReachable": true,
-    "detail": "every file the generator reads merged without conflict, so regenerating the contract from the rebased tree is not blocked by the rebase. What the regenerated contract would CHANGE is a separate question, answered by classify-churn --upstream-movement."
+    "sourceHash": {
+      "checked": true,
+      "algorithm": "sha256",
+      "comparedTo": "3786b840e1a4a26c062138889cd72bcaed2fbdc1",
+      "files": {
+        "auth.ts": "89374198ca06cfc7d21e7080f291de79df34cdc3f9bd9453a1e68895388e16d4",
+        "baseSchemas.ts": "0fea5d24348912260361716e01cf1c9ce1cd4d456a434471069a9215c4e8f1d7",
+        "environment.ts": "766021fc016d0a8a45f9523b47f1f3ee4ff1e8564950b58a314bd5bce5082da2",
+        "git.ts": "0d95b17b6aba4e808951a94c734c398c877e1a334572db659a815d093b3bdabb",
+        "model.ts": "0749c9085481e3500f156646d4216fb78436764272d97480e059a193fc6982fc",
+        "orchestration.ts": "fdf0811aac5573ec4b557993fe9392b577a0a1c41a50815f661821027ad8a29b",
+        "providerInstance.ts": "0a1fea758707473021ff0e340015a464ff1af785a4bb842b8976a574acb0afaf",
+        "sourceControl.ts": "e58dc3e8612be6e16bf25d9ee13a9c5d8a02807995f086abe544558544cd7f85",
+        "vcs.ts": "41470d7316088e6fd85710df794076bc6311ca851816856c028a24a8cd4e63db"
+      },
+      "moved": [
+        "auth.ts",
+        "baseSchemas.ts",
+        "environment.ts",
+        "orchestration.ts"
+      ],
+      "detail": "4 of 9 closure files differ after the merge: auth.ts, baseSchemas.ts, environment.ts, orchestration.ts. The generator would emit a different contract from the rebased tree; how different is what classify-churn --upstream-movement answers, and what generate.mjs settles once a rebase is adopted."
+    },
+    "detail": "every file the generator reads merged without conflict, so regenerating the contract from the rebased tree is not blocked by the rebase. What the regenerated contract would CHANGE is bounded by sourceHash.moved and settled by classify-churn --upstream-movement."
   },
-  "startedAt": "2026-08-31T11:09:02.249Z",
-  "finishedAt": "2026-08-31T11:09:08.426Z",
+  "startedAt": "2026-08-31T11:18:45.040Z",
+  "finishedAt": "2026-08-31T11:18:51.422Z",
+  "contractRegeneration": {
+    "attempted": false,
+    "reason": "generate.mjs refuses any checkout whose HEAD is not pin.commit, and a rebased tree never satisfies that — its head is a commit that did not exist before the rebase. Regenerating from one means moving the pin, which is the adoption this drill exists in order not to perform (step 3 of tools/t3-codegen/REFRESH.md). contractClosure.sourceHash bounds the job instead. shape-check did not run."
+  },
+  "upstreamChurn": {
+    "range": "082e6ea52186..9b2d04317c68",
+    "commits": 104,
+    "closureTouching": 5,
+    "closureFiles": [
+      "packages/contracts/src/auth.ts",
+      "packages/contracts/src/baseSchemas.ts",
+      "packages/contracts/src/environment.ts",
+      "packages/contracts/src/git.ts",
+      "packages/contracts/src/model.ts",
+      "packages/contracts/src/orchestration.ts",
+      "packages/contracts/src/providerInstance.ts",
+      "packages/contracts/src/sourceControl.ts",
+      "packages/contracts/src/vcs.ts"
+    ]
+  },
   "upstreamRoot": "/Users/chris/dev/t3code",
   "forkRoot": "/Users/chris/dev/t3code-codev",
   "base": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
