@@ -1,7 +1,7 @@
 From 81c2463d7ec156a8d38475d2b88753e1753021f9 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Mon, 31 Aug 2026 00:48:06 -0600
-Subject: [PATCH 20/34] [Spec 250][Phase: phase_8] fix: a gated architect lost
+Subject: [PATCH 20/35] [Spec 250][Phase: phase_8] fix: a gated architect lost
  its role caption to the gate marker
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

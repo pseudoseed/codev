@@ -1,7 +1,7 @@
 From 2f64a1b0ee2b35cd858a8b601b4d425216e73ae5 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Mon, 31 Aug 2026 06:43:08 -0600
-Subject: [PATCH 34/34] [Spec 250][Phase: review] fix: the approval path had no
+Subject: [PATCH 34/35] [Spec 250][Phase: review] fix: the approval path had no
  answer for a dead network, and the proxy had no bound on the way back
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

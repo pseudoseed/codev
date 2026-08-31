@@ -1,0 +1,604 @@
+From 26b4c2dc09f0fe2f6798e9b781df6722603b5bfe Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Mon, 31 Aug 2026 11:34:57 -0600
+Subject: [PATCH 35/35] [Issue 272] feat: a workspace with nothing running in
+ it still gets a heading
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The tree's project level was derived entirely from architects. `buildCodevSidebarOrder`
+walked `hierarchy.architects`, keyed each subtree by `projectKeyOf`, and set
+`startsProject` on the first of each — so a project with no architect contributed no
+entry, drew no heading, and was absent from the sidebar.
+
+That was fine while a project existed only because something had been spawned into it.
+Codev now registers a project per workspace whether or not anything has been spawned
+there, which makes "nobody has spawned here yet" the ordinary case. It was rendering
+identically to "this workspace does not exist" — the two spelled the same way, which is
+the thing that must never happen.
+
+**A group, not a key.** The sidebar's project list is LOGICAL projects — one row that may
+stand for the same physical project across several environments — while `projectKeyOf`
+returns the physical `environmentId:projectId` a thread belongs to. A flat list of keys
+draws a second, empty heading beside a group whose OTHER member holds the architects,
+carrying the same name, and a reader sees two workspaces where there is one. So a group
+names every key that counts as opening it and the one key its heading is drawn with. With
+one environment each group is a single key, which is the ordinary case.
+
+**One heading, two callers.** The markup is a local helper now rather than two copies. Two
+subtly different headings would read to a user as two kinds of workspace, which they are
+not. The only difference is `data-codev-project-empty`, so a test can tell the cases apart
+without them rendering differently.
+
+**The union gained a case, and every consumer had to say what it does with it.** An
+`empty-project` entry carries no thread. `orderedActiveThreads` was
+`.map(entry => entry.thread)`, and that list is what shift-range-select and the jump-hint
+labels are assigned from — `undefined` in it is a crash one row away, not a wrong row.
+`codevOrderedThreads` and `codevEntryThread` are that answer, exported rather than inlined
+because six callers needed it. An optional `thread?: T` field was the alternative and is
+worse: `entry.thread.id` would keep compiling and fail at runtime on the one entry kind
+that has no thread.
+
+The three project maps are annotated `Map<string, ...>` rather than inferred. Inference
+gives them the template-literal key type, which a plain `string` cannot index, and an
+empty-project heading has only a plain string — it carries no thread to rebuild the key
+from. Widening is strictly more permissive; every existing lookup still type-checks.
+
+Refs #272.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/components/Sidebar.logic.test.ts | 127 +++++++++++++--
+ apps/web/src/components/Sidebar.logic.ts      |  86 ++++++++++
+ apps/web/src/components/Sidebar.tsx           | 153 ++++++++++++++----
+ 3 files changed, 325 insertions(+), 41 deletions(-)
+
+diff --git a/apps/web/src/components/Sidebar.logic.test.ts b/apps/web/src/components/Sidebar.logic.test.ts
+index cb8531674..7b3f63129 100644
+--- a/apps/web/src/components/Sidebar.logic.test.ts
++++ b/apps/web/src/components/Sidebar.logic.test.ts
+@@ -5,6 +5,8 @@ import {
+   archiveSelectedThreadEntries,
+   buildBulkTitleRegenerationContextMenuItem,
+   buildCodevSidebarOrder,
++  codevEntryThread,
++  codevOrderedThreads,
+   buildMultiSelectThreadContextMenuItems,
+   describeCodevOrphanReason,
+   createThreadJumpHintVisibilityController,
+@@ -1719,7 +1721,7 @@ describe("buildCodevSidebarOrder", () => {
+     ]);
+     // Same threads, same order. The renderer's no-hierarchy branch draws this
+     // list directly, so "unchanged for upstream" is this assertion.
+-    expect(order.entries.map((entry) => entry.thread)).toEqual(threads);
++    expect(codevOrderedThreads(order.entries)).toEqual(threads);
+   });
+ 
+   it("puts each architect above the builders that name it", () => {
+@@ -1729,7 +1731,7 @@ describe("buildCodevSidebarOrder", () => {
+       builderThread("b-1", "arch-1"),
+     ]);
+     expect(order.hasHierarchy).toBe(true);
+-    expect(order.entries.map((entry) => [entry.kind, entry.thread.id])).toEqual([
++    expect(order.entries.map((entry) => [entry.kind, codevEntryThread(entry)?.id])).toEqual([
+       ["architect", "arch-1"],
+       // Input order within the subtree, because the caller already sorted.
+       ["builder", "b-2"],
+@@ -1745,7 +1747,7 @@ describe("buildCodevSidebarOrder", () => {
+       builderThread("b-1", "arch-b"),
+       builderThread("b-2", "arch-b"),
+     ]);
+-    expect(order.entries.map((entry) => [entry.kind, entry.thread.id])).toEqual([
++    expect(order.entries.map((entry) => [entry.kind, codevEntryThread(entry)?.id])).toEqual([
+       ["architect", "arch-a"],
+       ["builder", "a-1"],
+       ["architect", "arch-b"],
+@@ -1770,7 +1772,7 @@ describe("buildCodevSidebarOrder", () => {
+       builderThread("b-1", "arch-1"),
+       plainThread("upstream-2"),
+     ]);
+-    expect(order.entries.map((entry) => [entry.kind, entry.thread.id])).toEqual([
++    expect(order.entries.map((entry) => [entry.kind, codevEntryThread(entry)?.id])).toEqual([
+       ["architect", "arch-1"],
+       ["builder", "b-1"],
+       ["unmanaged", "upstream-1"],
+@@ -1819,7 +1821,7 @@ describe("buildCodevSidebarOrder", () => {
+     expect(reasons).toEqual(["parent-elsewhere", "parent-missing"]);
+     // The pinned architect keeps its row in the pinned block and gains none
+     // here: two rows for one thread is worse than the problem it solves.
+-    expect(order.entries.map((entry) => entry.thread.id)).toEqual(["b-1", "lost"]);
++    expect(codevOrderedThreads(order.entries).map((thread) => thread.id)).toEqual(["b-1", "lost"]);
+   });
+ 
+   it("accounts for every thread exactly once", () => {
+@@ -1834,9 +1836,116 @@ describe("buildCodevSidebarOrder", () => {
+       architectThread("arch-empty"),
+     ];
+     const order = buildCodevSidebarOrder(threads);
+-    expect(order.entries.map((entry) => entry.thread.id).toSorted()).toEqual(
+-      threads.map((thread) => thread.id).toSorted(),
+-    );
++    expect(
++      codevOrderedThreads(order.entries)
++        .map((thread) => thread.id)
++        .toSorted(),
++    ).toEqual(threads.map((thread) => thread.id).toSorted());
++  });
++});
++
++/**
++ * Issue #272 — a workspace with nothing running in it still gets a heading.
++ *
++ * The project level is derived from ARCHITECTS, so a project with none
++ * contributed no entry and drew no heading. Codev registers a project per
++ * workspace whether or not anything has been spawned in it, which makes "nobody
++ * has spawned here yet" the ordinary case rather than an edge one — and it was
++ * rendering identically to "this workspace does not exist".
++ */
++describe("buildCodevSidebarOrder: projects with no architect", () => {
++  const inProject = (projectId: string, thread: Thread): Thread => ({
++    ...thread,
++    projectId: ProjectId.make(projectId),
++  });
++  const architectIn = (projectId: string, id: string) =>
++    inProject(projectId, makeThread({ id: ThreadId.make(id), title: id, role: "architect" }));
++  const projectKeyOf = (thread: Thread) => `${thread.environmentId}:${thread.projectId}`;
++  const keyOf = (projectId: string) => projectKeyOf(architectIn(projectId, "probe"));
++  const soloGroup = (projectId: string) => {
++    const key = keyOf(projectId);
++    return { key, memberKeys: [key] };
++  };
++
++  it("draws a heading for a project no architect opened", () => {
++    const order = buildCodevSidebarOrder([architectIn("busy", "arch-1")], {
++      projectKeyOf,
++      projectGroups: [soloGroup("busy"), soloGroup("idle")],
++    });
++    expect(
++      order.entries.map((entry) =>
++        entry.kind === "empty-project" ? entry.projectKey : entry.kind,
++      ),
++    ).toEqual(["architect", keyOf("idle")]);
++  });
++
++  it("does not draw a second heading for a project the architect run already opened", () => {
++    const order = buildCodevSidebarOrder([architectIn("busy", "arch-1")], {
++      projectKeyOf,
++      projectGroups: [soloGroup("busy")],
++    });
++    expect(order.entries.map((entry) => entry.kind)).toEqual(["architect"]);
++  });
++
++  it("treats a group as opened when ANY of its member projects has an architect", () => {
++    // One logical project spanning two environments. Without the member list
++    // this draws an empty heading beside the populated one, carrying the same
++    // name, and a reader sees two workspaces where there is one.
++    const populated = keyOf("busy");
++    const order = buildCodevSidebarOrder([architectIn("busy", "arch-1")], {
++      projectKeyOf,
++      projectGroups: [{ key: keyOf("mirror"), memberKeys: [keyOf("mirror"), populated] }],
++    });
++    expect(order.entries.map((entry) => entry.kind)).toEqual(["architect"]);
++  });
++
++  it("draws one heading for a project named twice in the caller's list", () => {
++    const order = buildCodevSidebarOrder([architectIn("busy", "arch-1")], {
++      projectKeyOf,
++      projectGroups: [soloGroup("idle"), soloGroup("idle")],
++    });
++    expect(order.entries.filter((entry) => entry.kind === "empty-project")).toHaveLength(1);
++  });
++
++  it("puts the empty projects after the architect run, in the caller's order", () => {
++    // The caller has already sorted its project list — by pin, by recency, by
++    // whatever the user chose. Re-sorting here would silently override it.
++    const order = buildCodevSidebarOrder([architectIn("busy", "arch-1")], {
++      projectKeyOf,
++      projectGroups: [soloGroup("zeta"), soloGroup("alpha")],
++    });
++    expect(
++      order.entries.flatMap((entry) => (entry.kind === "empty-project" ? [entry.projectKey] : [])),
++    ).toEqual([keyOf("zeta"), keyOf("alpha")]);
++  });
++
++  it("changes nothing for a caller that does not supply a project list", () => {
++    const order = buildCodevSidebarOrder([architectIn("busy", "arch-1")], { projectKeyOf });
++    expect(order.entries.map((entry) => entry.kind)).toEqual(["architect"]);
++  });
++
++  it("stays out of a sidebar with no Codev hierarchy at all", () => {
++    // `hasHierarchy: false` is the untouched upstream presentation, and an empty
++    // heading is furniture for a feature that sidebar does not have.
++    const order = buildCodevSidebarOrder([makeThread({ id: ThreadId.make("a"), title: "a" })], {
++      projectKeyOf,
++      projectGroups: [soloGroup("idle")],
++    });
++    expect(order.hasHierarchy).toBe(false);
++    expect(order.entries.map((entry) => entry.kind)).toEqual(["unmanaged"]);
++  });
++
++  it("still accounts for every thread exactly once", () => {
++    const threads = [architectIn("busy", "arch-1"), architectIn("other", "arch-2")];
++    const order = buildCodevSidebarOrder(threads, {
++      projectKeyOf,
++      projectGroups: [soloGroup("busy"), soloGroup("idle")],
++    });
++    expect(
++      order.entries
++        .flatMap((entry) => (entry.kind === "empty-project" ? [] : [entry.thread.id]))
++        .toSorted(),
++    ).toEqual(threads.map((thread) => thread.id).toSorted());
+   });
+ });
+ 
+@@ -1916,7 +2025,7 @@ describe("buildCodevSidebarOrder: the project level", () => {
+       ],
+       { projectKeyOf },
+     );
+-    expect(order.entries.map((entry) => entry.thread.id)).toEqual([
++    expect(codevOrderedThreads(order.entries).map((thread) => thread.id)).toEqual([
+       "arch-a1",
+       "a1-one",
+       "arch-a2",
+diff --git a/apps/web/src/components/Sidebar.logic.ts b/apps/web/src/components/Sidebar.logic.ts
+index ef4e26ea2..62f94bffc 100644
+--- a/apps/web/src/components/Sidebar.logic.ts
++++ b/apps/web/src/components/Sidebar.logic.ts
+@@ -1008,6 +1008,24 @@ export type CodevSidebarEntry<T> =
+       readonly startsProject: boolean;
+     }
+   | { readonly kind: "builder"; readonly thread: T; readonly architectId: string }
++  | {
++      /**
++       * A project with no architect in this section, drawn as a heading with
++       * nothing under it (issue #272).
++       *
++       * The tree's project level is derived from ARCHITECTS — a project with no
++       * architect contributed no entry, so it drew no heading and was absent from
++       * the sidebar entirely. Codev registers a project per workspace whether or
++       * not anything has been spawned in it, and a workspace nobody has spawned
++       * into is exactly the one with no architect. Without this entry, "nothing
++       * running here yet" and "this workspace does not exist" look the same.
++       *
++       * It carries no thread, which is the whole point: there is nothing to
++       * render under the heading.
++       */
++      readonly kind: "empty-project";
++      readonly projectKey: string;
++    }
+   | { readonly kind: "unmanaged"; readonly thread: T }
+   | {
+       readonly kind: "orphan";
+@@ -1028,6 +1046,32 @@ export interface CodevSidebarOrderOptions<T extends CodevHierarchyFields> {
+    * already scopes everything by `environmentId:projectId`.
+    */
+   readonly projectKeyOf?: ((thread: T) => string) | undefined;
++  /**
++   * Every project the sidebar knows about, in the order it wants them (issue #272).
++   *
++   * Projects here that no architect subtree opened are emitted as `empty-project`
++   * entries after the architect run. Omitted, nothing changes: a caller that does
++   * not supply it gets exactly the entries it got before, which is what the
++   * grouping's own unit tests rely on.
++   *
++   * ## Why a group and not a key
++   *
++   * The sidebar's project list is LOGICAL projects — one row that may stand for
++   * the same physical project on several environments — while `projectKeyOf`
++   * returns the physical `environmentId:projectId` a thread actually belongs to.
++   * A flat list of keys would draw a second, empty heading beside a group whose
++   * OTHER member has the architects, with the same name on both. So a group names
++   * every key that counts as opening it, and the one key its heading is drawn
++   * with.
++   *
++   * With one environment each group is a single key, which is the ordinary case.
++   */
++  readonly projectGroups?:
++    | readonly {
++        readonly key: string;
++        readonly memberKeys: readonly string[];
++      }[]
++    | undefined;
+ }
+ 
+ export interface CodevSidebarOrder<T> {
+@@ -1098,6 +1142,21 @@ export function buildCodevSidebarOrder<T extends CodevHierarchyFields>(
+       }
+     }
+   }
++  // Projects with no architect in this section, after the ones that have them.
++  // Order is the caller's — the sidebar's own project order — minus the ones
++  // already opened above, so a workspace that gains its first architect moves up
++  // into the run rather than appearing twice.
++  if (options.projectGroups !== undefined) {
++    const opened = new Set(projectOrder);
++    for (const group of options.projectGroups) {
++      if (group.memberKeys.some((key) => opened.has(key))) continue;
++      // Every member, not just the one the heading is drawn with: a duplicate
++      // group in the caller's list must not draw a second heading either.
++      for (const key of group.memberKeys) opened.add(key);
++      opened.add(group.key);
++      entries.push({ kind: "empty-project", projectKey: group.key });
++    }
++  }
+   for (const thread of hierarchy.unmanaged) {
+     entries.push({ kind: "unmanaged", thread });
+   }
+@@ -1112,6 +1171,33 @@ export function buildCodevSidebarOrder<T extends CodevHierarchyFields>(
+   return { hasHierarchy: true, entries };
+ }
+ 
++/**
++ * The thread an entry stands for, or `null` for one that stands for a project.
++ *
++ * `empty-project` carries no thread (issue #272), and every consumer of this
++ * union now has to say what it does with that. Two helpers rather than a widened
++ * `thread?: T` field: an optional field would let `entry.thread.id` keep
++ * compiling and fail at runtime on the one entry kind that has no thread.
++ */
++export function codevEntryThread<T>(entry: CodevSidebarEntry<T>): T | null {
++  return entry.kind === "empty-project" ? null : entry.thread;
++}
++
++/**
++ * The threads an entry list stands for, in render order.
++ *
++ * What every caller wanting "the rows, in the order they draw" actually means.
++ * The sidebar assigns shift-range-select and jump-hint labels from this list, and
++ * a plain `.map(entry => entry.thread)` put `undefined` in it for a project
++ * heading — a crash one row away rather than a wrong row.
++ */
++export function codevOrderedThreads<T>(entries: readonly CodevSidebarEntry<T>[]): T[] {
++  return entries.flatMap((entry) => {
++    const thread = codevEntryThread(entry);
++    return thread === null ? [] : [thread];
++  });
++}
++
+ /**
+  * What the orphan group says about one row, in words a human can act on.
+  *
+diff --git a/apps/web/src/components/Sidebar.tsx b/apps/web/src/components/Sidebar.tsx
+index 2b8d3e99e..6890d5c63 100644
+--- a/apps/web/src/components/Sidebar.tsx
++++ b/apps/web/src/components/Sidebar.tsx
+@@ -30,7 +30,7 @@ import {
+   scopeThreadRef,
+   scopedThreadKey,
+ } from "@t3tools/client-runtime/environment";
+-import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
++import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+ import type { TimestampFormat } from "@t3tools/contracts/settings";
+ import {
+   AlarmClockIcon,
+@@ -128,6 +128,8 @@ import {
+   animatePinnedLayoutChanges,
+   buildBulkTitleRegenerationContextMenuItem,
+   buildCodevSidebarOrder,
++  codevEntryThread,
++  codevOrderedThreads,
+   describeCodevOrphanReason,
+   type CodevSidebarEntry,
+   formatWorkingDurationLabel,
+@@ -1948,9 +1950,18 @@ export default function Sidebar() {
+       ),
+     [serverConfigs],
+   );
++  /*
++   * `Map<string, ...>`, written out rather than inferred (issue #272).
++   *
++   * Inference gives these the template-literal key type `${string}:${string}`,
++   * which cannot be indexed by a plain `string` — and the empty-project heading
++   * has only a plain string, because it comes from an entry that carries no
++   * thread to rebuild the key from. Widening is strictly more permissive: every
++   * existing template-literal lookup still type-checks.
++   */
+   const projectCwdByKey = useMemo(
+     () =>
+-      new Map(
++      new Map<string, string>(
+         projects.map((project) => [
+           `${project.environmentId}:${project.id}`,
+           project.workspaceRoot,
+@@ -1958,16 +1969,29 @@ export default function Sidebar() {
+       ),
+     [projects],
+   );
++  const projectEnvironmentByKey = useMemo(
++    () =>
++      new Map<string, EnvironmentId>(
++        projects.map((project) => [
++          `${project.environmentId}:${project.id}`,
++          project.environmentId,
++        ]),
++      ),
++    [projects],
++  );
+   const projectFaviconPathByKey = useMemo(
+     () =>
+-      new Map(
++      // `| undefined` because `faviconPath` is optional on the project record and
++      // the web app compiles with `exactOptionalPropertyTypes`. The heading
++      // normalises to `null` at the point of use, where the component wants it.
++      new Map<string, string | null | undefined>(
+         projects.map((project) => [`${project.environmentId}:${project.id}`, project.faviconPath]),
+       ),
+     [projects],
+   );
+   const projectDisplayNameByKey = useMemo(
+     () =>
+-      new Map(
++      new Map<string, string>(
+         projectGroups.flatMap((group) =>
+           group.memberProjects.map(
+             (project) => [`${project.environmentId}:${project.id}`, group.displayName] as const,
+@@ -1976,6 +2000,25 @@ export default function Sidebar() {
+       ),
+     [projectGroups],
+   );
++  /**
++   * The project rows the tree may draw a heading for, in the sidebar's own order
++   * (issue #272).
++   *
++   * One entry per LOGICAL project, naming every physical member: a group whose
++   * member carries the architects is already drawn by the architect run, and
++   * without the member list it would get a second, empty heading with the same
++   * name beside it.
++   */
++  const codevProjectGroups = useMemo(
++    () =>
++      projectGroups.map((group) => {
++        const memberKeys = group.memberProjects.map(
++          (project) => `${project.environmentId}:${project.id}`,
++        );
++        return { key: memberKeys[0] ?? group.projectKey, memberKeys };
++      }),
++    [projectGroups],
++  );
+ 
+   // now is quantized to the minute so effectiveSettled memoization doesn't
+   // churn on every render; auto-settle thresholds are day-granular anyway.
+@@ -2307,15 +2350,22 @@ export default function Sidebar() {
+         // project lookup. `projectId` alone is not a project: two environments
+         // can carry the same id.
+         projectKeyOf: (thread) => `${thread.environmentId}:${thread.projectId}`,
++        // Issue #272. Without this the tree's project level is derived entirely
++        // from architects, so a workspace nobody has spawned into draws nothing
++        // at all — indistinguishable from a workspace that does not exist.
++        projectGroups: codevProjectGroups,
+       }),
+-    [activeThreads, pinnedThreads, snoozedThreads, settledThreads],
++    [activeThreads, codevProjectGroups, pinnedThreads, snoozedThreads, settledThreads],
+   );
+   // The tree's order IS the ordered list. Shift-range-select and jump-hint
+   // labels are assigned from `orderedThreads`, so a reordered render with the
+   // old list behind it puts every row in the right place and the keyboard on
+   // the wrong ones.
+   const orderedActiveThreads = useMemo(
+-    () => codevActiveOrder.entries.map((entry) => entry.thread),
++    // Not `.map(entry => entry.thread)`: an `empty-project` entry carries no
++    // thread (issue #272), and this list is what shift-range-select and the
++    // jump-hint labels are assigned from.
++    () => codevOrderedThreads(codevActiveOrder.entries),
+     [codevActiveOrder],
+   );
+   const orderedThreads = useMemo(
+@@ -3953,12 +4003,55 @@ export default function Sidebar() {
+                   // does not have.
+                   if (!codevActiveOrder.hasHierarchy) {
+                     for (const entry of codevActiveOrder.entries) {
+-                      items.push(renderThreadRow(entry.thread, "active"));
++                      // Every entry here is `unmanaged` — the no-hierarchy branch
++                      // returns the untouched input — but the union says it might
++                      // not be, and a renderer that assumes an impossible state is
++                      // impossible has no way to show one when it happens.
++                      const thread = codevEntryThread(entry);
++                      if (thread !== null) items.push(renderThreadRow(thread, "active"));
+                     }
+                   } else {
+                     const entries = codevActiveOrder.entries;
+                     const codevRowKey = (thread: EnvironmentThreadShell) =>
+                       scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
++                    /*
++                     * ONE heading, two callers (issue #272).
++                     *
++                     * The architect run opens a project heading; a project with
++                     * no architect draws the same heading with nothing under it.
++                     * Two copies of this markup would drift, and a user reading
++                     * two subtly different headings would take them for two kinds
++                     * of workspace — which they are not. The only difference is
++                     * `data-codev-project-empty`, so a test can tell which case it
++                     * is looking at without the two rendering differently.
++                     */
++                    const projectHeading = (
++                      projectKey: string,
++                      environmentId: EnvironmentId,
++                      empty: boolean,
++                    ) => (
++                      <li
++                        key={`codev-project-${projectKey}`}
++                        data-thread-selection-safe
++                        data-testid="sidebar-codev-project-heading"
++                        data-codev-project-key={projectKey}
++                        data-codev-project-empty={empty ? "true" : undefined}
++                        className="list-none"
++                      >
++                        <div className="mb-1 mt-3 flex w-full items-center gap-2 px-2.5">
++                          <ProjectFavicon
++                            environmentId={environmentId}
++                            cwd={projectCwdByKey.get(projectKey) ?? ""}
++                            faviconPath={projectFaviconPathByKey.get(projectKey) ?? null}
++                            className="size-4 shrink-0"
++                          />
++                          <span className="min-w-0 truncate text-xs font-medium text-sidebar-foreground">
++                            {projectDisplayNameByKey.get(projectKey) ?? "Project"}
++                          </span>
++                          <span className="h-px flex-1 bg-sidebar-border/60" />
++                        </div>
++                      </li>
++                    );
+                     let renderedArchitectCount = 0;
+                     const unmanaged: EnvironmentThreadShell[] = [];
+                     const orphans: Extract<
+@@ -3968,6 +4061,22 @@ export default function Sidebar() {
+                     for (let index = 0; index < entries.length; index += 1) {
+                       const entry = entries[index];
+                       if (entry === undefined) continue;
++                      if (entry.kind === "empty-project") {
++                        // A workspace with nothing running in it. The heading is
++                        // the whole row: there is no thread to draw beneath it,
++                        // and inventing a placeholder would make an idle
++                        // workspace look like a broken one.
++                        const environmentId = projectEnvironmentByKey.get(entry.projectKey);
++                        // No environment for this key means the project left the
++                        // list between the order being built and this render.
++                        // Skipping is the honest answer — a favicon needs an
++                        // environment to resolve against, and guessing one would
++                        // draw somebody else's icon.
++                        if (environmentId !== undefined) {
++                          items.push(projectHeading(entry.projectKey, environmentId, true));
++                        }
++                        continue;
++                      }
+                       if (entry.kind === "unmanaged") {
+                         unmanaged.push(entry.thread);
+                         continue;
+@@ -3991,32 +4100,12 @@ export default function Sidebar() {
+                       // goes — carrying the project's own favicon so it reads as
+                       // t3code's project rather than as a new kind of shelf.
+                       if (entry.startsProject) {
+-                        // `as const` keeps the template-literal type the
+-                        // project maps are keyed by; a widened `string` does not
+-                        // index them.
+-                        const projectKey =
+-                          `${entry.thread.environmentId}:${entry.thread.projectId}` as const;
+                         items.push(
+-                          <li
+-                            key={`codev-project-${projectKey}`}
+-                            data-thread-selection-safe
+-                            data-testid="sidebar-codev-project-heading"
+-                            data-codev-project-key={projectKey}
+-                            className="list-none"
+-                          >
+-                            <div className="mb-1 mt-3 flex w-full items-center gap-2 px-2.5">
+-                              <ProjectFavicon
+-                                environmentId={entry.thread.environmentId}
+-                                cwd={projectCwdByKey.get(projectKey) ?? ""}
+-                                faviconPath={projectFaviconPathByKey.get(projectKey) ?? null}
+-                                className="size-4 shrink-0"
+-                              />
+-                              <span className="min-w-0 truncate text-xs font-medium text-sidebar-foreground">
+-                                {projectDisplayNameByKey.get(projectKey) ?? "Project"}
+-                              </span>
+-                              <span className="h-px flex-1 bg-sidebar-border/60" />
+-                            </div>
+-                          </li>,
++                          projectHeading(
++                            `${entry.thread.environmentId}:${entry.thread.projectId}`,
++                            entry.thread.environmentId,
++                            false,
++                          ),
+                         );
+                       }
+                       items.push(
