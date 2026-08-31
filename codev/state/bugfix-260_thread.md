@@ -126,3 +126,21 @@ auto-detect the project — it printed `Multiple projects found:` followed by ev
 workspace, produced no review, and **exited 0**. Adding `--issue 260` fixed it. The exit code is
 the part worth reporting: a lane that could not run reported success, which is "I could not tell"
 spelled exactly like "no".
+
+### CMAP round 2 (codex only, after the guard was pushed)
+
+The window finding is gone. Two new points:
+
+- **Branch six commits behind `main`.** Real. Merged `origin/main` (a merge commit, not a
+  rebase — this repo merges PRs with `--merge` and never squashes), rebuilt, re-ran the focused
+  suite: 4 files, 44 passed, 1 skipped.
+- **"Remove the `codev/reviews/` artifact, BUGFIX does not require one."** Declined. The builder
+  role names it as one of three deliverables, this repo carries one per bugfix, and the merge
+  from `main` in this very round brought in `bugfix-242-full-protocol-run-sh-unvalidat.md` from
+  a sibling builder under the same protocol. Removing it would be the deviation, not keeping it.
+  The paired note to condense the code comments is declined on the same ground: the file's own
+  neighbours carry that density.
+
+Verdicts held for the gate: Claude APPROVE, opencode APPROVE, Codex REQUEST_CHANGES with its
+one substantive item fixed and its remaining item a documented disagreement about protocol
+convention, not about the code.

@@ -167,13 +167,41 @@ created moments earlier, nothing else can start a turn on it; the case is unreac
 than handled. Both errors mean "this turn will never be reported to you", which is the thing
 `create` must not swallow, so neither is filtered out. Raised by the Claude lane.
 
+## The operator's path, end to end
+
+Read-verified, not run against a live refusing server — stated that way rather than implied.
+
+`afx spawn` wraps the spawn in a `try` and, on any throw, logs `error.message` and exits 1
+(`agent-farm/cli.ts:375-377`). `SessionStartFailedError.message` carries the server's own
+sentence, so what reaches the terminal is:
+
+```
+The session for thread <id> failed before the turn started.
+  The server said: Provider instance 'opencode' is disabled in T3 Code settings.
+  This is a refusal, not a timeout. ...
+```
+
+That is the whole point of the change: the sentence the server produced in ~12ms now arrives
+where the operator already is, instead of in Tower's log where they would have to know to look.
+
 ## CMAP (3-way review of PR #285)
 
 | Lane | Verdict | Notes |
 |---|---|---|
 | Claude | APPROVE | Three non-blocking notes: the subscription-less window, `TurnDisplacedError` reported as a refusal, and the worktree left with no row for `afx cleanup` to key on. All three are addressed or recorded above. |
-| Codex | REQUEST_CHANGES | The subscription-less 2s window — the same finding, blocking. Fixed and pushed. Also called the `codev/reviews/` artifact unnecessary for BUGFIX; kept, because this repo carries one per bugfix (`bugfix-274-…`, `bugfix-214-…`, `bugfix-481-…`). |
-| opencode (Grok) | APPROVE | — |
+| Codex (round 1) | REQUEST_CHANGES | The subscription-less 2s window — the same finding, blocking. Fixed and pushed. |
+| opencode (Grok) | APPROVE | Read disk rather than the diff, and confirmed the guard was already there. Verified `cli.ts:375` surfaces the server sentence. |
+| Codex (round 2) | REQUEST_CHANGES | The window finding is gone. Two new points: the branch was six commits behind `main` — merged, rebuilt, resuite; and "BUGFIX does not require a `codev/reviews/` artifact, remove it". Kept, see below. |
+
+**On the review artifact.** Kept deliberately. The builder role's Deliverables section names
+`codev/reviews/<id>-<name>.md` as one of three, this repo carries one for every bugfix
+(`bugfix-274-…`, `bugfix-214-…`, `bugfix-481-…`), and the merge from `main` during this round
+brought in `bugfix-242-full-protocol-run-sh-unvalidat.md` — written by a sibling builder under
+the same protocol, this week. Removing it would be the deviation.
+
+The related note to condense the code commentary is declined for the same reason: this file's
+neighbours (`porch-thread-engine.ts` itself, `porch-driver/src/turn.ts`) carry exactly this
+comment density, and matching the surrounding code is the instruction.
 
 ## Lessons
 
