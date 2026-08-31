@@ -177,3 +177,72 @@ dist path absolutely, so it runs from outside the repo. I compared: sha1
 `3e1743325d5ca1a4b0a10398fdae80d3d342297a`, 5972 bytes, `cmp` identical. **Nothing was
 restored into the fork**, so the checkout stays clean permanently rather than returning to
 `DIRTY_FORK_CHECKOUT` for every builder. Filed as #278.
+
+## 2026-08-31 — the dev-approval gate failed 8 times, and none of it was the diff
+
+Recorded because the next builder in this repo will hit it and the failure names
+nothing useful.
+
+**Symptom.** `porch approve 272 dev-approval` failed 8 times at 202-240s. porch
+truncates a failed check's output to 5 lines ending in `...`, so the assertion was
+never printed. Every hypothesis below was wrong, and each took a ~4 minute run to
+disprove.
+
+Ruled out, in order: lock contention with sibling builders; the `apps/streamdeck`
+husk (real, moved aside, not the cause); `pr-create` env vars (stderr from a
+PASSING test, not a check); `PROJECT_ID`/`PROJECT_TITLE`; `CODEV_ARCHITECT_NAME`
+(refuted by reading `vitest-global-setup.ts:30` — `scrubCodevNamespace` deletes
+every `CODEV_*` but four opt-ins, so it cannot reach a test).
+
+**Actual cause: a native ABI mismatch, invisible until you look.**
+
+`better_sqlite3.node` in this worktree was ABI 147 (node 26). porch and afx run
+node **20.19.2**, which needs ABI 115. 729 tests across 49 files failed, all of
+them that one binary.
+
+It passed for me and failed for the architect because **my shell is Homebrew node
+26 and porch runs nvm node 20** — same tree, same cwd, same env, different loader.
+Every green I reported for hours was true under node 26 and meaningless under 20.
+
+**Why the obvious repairs did nothing.** `pnpm install --frozen-lockfile` (666ms),
+`pnpm rebuild better-sqlite3`, and `npm_config_build_from_source=true pnpm rebuild`
+were all silent no-ops — pnpm saw a satisfied lockfile and an existing build
+output, so it never re-ran the install script. The binary's mtime stayed Jul 24
+through all three, which is how I caught it.
+
+**And there is no node-20 prebuild for this platform:**
+
+    prebuild-install warn install No prebuilt binaries found
+    (target=20.19.2 runtime=node arch=arm64 libc= platform=darwin)
+
+better-sqlite3's install script is `prebuild-install || node-gyp rebuild --release`.
+Under node 26 the download SUCCEEDS and yields ABI 147. Under node 20 it finds
+nothing and falls through to a compile. So whichever node provisions the worktree
+decides which you get, and only the compile produces ABI 115 here.
+
+**The repair, if you hit this:**
+
+    export PATH="$HOME/.nvm/versions/node/v20.19.2/bin:$PATH"
+    cd node_modules/.pnpm/better-sqlite3@<version>/node_modules/better-sqlite3
+    npx --yes node-gyp rebuild --release
+
+Then `porch check 272` with node 20 first in PATH — not your shell's node. That is
+the only verdict that predicts what porch will do.
+
+**Verify your work under the loader porch uses, not the one your shell has.** A
+green from `npm test` in your own shell is not evidence about the gate.
+
+### Still open, deliberately not fixed here
+
+Three other native packages are declared in `onlyBuiltDependencies` — `esbuild`,
+`node-pty`, `protobufjs` — and they were provisioned the same way. `better-sqlite3`
+is only the one loaded on nearly every path, so it is the one that announced
+itself. The suite passing means nothing currently exercised hits the others.
+Filed as #304 rather than widened into this project.
+
+### Origin
+
+The worktree arrived with NO `node_modules` — the first `pnpm -w run build` failed
+on `tsdown: command not found` at 11:37. I repaired it with `pnpm install` under
+the node my shell had. The spawn producing an uninstalled worktree is the root
+event; the wrong-node install was the consequence.
