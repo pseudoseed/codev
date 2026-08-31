@@ -5,6 +5,9 @@ no test says so** rather than borrowing another criterion's evidence.
 
 Recorded 2026-08-31. Fork at `3786b840e1a4`; upstream preserved at `082e6ea521861fff37b90fcd789b5eaa5ef5d6a6`.
 
+**10 of 11 met. Criterion 6 is UNMET and says why.** Nothing here borrows another criterion's
+evidence, and nothing that was not run is recorded as passing.
+
 ## The criteria
 
 | # | What it asks | Evidence | Status |
@@ -15,7 +18,7 @@ Recorded 2026-08-31. Fork at `3786b840e1a4`; upstream preserved at `082e6ea52186
 | 4 | the gate is approved from t3code and porch records session id, machine and timestamp in `status.yaml`, over `codev-agent`'s capability path | `spec-250-t3code-approval.e2e.test.ts` through the REAL fork server's proxy, ending in a real `status.yaml`; and `spec-250-approval.spec.ts` from a real browser | **met** |
 | 5 | six builders at 1440x900, panes ≥340x240, body text ≥13px, measured against t3code's chrome | `spec-250-tiling.spec.ts:136` — measured from the browser's own geometry, not from the component's attribute | **met** |
 | 5b | seven panes at 1920 tile 4x2, not 3x3 | `spec-250-tiling.spec.ts:243` | **met** |
-| 6 | reached from an **iPad** over the tailnet, no account, no relay, driving a builder to completion | **no run** — see below | **UNMET** |
+| 6 | reached from an **iPad** over the tailnet, no account, no relay, driving a builder to completion | **no run** — no device available; runbook written and verified | **UNMET** |
 | 7 | a `role: null` thread appears where it always did and nothing claims it | `spec-250-hierarchy.spec.ts:291` | **met** |
 | 8 | an existing database opens against the customized server; added columns read as "not recorded"; a projection rebuilt over a pre-fork event log decodes every historical payload | `apps/server/src/codev/schemaGuard.test.ts` and the projector tests in the fork | **met** |
 | 8b | a migration interrupted partway leaves the database openable by the **pre-fork** server — by killing the server, not by argument | `tools/t3-fork/criterion-8b.mjs`, evidence at `codev/research/250-criterion-8b-evidence.json`, `passed: true` at the pin | **met** |
@@ -71,9 +74,9 @@ stated reason, not as passed and not left open.
 
 | Tree | Command | Result |
 |---|---|---|
-| Codev | `npm test -- --exclude='**/e2e/**'` | see the review; 0 failed |
+| Codev | `npm test -- --exclude='**/e2e/**'` | **7377 passed, 57 skipped**; 2 timeouts on the first run, both diagnosed below |
 | Fork, web | `apps/web && npx vp test run` | **2984 passed** |
-| Fork, server | `apps/server && npx vp test run src/codev/ src/http.test.ts src/server.test.ts` | **198 passed** |
+| Fork, server | `apps/server && npx vp test run` (whole server suite) | **2873 passed, 8 skipped, 1 failed** — the `entrypoint.test.ts` symlink one |
 | Fork, typecheck | `vp run --filter @t3tools/contracts --filter t3 --filter @t3tools/web typecheck` | clean |
 | Fork, whole monorepo | `npx vp test run` from the fork root | **8949 passed, 1 failed, 24 suites failed to load** |
 
@@ -88,6 +91,13 @@ package spec 250 touches.** Stated with the reason rather than waved at:
   script the runner collects and cannot read.
 - **`apps/web/src/terminal/ghostty/runtimeAbi.test.ts`** — needs a native artifact this checkout
   does not build.
+- **`spec-250-vendoring-identities > reports zero fork drift as a named zero`** — timed out at the
+  5s default on the first phase-11 run, 2s standalone. **Not flaky: the budget was wrong.**
+  `classify-churn --fork-drift` re-emits the pinned closure once per closure-touching commit, and
+  that range grows as the fork does. Raised to 30s with the reason at the call site.
+- **`session-manager.test.ts > stderr tail logging (integration)`** — has timed out under
+  full-suite load twice, in two sibling tests of the same block. Both spawn a real process, both
+  pass alone. Recorded, not skipped.
 - **`apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint`** — the one real
   test failure, and it is pre-existing: byte-identical to the base commit, and macOS resolves
   `/var` to `/private/var`. Not skipped and not modified — editing an upstream test we did not
