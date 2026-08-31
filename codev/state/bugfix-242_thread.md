@@ -116,3 +116,11 @@ diffing on-disk against the saved copy before committing. The retry wrapper rest
 loopback socket (127.0.0.1:13999), with a 900s wait timeout. bugfix-273 and bugfix-260 were both
 running full suites, so single-file runs here queued for minutes at a time. `lsof -nP -iTCP:13999
 -sTCP:LISTEN` names the holder.
+
+### Known-failing test, not mine (#278)
+
+`spec-250-vendoring-identities.test.ts` fails in this worktree and in at least two others. The
+fork checkout at `/Users/chris/dev/t3code-codev` is dirty with an untracked `tools/` (holding `lan-serve.mjs`) plus three modified `apps/web/src/components/Sidebar.*` files,
+so `assertClean` (`tools/t3-server/t3-server.mjs:188`) exits after printing `FORK_AHEAD_OF_CONTRACT`
+and the second assertion cannot run. Filed as #278 by the architect. Documented in the PR body; the
+assertion is not skipped and the fork checkout is not touched.

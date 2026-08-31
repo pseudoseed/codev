@@ -134,6 +134,15 @@ describe('Issue #242 — the launcher validates its arguments', () => {
       expect(result.stderr, `label ${label} was rejected`).not.toContain('BAD_LABEL');
       expect(result.stderr, `label ${label} did not reach the T3_NODE check`).toContain('NO_INTERPRETER');
     }
+    /*
+     * The MODEL is not whitelisted and must not be. `xai/grok-4.6` — one of the
+     * three recorded invocations — carries a slash, and nothing builds a path from
+     * it. Pinned because "harden the other arguments too" is the obvious next edit
+     * and it would refuse a documented run.
+     */
+    const slashModel = run(['3804', 'opencode', 'xai/grok-4.6', '3600', 'opencode-1h']);
+    expect(slashModel.stderr).toContain('NO_INTERPRETER');
+    expect(slashModel.stderr).not.toMatch(/BAD_(LABEL|PORT|GATE)/);
   });
 
   it('refuses a port outside 1..65535 and a non-numeric gate', () => {
