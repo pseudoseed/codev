@@ -43,7 +43,7 @@ gates:
       machine: chriss-MacBook-Pro.local
       caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
   dev-approval:
-    status: pending
+    status: approved
     requested_at: '2026-08-31T18:11:31.881Z'
     request:
       question: >-
@@ -80,10 +80,16 @@ gates:
 
         Known, NOT mine: spec-250-approval.spec.ts times out intermittently in openThread. A/B with my fixture reverted
         to HEAD still failed, at a third different test. Documented, not skipped.
+    approved_at: '2026-08-31T21:58:51.040Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-31T21:58:51.040Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
   pr:
     status: pending
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T16:47:04.075Z'
-updated_at: '2026-08-31T18:11:51.869Z'
+updated_at: '2026-08-31T22:02:45.646Z'
