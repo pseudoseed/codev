@@ -59,7 +59,7 @@ import { loadCheckOverrides, resolveConsultationModels } from './config.js';
 import { findUnlandedCommits, completionReport } from './unlanded.js';
 import { resolveDefaultBranch } from '../../lib/default-branch.js';
 
-import { notifyTerminal, gateApprovedMessage, notifyProtocolComplete } from './notify.js';
+import { notifyGateApproved, notifyProtocolComplete } from './notify.js';
 import type { ApprovalRecord } from './approval-record.js';
 import { loadConfig } from '../../lib/config.js';
 import { version } from '../../version.js';
@@ -1264,11 +1264,12 @@ export async function approve(
   // inside the worktree it resolves to the same path as artifactRoot.
   const calledFromBuilderWorktree = path.resolve(workspaceRoot) === path.resolve(artifactRoot);
   if (!calledFromBuilderWorktree) {
-    notifyTerminal({
-      target: state.id,
-      message: gateApprovedMessage(gateName),
-      worktreeDir: workspaceRoot,
-    });
+    // Issue #264: addressed by the PROJECT's worktree, never by its bare id.
+    // `state.id` plus the invoking process's workspace was an address that could
+    // resolve anywhere on the machine; `artifactRoot` is the directory whose
+    // status.yaml was just written, so it names one builder in one workspace or
+    // it names nothing.
+    notifyGateApproved(artifactRoot, state.id, gateName);
   }
 
   say('');

@@ -824,6 +824,17 @@ export class TowerClient {
        * the pending send is listable/cancellable via `afx inbox`.
        */
       deliverAfter?: number;
+      /**
+       * Issue #264: resolve the address EXACTLY — no builder tail match.
+       *
+       * The tail match (`250` -> `builder-spir-250`) is a convenience for a human
+       * typing an address. A machine-generated, authority-adjacent message must
+       * not have it: a gate-approval notification addressed by bare project id
+       * reached a live builder in a different workspace whose id merely ended
+       * with the same digits. With this set, a miss is an error naming the
+       * address and the workspace, and nothing is delivered.
+       */
+      exact?: boolean;
     },
   ): Promise<{
     ok: boolean;
@@ -901,6 +912,7 @@ export class TowerClient {
             interrupt: options?.interrupt,
             escape: options?.escape,
             deliverAfter: options?.deliverAfter,
+            exact: options?.exact,
           },
         }),
       },

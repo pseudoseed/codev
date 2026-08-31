@@ -69,10 +69,16 @@ afx send [builder] [message]
 | `--interrupt` | Ready the prompt first — end the turn and clear the composer — with the keystrokes recorded as safe for the target (Ctrl+C on claude/codex and shells; ESC then Ctrl+U on opencode) |
 | `--raw` | Skip structured formatting |
 | `--no-enter` | Don't press Enter after message |
+| `--exact` | Resolve the address exactly — no builder tail match. A miss names the address and the workspace and sends nothing. |
+| `--worktree <path>` | Resolve the recipient and the workspace from that worktree, not from your session. With no builder given, addresses the builder that owns it. |
 
 ```bash
 afx send 0042 "PR approved, please merge"
 afx send 0585 "check the test output" --file /tmp/test-results.txt
+
+# Machine-generated, authority-adjacent messages address a worktree, never a project id.
+# `250` tail-matches builder-spir-250 in whatever workspace your session resolves to (#264).
+afx send --worktree /repo/.builders/spir-250 --exact "gate notification" --raw
 ```
 
 **Addressing forms** — the recipient isn't only a builder ID:

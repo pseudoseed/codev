@@ -189,6 +189,18 @@ export interface SendOptions {
   raw?: boolean;        // Skip structured formatting
   noEnter?: boolean;    // Don't send Enter after message
   /**
+   * Issue #264: resolve the address exactly — no builder tail match, no
+   * plausible neighbour. A miss names the address and the workspace and sends
+   * nothing.
+   */
+  exact?: boolean;
+  /**
+   * Issue #264: resolve the recipient and the resolution workspace from THIS
+   * worktree path rather than from the sending process's session or cwd. With no
+   * explicit target, the recipient is the builder that owns the worktree.
+   */
+  worktree?: string;
+  /**
    * Spec 1307: hold in Tower and deliver after this many seconds. Resolution
    * and authorization still happen at request time; only delivery is deferred.
    *
