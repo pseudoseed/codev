@@ -6,13 +6,19 @@ plan_phases: []
 current_plan_phase: null
 gates:
   pr:
-    status: pending
+    status: approved
     requested_at: '2026-08-31T16:56:41.322Z'
+    approved_at: '2026-08-31T17:19:19.259Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-31T17:19:19.259Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T15:42:55.843Z'
-updated_at: '2026-08-31T16:56:41.323Z'
+updated_at: '2026-08-31T17:19:20.421Z'
 pr_history:
   - phase: implement
     pr_number: 274
@@ -20,4 +26,4 @@ pr_history:
     created_at: '2026-08-31T16:24:29.278Z'
     merged: true
     merged_at: '2026-08-31T16:56:22.410Z'
-pr_ready_for_human: true
+pr_ready_for_human: false
