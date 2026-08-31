@@ -22,7 +22,7 @@ import {
 } from '../utils/architect-name.js';
 import { getArchitects, setArchitectByName } from '../state.js';
 import { architectThreadDefaults, createArchitectThread, tryGetThreadEngine } from '../thread-runtime.js';
-import { ensureThreadBackendReady } from '../thread-backend.js';
+import { closeThreadBackend, ensureThreadBackendReady } from '../thread-backend.js';
 
 export interface WorkspaceAddArchitectOptions {
   name?: string;
@@ -95,21 +95,33 @@ export async function workspaceAddArchitect(
     // Read BEFORE the create, so the pair recorded is the one this create resolves —
     // not a re-read of configuration that a concurrent edit could have moved.
     const defaults = architectThreadDefaults(workspacePath);
-    const threadId = await createArchitectThread({ name, workspaceRoot: workspacePath });
-    setArchitectByName(workspacePath, name, {
-      name,
-      cmd: '',
-      startedAt: new Date().toISOString(),
-      threadId,
-      // Issue #227 item 3: the pair this thread was created with, pinned on the row the
-      // way a builder's is. Without it a later `attach` — which is where Tower resumes
-      // this thread — carries no harness or model and falls back to whatever
-      // `.codev/config.json` says at THAT moment, so editing `threads.model` between a
-      // spawn and a delivery silently moved a live architect onto a different model.
-      harness: defaults?.harness,
-      model: defaults?.model,
-    });
-    logger.success(`Started architect '${name}' (thread ${threadId}).`);
+    try {
+      const threadId = await createArchitectThread({ name, workspaceRoot: workspacePath });
+      setArchitectByName(workspacePath, name, {
+        name,
+        cmd: '',
+        startedAt: new Date().toISOString(),
+        threadId,
+        // Issue #227 item 3: the pair this thread was created with, pinned on the row the
+        // way a builder's is. Without it a later `attach` — which is where Tower resumes
+        // this thread — carries no harness or model and falls back to whatever
+        // `.codev/config.json` says at THAT moment, so editing `threads.model` between a
+        // spawn and a delivery silently moved a live architect onto a different model.
+        harness: defaults?.harness,
+        model: defaults?.model,
+      });
+      logger.success(`Started architect '${name}' (thread ${threadId}).`);
+    } finally {
+      // Issue #271. An open WebSocket keeps the event loop alive, and this command is
+      // expected to exit. Without it the live run printed nothing and hung past two
+      // minutes until the caller killed it — the architect having already been created
+      // AND registered. Working, and hung, which reads from outside exactly like a
+      // command that failed.
+      //
+      // The same fix `afx interrupt` carries, for the same reason. Every one-shot
+      // command that reaches a thread owes it.
+      closeThreadBackend(workspacePath);
+    }
     return;
   }
 
