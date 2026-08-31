@@ -141,10 +141,23 @@ stated reason, not as passed and not left open.
 | Tree | Command | Result |
 |---|---|---|
 | Codev | `npm test -- --exclude='**/e2e/**'` | **7377 passed, 57 skipped**; 2 timeouts on the first run, both diagnosed below |
+| Codev, e2e | `npx playwright test --config playwright.spec250.config.ts` at fork head `3786b840e1a4` | **32 passed** in 2.3m, across all 4 spec-250 spec files |
 | Fork, web | `apps/web && npx vp test run` | **2984 passed** |
 | Fork, server | `apps/server && npx vp test run` (whole server suite) | **2873 passed, 8 skipped, 1 failed** — the `entrypoint.test.ts` symlink one |
 | Fork, typecheck | `vp run --filter @t3tools/contracts --filter t3 --filter @t3tools/web typecheck` | clean |
 | Fork, whole monorepo | `npx vp test run` from the fork root | **8949 passed, 1 failed, 24 suites failed to load** |
+
+**The Playwright row is a re-run, not a first run, and the distinction is worth stating.** The
+criteria table cites phase 7-10 runs; phase 11 adds **no fork commit**, so `pin.commit` is still
+phase 10's head and those runs were already runs at the final fork head. What changed afterwards is
+codev-side only — tools, docs, and the frozen `apps/client` suite — none of which these specs load.
+The re-run confirms that rather than correcting it, and it was worth 2.3 minutes to say so from a run
+instead of from an argument.
+
+**It also had to be re-run once to get a real answer.** The first attempt reported `32 skipped` and
+exited 0, because `T3_NODE` was unset and the fixture refuses to start the fork server without it.
+That is the fixture behaving as phase 10 built it — a skip that carries its reason rather than a pass
+— and it is why the row above says 32 passed and not "the suite is green".
 
 **The 24 load failures and the 1 failure are all environmental or pre-existing, and none is in a
 package spec 250 touches.** Stated with the reason rather than waved at:
