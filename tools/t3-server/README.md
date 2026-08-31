@@ -144,8 +144,12 @@ pairing token, which is one-time.
 Four things it refuses rather than guesses:
 
 - **An argument it would build a path from.** The label must be `[A-Za-z0-9._-]+`, the port an
-  integer in `1..65535`, the gate a non-negative integer; anything else exits `2`. The label
-  becomes a directory name *and* a deletion path — `rm -rf "${RUNS:?}/work-$LABEL"` — and
+  integer in `1..65535` written without a leading zero, the gate a non-negative integer of at most
+  nine digits — which is 31 years, so a longer one is a typo rather than a run; anything else exits
+  `2`. The port's *shape* is matched before its value is compared, because `[ "$PORT" -lt 1 ]` on a
+  30-digit port prints "integer expression expected" and returns 2, which an `if` reads as false —
+  a guard that falls through reads as a guard while being none. The label becomes a directory name
+  *and* a deletion path — `rm -rf "${RUNS:?}/work-$LABEL"` — and
   `${RUNS:?}` guards an empty `RUNS`, not what the label appends to it. A label carrying a path
   separator resolved out of `.runtime-runs` and the `rm -rf` followed it (#242).
 - **A port it does not own.** `stop` can only stop a server its own `T3_HARNESS_DIR` describes,
@@ -159,9 +163,10 @@ Four things it refuses rather than guesses:
   not failed a protocol.
 
 **It stops the server on every exit, not only the one that reaches the end.** A `trap` on `EXIT`,
-`INT` and `TERM` is armed immediately before `start`, and the runner is a background job the
-script `wait`s on — bash defers a trap until the current *foreground* command returns, so a
-foreground runner would hold the handler for the rest of the hour, or of the day. Without this an
+`INT`, `TERM` and `HUP` is armed immediately before `start` — `HUP` because the 24-hour gate
+outlives the terminal that started it — and the runner is a background job the script `wait`s on:
+bash defers a trap until the current *foreground* command returns, so a foreground runner would
+hold the handler for the rest of the hour, or of the day. Without this an
 interrupted launcher left its server holding the port, and deleting `.runtime-<label>` afterwards
 orphaned it beyond any `stop` (#242). The exit status is still the runner's.
 

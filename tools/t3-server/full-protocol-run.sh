@@ -161,7 +161,7 @@ stop_server() {
   node tools/t3-server/t3-server.mjs stop >/dev/null 2>&1 || true
   return 0
 }
-# shellcheck disable=SC2329  # reached through the INT/TERM traps below.
+# shellcheck disable=SC2329  # reached through the INT/TERM/HUP traps below.
 on_signal() {
   stop_server
   trap - EXIT INT TERM HUP
