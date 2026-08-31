@@ -16,7 +16,12 @@ like success, the step says so.
 
 These run on the Mac. Each ends in something to check, not just something to run.
 
-### 1. Put the fork's server on the tailnet, not on loopback
+### 1. Put the WEB dev server on the tailnet, not on loopback
+
+**`HOST`, not `T3CODE_HOST`.** Verified against `apps/web/vite.config.ts:30-31`: Vite reads
+`process.env.HOST` and falls back to `localhost`. `T3CODE_HOST` is the *backend's* bind address
+(port 3811) and should stay loopback — the iPad talks to Vite, and Vite proxies `/api` to the
+backend on the Mac.
 
 ```bash
 export PATH=$HOME/.nvm/versions/node/v22.22.2/bin:$PATH
@@ -24,28 +29,31 @@ cd /Users/chris/dev/t3code-codev/apps/web
 T3CODE_SINGLE_ORIGIN_DEV=1 \
   T3CODE_PORT=3811 \
   PORT=5733 \
-  T3CODE_HOST=0.0.0.0 \
-  T3CODE_DEV_ALLOWED_ORIGINS="http://<mac>.<tailnet>.ts.net:5733" \
+  HOST=0.0.0.0 \
+  T3CODE_CODEV_AGENT_ORIGINS="local=http://127.0.0.1:4100" \
   npx vp dev
 ```
 
-Replace `<mac>.<tailnet>.ts.net` with the Mac's tailnet name (`tailscale status --json | jq -r
-.Self.DNSName`, minus the trailing dot).
+Get the Mac's tailnet name with `tailscale status --json | jq -r .Self.DNSName` (drop the trailing
+dot).
+
+**No allowlist entry is needed for a tailnet name.** `vite.config.ts:152` already carries
+`allowedHosts: [".ts.net", ...]` — tailnet DNS is controlled by tailscale, so it cannot be rebound.
+A LAN IP or an ngrok name would need `T3CODE_DEV_ALLOWED_HOSTS` (note **`_HOSTS`**;
+`T3CODE_DEV_ALLOWED_ORIGINS` is the backend's CORS list and is a different thing).
 
 **Check, from the Mac:** `curl -s -o /dev/null -w '%{http_code}\n' http://<mac>.<tailnet>.ts.net:5733`
-prints `200`. A `000` means it bound to loopback only and the iPad will show a blank page with no
-error worth reading.
+prints `200`. A `000` means it bound to loopback only, and the iPad will show a blank page with no
+error worth reading — which is why this is checked here rather than discovered there.
 
-### 2. Configure the proxy's upstream, and confirm the server actually read it
+### 2. Confirm the server actually read the proxy's upstream
 
-The fork's server reads its `codev-agent` allowlist from its **own environment at start**, so this
-has to be set in the shell that starts it — not afterwards.
+`T3CODE_CODEV_AGENT_ORIGINS` is in step 1's command because the backend reads it from its **own
+environment at start**. Setting it afterwards does nothing, and the symptom is an empty picker
+rather than an error.
 
-```bash
-T3CODE_CODEV_AGENT_ORIGINS="local=http://127.0.0.1:4100"
-```
-
-Loopback is correct here: the proxy hop is Mac-to-Mac. The iPad never talks to `codev-agent`.
+Loopback (`127.0.0.1:4100`) is correct: the proxy hop is Mac-to-Mac. **The iPad never talks to
+`codev-agent`** — that is the whole point of the same-origin proxy.
 
 **Check:** with a t3code session in a desktop browser, open
 `http://<mac>.<tailnet>.ts.net:5733/api/codev/agent-targets`. It must answer
@@ -87,7 +95,7 @@ Safari. No app, no account, no cloud relay.
 | # | Do this | You should see | If not |
 |---|---|---|---|
 | 5 | Open `http://<mac>.<tailnet>.ts.net:5733` | t3code's pairing screen, "Enter a pairing token to start a session" | A blank page means step 1 bound to loopback. A timeout means the iPad is not on the tailnet — check `tailscale status` on the Mac lists the iPad |
-| 6 | Paste the t3code pairing credential (from `POST /api/auth/pairing-token`, or the `/pair#token=` URL) | The app loads with the sidebar | Landing back on the pairing form means the credential was already spent — mint another |
+| 6 | Paste the t3code pairing credential — `POST /api/auth/pairing-token` on the Mac with your bearer, or open the `/pair#token=<credential>` URL directly | The app loads with the sidebar | Landing back on the pairing form means the credential was already spent — mint another |
 | 7 | Tap the sidebar toggle if the sidebar is off-canvas | **The tree: workspace → architect → its builders**, indented, with `Architect` captions | A flat list means `hasCodevHierarchy` is false — the threads carry no `role`, so this is not an iPad problem |
 | 8 | Tap **Builders** in the sidebar | The grid, one pane per agent, each showing its porch phase and its last three messages | Panes reading "Phase needs a codev-agent credential" is expected here — you have not paired with the agent yet. That is step 9 |
 | 9 | Open the gated builder's thread | A rose **Waiting on you: `<gate>`** panel with the question and the choices | If the panel is absent the gate is not on the thread; check `porch status` again |
