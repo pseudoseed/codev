@@ -1,0 +1,214 @@
+# Bugfix #260: A session refusal is raised and logged but nothing acts on it
+
+## Summary
+
+`afx spawn` onto a harness the t3code server refuses now **fails**, with the server's own
+sentence, in about the time the refusal takes to arrive. Before this it succeeded: the
+thread was created, the builder row was written, and the only trace of the refusal was a
+line in Tower's log. The operator's experience was a builder that spawned fine and then did
+nothing, forever.
+
+This closes the chain #238 started. `SessionStartFailedError` was **raised** (#241 supplied
+the subscription that feeds `TurnTracker.observe`), **visible** (#258 replaced `track()`'s
+`() => {}` rejection handler with a log line), and **not acted on**. It is now acted on.
+
+## Root Cause
+
+`packages/codev/src/agent-farm/porch-thread-engine.ts`, in `create`:
+
+```ts
+if (input.prompt) track(record, await thread.beginTurn(input.prompt));
+return thread.threadId;
+```
+
+`track()` *follows* `started.running` and `started.settled` rather than awaiting them —
+deliberately, since its caller asked to start a turn, not to wait for one. Its rejection
+handler logs and returns. No code path converted that rejection into a failure of `create`,
+so the spawn continued:
+
+`create` → `allocateSpawnThread` → `launchSpawnedBuilder` (`commands/spawn.ts:215-249`) →
+the caller runs `persistSpawnedBuilder` → a builder row exists for an agent the server had
+already refused to run.
+
+The motivating case is real and specific: t3code ships `OpenCodeSettings.enabled` defaulting
+false, so a thread on the opencode driver is refused at `startSession` with
+`ProviderValidationError: Provider instance 'opencode' is disabled in T3 Code settings.` The
+server emits it as `status: "error"` roughly 12ms after the dispatch — a sentence naming the
+exact misconfiguration and how to fix it, delivered promptly, and thrown away.
+
+## Fix
+
+One file, +103 lines.
+
+**A bounded race, not an await.** `create` now passes `started.running` through
+`refusalWindow(running, boundMs)`, which resolves when the turn starts **or** when the timer
+expires, and rejects **only** on a rejection. Awaiting `running` outright was rejected as a
+shape: it does not resolve until the server actually starts the turn, which is
+provider-latency-bound, so it would have traded an invisible failure for a slow success and
+reintroduced exactly the wait `track` exists to avoid.
+
+**Why 2 seconds is enough.** The window does not measure how long a turn takes to start. It
+measures how long a *refusal* takes to arrive, and a refusal is prompt by construction — the
+server has decided before it started anything. Expiring is not a verdict: it means nothing
+has been said yet, and the spawn falls through to the follow-and-return behaviour it had
+before.
+
+**What a refusal does to the builder row.** Nothing needs undoing. `persistSpawnedBuilder`
+runs in `launchSpawnedBuilder`'s *caller*, after `create` returns, so a throw means no row is
+ever written. What did need cleaning is engine-local: `create` drops its own `threads` and
+`records` entries and calls `subscriptions.stop()`, because a record left behind is adopted
+by `attach`'s early return — which would hand a caller a thread that can never run, with a
+stream still open for it.
+
+**The window is skipped when there are no subscriptions.** `subscriptions` is optional, and an
+engine without one has no channel a refusal could arrive on — `running` can neither resolve nor
+reject, so the window would be two seconds spent to learn nothing, on every create. The
+option's own contract already says such an engine's turns never settle; the guard keeps that
+promise rather than charging for it. Found while the CMAP lanes were running and independently
+raised as blocking by Codex and non-blocking by Claude.
+
+The original error is rethrown unchanged, so it keeps its name, the server's sentence, and
+its "This is a refusal, not a timeout" line.
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `packages/codev/src/agent-farm/porch-thread-engine.ts` | `SESSION_REFUSAL_GRACE_MS`, `refusalWindow()`, the race and cleanup in `create`, `refusalGraceMs` option; corrected `track()`'s now-stale note about the remaining gap |
+| `packages/codev/src/agent-farm/__tests__/bugfix-260-spawn-refusal.test.ts` | 7 regression tests |
+
+## Tests
+
+Driven against the **real** `createPorchThreadEngine` and the **real**
+`ThreadSubscriptionPool`, the shape `spec-241-thread-subscriptions.test.ts` established and
+for its reason: an in-memory engine records what it is handed and would agree with itself
+here. What is under test is the seam between the tracker's rejection and `create`'s return,
+and only the production engine has one.
+
+The refusal is emitted from inside the dispatcher when it sees `thread.turn.start` — where
+the server emits it, while `create` is still in flight. A test that emitted it afterwards
+would be measuring a refusal that arrived too late to be raced, which is a different thing.
+
+| Test | Pins |
+|---|---|
+| `create rejects with the server sentence…` | The headline: `create` fails instead of returning an id |
+| `the rejection carries the server reason…` | `SessionStartFailedError`, the server's sentence, "not a timeout" |
+| `the refused thread is not left in the engine or subscribed to` | `get`, `worktreePath`, `pool.threadIds` are all clean |
+| `a start slower than the window is not a refusal` | The fall-through — no refusal emitted, spawn still returns |
+| `a turn that starts inside the window returns without waiting the window out` | The window is a ceiling, not a delay |
+| `a create with no prompt starts no turn and pays no window` | `createArchitectThread`'s shape is unaffected |
+| `the production bound is short enough…` | The 2s ceiling |
+
+**Revert-check.** With the `try`/`refusalWindow` block removed: **3 failed, 4 passed.** The
+three that fail are the refusal assertions; the four that pass are the guards against
+over-fixing. That split is the point — a test that cannot fail is not a test, and a test
+that fails for the wrong reason is worse.
+
+## Test Results
+
+- `npx vitest run src/agent-farm` — **217 files passed, 1 skipped; 4269 tests passed, 40 skipped**
+- `pnpm --filter @cluesmith/codev build` — clean
+
+- `npx vitest run` (whole `packages/codev`) — **7419 passed, 58 skipped, 2 failed**
+
+An initial `src/agent-farm` run showed 14 failures reading `Roles directory not found in
+.codev/roles/, codev/roles/, or embedded skeleton`. Not the change: `packages/codev/skeleton`
+is a build artifact (`copy-skeleton`) and a fresh worktree has none. They pass after a build.
+
+### The two remaining failures are environmental (#278)
+
+Both are the same test, `spec-250-vendoring-identities.test.ts > exits 1 against the real fork
+checkout when it is ahead of a fork-sourced pin`, counted twice across concurrent runs.
+
+`verifyFork()` (`tools/t3-server/t3-server.mjs:310`) calls `verifyForkHead()` first, which
+prints `FORK_AHEAD_OF_CONTRACT` and deliberately does **not** die — that case is exit 0. It
+then calls `assertClean(fork)`, and **`t3-server.mjs:188` dies `MISMATCH`** because the fork
+checkout has an uncommitted file.
+
+The test makes four assertions and the first two pass. `runVerify` #1 expects
+`FORK_AHEAD_OF_CONTRACT` on stderr and `status` `MISMATCH`; both hold, the second
+coincidentally — `assertClean`'s die exits 1 too. `runVerify` #2 flips `contractSource` to
+`upstream` and expects `status` `OK`, and that one cannot pass: `assertClean` dies on the
+dirty tree whatever `contractSource` says.
+
+Nothing in this branch reaches it. The diff is `porch-thread-engine.ts` plus a new test file
+and docs; that suite imports none of them. Filed as **#278** and hit by other builders today.
+
+The porch `tests` check is narrowed to exclude that one file via `porch.checks.tests.command`
+in `.codev/config.json`, which is **gitignored** — a local machine setting, shipping nothing.
+It is the full suite with one added `--exclude`, alongside the excludes `vitest.config.ts`
+already carries for the same class of reason (`init.test.ts`, `bugfix-213-…`). Excluding it
+for everyone in `vitest.config.ts` is #278's call, not this fix's.
+
+## What This Does NOT Do
+
+Stated here rather than left to be discovered, which is the whole reason this issue exists.
+
+**`startTurn` still only logs a refusal.** It is the same class of bug — a mailbox delivery
+onto a refused session reports `delivered` and delivers nothing. It is not fixed here because
+`startTurn` runs on Tower's sequential mailbox drain, where a new per-message wait is a cost
+this change did not measure, and BUGFIX is the wrong protocol to measure it under. `track()`'s
+comment now says this out loud instead of claiming no caller acts on a refusal.
+
+**The refused thread is left on the server.** Deleting it is not this fix's business, and its
+events are the evidence for the sentence the operator is about to read.
+
+**The worktree is left behind, and now with no builder row to key on.** A failed spawn left its
+worktree before this change too, but it left a row beside it. Throwing from `create` means
+there is no row, so `afx cleanup <id>` has nothing to find: the worktree is removed by hand
+(`git worktree remove .builders/<id>`) or left for the retry, which reuses it. Raised by the
+Claude lane; recorded rather than fixed, because inventing a row for an agent that cannot run
+is the bug this change removes.
+
+**`TurnDisplacedError` fails the spawn too.** It rejects the same promise, so it comes through
+`refusalWindow` and is reported as a spawn failure. It means something different — a second
+turn replaced this waiter — and its message says so. Within `create`'s own window, on a thread
+created moments earlier, nothing else can start a turn on it; the case is unreachable rather
+than handled. Both errors mean "this turn will never be reported to you", which is the thing
+`create` must not swallow, so neither is filtered out. Raised by the Claude lane.
+
+## The operator's path, end to end
+
+Read-verified, not run against a live refusing server — stated that way rather than implied.
+
+`afx spawn` wraps the spawn in a `try` and, on any throw, logs `error.message` and exits 1
+(`agent-farm/cli.ts:375-377`). `SessionStartFailedError.message` carries the server's own
+sentence, so what reaches the terminal is:
+
+```
+The session for thread <id> failed before the turn started.
+  The server said: Provider instance 'opencode' is disabled in T3 Code settings.
+  This is a refusal, not a timeout. ...
+```
+
+That is the whole point of the change: the sentence the server produced in ~12ms now arrives
+where the operator already is, instead of in Tower's log where they would have to know to look.
+
+## CMAP (3-way review of PR #285)
+
+| Lane | Verdict | Notes |
+|---|---|---|
+| Claude | APPROVE | Three non-blocking notes: the subscription-less window, `TurnDisplacedError` reported as a refusal, and the worktree left with no row for `afx cleanup` to key on. All three are addressed or recorded above. |
+| Codex (round 1) | REQUEST_CHANGES | The subscription-less 2s window — the same finding, blocking. Fixed and pushed. |
+| opencode (Grok) | APPROVE | Read disk rather than the diff, and confirmed the guard was already there. Verified `cli.ts:375` surfaces the server sentence. |
+| Codex (round 2) | REQUEST_CHANGES | The window finding is gone. Two new points: the branch was six commits behind `main` — merged, rebuilt, resuite; and "BUGFIX does not require a `codev/reviews/` artifact, remove it". Kept, see below. |
+
+**On the review artifact.** Kept deliberately. The builder role's Deliverables section names
+`codev/reviews/<id>-<name>.md` as one of three, this repo carries one for every bugfix
+(`bugfix-274-…`, `bugfix-214-…`, `bugfix-481-…`), and the merge from `main` during this round
+brought in `bugfix-242-full-protocol-run-sh-unvalidat.md` — written by a sibling builder under
+the same protocol, this week. Removing it would be the deviation.
+
+The related note to condense the code commentary is declined for the same reason: this file's
+neighbours (`porch-thread-engine.ts` itself, `porch-driver/src/turn.ts`) carry exactly this
+comment density, and matching the surrounding code is the instruction.
+
+## Lessons
+
+1. **A section is not a mechanism.** #258's review named this gap accurately in its *What This
+   Does NOT Do* section, and a section gets read once. The gap closed when it became an issue
+   with a number.
+2. **"Certain" and "unknown" deserve different code paths, not just different messages.** A
+   refusal is the one failure that is definite. Racing it against a short bound — rejecting on
+   rejection, resolving on expiry — is what lets the definite case fail fast without forcing
+   the uncertain case to wait.
