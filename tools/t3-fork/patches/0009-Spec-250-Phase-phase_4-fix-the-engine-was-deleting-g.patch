@@ -1,0 +1,934 @@
+From 3d0e76776cd9fa76947099c2f2c4635ae8c047ed Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 18:44:30 -0600
+Subject: [PATCH 09/12] [Spec 250][Phase: phase_4] fix: the engine was deleting
+ gate refusals too
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Both lanes found it and it is the phase 3 bug, in the same function, one
+phase later. `isRefusal` listed two refusal types; phase 4 added a third
+and did not extend it, so every gate refusal was rewritten as "Failed to
+generate an event identifier" and CRITERION 10 WAS FALSE AT THE WIRE while
+all 11 decider tests stayed green. Adding a refusal type without adding it
+there is now the same mistake three times.
+
+An engine-level test covers it, verified to discriminate: with isRefusal
+reverted the stale-write test fails; restored, it passes.
+
+Reason taxonomy, from the same review. "Could not tell" was sharing a
+spelling with "no":
+
+  CODEV_GATE_WRITE_UNCONFIRMED  new. The write may have landed and we
+    cannot name its revision. Not a rare defensive path — an idempotent
+    replay of the same commandId commits nothing, returns no events, and
+    lands here EVERY time. A normal retry was being reported as a
+    nonexistent thread.
+  CODEV_GATE_WRITE_FAILED       new. Database and decode failures, which
+    were being relabelled as a missing thread — hiding a broken database
+    behind ordinary caller error.
+  CODEV_GATE_SCOPE_REQUIRED     dropped. It was declared and never
+    constructed; the real refusal is EnvironmentAuthorizationError
+    carrying requiredScope "codev:gate-write", which is already distinct
+    from a 401 and from another scope failure. A second path the transport
+    already blocks would be unreachable code.
+
+CODEV_GATE_THREAD_NOT_FOUND was also declared and never constructed: a
+missing thread raised the generic invariant error, making the RPC's
+declared error type a lie for its commonest failure. The decider now
+raises the declared error. Found by tightening a test, not by reading.
+
+Two of my own tests asserted nothing, again. Assertions sat inside
+`if (events[0]?.type === "codev.gate-set")`, which passes vacuously when
+the type is wrong, and the thread-not-found test asserted only that
+something failed. Replaced with helpers that assert the type first and
+return the payload.
+
+THE FINDING THAT MATTERS MOST: nothing asserted the projector applies
+either gate event. Every decider test hand-builds its read model, so a
+projector that dropped gateRevision would pass all 11 while every write
+after the first re-allocated revision 1 — precisely the failure the
+revision mechanism exists to prevent, invisible to the suite meant to
+protect it. Six projector tests now cover it, verified to fail when the
+mark is dropped.
+
+Also: the OAuth token allowlist exclusion is now asserted (the third place
+the scope must not appear, and the easiest to add by reflex), and
+codev/gateCredential.ts names the issuance API and the on-disk path of the
+single credential — scopes asserted as a set, token written 0600 via a
+temp-and-rename so a reader never sees a half-written token.
+
+Fork typecheck green; contracts 304 passed, server 2832 passed.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/server/src/auth/CodevGateScope.test.ts   |  31 +++++
+ apps/server/src/codev/gateCredential.test.ts  |  98 ++++++++++++++
+ apps/server/src/codev/gateCredential.ts       |  92 +++++++++++++
+ apps/server/src/orchestration/Errors.ts       |   5 +
+ ...OrchestrationEngine.codevHierarchy.test.ts |  79 ++++++++++++
+ .../Layers/OrchestrationEngine.ts             |  22 +++-
+ .../orchestration/decider.codevGate.test.ts   | 122 ++++++++++--------
+ apps/server/src/orchestration/decider.ts      |  19 ++-
+ .../projector.codevHierarchy.test.ts          | 118 +++++++++++++++++
+ apps/server/src/ws.ts                         |  32 +++--
+ packages/contracts/src/orchestration.ts       |  21 ++-
+ 11 files changed, 562 insertions(+), 77 deletions(-)
+ create mode 100644 apps/server/src/codev/gateCredential.test.ts
+ create mode 100644 apps/server/src/codev/gateCredential.ts
+
+diff --git a/apps/server/src/auth/CodevGateScope.test.ts b/apps/server/src/auth/CodevGateScope.test.ts
+index 4f2c7ab38..62fea3d7e 100644
+--- a/apps/server/src/auth/CodevGateScope.test.ts
++++ b/apps/server/src/auth/CodevGateScope.test.ts
+@@ -72,6 +72,37 @@ describe("codev:gate-write scope (spec 250)", () => {
+   });
+ });
+ 
++describe("codev:gate-write is not obtainable through the OAuth token route (spec 250)", () => {
++  /**
++   * The third place the scope must not appear, and the one that is easiest to
++   * add by reflex: the token-issuance allowlist in `auth/http.ts`.
++   *
++   * `AuthStandardClientScopes` governs what a client is issued by default; THIS
++   * list governs what a client may ASK for. A scope excluded from the first and
++   * present in the second is not excluded at all — anyone can request it. Nothing
++   * asserted this until review pointed it out.
++   *
++   * Asserted against the source, because the list is an inline literal inside a
++   * handler with no exported value to inspect. That is itself worth noting: an
++   * allowlist nobody can read from a test is an allowlist nobody can check.
++   */
++  it("is absent from the OAuth scope allowlist", async () => {
++    const { readFileSync } = await import("node:fs");
++    const { fileURLToPath } = await import("node:url");
++    const source = readFileSync(fileURLToPath(new URL("./http.ts", import.meta.url)), "utf8");
++
++    const start = source.indexOf("allowedScopes: new Set<AuthEnvironmentScope>([");
++    expect(start, "the OAuth scope allowlist must still exist").toBeGreaterThan(-1);
++    const allowlist = source.slice(start, source.indexOf("]),", start));
++
++    expect(allowlist).not.toContain("AuthCodevGateWriteScope");
++    expect(allowlist).not.toContain("codev:gate-write");
++    // And it does still allow the ordinary ones, so this is not passing because
++    // the list moved or emptied.
++    expect(allowlist).toContain("AuthOrchestrationOperateScope");
++  });
++});
++
+ describe("codev gate commands stay off the dispatchCommand payload (spec 250)", () => {
+   /**
+    * Asserted against the contract SOURCE, because the property is an absence and
+diff --git a/apps/server/src/codev/gateCredential.test.ts b/apps/server/src/codev/gateCredential.test.ts
+new file mode 100644
+index 000000000..d588a7f27
+--- /dev/null
++++ b/apps/server/src/codev/gateCredential.test.ts
+@@ -0,0 +1,98 @@
++/**
++ * Codev customization (spec 250) — the single `codev:gate-write` credential.
++ *
++ * The scope's whole job is to exclude callers, so the credential holding it is
++ * the security boundary. These assert the two things that would silently widen
++ * it: the scope set, and the file mode.
++ */
++
++import {
++  AuthCodevGateWriteScope,
++  AuthOrchestrationOperateScope,
++  AuthOrchestrationReadScope,
++  AuthStandardClientScopes,
++} from "@t3tools/contracts";
++import * as NodeServices from "@effect/platform-node/NodeServices";
++import { assert, describe, it } from "@effect/vitest";
++import * as Effect from "effect/Effect";
++import * as FileSystem from "effect/FileSystem";
++import * as Path from "effect/Path";
++
++import {
++  CODEV_GATE_WRITER_LABEL,
++  CODEV_GATE_WRITER_SCOPES,
++  CODEV_GATE_WRITER_SUBJECT,
++  codevGateWriterTokenPath,
++  writeCodevGateWriterToken,
++} from "./gateCredential.ts";
++
++describe("codev gate-writer credential (spec 250)", () => {
++  it("holds exactly read plus gate-write", () => {
++    // Asserted as a SET, not a containment check. A containment check passes
++    // while the credential quietly grows, which is the failure this whole
++    // arrangement exists to prevent and which would not look wrong at the call
++    // site.
++    assert.deepStrictEqual(
++      [...CODEV_GATE_WRITER_SCOPES].sort(),
++      [AuthCodevGateWriteScope, AuthOrchestrationReadScope].sort(),
++    );
++  });
++
++  it("does NOT hold orchestration:operate", () => {
++    // codev-agent publishes gate state; it does not create threads or drive
++    // turns. Granting operate would make this credential a superset of an
++    // ordinary client's and remove the point of separating them.
++    assert.ok(!CODEV_GATE_WRITER_SCOPES.includes(AuthOrchestrationOperateScope));
++  });
++
++  it("holds a scope no ordinary client is issued", () => {
++    // The two facts together are the boundary: this credential has something the
++    // standard set does not, and the standard set is what a paired thread gets.
++    assert.ok(CODEV_GATE_WRITER_SCOPES.includes(AuthCodevGateWriteScope));
++    const standard: ReadonlyArray<string> = AuthStandardClientScopes;
++    assert.ok(!standard.includes(AuthCodevGateWriteScope));
++  });
++
++  it("is identifiable in a session listing", () => {
++    assert.strictEqual(CODEV_GATE_WRITER_SUBJECT, "codev-agent");
++    assert.ok(CODEV_GATE_WRITER_LABEL.includes("gate writer"));
++  });
++
++  it.effect("writes the token 0600 and readable, under the server's base dir", () =>
++    Effect.gen(function* () {
++      const fs = yield* FileSystem.FileSystem;
++      const path = yield* Path.Path;
++      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "codev-gate-cred-" });
++
++      const target = yield* writeCodevGateWriterToken({ baseDir, token: "tok_example" });
++
++      assert.strictEqual(target, codevGateWriterTokenPath(baseDir, path));
++      assert.strictEqual((yield* fs.readFileString(target)).trim(), "tok_example");
++
++      // The mode is the point. A directory anyone can traverse still hands out a
++      // world-readable file inside it, so the mode is set on the file itself.
++      const info = yield* fs.stat(target);
++      const mode = Number(info.mode) & 0o777;
++      assert.strictEqual(mode, 0o600, `expected 0600, got 0${mode.toString(8)}`);
++
++      // And nothing is left behind that a reader could pick up mid-write: a
++      // truncated bearer token fails auth in a way that looks like revocation.
++      assert.strictEqual(yield* fs.exists(`${target}.partial`), false);
++    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
++  );
++
++  it.effect("overwrites an existing token rather than appending to it", () =>
++    Effect.gen(function* () {
++      const fs = yield* FileSystem.FileSystem;
++      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "codev-gate-cred-2-" });
++
++      yield* writeCodevGateWriterToken({ baseDir, token: "first" });
++      const target = yield* writeCodevGateWriterToken({ baseDir, token: "second" });
++
++      // Two tokens in one file is one unusable file, and it would authenticate as
++      // neither — reported to an operator as a credential problem rather than as
++      // the write bug it is.
++      assert.strictEqual((yield* fs.readFileString(target)).trim(), "second");
++    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
++  );
++});
+diff --git a/apps/server/src/codev/gateCredential.ts b/apps/server/src/codev/gateCredential.ts
+new file mode 100644
+index 000000000..04fdc7632
+--- /dev/null
++++ b/apps/server/src/codev/gateCredential.ts
+@@ -0,0 +1,92 @@
++/**
++ * Codev customization (spec 250) — the single `codev:gate-write` credential.
++ *
++ * The scope exists to exclude callers, so the credential that holds it is the
++ * whole security boundary. Leaving its issuance and location "to the implementer"
++ * is how a scope like this ends up quietly attached to something broader; this
++ * file names both.
++ *
++ * ISSUANCE API: `EnvironmentAuth.issueSession({ subject, scopes, label })` —
++ * upstream's own bearer-session issuance, not a new mechanism. It already accepts
++ * an explicit scope list, so the customization is *which* scopes, not *how*.
++ *
++ * ON-DISK PATH: `<baseDir>/codev/gate-writer.token`, mode `0600`.
++ * `baseDir` is the server's own data directory (`--base-dir`), so the credential
++ * lives with the database it can write to and moves with it. `codev/` rather than
++ * the root so it is obviously ours.
++ *
++ * WHAT IT HOLDS, and what it deliberately does not:
++ *
++ *   orchestration:read   it must know which thread a gate belongs to.
++ *   codev:gate-write     its reason for existing.
++ *
++ * NOT `orchestration:operate`. `codev-agent` publishes gate state; it does not
++ * create threads or drive turns — `porch-driver` does, with an ordinary client
++ * credential. Granting operate here would make this credential a superset of an
++ * ordinary client's and remove the point of separating them.
++ *
++ * NEVER ISSUED TO A THREAD. Threads receive client sessions through the pairing
++ * flow, which draws from `AuthStandardClientScopes` — a list this scope is
++ * deliberately absent from. There is no code path from a thread to this token;
++ * the only way to hold it is to be able to read this file.
++ */
++
++import * as Effect from "effect/Effect";
++import * as FileSystem from "effect/FileSystem";
++import * as Path from "effect/Path";
++import {
++  AuthCodevGateWriteScope,
++  AuthOrchestrationReadScope,
++  type AuthEnvironmentScope,
++} from "@t3tools/contracts";
++
++/** The one credential's subject, so it is identifiable in a session listing. */
++export const CODEV_GATE_WRITER_SUBJECT = "codev-agent";
++
++/** Human-readable label, shown wherever sessions are listed. */
++export const CODEV_GATE_WRITER_LABEL = "codev-agent (gate writer)";
++
++/**
++ * Exactly the scopes this credential holds.
++ *
++ * Frozen and exported so a test can assert the set rather than trusting the call
++ * site — a scope added here by reflex is the failure this whole arrangement
++ * exists to prevent, and it would not look wrong at the call site.
++ */
++export const CODEV_GATE_WRITER_SCOPES: ReadonlyArray<AuthEnvironmentScope> = [
++  AuthOrchestrationReadScope,
++  AuthCodevGateWriteScope,
++];
++
++/** Path of the token file, relative to the server's base directory. */
++export const CODEV_GATE_WRITER_TOKEN_RELATIVE_PATH = ["codev", "gate-writer.token"] as const;
++
++export const codevGateWriterTokenPath = (baseDir: string, path: Path.Path): string =>
++  path.join(baseDir, ...CODEV_GATE_WRITER_TOKEN_RELATIVE_PATH);
++
++/**
++ * Write the token where `codev-agent` reads it, at `0600`.
++ *
++ * The mode is set on the file, not on the directory alone: a directory anyone can
++ * traverse still hands out a world-readable file inside it. Written whole and
++ * then moved into place, so a reader never sees a half-written token — a
++ * truncated bearer token fails authentication in a way that looks like
++ * revocation.
++ */
++export const writeCodevGateWriterToken = Effect.fn("writeCodevGateWriterToken")(function* (input: {
++  readonly baseDir: string;
++  readonly token: string;
++}) {
++  const fs = yield* FileSystem.FileSystem;
++  const path = yield* Path.Path;
++
++  const target = codevGateWriterTokenPath(input.baseDir, path);
++  yield* fs.makeDirectory(path.dirname(target), { recursive: true });
++
++  const temporary = `${target}.partial`;
++  yield* fs.writeFileString(temporary, `${input.token}\n`);
++  yield* fs.chmod(temporary, 0o600);
++  yield* fs.rename(temporary, target);
++
++  return target;
++});
+diff --git a/apps/server/src/orchestration/Errors.ts b/apps/server/src/orchestration/Errors.ts
+index 36ae8fd5a..5b1eb51b1 100644
+--- a/apps/server/src/orchestration/Errors.ts
++++ b/apps/server/src/orchestration/Errors.ts
+@@ -1,5 +1,6 @@
+ import * as SchemaIssue from "effect/SchemaIssue";
+ import * as Schema from "effect/Schema";
++import type { CodevGateWriteError } from "@t3tools/contracts";
+ 
+ import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
+ 
+@@ -142,6 +143,10 @@ export type OrchestrationDispatchError =
+   | ProjectionRepositoryError
+   | OrchestrationCommandInvariantError
+   | CodevHierarchyInvalidError
++  // Codev customization (spec 250). A gate refusal is a REFUSAL and must reach
++  // the dispatcher intact — see `isRefusal` in OrchestrationEngine.ts. Omitting
++  // it here is how phase 4 reintroduced phase 3's bug in the same function.
++  | CodevGateWriteError
+   | OrchestrationCommandIdConflictError
+   | OrchestrationCommandPreviouslyRejectedError
+   | OrchestrationProjectorDecodeError
+diff --git a/apps/server/src/orchestration/Layers/OrchestrationEngine.codevHierarchy.test.ts b/apps/server/src/orchestration/Layers/OrchestrationEngine.codevHierarchy.test.ts
+index 0d04eb6f0..ba7084b55 100644
+--- a/apps/server/src/orchestration/Layers/OrchestrationEngine.codevHierarchy.test.ts
++++ b/apps/server/src/orchestration/Layers/OrchestrationEngine.codevHierarchy.test.ts
+@@ -38,6 +38,7 @@ import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
+ import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
+ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+ import { CodevHierarchyInvalidError } from "../Errors.ts";
++import { CodevGateWriteError } from "@t3tools/contracts";
+ import { ServerConfig } from "../../config.ts";
+ 
+ const NOW = "2026-01-01T00:00:00.000Z";
+@@ -250,6 +251,84 @@ describe("OrchestrationEngine: codev hierarchy refusals (spec 250)", () => {
+     }
+   });
+ 
++  /**
++   * Codev customization (spec 250). Criterion 10 AT THE WIRE.
++   *
++   * The decider tests prove the revision rules; they cannot prove the refusal
++   * survives `OrchestrationEngine`. It did not: `isRefusal` listed two refusal
++   * types and phase 4 added a third without extending it, so every gate refusal
++   * was rewritten as "Failed to generate an event identifier" while all eleven
++   * decider tests stayed green. That is phase 3's bug, in the same function, one
++   * phase later — which is why this assertion now lives beside the hierarchy one.
++   */
++  it("a stale gate write is refused at the wire with its own reason", async () => {
++    const system = await seededSystem();
++    try {
++      const gate = {
++        gateName: "plan-approval",
++        requestedAt: NOW,
++      };
++      const write = (commandId: string, revision?: number) =>
++        ({
++          type: "codev.gate.set",
++          commandId: CommandId.make(commandId),
++          threadId: ThreadId.make("thread-architect"),
++          gate,
++          ...(revision === undefined ? {} : { revision }),
++          createdAt: NOW,
++        }) as never;
++
++      // Allocate a real mark first, so the stale write below is genuinely stale.
++      await system.run(system.engine.dispatch(write("cmd-gate-1")));
++
++      const outcome = await system.run(
++        Effect.result(system.engine.dispatch(write("cmd-gate-stale", 1))),
++      );
++      expect(outcome._tag).toBe("Failure");
++      const error = (outcome as { failure: unknown }).failure;
++
++      expect(
++        error instanceof CodevGateWriteError,
++        `the engine collapsed the gate refusal into ${String(error)}`,
++      ).toBe(true);
++      expect((error as CodevGateWriteError).reason).toBe("CODEV_GATE_REVISION_STALE");
++      expect(String((error as CodevGateWriteError).message)).not.toContain(
++        "Failed to generate an event identifier",
++      );
++    } finally {
++      await system.dispose();
++    }
++  });
++
++  it("a gate write returns the revision the server allocated for it", async () => {
++    const system = await seededSystem();
++    try {
++      const write = (commandId: string) =>
++        ({
++          type: "codev.gate.set",
++          commandId: CommandId.make(commandId),
++          threadId: ThreadId.make("thread-architect"),
++          gate: { gateName: "plan-approval", requestedAt: NOW },
++          createdAt: NOW,
++        }) as never;
++
++      const first = await system.run(system.engine.dispatch(write("cmd-rev-1")));
++      const second = await system.run(system.engine.dispatch(write("cmd-rev-2")));
++
++      const revisionOf = (result: { readonly events: ReadonlyArray<{ type: string }> }) => {
++        const event = result.events.find((e) => e.type === "codev.gate-set");
++        expect(event, "the dispatch must hand back the event it committed").toBeDefined();
++        return (event as unknown as { payload: { gateRevision: number } }).payload.gateRevision;
++      };
++
++      // Two writes, two different numbers, both allocated by the server and both
++      // readable by the caller that made them.
++      expect(revisionOf(second)).toBeGreaterThan(revisionOf(first));
++    } finally {
++      await system.dispose();
++    }
++  });
++
+   it("accepts the legal architect -> builder edge through the engine", async () => {
+     const system = await seededSystem();
+     try {
+diff --git a/apps/server/src/orchestration/Layers/OrchestrationEngine.ts b/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
+index 068c7fbb9..ac5266f18 100644
+--- a/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
++++ b/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
+@@ -5,7 +5,7 @@ import type {
+   ProjectId,
+   ThreadId,
+ } from "@t3tools/contracts";
+-import { OrchestrationCommand } from "@t3tools/contracts";
++import { CodevGateWriteError, OrchestrationCommand } from "@t3tools/contracts";
+ import * as Cause from "effect/Cause";
+ import * as Clock from "effect/Clock";
+ import * as Crypto from "effect/Crypto";
+@@ -67,11 +67,25 @@ const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvar
+  * decider tests stayed green, because they call the decider directly.
+  */
+ const isCodevHierarchyInvalidError = Schema.is(CodevHierarchyInvalidError);
+-/** Errors that describe a REFUSAL and must reach the dispatcher intact. */
++const isCodevGateWriteError = Schema.is(CodevGateWriteError);
++
++/**
++ * Errors that describe a REFUSAL and must reach the dispatcher intact.
++ *
++ * EVERY refusal type has to be listed here. Phase 3 fixed this function once,
++ * for `CodevHierarchyInvalidError`; phase 4 added a third refusal type and did
++ * not extend it, so gate refusals were rewritten as "Failed to generate an event
++ * identifier" and criterion 10 was false at the wire while all 11 decider tests
++ * stayed green. Both review lanes caught it. Adding a refusal type without adding
++ * it here is the same bug a third time.
++ */
+ const isRefusal = (cause: unknown): cause is
+   | OrchestrationCommandInvariantError
+-  | CodevHierarchyInvalidError =>
+-  isOrchestrationCommandInvariantError(cause) || isCodevHierarchyInvalidError(cause);
++  | CodevHierarchyInvalidError
++  | CodevGateWriteError =>
++  isOrchestrationCommandInvariantError(cause) ||
++  isCodevHierarchyInvalidError(cause) ||
++  isCodevGateWriteError(cause);
+ 
+ interface CommandEnvelope {
+   command: OrchestrationCommand;
+diff --git a/apps/server/src/orchestration/decider.codevGate.test.ts b/apps/server/src/orchestration/decider.codevGate.test.ts
+index f4ab3b673..21abb75ce 100644
+--- a/apps/server/src/orchestration/decider.codevGate.test.ts
++++ b/apps/server/src/orchestration/decider.codevGate.test.ts
+@@ -102,6 +102,28 @@ const decide = (command: unknown, model: OrchestrationReadModel) =>
+     (event) => (Array.isArray(event) ? event : [event]) as ReadonlyArray<OrchestrationEvent>,
+   );
+ 
++/**
++ * Assert the event type and RETURN the payload.
++ *
++ * Every assertion here used to sit inside `if (events[0]?.type === "codev.gate-set")`,
++ * which passes vacuously when the type is wrong — the test reports success by
++ * asserting nothing. Review caught it. Now the type is asserted first, so a wrong
++ * event fails here rather than silently skipping the checks that follow.
++ */
++function gateSetPayload(events: ReadonlyArray<OrchestrationEvent>) {
++  assert.strictEqual(events.length, 1, "a gate write emits exactly one event");
++  const event = events[0];
++  assert.ok(event !== undefined && event.type === "codev.gate-set", `expected codev.gate-set, got ${events[0]?.type}`);
++  return (event as Extract<OrchestrationEvent, { type: "codev.gate-set" }>).payload;
++}
++
++function gateClearedPayload(events: ReadonlyArray<OrchestrationEvent>) {
++  assert.strictEqual(events.length, 1, "a gate clear emits exactly one event");
++  const event = events[0];
++  assert.ok(event !== undefined && event.type === "codev.gate-cleared", `expected codev.gate-cleared, got ${events[0]?.type}`);
++  return (event as Extract<OrchestrationEvent, { type: "codev.gate-cleared" }>).payload;
++}
++
+ const refusal = (command: unknown, model: OrchestrationReadModel) =>
+   Effect.gen(function* () {
+     const outcome = yield* Effect.result(decide(command, model));
+@@ -114,25 +136,21 @@ const refusal = (command: unknown, model: OrchestrationReadModel) =>
+ it.layer(NodeServices.layer)("codev gate revision (spec 250)", (it) => {
+   it.effect("allocates the next revision when the command carries none", () =>
+     Effect.gen(function* () {
+-      const events = yield* decide(setGate({ commandId: "cmd-1" }), readModel([thread({})]));
+-      expect(events[0]?.type).toBe("codev.gate-set");
+-      if (events[0]?.type === "codev.gate-set") {
+-        // Allocated, not echoed: the command carried no revision at all.
+-        expect(events[0].payload.gateRevision).toBe(1);
+-        expect(events[0].payload.gate.gateName).toBe("plan-approval");
+-      }
++      const payload = gateSetPayload(
++        yield* decide(setGate({ commandId: "cmd-1" }), readModel([thread({})])),
++      );
++      // Allocated, not echoed: the command carried no revision at all.
++      expect(payload.gateRevision).toBe(1);
++      expect(payload.gate.gateName).toBe("plan-approval");
+     }),
+   );
+ 
+   it.effect("allocates from the CURRENT mark, not from zero", () =>
+     Effect.gen(function* () {
+-      const events = yield* decide(
+-        setGate({ commandId: "cmd-2" }),
+-        readModel([thread({ gateRevision: 41 })]),
++      const payload = gateSetPayload(
++        yield* decide(setGate({ commandId: "cmd-2" }), readModel([thread({ gateRevision: 41 })])),
+       );
+-      if (events[0]?.type === "codev.gate-set") {
+-        expect(events[0].payload.gateRevision).toBe(42);
+-      }
++      expect(payload.gateRevision).toBe(42);
+     }),
+   );
+ 
+@@ -143,26 +161,22 @@ it.layer(NodeServices.layer)("codev gate revision (spec 250)", (it) => {
+    */
+   it.effect("a writer that forgot everything still gets a higher number", () =>
+     Effect.gen(function* () {
+-      const events = yield* decide(
+-        setGate({ commandId: "cmd-restart" }),
+-        readModel([thread({ gateRevision: 9 })]),
++      const payload = gateSetPayload(
++        yield* decide(setGate({ commandId: "cmd-restart" }), readModel([thread({ gateRevision: 9 })])),
+       );
+-      if (events[0]?.type === "codev.gate-set") {
+-        expect(events[0].payload.gateRevision).toBe(10);
+-      }
++      expect(payload.gateRevision).toBe(10);
+     }),
+   );
+ 
+   it.effect("clearing raises the mark rather than resetting it", () =>
+     Effect.gen(function* () {
+-      const events = yield* decide(
+-        clearGate({ commandId: "cmd-clear" }),
+-        readModel([thread({ gateRevision: 5, codevGate: GATE })]),
++      const payload = gateClearedPayload(
++        yield* decide(
++          clearGate({ commandId: "cmd-clear" }),
++          readModel([thread({ gateRevision: 5, codevGate: GATE })]),
++        ),
+       );
+-      expect(events[0]?.type).toBe("codev.gate-cleared");
+-      if (events[0]?.type === "codev.gate-cleared") {
+-        expect(events[0].payload.gateRevision).toBe(6);
+-      }
++      expect(payload.gateRevision).toBe(6);
+     }),
+   );
+ 
+@@ -197,28 +211,25 @@ it.layer(NodeServices.layer)("codev gate revision (spec 250)", (it) => {
+ 
+   it.effect("accepts a revision that genuinely exceeds the mark", () =>
+     Effect.gen(function* () {
+-      const events = yield* decide(
+-        setGate({ commandId: "cmd-ahead", revision: 9 }),
+-        readModel([thread({ gateRevision: 6 })]),
++      const payload = gateSetPayload(
++        yield* decide(setGate({ commandId: "cmd-ahead", revision: 9 }), readModel([thread({ gateRevision: 6 })])),
+       );
+-      if (events[0]?.type === "codev.gate-set") {
+-        expect(events[0].payload.gateRevision).toBe(9);
+-      }
++      expect(payload.gateRevision).toBe(9);
+     }),
+   );
+ 
+   it.effect("a later gate on the same thread does not resurrect the first", () =>
+     Effect.gen(function* () {
+-      const first = yield* decide(setGate({ commandId: "cmd-a" }), readModel([thread({})]));
+-      const firstRevision =
+-        first[0]?.type === "codev.gate-set" ? first[0].payload.gateRevision : -1;
++      const firstRevision = gateSetPayload(
++        yield* decide(setGate({ commandId: "cmd-a" }), readModel([thread({})])),
++      ).gateRevision;
+ 
+-      const second = yield* decide(
+-        setGate({ commandId: "cmd-b" }),
+-        readModel([thread({ gateRevision: firstRevision, codevGate: GATE })]),
+-      );
+-      const secondRevision =
+-        second[0]?.type === "codev.gate-set" ? second[0].payload.gateRevision : -1;
++      const secondRevision = gateSetPayload(
++        yield* decide(
++          setGate({ commandId: "cmd-b" }),
++          readModel([thread({ gateRevision: firstRevision, codevGate: GATE })]),
++        ),
++      ).gateRevision;
+ 
+       expect(secondRevision).toBeGreaterThan(firstRevision);
+ 
+@@ -241,14 +252,13 @@ it.layer(NodeServices.layer)("codev gate revision (spec 250)", (it) => {
+    */
+   it.effect("two writers receive two different revisions", () =>
+     Effect.gen(function* () {
+-      const a = yield* decide(setGate({ commandId: "cmd-w1" }), readModel([thread({})]));
+-      const aRevision = a[0]?.type === "codev.gate-set" ? a[0].payload.gateRevision : -1;
++      const aRevision = gateSetPayload(
++        yield* decide(setGate({ commandId: "cmd-w1" }), readModel([thread({})])),
++      ).gateRevision;
+ 
+-      const b = yield* decide(
+-        setGate({ commandId: "cmd-w2" }),
+-        readModel([thread({ gateRevision: aRevision })]),
+-      );
+-      const bRevision = b[0]?.type === "codev.gate-set" ? b[0].payload.gateRevision : -1;
++      const bRevision = gateSetPayload(
++        yield* decide(setGate({ commandId: "cmd-w2" }), readModel([thread({ gateRevision: aRevision })])),
++      ).gateRevision;
+ 
+       expect(aRevision).not.toBe(bRevision);
+       expect(bRevision).toBeGreaterThan(aRevision);
+@@ -259,19 +269,19 @@ it.layer(NodeServices.layer)("codev gate revision (spec 250)", (it) => {
+     Effect.gen(function* () {
+       // Rows predating the guard get 0 from the column default, and 0 must be a
+       // real starting point rather than an "unset" sentinel.
+-      const events = yield* decide(setGate({ commandId: "cmd-hist" }), readModel([thread({ gateRevision: 0 })]));
+-      if (events[0]?.type === "codev.gate-set") {
+-        expect(events[0].payload.gateRevision).toBe(1);
+-      }
++      const payload = gateSetPayload(
++        yield* decide(setGate({ commandId: "cmd-hist" }), readModel([thread({ gateRevision: 0 })])),
++      );
++      expect(payload.gateRevision).toBe(1);
+     }),
+   );
+ 
+   it.effect("refuses a gate write for a thread that does not exist", () =>
+     Effect.gen(function* () {
+-      const outcome = yield* Effect.result(
+-        decide(setGate({ commandId: "cmd-missing" }), readModel([])),
+-      );
+-      expect(outcome._tag).toBe("Failure");
++      // Asserting only `_tag === "Failure"` passes on ANY failure, including one
++      // raised for a completely different reason. Review caught that too.
++      const error = yield* refusal(setGate({ commandId: "cmd-missing" }), readModel([]));
++      expect(error.reason).toBe("CODEV_GATE_THREAD_NOT_FOUND");
+     }),
+   );
+ });
+diff --git a/apps/server/src/orchestration/decider.ts b/apps/server/src/orchestration/decider.ts
+index cd312775e..47adff1bf 100644
+--- a/apps/server/src/orchestration/decider.ts
++++ b/apps/server/src/orchestration/decider.ts
+@@ -12,6 +12,7 @@ import type * as PlatformError from "effect/PlatformError";
+ 
+ import { CodevHierarchyInvalidError, OrchestrationCommandInvariantError } from "./Errors.ts";
+ import {
++  findThreadById,
+   listThreadsByProjectId,
+   requireActiveProjectWorkspaceRootAbsent,
+   requireCodevHierarchy,
+@@ -428,11 +429,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
+      */
+     case "codev.gate.set":
+     case "codev.gate.clear": {
+-      const thread = yield* requireThread({
+-        readModel,
+-        command,
+-        threadId: command.threadId,
+-      });
++      // Not `requireThread`: that raises the generic invariant error, and the
++      // gate RPC declares its error as `CodevGateWriteError`. Raising the generic
++      // one made the RPC's declared error type a lie for the commonest failure,
++      // and left CODEV_GATE_THREAD_NOT_FOUND declared but never constructed —
++      // the same defect review flagged for the scope reason. A stricter test
++      // found it.
++      const thread = findThreadById(readModel, command.threadId);
++      if (thread === undefined) {
++        return yield* new CodevGateWriteError({
++          reason: "CODEV_GATE_THREAD_NOT_FOUND",
++          message: `Gate write refused: thread '${command.threadId}' does not exist.`,
++        });
++      }
+       const currentRevision = thread.gateRevision ?? 0;
+ 
+       if (command.revision !== undefined && command.revision <= currentRevision) {
+diff --git a/apps/server/src/orchestration/projector.codevHierarchy.test.ts b/apps/server/src/orchestration/projector.codevHierarchy.test.ts
+index 2873e8f22..bb0470afe 100644
+--- a/apps/server/src/orchestration/projector.codevHierarchy.test.ts
++++ b/apps/server/src/orchestration/projector.codevHierarchy.test.ts
+@@ -122,6 +122,124 @@ async function rebuild(events: ReadonlyArray<OrchestrationEvent>) {
+   return model;
+ }
+ 
++/**
++ * Codev customization (spec 250) — the gate through the PROJECTOR.
++ *
++ * Review's finding, and it is the sharpest one in phase 4: nothing asserted that
++ * the read model applies either gate event. Every decider test hand-builds its
++ * read model, so a projector that dropped `gateRevision` would pass all eleven of
++ * them while every write after the first re-allocated revision 1 — which is
++ * precisely the failure the revision mechanism exists to prevent, invisible to
++ * the suite that was meant to protect it.
++ *
++ * These read the mark back out of a projected model, so a projector that forgets
++ * it fails here.
++ */
++describe("projector: codev gate (spec 250)", () => {
++  const gate = {
++    gateName: "plan-approval",
++    requestedAt: NOW,
++    question: "Ship it?",
++    choices: [{ label: "Ship", consequence: "It ships." }],
++  };
++
++  const gateSet = (sequence: number, gateRevision: number) =>
++    makeEvent({
++      sequence,
++      type: "codev.gate-set",
++      aggregateKind: "thread",
++      aggregateId: "thread-a",
++      payload: { threadId: "thread-a", gate, gateRevision, updatedAt: NOW },
++    });
++
++  const gateCleared = (sequence: number, gateRevision: number) =>
++    makeEvent({
++      sequence,
++      type: "codev.gate-cleared",
++      aggregateKind: "thread",
++      aggregateId: "thread-a",
++      payload: { threadId: "thread-a", gateRevision, updatedAt: NOW },
++    });
++
++  it("applies a gate and its revision to the read model", async () => {
++    const model = await rebuild([
++      projectCreated,
++      preForkThreadCreated(2, "thread-a"),
++      gateSet(3, 1),
++    ]);
++    const thread = model.threads.find((t) => t.id === "thread-a");
++    expect(thread?.codevGate?.gateName).toBe("plan-approval");
++    expect(thread?.gateRevision).toBe(1);
++  });
++
++  it("a new thread starts with no gate at revision 0", async () => {
++    const model = await rebuild([projectCreated, preForkThreadCreated(2, "thread-a")]);
++    const thread = model.threads.find((t) => t.id === "thread-a");
++    expect(thread?.codevGate ?? null).toBeNull();
++    expect(thread?.gateRevision).toBe(0);
++  });
++
++  /**
++   * The one that catches a dropped mark. If the projector ignored `gateRevision`
++   * every thread would read 0 forever, the decider would allocate 1 on every
++   * write, and criterion 10 would be unenforceable — while the decider's own
++   * tests, which never touch a projected model, stayed green.
++   */
++  it("carries the mark forward so the next allocation is not 1 again", async () => {
++    const model = await rebuild([
++      projectCreated,
++      preForkThreadCreated(2, "thread-a"),
++      gateSet(3, 1),
++      gateCleared(4, 2),
++      gateSet(5, 3),
++    ]);
++    const thread = model.threads.find((t) => t.id === "thread-a");
++    expect(thread?.gateRevision).toBe(3);
++    expect(thread?.gateRevision).not.toBe(0);
++    expect(thread?.gateRevision).not.toBe(1);
++  });
++
++  it("clearing removes the gate but RAISES the mark", async () => {
++    const model = await rebuild([
++      projectCreated,
++      preForkThreadCreated(2, "thread-a"),
++      gateSet(3, 5),
++      gateCleared(4, 6),
++    ]);
++    const thread = model.threads.find((t) => t.id === "thread-a");
++    // The block is gone and the mark is higher than the gate that set it. This
++    // is what makes a stale write unable to resurrect an answered gate.
++    expect(thread?.codevGate ?? null).toBeNull();
++    expect(thread?.gateRevision).toBe(6);
++  });
++
++  it("a gate on one thread does not touch another", async () => {
++    const model = await rebuild([
++      projectCreated,
++      preForkThreadCreated(2, "thread-a"),
++      preForkThreadCreated(3, "thread-b"),
++      gateSet(4, 1),
++    ]);
++    const other = model.threads.find((t) => t.id === "thread-b");
++    expect(other?.codevGate ?? null).toBeNull();
++    expect(other?.gateRevision).toBe(0);
++  });
++
++  it("a rebuild over the same log reproduces the mark, not just the gate", async () => {
++    const events = [
++      projectCreated,
++      preForkThreadCreated(2, "thread-a"),
++      gateSet(3, 1),
++      gateCleared(4, 2),
++    ];
++    const first = await rebuild(events);
++    const second = await rebuild(events);
++    expect(second.threads.map((t) => [t.id, t.gateRevision, t.codevGate])).toEqual(
++      first.threads.map((t) => [t.id, t.gateRevision, t.codevGate]),
++    );
++  });
++});
++
+ describe("projector: codev thread hierarchy (spec 250)", () => {
+   it("rebuilds a pre-fork event log, reading the hierarchy as not recorded", async () => {
+     const model = await rebuild([
+diff --git a/apps/server/src/ws.ts b/apps/server/src/ws.ts
+index ae895c634..4613d2f99 100644
+--- a/apps/server/src/ws.ts
++++ b/apps/server/src/ws.ts
+@@ -1194,14 +1194,18 @@ const makeWsRpcLayer = (
+               const { events } = yield* dispatchFromClient(command).pipe(
+                 Effect.mapError((cause) =>
+                   // The decider's own refusal — a stale revision, or no such
+-                  // thread — arrives here already named. Anything else is
+-                  // reported as the thread lookup failing rather than being
+-                  // given a reason it did not have.
++                  // thread — arrives here already named, and is passed through
++                  // untouched.
++                  //
++                  // Everything else is CODEV_GATE_WRITE_FAILED, NOT
++                  // "thread not found". A database error relabelled as a missing
++                  // thread sends a caller to look for a thread that is there,
++                  // and hides a broken database behind ordinary caller error.
+                   cause instanceof CodevGateWriteError
+                     ? cause
+                     : new CodevGateWriteError({
+-                        reason: "CODEV_GATE_THREAD_NOT_FOUND",
+-                        message: `Gate write refused: ${String(cause)}`,
++                        reason: "CODEV_GATE_WRITE_FAILED",
++                        message: `Gate write failed: ${String(cause)}`,
+                         cause,
+                       }),
+                 ),
+@@ -1218,14 +1222,20 @@ const makeWsRpcLayer = (
+                 committed === undefined ||
+                 (committed.type !== "codev.gate-set" && committed.type !== "codev.gate-cleared")
+               ) {
+-                // Reported as unconfirmed, never as applied. The write may well
+-                // have landed; what we cannot do is tell the caller which
+-                // revision it got, and a guessed revision is worse than none.
++                // Unconfirmed, and spelled as such. This is the ROUTINE retry
++                // path, not a rare defensive one: an idempotent replay of the
++                // same commandId commits nothing and returns no events, landing
++                // here every time. Labelling it THREAD_NOT_FOUND reported a
++                // normal retry as a nonexistent thread.
++                //
++                // The write may well have applied. What cannot be done is name
++                // its revision, and a guessed revision is worse than none.
+                 return yield* new CodevGateWriteError({
+-                  reason: "CODEV_GATE_THREAD_NOT_FOUND",
++                  reason: "CODEV_GATE_WRITE_UNCONFIRMED",
+                   message:
+-                    "Gate write committed but its event could not be read back; the revision is " +
+-                    "unconfirmed. Re-read the thread rather than assuming this write applied.",
++                    "Gate write produced no event to read a revision from — most likely a replay " +
++                    "of a commandId that already committed. Re-read the thread: do not assume " +
++                    "this write applied, and do not assume it did not.",
+                 });
+               }
+ 
+diff --git a/packages/contracts/src/orchestration.ts b/packages/contracts/src/orchestration.ts
+index be111a3dd..9f460701f 100644
+--- a/packages/contracts/src/orchestration.ts
++++ b/packages/contracts/src/orchestration.ts
+@@ -2033,9 +2033,28 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<O
+  *   CODEV_GATE_THREAD_NOT_FOUND no such thread.
+  */
+ export const CodevGateWriteErrorReason = Schema.Literals([
+-  "CODEV_GATE_SCOPE_REQUIRED",
+   "CODEV_GATE_REVISION_STALE",
+   "CODEV_GATE_THREAD_NOT_FOUND",
++  /**
++   * The write may have landed and we cannot say which revision it got.
++   *
++   * Its own reason, because "I could not tell" must never share a spelling with
++   * "no". It was briefly reported as THREAD_NOT_FOUND, which is a definite
++   * negative about a definite thing — and it is not a rare defensive path: an
++   * idempotent replay of the same `commandId` commits nothing, returns no events,
++   * and lands here EVERY time. A normal retry was being reported as a
++   * nonexistent thread.
++   *
++   * A caller receiving this re-reads the thread. It must not assume the write
++   * applied, and must not assume it did not.
++   */
++  "CODEV_GATE_WRITE_UNCONFIRMED",
++  /**
++   * Something failed that is none of the above — a database error, a decode
++   * failure. Named rather than folded into THREAD_NOT_FOUND, which would hide a
++   * broken database behind a signal that reads like ordinary caller error.
++   */
++  "CODEV_GATE_WRITE_FAILED",
+ ]);
+ export type CodevGateWriteErrorReason = typeof CodevGateWriteErrorReason.Type;
+ 

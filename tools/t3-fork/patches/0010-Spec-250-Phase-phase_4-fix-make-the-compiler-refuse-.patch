@@ -1,0 +1,212 @@
+From 570cc29dc63ca1e64401e9ddd3823a64fa32dd49 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 19:08:27 -0600
+Subject: [PATCH 10/12] [Spec 250][Phase: phase_4] fix: make the compiler
+ refuse an unclassified refusal
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Architect ruling: not a follow-up. Three occurrences of one mistake in one
+project is a structural defect, and a follow-up issue is a promise to hit
+it a fourth time.
+
+isRefusal was a hand-written disjunction of type guards over a structural
+union. Adding a member to OrchestrationDispatchError and forgetting the
+predicate compiled cleanly and silently dropped the new member — twice in
+this spec, both times making a refusal reach the caller as "Failed to
+generate an event identifier", and the second time making criterion 10
+false at the wire.
+
+dispatchErrorKind now classifies EVERY member in a switch whose default
+assigns to `never`, and isRefusal reads that classification instead of
+keeping its own list. Adding a member without classifying it does not
+compile, and the error names the type:
+
+  error TS2322: Type 'ProbeUnclassifiedError' is not assignable to type 'never'.
+
+Verified by doing exactly that — a fourth member added, the build confirmed
+to fail, the member removed.
+
+At runtime an unrecognised error classifies as internal, which is the safe
+direction: a refusal misclassified as internal is a worse message, while an
+internal error misclassified as a refusal is a lie about whose fault it
+was.
+
+Three tests assert the classification itself, so a member silently moved
+between the two groups fails even though it still compiles.
+
+Server 2835 passed, 8 skipped.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ ...OrchestrationEngine.codevHierarchy.test.ts | 46 +++++++++-
+ .../Layers/OrchestrationEngine.ts             | 86 ++++++++++++++++---
+ 2 files changed, 117 insertions(+), 15 deletions(-)
+
+diff --git a/apps/server/src/orchestration/Layers/OrchestrationEngine.codevHierarchy.test.ts b/apps/server/src/orchestration/Layers/OrchestrationEngine.codevHierarchy.test.ts
+index ba7084b55..097d5a790 100644
+--- a/apps/server/src/orchestration/Layers/OrchestrationEngine.codevHierarchy.test.ts
++++ b/apps/server/src/orchestration/Layers/OrchestrationEngine.codevHierarchy.test.ts
+@@ -31,7 +31,7 @@ import { OrchestrationEventStoreLive } from "../../persistence/Layers/Orchestrat
+ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+ import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
+ import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
+-import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
++import { OrchestrationEngineLive, dispatchErrorKind } from "./OrchestrationEngine.ts";
+ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
+ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
+ import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
+@@ -143,6 +143,50 @@ async function dispatchFailure(
+   return (outcome as { failure: unknown }).failure;
+ }
+ 
++/**
++ * The exhaustiveness check that replaced three fixes of the same bug.
++ *
++ * The COMPILER is the real test — adding a member to `OrchestrationDispatchError`
++ * without classifying it fails the build, verified by doing exactly that and
++ * watching tsc name the forgotten type. These assert the classification itself,
++ * so a member silently moved from "refusal" to "internal" also fails.
++ */
++describe("dispatch error classification (spec 250)", () => {
++  const refusals = [
++    "OrchestrationCommandInvariantError",
++    "CodevHierarchyInvalidError",
++    "CodevGateWriteError",
++  ] as const;
++
++  const internals = [
++    "PersistenceSqlError",
++    "PersistenceDecodeError",
++    "OrchestrationCommandIdConflictError",
++    "OrchestrationCommandPreviouslyRejectedError",
++    "OrchestrationProjectorDecodeError",
++    "OrchestrationListenerCallbackError",
++  ] as const;
++
++  it("classifies every refusal as a refusal", () => {
++    for (const tag of refusals) {
++      expect(dispatchErrorKind({ _tag: tag } as never), `${tag} must be a refusal`).toBe("refusal");
++    }
++  });
++
++  it("classifies everything else as internal", () => {
++    for (const tag of internals) {
++      expect(dispatchErrorKind({ _tag: tag } as never), `${tag} must be internal`).toBe("internal");
++    }
++  });
++
++  it("treats an unrecognised error as internal, not as a refusal", () => {
++    // The safe direction. A refusal misclassified as internal is a worse
++    // message; an internal error misclassified as a refusal is a lie about
++    // whose fault it was.
++    expect(dispatchErrorKind({ _tag: "SomethingFromTheFuture" } as never)).toBe("internal");
++  });
++});
++
+ describe("OrchestrationEngine: codev hierarchy refusals (spec 250)", () => {
+   it("surfaces the reason discriminant through the engine, not a generic invariant error", async () => {
+     const system = await seededSystem();
+diff --git a/apps/server/src/orchestration/Layers/OrchestrationEngine.ts b/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
+index ac5266f18..a8a4ce3cd 100644
+--- a/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
++++ b/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
+@@ -67,25 +67,83 @@ const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvar
+  * decider tests stayed green, because they call the decider directly.
+  */
+ const isCodevHierarchyInvalidError = Schema.is(CodevHierarchyInvalidError);
+-const isCodevGateWriteError = Schema.is(CodevGateWriteError);
++/**
++ * Every dispatch error, classified — and the compiler will not let you skip one.
++ *
++ * THIS EXISTS BECAUSE THE SAME BUG SHIPPED THREE TIMES. `isRefusal` used to be a
++ * hand-written disjunction of type guards over a structural union. Adding a
++ * member to `OrchestrationDispatchError` and forgetting the predicate compiles
++ * cleanly and silently drops the new member, so:
++ *
++ *   - spec 250 phase 3: `CodevHierarchyInvalidError` was rewritten as "Failed to
++ *     generate an event identifier" and persisted onto the rejected receipt;
++ *   - spec 250 phase 4: `CodevGateWriteError` the same way, which made criterion
++ *     10 false at the wire while every decider test stayed green.
++ *
++ * Both were found by review, not by the suite, because the suite tested one layer
++ * below the one that broke them. A follow-up issue would have been a promise to
++ * hit it a fourth time.
++ *
++ * The `never` assignment in `default` is the mechanism: when every member is
++ * handled, `error` narrows to `never` and the line compiles. Add a member to
++ * `OrchestrationDispatchError` without a case here and it does not — the build
++ * fails at the place that needs the decision, naming the type you forgot.
++ *
++ * At runtime `default` returns `"internal"`, so a foreign error is not a refusal.
++ * That is the safe answer: a refusal misclassified as internal is a worse message,
++ * while an internal error misclassified as a refusal is a lie about whose fault
++ * it was.
++ */
++type DispatchErrorKind = "refusal" | "internal";
++
++export const dispatchErrorKind = (error: OrchestrationDispatchError): DispatchErrorKind => {
++  switch (error._tag) {
++    // Refusals: the command was understood and declined. The caller acts on these.
++    case "OrchestrationCommandInvariantError":
++    case "CodevHierarchyInvalidError":
++    case "CodevGateWriteError":
++      return "refusal";
++
++    // Everything else: the command may have been fine and something under it
++    // failed. The caller cannot act on these beyond retrying.
++    case "PersistenceSqlError":
++    case "PersistenceDecodeError":
++    case "OrchestrationCommandIdConflictError":
++    case "OrchestrationCommandPreviouslyRejectedError":
++    case "OrchestrationProjectorDecodeError":
++    case "OrchestrationListenerCallbackError":
++      return "internal";
++
++    default: {
++      // COMPILE-TIME EXHAUSTIVENESS. If this line stops compiling, a member was
++      // added to OrchestrationDispatchError and not classified above. Classify
++      // it — and if it is a refusal, that is all you need to do: `isRefusal`
++      // reads this function rather than keeping its own list.
++      const unclassified: never = error;
++      void unclassified;
++      return "internal";
++    }
++  }
++};
++
++/** A dispatch error the caller is meant to act on, as opposed to retry. */
++export type OrchestrationRefusal = Extract<
++  OrchestrationDispatchError,
++  { readonly _tag: "OrchestrationCommandInvariantError" | "CodevHierarchyInvalidError" | "CodevGateWriteError" }
++>;
+ 
+ /**
+  * Errors that describe a REFUSAL and must reach the dispatcher intact.
+  *
+- * EVERY refusal type has to be listed here. Phase 3 fixed this function once,
+- * for `CodevHierarchyInvalidError`; phase 4 added a third refusal type and did
+- * not extend it, so gate refusals were rewritten as "Failed to generate an event
+- * identifier" and criterion 10 was false at the wire while all 11 decider tests
+- * stayed green. Both review lanes caught it. Adding a refusal type without adding
+- * it here is the same bug a third time.
++ * Derived from `dispatchErrorKind` rather than keeping a second list, so there is
++ * one place to update and the compiler guards it.
+  */
+-const isRefusal = (cause: unknown): cause is
+-  | OrchestrationCommandInvariantError
+-  | CodevHierarchyInvalidError
+-  | CodevGateWriteError =>
+-  isOrchestrationCommandInvariantError(cause) ||
+-  isCodevHierarchyInvalidError(cause) ||
+-  isCodevGateWriteError(cause);
++const isRefusal = (cause: unknown): cause is OrchestrationRefusal =>
++  typeof cause === "object" &&
++  cause !== null &&
++  "_tag" in cause &&
++  typeof (cause as { readonly _tag: unknown })._tag === "string" &&
++  dispatchErrorKind(cause as OrchestrationDispatchError) === "refusal";
+ 
+ interface CommandEnvelope {
+   command: OrchestrationCommand;

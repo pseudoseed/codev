@@ -90,11 +90,20 @@ It is not a false positive and it is not a formatting nit. Read the diff.
    `1` and classifies nothing.
 
 3. Move the pins. Edit `packages/types/src/t3/pin.json`: `upstreamBase` to the new upstream
-   commit, `commit` to the fork head that now sits on top of it, plus `commitDate` and
-   `effectVersion` if t3code's catalog moved. If `effectVersion` changed, update the
+   commit and `upstreamBaseDate` to its date, `commit` to the fork head that now sits on top of
+   it and `commitDate` to *its* date, plus `effectVersion` if t3code's catalog moved. There is one
+   date per identity because the two commits are no longer the same commit — a single date would
+   be right for one and wrong for the other. If `effectVersion` changed, update the
    `devDependencies` in `tools/t3-codegen/package.json` to match and reinstall — generating with
    a different Effect than the server was built against produces artifacts that describe nothing
    real.
+
+   `pin.methods` is the vendoring list, and it is not derived: `generate.mjs` iterates it, so a
+   method the fork adds and this map does not name is silently never vendored. An entry whose
+   `source` names a vendored file (`git.ts` for `vcs.*`, `orchestration.ts` for
+   `codev.gateWrite`) is one whose method string lives in the unvendored `rpc.ts` — those are
+   hand-recorded on purpose. `codev.gateWrite`'s schemas exist only in the fork; a refresh that
+   moves the pin back to upstream must remove it or generation fails.
 
 4. Put both checkouts on their pins and regenerate:
 
@@ -120,7 +129,19 @@ It is not a false positive and it is not a formatting nit. Read the diff.
    `$T3CODE_FORK_ROOT`, in two separately-gated suites, so a stale regeneration fails here and a
    run missing one checkout reports that suite as skipped rather than passing it.
 
-7. Commit the pin and the regenerated artifacts **together**. A pin without its artifacts, or
+7. Re-export the review patches, because they are cut against `pin.commit`:
+
+   ```bash
+   rm -f ../t3-fork/patches/*.patch
+   git -C "$T3CODE_FORK_ROOT" format-patch --no-signature \
+     -o ../t3-fork/patches <upstreamBase>..<fork head>
+   ```
+
+   They are a **review aid** — the customization readable by someone without the private
+   repository — and not how the fork is built or rebased. `tools/t3-fork/FORK.md` says so
+   there too.
+
+8. Commit the pin and the regenerated artifacts **together**. A pin without its artifacts, or
    artifacts without their pin, is worse than either alone — the drift test then compares against
    something nobody chose.
 

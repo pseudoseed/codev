@@ -94,9 +94,14 @@ records which state we are in:
 | `upstream` (phases 1-4) | `FORK_AHEAD_OF_CONTRACT`, exit `0` | `FORK_CHECKOUT_MISMATCH`, exit `1` |
 | `fork` (phase 5 onward) | `FORK_AHEAD_OF_CONTRACT`, exit `1` | `FORK_CHECKOUT_MISMATCH`, exit `1` |
 
-The tolerated case is reported, not silenced — it prints on every run. It is spelled differently
-from a real error on purpose: a signal that fires for three phases straight is one people learn to
-ignore, and then it fires for a real reason and nobody looks.
+**`contractSource` is now `fork`.** Phase 5 regenerated, so the tolerated row is history: a
+checkout ahead of `pin.commit` means the vendored contract is stale and `verify` exits `1`. The
+next customization commit therefore turns the suite red until the contract is regenerated from it,
+which is the intended cost of vendoring a moving source.
+
+The tolerated case was reported, not silenced — it printed on every run. It was spelled
+differently from a real error on purpose: a signal that fires for three phases straight is one
+people learn to ignore, and then it fires for a real reason and nobody looks.
 
 A contract commit the fork repository does not contain at all is `NO_FORK_ANCESTRY`, exit `3`.
 Whether HEAD descends from a commit that is not there is not a question git can answer.
@@ -130,6 +135,43 @@ constructs `MigrationsLive` itself passes. It is called from `persistence/Layers
 `setup`, which is the path that actually boots the database, and a test asserts the ordering
 against that file rather than against a layer it assembles.
 
+## The exported patches are a review aid
+
+`tools/t3-fork/patches/` holds `git format-patch upstreamBase..pin.commit`, one file per fork
+commit. **It exists to be read.** A reviewer who does not have the private repository can see
+every byte of the customization in the Codev pull request.
+
+**It is not how the fork is built, and not how it is rebased.** The fork is a git repository with
+real history and a real `upstream` remote; it moves forward with `git rebase upstream/main` or a
+merge, against the actual commits. Nothing in this project applies these patches to produce the
+fork, and a patch that fails to apply says nothing about whether the fork is healthy.
+
+They are regenerated whenever `pin.commit` moves:
+
+```bash
+rm -f tools/t3-fork/patches/*.patch
+git -C "$T3CODE_FORK_ROOT" format-patch --no-signature \
+  -o tools/t3-fork/patches <upstreamBase>..<pin.commit>
+```
+
+`--no-signature` matters: without it every patch footer carries the local git version, so the
+files churn whenever someone regenerates them on a different machine.
+
+## Abandoning the fork
+
+The spec keeps `apps/client` as the fallback, so falling back has to be a procedure rather than a
+reconstruction. Four steps:
+
+1. Set `pin.commit` back to `pin.upstreamBase` in `packages/types/src/t3/pin.json`.
+2. Set `pin.contractSource` back to `"upstream"`.
+3. Regenerate: `node tools/t3-codegen/generate.mjs` (Node 22, with the upstream clone present).
+4. Re-run `node tools/t3-server/t3-server.mjs verify`.
+
+Remove `codev.gateWrite` from `pin.methods` in the same edit — its schemas live only in the fork,
+so the generator fails on step 3 if it is left behind. That failure is the procedure working, not
+a problem with it. The fork repository and `tools/t3-fork/patches/` can stay where they are; the
+vendored contract is what decides whether Codev depends on the customization.
+
 ## Phase log
 
 | Phase | Fork commit | What landed |
@@ -147,6 +189,31 @@ against that file rather than against a layer it assembles.
 | 4 | `570cc29dc63c` | `dispatchErrorKind` makes an unclassified dispatch error a **compile error**, replacing the hand-written disjunction that shipped the same bug three times. |
 | 4 | `0254c84e1241` | The gate-writer credential is actually provisioned at server start. It had no production caller — costume one, in the phase that named it. |
 | 4 | `51b55d4899e4` | `OrchestrationRefusal` derived from the `DISPATCH_ERROR_KIND` table instead of hand-listing the same three tags a second time. The classification is one place; a missing member is a missing key. |
+
+**Phase 5 added no row, and that is not an omission.** It regenerated the vendored contract in the
+Codev repository from `51b55d4899e4`; it changed nothing in the fork. The fork's HEAD is the same
+commit phase 4 ended on.
+
+### What the churn classifier could not decide, decided
+
+`classify-churn.mjs --fork-drift` reports three commits as `consumed-change-undecidable`. That is
+the classifier refusing to guess inside a union, not a pass, so phase 5 decided them by hand and
+recorded the answer here. Reproduce the diff by emitting the JSON Schema for each method at
+`upstreamBase` and at `pin.commit` and comparing union members by discriminant:
+
+| Method | Direction | Change | Verdict |
+|---|---|---|---|
+| `orchestration.subscribeThread` | output | `role`, `parentThreadId`, `codevGate`, `gateRevision` added to the snapshot thread; `role`/`parentThreadId` added to the `thread.created` payload | non-breaking |
+| `orchestration.subscribeThread` | output | two alternatives added to the `OrchestrationEvent` union: `codev.gate-set`, `codev.gate-cleared` | **breaking for a client on the pre-regeneration contract**, non-breaking after |
+| `orchestration.dispatchCommand` | input | `role`, `parentThreadId` added to `thread.create`, both optional | non-breaking |
+
+Nothing was removed, nothing became required, no type narrowed, no enum lost a member, and
+`additionalProperties` did not tighten anywhere. The one change that is genuinely breaking is the
+pair of new event alternatives, and it breaks in exactly one direction: a client shape-checking the
+stream against the **upstream-generated** contract rejects a `codev.gate-set` frame, because the
+frame matches no member of the union it knows. That is the defect this phase closes — regenerating
+is the fix, and `spec-250-generated-contract.test.ts` holds the before-and-after so the claim is
+measured rather than asserted.
 
 ### Migration 900 is abandoned, and must stay abandoned
 

@@ -1,0 +1,591 @@
+From 57d24ddcb3be0fe1b893948274dadc466c67b81e Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 18:05:59 -0600
+Subject: [PATCH 07/12] [Spec 250][Phase: phase_4] test: the revision rules,
+ the scope exclusions, the payload bounds
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+29 tests across three files, each aimed at a property a wrong
+implementation would still pass most tests on.
+
+Revision (11): allocation comes from the CURRENT mark rather than zero, so
+a writer that restarted and forgot everything still gets a higher number —
+the property a writer-held counter breaks, and its failure mode is every
+later gate rendering as "no gate pending", a false negative exactly where a
+human is waiting. Clearing RAISES the mark. Criterion 10 is a direct test:
+clear an approved gate, deliver a lower revision, and the gate does not
+come back — which only holds because the mark outlived the block it
+described. Equal is refused as well as lower.
+
+Scope (7): the tests are the EXCLUSIONS, because that is where this scope's
+value is. Not in AuthStandardClientScopes, not in AuthAdministrativeScopes,
+and it guards exactly one method. One test pins that dispatchCommand still
+requires only orchestration:operate — which is the reason the gate cannot
+ride on it. One asserts against the contract source that neither gate
+command appears in the client unions, because that property is an absence
+and an absence has no runtime value to inspect.
+
+Payload bounds (11): six choices, an empty choices array, two recommended
+choices, a multi-line question, an empty gate name, a choice with no
+consequence, and both size caps — all refused at the schema boundary, so a
+gate never partially applies. Half a question is worse than no gate: it
+looks answerable. A multi-line terminal excerpt IS allowed, because that
+one renders as a block.
+
+Fork typecheck green; contracts 301 passed, server 2815 passed.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/server/src/auth/CodevGateScope.test.ts   | 111 +++++++
+ .../orchestration/decider.codevGate.test.ts   | 277 ++++++++++++++++++
+ packages/contracts/src/orchestration.test.ts  | 129 ++++++++
+ 3 files changed, 517 insertions(+)
+ create mode 100644 apps/server/src/auth/CodevGateScope.test.ts
+ create mode 100644 apps/server/src/orchestration/decider.codevGate.test.ts
+
+diff --git a/apps/server/src/auth/CodevGateScope.test.ts b/apps/server/src/auth/CodevGateScope.test.ts
+new file mode 100644
+index 000000000..4f2c7ab38
+--- /dev/null
++++ b/apps/server/src/auth/CodevGateScope.test.ts
+@@ -0,0 +1,111 @@
++/**
++ * Codev customization (spec 250) — `codev:gate-write`.
++ *
++ * The scope's value is entirely in what it is NOT attached to. A scope that ends
++ * up in the standard client set, or in the token allowlist, grants gate-writing
++ * to exactly the callers it exists to exclude — and nothing about the code would
++ * look wrong. These are the exclusions, asserted.
++ */
++
++import {
++  AuthAdministrativeScopes,
++  AuthCodevGateWriteScope,
++  AuthEnvironmentScope,
++  AuthOrchestrationOperateScope,
++  AuthStandardClientScopes,
++  CODEV_WS_METHODS,
++  ORCHESTRATION_WS_METHODS,
++} from "@t3tools/contracts";
++import * as Schema from "effect/Schema";
++import { describe, expect, it } from "vite-plus/test";
++
++import { RPC_REQUIRED_SCOPES, requiredScopeForRpcMethod } from "./RpcAuthorization.ts";
++
++describe("codev:gate-write scope (spec 250)", () => {
++  it("is a real environment scope", () => {
++    const decode = Schema.decodeUnknownSync(AuthEnvironmentScope);
++    expect(decode(AuthCodevGateWriteScope)).toBe("codev:gate-write");
++  });
++
++  it("is NOT in the standard client scope set", () => {
++    // Every ordinary client is issued this set. Membership here would hand gate
++    // writing to every connected UI.
++    expect([...AuthStandardClientScopes]).not.toContain(AuthCodevGateWriteScope);
++  });
++
++  it("is NOT in the administrative scope set either", () => {
++    // Administrative is "an operator with full reach", which is still not the
++    // single out-of-band credential this scope is for.
++    expect([...AuthAdministrativeScopes]).not.toContain(AuthCodevGateWriteScope);
++  });
++
++  it("guards the gate RPC method, and only that method", () => {
++    expect(requiredScopeForRpcMethod(CODEV_WS_METHODS.gateWrite)).toBe(AuthCodevGateWriteScope);
++
++    const guarded = Object.entries(RPC_REQUIRED_SCOPES)
++      .filter(([, scope]) => scope === AuthCodevGateWriteScope)
++      .map(([method]) => method);
++    expect(guarded).toEqual([CODEV_WS_METHODS.gateWrite]);
++  });
++
++  /**
++   * The reason the gate has its own method at all.
++   *
++   * `RPC_REQUIRED_SCOPES` maps the METHOD, not the command type. If gate writes
++   * rode on `dispatchCommand`, this row is the only thing that could have
++   * authorized them — and it says `orchestration:operate`, which every operator
++   * holds.
++   */
++  it("dispatchCommand still requires only orchestration:operate, which is why the gate cannot ride on it", () => {
++    expect(requiredScopeForRpcMethod(ORCHESTRATION_WS_METHODS.dispatchCommand)).toBe(
++      AuthOrchestrationOperateScope,
++    );
++    expect(requiredScopeForRpcMethod(ORCHESTRATION_WS_METHODS.dispatchCommand)).not.toBe(
++      AuthCodevGateWriteScope,
++    );
++  });
++
++  it("a caller holding only orchestration:operate does not hold the gate scope", () => {
++    const operatorScopes = [...AuthStandardClientScopes];
++    expect(operatorScopes).toContain(AuthOrchestrationOperateScope);
++    expect(operatorScopes).not.toContain(AuthCodevGateWriteScope);
++  });
++});
++
++describe("codev gate commands stay off the dispatchCommand payload (spec 250)", () => {
++  /**
++   * Asserted against the contract SOURCE, because the property is an absence and
++   * an absence has no runtime value to inspect. If `codev.gate.set` ever appears
++   * in either client union, every holder of `orchestration:operate` can write
++   * gates and the scope above becomes decorative.
++   */
++  it("neither gate command appears in the client command unions", async () => {
++    const { readFileSync } = await import("node:fs");
++    const { fileURLToPath } = await import("node:url");
++    const source = readFileSync(
++      fileURLToPath(new URL("../../../../packages/contracts/src/orchestration.ts", import.meta.url)),
++      "utf8",
++    );
++
++    const unionOf = (name: string) => {
++      const start = source.indexOf(`const ${name} = Schema.Union([`);
++      expect(start, `${name} must exist`).toBeGreaterThan(-1);
++      return source.slice(start, source.indexOf("]);", start));
++    };
++
++    for (const union of ["DispatchableClientOrchestrationCommand", "ClientOrchestrationCommand"]) {
++      const body = unionOf(union);
++      expect(body, `${union} must not carry CodevGateSetCommand`).not.toContain(
++        "CodevGateSetCommand",
++      );
++      expect(body, `${union} must not carry CodevGateClearCommand`).not.toContain(
++        "CodevGateClearCommand",
++      );
++    }
++
++    // And they ARE reachable internally, or the decider could never see them.
++    const internal = unionOf("InternalOrchestrationCommand");
++    expect(internal).toContain("CodevGateSetCommand");
++    expect(internal).toContain("CodevGateClearCommand");
++  });
++});
+diff --git a/apps/server/src/orchestration/decider.codevGate.test.ts b/apps/server/src/orchestration/decider.codevGate.test.ts
+new file mode 100644
+index 000000000..f4ab3b673
+--- /dev/null
++++ b/apps/server/src/orchestration/decider.codevGate.test.ts
+@@ -0,0 +1,277 @@
++/**
++ * Codev customization (spec 250) — the gate's server-allocated revision.
++ *
++ * The revision is the whole mechanism, and every property below is one a wrong
++ * implementation would still pass most tests on:
++ *
++ *  - it is allocated by the SERVER, so a writer that restarts cannot reset it;
++ *  - it survives a clear, so a stale write cannot resurrect an answered gate;
++ *  - EQUAL is refused as well as lower, because two writers that computed the
++ *    same number are colliding, not agreeing.
++ */
++
++import {
++  CommandId,
++  ProjectId,
++  ProviderInstanceId,
++  ThreadId,
++  CodevGateWriteError,
++  type CodevGate,
++  type OrchestrationEvent,
++  type OrchestrationReadModel,
++  type OrchestrationThread,
++} from "@t3tools/contracts";
++import * as NodeServices from "@effect/platform-node/NodeServices";
++import { assert, expect, it } from "@effect/vitest";
++import * as Effect from "effect/Effect";
++
++import { decideOrchestrationCommand } from "./decider.ts";
++
++const NOW = "2026-01-01T00:00:00.000Z";
++
++const GATE: CodevGate = {
++  gateName: "plan-approval",
++  requestedAt: NOW,
++  question: "Delete the legacy table, or keep it for audit purposes?",
++  choices: [
++    { label: "Delete it", consequence: "Migrate references and drop it.", recommended: true },
++    { label: "Keep it", consequence: "Retain the table and document the dependency." },
++  ],
++};
++
++function thread(input: {
++  readonly id?: string;
++  readonly gateRevision?: number;
++  readonly codevGate?: CodevGate | null;
++}): OrchestrationThread {
++  return {
++    id: ThreadId.make(input.id ?? "thread-1"),
++    projectId: ProjectId.make("project-1"),
++    title: "Thread",
++    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
++    runtimeMode: "full-access",
++    interactionMode: "default",
++    branch: null,
++    worktreePath: null,
++    role: null,
++    parentThreadId: null,
++    codevGate: input.codevGate ?? null,
++    gateRevision: input.gateRevision ?? 0,
++    latestTurn: null,
++    createdAt: NOW,
++    updatedAt: NOW,
++    archivedAt: null,
++    settledOverride: null,
++    settledAt: null,
++    snoozedUntil: null,
++    snoozedAt: null,
++    pinnedAt: null,
++    pinOrderKey: null,
++    deletedAt: null,
++    messages: [],
++    proposedPlans: [],
++    activities: [],
++    checkpoints: [],
++    session: null,
++  } as OrchestrationThread;
++}
++
++const readModel = (threads: ReadonlyArray<OrchestrationThread>): OrchestrationReadModel =>
++  ({ snapshotSequence: 0, projects: [], threads, updatedAt: NOW }) as OrchestrationReadModel;
++
++const setGate = (input: { readonly commandId: string; readonly revision?: number }) => ({
++  type: "codev.gate.set" as const,
++  commandId: CommandId.make(input.commandId),
++  threadId: ThreadId.make("thread-1"),
++  gate: GATE,
++  ...(input.revision === undefined ? {} : { revision: input.revision }),
++  createdAt: NOW,
++});
++
++const clearGate = (input: { readonly commandId: string; readonly revision?: number }) => ({
++  type: "codev.gate.clear" as const,
++  commandId: CommandId.make(input.commandId),
++  threadId: ThreadId.make("thread-1"),
++  ...(input.revision === undefined ? {} : { revision: input.revision }),
++  createdAt: NOW,
++});
++
++const decide = (command: unknown, model: OrchestrationReadModel) =>
++  Effect.map(
++    decideOrchestrationCommand({ command: command as never, readModel: model }),
++    (event) => (Array.isArray(event) ? event : [event]) as ReadonlyArray<OrchestrationEvent>,
++  );
++
++const refusal = (command: unknown, model: OrchestrationReadModel) =>
++  Effect.gen(function* () {
++    const outcome = yield* Effect.result(decide(command, model));
++    assert.strictEqual(outcome._tag, "Failure", "the write must be refused");
++    const error = (outcome as { failure: unknown }).failure;
++    assert.ok(error instanceof CodevGateWriteError, `expected CodevGateWriteError, got ${String(error)}`);
++    return error;
++  });
++
++it.layer(NodeServices.layer)("codev gate revision (spec 250)", (it) => {
++  it.effect("allocates the next revision when the command carries none", () =>
++    Effect.gen(function* () {
++      const events = yield* decide(setGate({ commandId: "cmd-1" }), readModel([thread({})]));
++      expect(events[0]?.type).toBe("codev.gate-set");
++      if (events[0]?.type === "codev.gate-set") {
++        // Allocated, not echoed: the command carried no revision at all.
++        expect(events[0].payload.gateRevision).toBe(1);
++        expect(events[0].payload.gate.gateName).toBe("plan-approval");
++      }
++    }),
++  );
++
++  it.effect("allocates from the CURRENT mark, not from zero", () =>
++    Effect.gen(function* () {
++      const events = yield* decide(
++        setGate({ commandId: "cmd-2" }),
++        readModel([thread({ gateRevision: 41 })]),
++      );
++      if (events[0]?.type === "codev.gate-set") {
++        expect(events[0].payload.gateRevision).toBe(42);
++      }
++    }),
++  );
++
++  /**
++   * The property a writer-held counter would break. `codev-agent` restarting and
++   * starting again from 1 would render every later gate as "no gate pending" — a
++   * false negative exactly where a human is waiting.
++   */
++  it.effect("a writer that forgot everything still gets a higher number", () =>
++    Effect.gen(function* () {
++      const events = yield* decide(
++        setGate({ commandId: "cmd-restart" }),
++        readModel([thread({ gateRevision: 9 })]),
++      );
++      if (events[0]?.type === "codev.gate-set") {
++        expect(events[0].payload.gateRevision).toBe(10);
++      }
++    }),
++  );
++
++  it.effect("clearing raises the mark rather than resetting it", () =>
++    Effect.gen(function* () {
++      const events = yield* decide(
++        clearGate({ commandId: "cmd-clear" }),
++        readModel([thread({ gateRevision: 5, codevGate: GATE })]),
++      );
++      expect(events[0]?.type).toBe("codev.gate-cleared");
++      if (events[0]?.type === "codev.gate-cleared") {
++        expect(events[0].payload.gateRevision).toBe(6);
++      }
++    }),
++  );
++
++  /**
++   * Criterion 10, at the decider. Clear an approved gate, then deliver a write
++   * carrying a lower revision; the gate must not reappear.
++   */
++  it.effect("CRITERION 10: a stale write after a clear does not resurrect the gate", () =>
++    Effect.gen(function* () {
++      // The mark survived the clear, so the thread sits at 6 with no gate.
++      const afterClear = readModel([thread({ gateRevision: 6, codevGate: null })]);
++      const error = yield* refusal(setGate({ commandId: "cmd-stale", revision: 4 }), afterClear);
++
++      expect(error.reason).toBe("CODEV_GATE_REVISION_STALE");
++      expect(error.currentRevision).toBe(6);
++      // Had the mark lived inside the gate block it would have vanished with it,
++      // this write would have been the first at revision 4, and the answered gate
++      // would be back in front of a human.
++    }),
++  );
++
++  it.effect("refuses an EQUAL revision, not only a lower one", () =>
++    Effect.gen(function* () {
++      const error = yield* refusal(
++        setGate({ commandId: "cmd-equal", revision: 6 }),
++        readModel([thread({ gateRevision: 6 })]),
++      );
++      expect(error.reason).toBe("CODEV_GATE_REVISION_STALE");
++      expect(error.currentRevision).toBe(6);
++    }),
++  );
++
++  it.effect("accepts a revision that genuinely exceeds the mark", () =>
++    Effect.gen(function* () {
++      const events = yield* decide(
++        setGate({ commandId: "cmd-ahead", revision: 9 }),
++        readModel([thread({ gateRevision: 6 })]),
++      );
++      if (events[0]?.type === "codev.gate-set") {
++        expect(events[0].payload.gateRevision).toBe(9);
++      }
++    }),
++  );
++
++  it.effect("a later gate on the same thread does not resurrect the first", () =>
++    Effect.gen(function* () {
++      const first = yield* decide(setGate({ commandId: "cmd-a" }), readModel([thread({})]));
++      const firstRevision =
++        first[0]?.type === "codev.gate-set" ? first[0].payload.gateRevision : -1;
++
++      const second = yield* decide(
++        setGate({ commandId: "cmd-b" }),
++        readModel([thread({ gateRevision: firstRevision, codevGate: GATE })]),
++      );
++      const secondRevision =
++        second[0]?.type === "codev.gate-set" ? second[0].payload.gateRevision : -1;
++
++      expect(secondRevision).toBeGreaterThan(firstRevision);
++
++      // And the first one's revision is now stale, so a replay of it is refused.
++      const error = yield* refusal(
++        setGate({ commandId: "cmd-a-replay", revision: firstRevision }),
++        readModel([thread({ gateRevision: secondRevision })]),
++      );
++      expect(error.reason).toBe("CODEV_GATE_REVISION_STALE");
++    }),
++  );
++
++  /**
++   * "Two concurrent connections writing gates receive two different revisions."
++   *
++   * Commands are decided serially against the authoritative read model, so the
++   * second decision sees the first's mark. Modelled here as two decisions where
++   * the second's read model reflects the first — which is exactly what the engine
++   * queue produces.
++   */
++  it.effect("two writers receive two different revisions", () =>
++    Effect.gen(function* () {
++      const a = yield* decide(setGate({ commandId: "cmd-w1" }), readModel([thread({})]));
++      const aRevision = a[0]?.type === "codev.gate-set" ? a[0].payload.gateRevision : -1;
++
++      const b = yield* decide(
++        setGate({ commandId: "cmd-w2" }),
++        readModel([thread({ gateRevision: aRevision })]),
++      );
++      const bRevision = b[0]?.type === "codev.gate-set" ? b[0].payload.gateRevision : -1;
++
++      expect(aRevision).not.toBe(bRevision);
++      expect(bRevision).toBeGreaterThan(aRevision);
++    }),
++  );
++
++  it.effect("a historical thread starts at revision 0 and its first write is 1", () =>
++    Effect.gen(function* () {
++      // Rows predating the guard get 0 from the column default, and 0 must be a
++      // real starting point rather than an "unset" sentinel.
++      const events = yield* decide(setGate({ commandId: "cmd-hist" }), readModel([thread({ gateRevision: 0 })]));
++      if (events[0]?.type === "codev.gate-set") {
++        expect(events[0].payload.gateRevision).toBe(1);
++      }
++    }),
++  );
++
++  it.effect("refuses a gate write for a thread that does not exist", () =>
++    Effect.gen(function* () {
++      const outcome = yield* Effect.result(
++        decide(setGate({ commandId: "cmd-missing" }), readModel([])),
++      );
++      expect(outcome._tag).toBe("Failure");
++    }),
++  );
++});
+diff --git a/packages/contracts/src/orchestration.test.ts b/packages/contracts/src/orchestration.test.ts
+index 0ee8fd20e..fb5cf7b67 100644
+--- a/packages/contracts/src/orchestration.test.ts
++++ b/packages/contracts/src/orchestration.test.ts
+@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
+ import * as Schema from "effect/Schema";
+ 
+ import {
++  CodevGate,
+   DEFAULT_PROVIDER_INTERACTION_MODE,
+   DEFAULT_RUNTIME_MODE,
+   ClientOrchestrationCommand,
+@@ -1176,3 +1177,131 @@ it.effect("decodes thread and shell with the hierarchy present and absent", () =
+     assert.strictEqual(explicitNull.parentThreadId, null);
+   }),
+ );
++
++// ---------------------------------------------------------------------------
++// Codev customization (spec 250) — the gate payload's bounds.
++//
++// The bounds are at the SCHEMA boundary, so an oversize or malformed gate is
++// refused whole. A gate that partially applied would leave a human looking at
++// half a question, and "half a question" is worse than no gate at all: it looks
++// answerable.
++
++const decodeCodevGate = Schema.decodeUnknownEffect(CodevGate);
++
++const validGate = {
++  gateName: "plan-approval",
++  requestedAt: "2026-01-01T00:00:00.000Z",
++  question: "Delete the legacy table, or keep it?",
++  choices: [
++    { label: "Delete it", consequence: "Migrate references and drop it.", recommended: true },
++    { label: "Keep it", consequence: "Retain it and document the dependency." },
++  ],
++};
++
++const gateRefused = (gate: unknown) =>
++  Effect.map(Effect.result(decodeCodevGate(gate)), (outcome) => outcome._tag === "Failure");
++
++it.effect("accepts a well-formed gate with a recommended choice", () =>
++  Effect.gen(function* () {
++    const gate = yield* decodeCodevGate(validGate);
++    assert.strictEqual(gate.gateName, "plan-approval");
++    assert.strictEqual(gate.choices?.length, 2);
++  }),
++);
++
++it.effect("accepts a gate with no question and no choices", () =>
++  Effect.gen(function* () {
++    // The structured request is optional; a bare gate name is still a gate, and
++    // porch's plain `porch gate` form produces exactly this.
++    const gate = yield* decodeCodevGate({
++      gateName: "spec-approval",
++      requestedAt: "2026-01-01T00:00:00.000Z",
++    });
++    assert.strictEqual(gate.gateName, "spec-approval");
++  }),
++);
++
++it.effect("refuses six choices", () =>
++  Effect.gen(function* () {
++    const six = Array.from({ length: 6 }, (_, index) => ({
++      label: `Option ${index}`,
++      consequence: "Something happens.",
++    }));
++    assert.strictEqual(yield* gateRefused({ ...validGate, choices: six }), true);
++  }),
++);
++
++it.effect("refuses an empty choices array", () =>
++  Effect.gen(function* () {
++    // Zero choices is not a question. An empty list would render as a prompt with
++    // nothing to pick, which reads as a broken UI rather than as a plain gate.
++    assert.strictEqual(yield* gateRefused({ ...validGate, choices: [] }), true);
++  }),
++);
++
++it.effect("refuses two recommended choices", () =>
++  Effect.gen(function* () {
++    // Two recommendations is no recommendation.
++    assert.strictEqual(
++      yield* gateRefused({
++        ...validGate,
++        choices: [
++          { label: "A", consequence: "a", recommended: true },
++          { label: "B", consequence: "b", recommended: true },
++        ],
++      }),
++      true,
++    );
++  }),
++);
++
++it.effect("refuses a multi-line question", () =>
++  Effect.gen(function* () {
++    // It is rendered as a heading. A newline there is a layout bug that only
++    // shows up in front of a human who is already blocked.
++    assert.strictEqual(
++      yield* gateRefused({ ...validGate, question: "First line\nSecond line" }),
++      true,
++    );
++  }),
++);
++
++it.effect("refuses an empty gate name", () =>
++  Effect.gen(function* () {
++    assert.strictEqual(yield* gateRefused({ ...validGate, gateName: "   " }), true);
++  }),
++);
++
++it.effect("refuses a choice with no consequence", () =>
++  Effect.gen(function* () {
++    // A choice whose outcome is unstated asks a human to pick blind, which is the
++    // failure the structured request exists to remove.
++    assert.strictEqual(
++      yield* gateRefused({ ...validGate, choices: [{ label: "Do it" }] }),
++      true,
++    );
++  }),
++);
++
++it.effect("refuses a payload past the size cap", () =>
++  Effect.gen(function* () {
++    assert.strictEqual(
++      yield* gateRefused({ ...validGate, question: "x".repeat(501) }),
++      true,
++    );
++    assert.strictEqual(
++      yield* gateRefused({ ...validGate, terminalExcerpt: "y".repeat(8001) }),
++      true,
++    );
++  }),
++);
++
++it.effect("allows a multi-line terminal excerpt, which is rendered as a block", () =>
++  Effect.gen(function* () {
++    const gate = yield* decodeCodevGate({
++      ...validGate,
++      terminalExcerpt: "warning: legacy references remain\ncheckout tests failed",
++    });
++    assert.ok(gate.terminalExcerpt?.includes("\n"));
++  }),
++);

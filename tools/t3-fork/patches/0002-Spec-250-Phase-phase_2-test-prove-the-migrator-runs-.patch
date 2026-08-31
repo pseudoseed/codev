@@ -1,0 +1,149 @@
+From 992b781f4314ec1df1abb752c7c9c5378ec13c26 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 16:15:14 -0600
+Subject: [PATCH 02/12] [Spec 250][Phase: phase_2] test: prove the migrator
+ runs, not that SQLite accepts a column
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Both review lanes caught the same substitution. The "schema work landing
+after the guard still takes effect" test did a raw ALTER TABLE, which
+proves SQLite accepts another column and says nothing about whether the
+watermark let the MIGRATOR execute one — the entire question migration 900
+got wrong.
+
+Now runMigrations({toMigrationInclusive: 41}) -> guard -> runMigrations(),
+asserting 42 actually executed and its column exists. That is upstream's
+own idiom from 042_ProjectionThreadLinkedPullRequest.test.ts:16-17. Adds a
+second test that the guard writes no rows to effect_sql_migrations at all.
+
+apps/server/scripts/apply-codev-guard.ts runs the production
+codevSchemaGuardStep against a file-backed database, for criterion 8b's
+resume step. It calls the real guard rather than reimplementing its
+statements: a script with its own ALTERs would prove the statements work
+and nothing about the guard.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/server/scripts/apply-codev-guard.ts  | 40 ++++++++++++++++++++
+ apps/server/src/codev/schemaGuard.test.ts | 45 ++++++++++++++++++-----
+ 2 files changed, 75 insertions(+), 10 deletions(-)
+ create mode 100644 apps/server/scripts/apply-codev-guard.ts
+
+diff --git a/apps/server/scripts/apply-codev-guard.ts b/apps/server/scripts/apply-codev-guard.ts
+new file mode 100644
+index 000000000..9718a7438
+--- /dev/null
++++ b/apps/server/scripts/apply-codev-guard.ts
+@@ -0,0 +1,40 @@
++/**
++ * Codev customization (spec 250) — run the schema guard against a file-backed
++ * database, out of band.
++ *
++ * Exists for criterion 8b, which has to resume a half-applied schema on a REAL
++ * file after a REAL process kill. The in-memory unit test proves the guard's
++ * logic; this proves the same code completes the job on the artefact a crash
++ * actually left behind.
++ *
++ * It runs the production `codevSchemaGuardStep`, not a copy of it. A script with
++ * its own ALTER statements would prove the statements work and nothing about the
++ * guard.
++ *
++ * Usage: node apps/server/scripts/apply-codev-guard.ts <path-to-sqlite-file>
++ */
++
++import * as Effect from "effect/Effect";
++import * as Layer from "effect/Layer";
++
++import * as NodeSqliteClient from "../src/persistence/NodeSqliteClient.ts";
++import { applyCodevSchemaGuard } from "../src/codev/schemaGuard.ts";
++
++const dbPath = process.argv[2];
++if (dbPath === undefined) {
++  console.error("usage: apply-codev-guard.ts <path-to-sqlite-file>");
++  process.exit(2);
++}
++
++const program = Effect.gen(function* () {
++  const result = yield* applyCodevSchemaGuard();
++  // stdout is the machine-readable answer; the guard's own log goes to stderr.
++  console.log(JSON.stringify(result));
++});
++
++await Effect.runPromise(
++  Effect.provide(program, Layer.mergeAll(NodeSqliteClient.layer({ filename: dbPath }))),
++).catch((error: unknown) => {
++  console.error(`apply-codev-guard failed: ${String(error)}`);
++  process.exit(1);
++});
+diff --git a/apps/server/src/codev/schemaGuard.test.ts b/apps/server/src/codev/schemaGuard.test.ts
+index ad782c66d..27441fd31 100644
+--- a/apps/server/src/codev/schemaGuard.test.ts
++++ b/apps/server/src/codev/schemaGuard.test.ts
+@@ -142,30 +142,55 @@ describe("codev schema guard (spec 250)", () => {
+    * skipped forever with no error. Applying the columns outside the registry
+    * means the watermark never moves, so later schema work still lands.
+    */
+-  it.effect("schema work landing after the guard still takes effect", () =>
++  it.effect("an upstream migration still RUNS after the guard has applied", () =>
+     withDb(
+       Effect.gen(function* () {
+-        const sql = yield* SqlClient.SqlClient;
+-        yield* runMigrations();
++        // Through the MIGRATOR, not a raw ALTER TABLE. A raw statement proves
++        // SQLite accepts another column; it says nothing about whether the
++        // watermark let the migrator execute one, which is the entire question
++        // migration 900 got wrong. This is upstream's own idiom, from
++        // 042_ProjectionThreadLinkedPullRequest.test.ts:16-17.
++        yield* runMigrations({ toMigrationInclusive: 41 });
++        const before = yield* migrationWatermark();
++        assert.ok(
++          !before.some((entry) => entry.startsWith("42_")),
++          "migration 42 must not have run yet, or this test proves nothing",
++        );
++
+         yield* applyCodevSchemaGuard();
+ 
+-        const watermarkAfterGuard = yield* migrationWatermark();
++        // Upstream's next migration, run the way the migrator runs it.
++        yield* runMigrations();
+ 
+-        // Stand-in for upstream's next migration.
+-        yield* sql`ALTER TABLE projection_threads ADD COLUMN pretend_upstream_column TEXT`;
++        const after = yield* migrationWatermark();
++        assert.ok(
++          after.some((entry) => entry.startsWith("42_")),
++          "migration 42 must execute after the guard: a watermark pushed past it would " +
++            "skip every future upstream migration, silently and forever",
++        );
+ 
+         const columns = yield* columnNames();
+         assert.ok(
+-          columns.includes("pretend_upstream_column"),
+-          "an upstream migration landing after the guard must still take effect",
++          columns.includes("linked_pull_request_json"),
++          "migration 42's column must be present, not merely recorded as run",
+         );
+         for (const column of CODEV_THREAD_COLUMN_NAMES) {
+           assert.ok(columns.includes(column), "and it must not have displaced Codev's columns");
+         }
++      }),
++    ),
++  );
++
++  it.effect("the guard adds no rows to the watermark table at all", () =>
++    withDb(
++      Effect.gen(function* () {
++        yield* runMigrations({ toMigrationInclusive: 41 });
++        const before = yield* migrationWatermark();
++        yield* applyCodevSchemaGuard();
+         assert.deepStrictEqual(
+           yield* migrationWatermark(),
+-          watermarkAfterGuard,
+-          "the guard left the watermark free for upstream to keep using",
++          before,
++          "the guard must leave every id above 41 free for upstream",
+         );
+       }),
+     ),

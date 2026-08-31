@@ -19,6 +19,11 @@
     "output": "searchThreadsOutput",
     "stream": false
   },
+  "codev.gateWrite": {
+    "input": "CodevGateWriteInput",
+    "output": "CodevGateWriteResult",
+    "stream": false
+  },
   "vcs.createWorktree": {
     "input": "VcsCreateWorktreeInput",
     "output": "VcsCreateWorktreeResult",

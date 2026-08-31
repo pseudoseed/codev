@@ -177,7 +177,12 @@ async function emitAt(sha) {
           const doc = (s) => JSON.stringify(SR.toJsonSchemaDocument(SR.toRepresentation(s.ast)).schema ?? {});
           out[method] = doc(entry.input) + '|' + doc(entry.output);
         } else {
-          const doc = (n) => (n && gitMod[n] ? JSON.stringify(SR.toJsonSchemaDocument(SR.toRepresentation(gitMod[n].ast)).schema ?? {}) : '<absent>');
+          // Same module map as generate.mjs. Hardcoding git.ts here would report
+          // `codev.gateWrite` as `<absent>` at every commit, which reads as "the
+          // method is not in the contract" rather than "this tool looked in the
+          // wrong file" — the two must not be spelled the same.
+          const mod = { 'git.ts': gitMod, 'orchestration.ts': orchestration }[spec.source];
+          const doc = (n) => (n && mod?.[n] ? JSON.stringify(SR.toJsonSchemaDocument(SR.toRepresentation(mod[n].ast)).schema ?? {}) : '<absent>');
           out[method] = doc(spec.input) + '|' + doc(spec.output);
         }
       } catch (error) {

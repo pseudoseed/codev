@@ -1,0 +1,142 @@
+From e1a858434a8096d7a82e05347f8159d94f42c0b1 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 16:36:33 -0600
+Subject: [PATCH 03/12] [Spec 250][Phase: phase_2] test: pin the two guard log
+ signals
+
+Review finding: the two signals ARE the mitigation for staying out of the
+migration registry, and nothing enforced that they exist, stay two, or
+that the applied one names the columns. A rename or a merge into one line
+would have broken the deal silently while every other test stayed green.
+
+apply-codev-guard.ts now calls codevSchemaGuardStep, which is what its
+docstring already claimed and what production calls. The bare
+applyCodevSchemaGuard left the signal unexercised by the one test that
+runs the guard against a real file.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/server/scripts/apply-codev-guard.ts  |  9 ++-
+ apps/server/src/codev/schemaGuard.test.ts | 68 +++++++++++++++++++++++
+ 2 files changed, 75 insertions(+), 2 deletions(-)
+
+diff --git a/apps/server/scripts/apply-codev-guard.ts b/apps/server/scripts/apply-codev-guard.ts
+index 9718a7438..038b41023 100644
+--- a/apps/server/scripts/apply-codev-guard.ts
++++ b/apps/server/scripts/apply-codev-guard.ts
+@@ -18,7 +18,7 @@ import * as Effect from "effect/Effect";
+ import * as Layer from "effect/Layer";
+ 
+ import * as NodeSqliteClient from "../src/persistence/NodeSqliteClient.ts";
+-import { applyCodevSchemaGuard } from "../src/codev/schemaGuard.ts";
++import { codevSchemaGuardStep } from "../src/codev/schemaGuard.ts";
+ 
+ const dbPath = process.argv[2];
+ if (dbPath === undefined) {
+@@ -27,7 +27,12 @@ if (dbPath === undefined) {
+ }
+ 
+ const program = Effect.gen(function* () {
+-  const result = yield* applyCodevSchemaGuard();
++  // `codevSchemaGuardStep`, not the bare `applyCodevSchemaGuard`: the step is
++  // what production calls, and it emits the CODEV_SCHEMA_GUARD_* signal that is
++  // the whole mitigation for staying out of the migration registry. Calling the
++  // bare apply here would have left that signal unexercised by the one test that
++  // runs the guard against a real file.
++  const result = yield* codevSchemaGuardStep();
+   // stdout is the machine-readable answer; the guard's own log goes to stderr.
+   console.log(JSON.stringify(result));
+ });
+diff --git a/apps/server/src/codev/schemaGuard.test.ts b/apps/server/src/codev/schemaGuard.test.ts
+index 27441fd31..481f4363f 100644
+--- a/apps/server/src/codev/schemaGuard.test.ts
++++ b/apps/server/src/codev/schemaGuard.test.ts
+@@ -14,6 +14,8 @@
+ import { assert, describe, it } from "@effect/vitest";
+ import * as Effect from "effect/Effect";
+ import * as Layer from "effect/Layer";
++import * as Logger from "effect/Logger";
++import * as References from "effect/References";
+ import * as SqlClient from "effect/unstable/sql/SqlClient";
+ 
+ import { runMigrations } from "../persistence/Migrations.ts";
+@@ -22,6 +24,7 @@ import {
+   CODEV_GUARDED_TABLE,
+   CODEV_THREAD_COLUMN_NAMES,
+   applyCodevSchemaGuard,
++  codevSchemaGuardStep,
+ } from "./schemaGuard.ts";
+ 
+ /**
+@@ -196,6 +199,71 @@ describe("codev schema guard (spec 250)", () => {
+     ),
+   );
+ 
++  /**
++   * The two log signals ARE the mitigation.
++   *
++   * Staying out of `effect_sql_migrations` has exactly one cost: the columns are
++   * absent from the migration history, so their existence is inferrable only by
++   * reading the schema. `CODEV_SCHEMA_GUARD_APPLIED` and `CODEV_SCHEMA_GUARD_NOOP`
++   * are what pays it. Nothing enforced that they exist, that they stay two, or
++   * that the applied one names the columns — so a rename or a merge into one line
++   * would have broken the deal silently while every other test stayed green.
++   *
++   * Two signals, not one, because "added two columns" and "had nothing to do" are
++   * different facts. A single line covering both is what makes a log useless: you
++   * cannot tell a first start from the thousandth.
++   */
++  it.effect("emits APPLIED with the columns it added, then NOOP on the next start", () =>
++    withDb(
++      Effect.gen(function* () {
++        const lines: Array<string> = [];
++        const capture = Logger.make(({ fiber, message }) => {
++          const annotations = fiber.getRef(References.CurrentLogAnnotations);
++          lines.push(
++            `${String(Array.isArray(message) ? message.join(" ") : message)} ` +
++              JSON.stringify(annotations ?? {}),
++          );
++        });
++
++        yield* runMigrations();
++
++        const first = yield* codevSchemaGuardStep().pipe(Effect.provide(Logger.layer([capture], { mergeWithExisting: false })));
++        assert.deepStrictEqual([...first.added], [...CODEV_THREAD_COLUMN_NAMES]);
++
++        const applied = lines.join("\n");
++        assert.ok(
++          applied.includes("CODEV_SCHEMA_GUARD_APPLIED"),
++          `first start must emit CODEV_SCHEMA_GUARD_APPLIED; got: ${applied}`,
++        );
++        assert.ok(
++          !applied.includes("CODEV_SCHEMA_GUARD_NOOP"),
++          "a start that added columns must not also claim it had nothing to do",
++        );
++        for (const column of CODEV_THREAD_COLUMN_NAMES) {
++          assert.ok(
++            applied.includes(column),
++            `the APPLIED signal must name ${column}; a signal that does not say what it did ` +
++              "leaves the columns inferrable only by reading the schema, which is the cost it exists to pay",
++          );
++        }
++
++        lines.length = 0;
++        const second = yield* codevSchemaGuardStep().pipe(Effect.provide(Logger.layer([capture], { mergeWithExisting: false })));
++        assert.deepStrictEqual([...second.added], []);
++
++        const noop = lines.join("\n");
++        assert.ok(
++          noop.includes("CODEV_SCHEMA_GUARD_NOOP"),
++          `a start with nothing to do must emit CODEV_SCHEMA_GUARD_NOOP; got: ${noop}`,
++        );
++        assert.ok(
++          !noop.includes("CODEV_SCHEMA_GUARD_APPLIED"),
++          "a start that added nothing must not claim it applied columns",
++        );
++      }),
++    ),
++  );
++
+   it.effect("guards the table the rest of the phase reads and writes", () =>
+     withDb(
+       Effect.gen(function* () {

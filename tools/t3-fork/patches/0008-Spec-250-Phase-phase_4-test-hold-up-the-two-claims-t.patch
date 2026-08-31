@@ -1,0 +1,266 @@
+From 6e8bdec207d6b1f531df581657b747ffc8f5c826 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 18:26:46 -0600
+Subject: [PATCH 08/12] [Spec 250][Phase: phase_4] test: hold up the two claims
+ the deviation rests on
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Architect's conditions on approving optional-on-the-wire gateRevision.
+With the mark optional on the wire, "always a number" is carried entirely
+by the database and by normalize-on-read, so both halves need tests that
+can fail rather than sentences.
+
+1. The column REJECTS a NULL, asked of SQLite on a real row rather than by
+   grepping the DDL string — a DDL grep passes against a column SQLite
+   never actually constrained. PRAGMA is checked too, but PRAGMA is also
+   just a report.
+
+   The first version of this ran the UPDATE against an empty table: zero
+   rows touched, trivially successful, and the assertion caught it only
+   because it expected a refusal. Written the other way round it would
+   have passed forever while proving nothing. The constraint needs
+   something to refuse.
+
+2. A record decoded with gateRevision ABSENT on the wire is a number and
+   not undefined, at both boundaries porch-driver crosses — the shell
+   snapshot and the full thread. Plus one that an explicit value survives
+   unchanged, because a default that fires when it should not is the same
+   bug as one that does not fire when it should.
+
+Verified to discriminate: with the decoding default removed, both wire
+tests fail; restored, all pass.
+
+Also asserts a row inserted BEFORE the guard ran reads back as 0, so the
+no-backfill claim rests on a row that really predates the column.
+
+Fork typecheck green.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/server/src/codev/schemaGuard.test.ts    |  99 ++++++++++++++++++
+ packages/contracts/src/orchestration.test.ts | 103 +++++++++++++++++++
+ 2 files changed, 202 insertions(+)
+
+diff --git a/apps/server/src/codev/schemaGuard.test.ts b/apps/server/src/codev/schemaGuard.test.ts
+index ffbbf2f72..3a11c4dbf 100644
+--- a/apps/server/src/codev/schemaGuard.test.ts
++++ b/apps/server/src/codev/schemaGuard.test.ts
+@@ -270,6 +270,105 @@ describe("codev schema guard (spec 250)", () => {
+     ),
+   );
+ 
++  /**
++   * The architect's first condition on the optional-in/required-out deviation:
++   * assert the CONSTRAINT, not the DDL string.
++   *
++   * `gateRevision` is optional on the wire, so "the mark is always a number" is
++   * carried entirely by the database. A test that greps the `ALTER TABLE` text
++   * would pass against a column SQLite never actually constrained — it would be
++   * checking that we wrote the right sentence, not that the sentence took effect.
++   * So this asks SQLite: insert a NULL and require it to refuse.
++   */
++  it.effect("the revision column REJECTS a null, enforced by SQLite and not by the DDL string", () =>
++    withDb(
++      Effect.gen(function* () {
++        const sql = yield* SqlClient.SqlClient;
++        yield* runMigrations();
++        yield* applyCodevSchemaGuard();
++
++        const columns = yield* sql<{
++          readonly name: string;
++          readonly notnull: number;
++          readonly dflt_value: string | null;
++        }>`PRAGMA table_info(projection_threads)`;
++        const revision = columns.find((column) => column.name === "codev_gate_revision");
++        assert.ok(revision, "the revision column must exist");
++        assert.strictEqual(revision.notnull, 1, "SQLite must report the column as NOT NULL");
++        assert.strictEqual(revision.dflt_value, "0", "and DEFAULT 0, so historical rows are 0");
++
++        // And prove the constraint BITES, rather than trusting PRAGMA either.
++        //
++        // The row matters: an UPDATE against an empty table touches nothing and
++        // succeeds trivially, which is how the first version of this test passed
++        // while proving nothing. It has to have something to refuse.
++        yield* sql`
++          INSERT INTO projection_threads (
++            thread_id, project_id, title, model_selection_json, runtime_mode,
++            interaction_mode, branch, worktree_path, latest_turn_id,
++            created_at, updated_at, archived_at, settled_override, settled_at,
++            snoozed_until, snoozed_at, pinned_at, latest_user_message_at,
++            pending_approval_count, pending_user_input_count,
++            has_actionable_proposed_plan, deleted_at
++          ) VALUES (
++            'thread-constraint', 'project-1', 'Constraint probe',
++            '{"instanceId":"codex","model":"gpt-5.4"}',
++            'full-access', 'default', NULL, NULL, NULL,
++            '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', NULL, NULL, NULL,
++            NULL, NULL, NULL, NULL, 0, 0, 0, NULL
++          )
++        `;
++
++        const rejected = yield* Effect.result(
++          sql`UPDATE projection_threads SET codev_gate_revision = NULL WHERE thread_id = 'thread-constraint'`,
++        );
++        assert.strictEqual(
++          rejected._tag,
++          "Failure",
++          "writing NULL into the revision column must be refused by the database",
++        );
++      }),
++    ),
++  );
++
++  /**
++   * The default is what makes historical rows correct with no backfill, and a
++   * backfill is a second write that can be interrupted. Asserted on a row that
++   * really predates the column.
++   */
++  it.effect("a row inserted before the guard ran reads back as revision 0, not null", () =>
++    withDb(
++      Effect.gen(function* () {
++        const sql = yield* SqlClient.SqlClient;
++        yield* runMigrations();
++
++        yield* sql`
++          INSERT INTO projection_threads (
++            thread_id, project_id, title, model_selection_json, runtime_mode,
++            interaction_mode, branch, worktree_path, latest_turn_id,
++            created_at, updated_at, archived_at, settled_override, settled_at,
++            snoozed_until, snoozed_at, pinned_at, latest_user_message_at,
++            pending_approval_count, pending_user_input_count,
++            has_actionable_proposed_plan, deleted_at
++          ) VALUES (
++            'thread-historical', 'project-1', 'Before the gate existed',
++            '{"instanceId":"codex","model":"gpt-5.4"}',
++            'full-access', 'default', NULL, NULL, NULL,
++            '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', NULL, NULL, NULL,
++            NULL, NULL, NULL, NULL, 0, 0, 0, NULL
++          )
++        `;
++
++        yield* applyCodevSchemaGuard();
++
++        const rows = yield* sql<{ readonly codev_gate_revision: number | null }>`
++          SELECT codev_gate_revision FROM projection_threads WHERE thread_id = 'thread-historical'
++        `;
++        assert.strictEqual(rows[0]?.codev_gate_revision, 0, "the ALTER's DEFAULT filled it in place");
++      }),
++    ),
++  );
++
+   it.effect("guards the table the rest of the phase reads and writes", () =>
+     withDb(
+       Effect.gen(function* () {
+diff --git a/packages/contracts/src/orchestration.test.ts b/packages/contracts/src/orchestration.test.ts
+index fb5cf7b67..4eb880562 100644
+--- a/packages/contracts/src/orchestration.test.ts
++++ b/packages/contracts/src/orchestration.test.ts
+@@ -1305,3 +1305,106 @@ it.effect("allows a multi-line terminal excerpt, which is rendered as a block",
+     assert.ok(gate.terminalExcerpt?.includes("\n"));
+   }),
+ );
++
++// ---------------------------------------------------------------------------
++// Codev customization (spec 250) — "always a number after decoding".
++//
++// `gateRevision` is optional on the wire, so that sentence is a CLAIM, and this
++// project has taught us what claims are worth. These are the boundary
++// porch-driver actually crosses: a shell snapshot arriving from the server, and
++// a full thread record. If the field can come back `undefined` there, then
++// "no gate yet" has two spellings and every consumer needs a `?? 0` nobody will
++// remember to write.
++
++it.effect("a shell decoded WITHOUT gateRevision on the wire is a number, not undefined", () =>
++  Effect.gen(function* () {
++    const shell = yield* decodeOrchestrationThreadShell({
++      id: "thread-wire",
++      projectId: "project-1",
++      title: "From an older server",
++      modelSelection: { provider: "codex", model: "gpt-5.4" },
++      runtimeMode: DEFAULT_RUNTIME_MODE,
++      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
++      branch: null,
++      worktreePath: null,
++      latestTurn: null,
++      createdAt: "2026-01-01T00:00:00.000Z",
++      updatedAt: "2026-01-01T00:00:00.000Z",
++      archivedAt: null,
++      session: null,
++      latestUserMessageAt: null,
++      hasPendingApprovals: false,
++      hasPendingUserInput: false,
++      hasActionableProposedPlan: false,
++      // gateRevision deliberately absent, exactly as a pre-fork server sends it.
++    });
++
++    assert.strictEqual(typeof shell.gateRevision, "number", "gateRevision must decode to a number");
++    assert.strictEqual(shell.gateRevision, 0);
++    assert.notStrictEqual(shell.gateRevision, undefined);
++  }),
++);
++
++it.effect("a thread decoded WITHOUT gateRevision on the wire is a number, not undefined", () =>
++  Effect.gen(function* () {
++    const thread = yield* decodeOrchestrationThread({
++      id: "thread-wire-2",
++      projectId: "project-1",
++      title: "From an older server",
++      modelSelection: { provider: "codex", model: "gpt-5.4" },
++      runtimeMode: DEFAULT_RUNTIME_MODE,
++      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
++      branch: null,
++      worktreePath: null,
++      latestTurn: null,
++      createdAt: "2026-01-01T00:00:00.000Z",
++      updatedAt: "2026-01-01T00:00:00.000Z",
++      archivedAt: null,
++      session: null,
++      deletedAt: null,
++      messages: [],
++      proposedPlans: [],
++      activities: [],
++      checkpoints: [],
++    });
++
++    assert.strictEqual(typeof thread.gateRevision, "number");
++    assert.strictEqual(thread.gateRevision, 0);
++    // And no gate, which is the other half of "no gate yet" having one spelling.
++    assert.ok(thread.codevGate === null || thread.codevGate === undefined);
++  }),
++);
++
++it.effect("an explicit gateRevision on the wire survives decoding unchanged", () =>
++  Effect.gen(function* () {
++    // The default must not overwrite a real value — a default that fires when it
++    // should not is the same bug as one that does not fire when it should.
++    const shell = yield* decodeOrchestrationThreadShell({
++      id: "thread-wire-3",
++      projectId: "project-1",
++      title: "Mid-gate",
++      modelSelection: { provider: "codex", model: "gpt-5.4" },
++      runtimeMode: DEFAULT_RUNTIME_MODE,
++      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
++      branch: null,
++      worktreePath: null,
++      latestTurn: null,
++      createdAt: "2026-01-01T00:00:00.000Z",
++      updatedAt: "2026-01-01T00:00:00.000Z",
++      archivedAt: null,
++      session: null,
++      latestUserMessageAt: null,
++      hasPendingApprovals: false,
++      hasPendingUserInput: false,
++      hasActionableProposedPlan: false,
++      gateRevision: 7,
++      codevGate: {
++        gateName: "plan-approval",
++        requestedAt: "2026-01-01T00:00:00.000Z",
++      },
++    });
++
++    assert.strictEqual(shell.gateRevision, 7);
++    assert.strictEqual(shell.codevGate?.gateName, "plan-approval");
++  }),
++);

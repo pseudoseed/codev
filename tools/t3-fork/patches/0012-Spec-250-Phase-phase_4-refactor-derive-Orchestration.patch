@@ -1,0 +1,206 @@
+From 51b55d4899e4d900dfa0a7995f6f9200c53d10c0 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 20:48:18 -0600
+Subject: [PATCH 12/12] [Spec 250][Phase: phase_4] refactor: derive
+ OrchestrationRefusal from the classification table
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Iteration-3 review: both lanes APPROVE, three non-blocking findings from the
+claude lane, all three fixed here rather than deferred.
+
+1. `OrchestrationRefusal` hand-listed the same three tags `dispatchErrorKind`
+   owns. Classifying a fourth refusal without also editing the `Extract` would
+   have narrowed `isRefusal` to a type excluding it — runtime correct, types
+   quietly lying. That is the one-list-in-two-places shape that shipped this bug
+   three times, so it is fixed in phase, not filed.
+
+   The switch is now a `DISPATCH_ERROR_KIND` table under
+   `as const satisfies { [K in OrchestrationDispatchError["_tag"]]: ... }`.
+   A missing member is a missing key; an extra one is an excess property. The
+   refusal type is derived from the table's literal values.
+
+   Verified to discriminate:
+   - remove the `CodevGateWriteError` row -> TS2741 naming the tag you forgot;
+   - flip it to "internal" -> 2 engine tests go red, including the one asserting
+     the stale write reaches the dispatcher as CodevGateWriteError.
+
+2. The `CodevGateWriteErrorReason` doc comment still said "Three causes" and
+   documented `CODEV_GATE_SCOPE_REQUIRED`, dropped from the union in iteration 1.
+   A phase 6/8 consumer would have gone looking for a reason that cannot arrive.
+   Rewritten to say why the scope case is refused by the transport instead, so
+   nobody adds it back.
+
+3. `CodevGateScope.test.ts` asserted exact source indentation. Now a
+   whitespace-tolerant regex over the same fact. Verified both directions:
+   registering the gate handler bare fails it; collapsing the call to one line
+   does not.
+
+Fork: typecheck green, server 2839 passed / 8 skipped / 1 pre-existing
+(entrypoint symlink, unmodified and byte-identical to the base commit).
+---
+ apps/server/src/auth/CodevGateScope.test.ts   |  6 +-
+ .../Layers/OrchestrationEngine.ts             | 97 +++++++++++--------
+ packages/contracts/src/orchestration.ts       | 14 ++-
+ 3 files changed, 68 insertions(+), 49 deletions(-)
+
+diff --git a/apps/server/src/auth/CodevGateScope.test.ts b/apps/server/src/auth/CodevGateScope.test.ts
+index 28c149640..7e6be7680 100644
+--- a/apps/server/src/auth/CodevGateScope.test.ts
++++ b/apps/server/src/auth/CodevGateScope.test.ts
+@@ -94,7 +94,11 @@ describe("the scope map is what the transport actually enforces (spec 250)", ()
+     expect(ws).toContain("authorizeStream(requiredScopeForRpcMethod(method)");
+     // And the gate handler goes through the instrumented wrapper rather than
+     // being registered bare, which is what puts it on that path at all.
+-    expect(ws).toContain("observeRpcEffect(\n            CODEV_WS_METHODS.gateWrite,");
++    // Whitespace-tolerant on purpose: the fact under test is "gateWrite is the
++    // first argument to observeRpcEffect", and a prettier reformat must not be
++    // able to fail it. The `toContain` guard above is the positive control that
++    // keeps this from passing vacuously against an unrelated file.
++    expect(ws).toMatch(/observeRpcEffect\(\s*CODEV_WS_METHODS\.gateWrite\s*,/);
+   });
+ 
+   it("an unmapped method is refused rather than defaulting to something permissive", () => {
+diff --git a/apps/server/src/orchestration/Layers/OrchestrationEngine.ts b/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
+index a8a4ce3cd..ac2680f89 100644
+--- a/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
++++ b/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
+@@ -84,53 +84,64 @@ const isCodevHierarchyInvalidError = Schema.is(CodevHierarchyInvalidError);
+  * below the one that broke them. A follow-up issue would have been a promise to
+  * hit it a fourth time.
+  *
+- * The `never` assignment in `default` is the mechanism: when every member is
+- * handled, `error` narrows to `never` and the line compiles. Add a member to
+- * `OrchestrationDispatchError` without a case here and it does not — the build
+- * fails at the place that needs the decision, naming the type you forgot.
+- *
+- * At runtime `default` returns `"internal"`, so a foreign error is not a refusal.
+- * That is the safe answer: a refusal misclassified as internal is a worse message,
+- * while an internal error misclassified as a refusal is a lie about whose fault
+- * it was.
++ * The mapped-type `satisfies` on `DISPATCH_ERROR_KIND` below is the mechanism: a
++ * member added to `OrchestrationDispatchError` without a row there is a missing
++ * key, and the build fails at the place that needs the decision, naming the tag
++ * you forgot. Classifying it is all you have to do — both `isRefusal` and the
++ * `OrchestrationRefusal` type read that table rather than keeping their own list.
+  */
+ type DispatchErrorKind = "refusal" | "internal";
+ 
+-export const dispatchErrorKind = (error: OrchestrationDispatchError): DispatchErrorKind => {
+-  switch (error._tag) {
+-    // Refusals: the command was understood and declined. The caller acts on these.
+-    case "OrchestrationCommandInvariantError":
+-    case "CodevHierarchyInvalidError":
+-    case "CodevGateWriteError":
+-      return "refusal";
+-
+-    // Everything else: the command may have been fine and something under it
+-    // failed. The caller cannot act on these beyond retrying.
+-    case "PersistenceSqlError":
+-    case "PersistenceDecodeError":
+-    case "OrchestrationCommandIdConflictError":
+-    case "OrchestrationCommandPreviouslyRejectedError":
+-    case "OrchestrationProjectorDecodeError":
+-    case "OrchestrationListenerCallbackError":
+-      return "internal";
+-
+-    default: {
+-      // COMPILE-TIME EXHAUSTIVENESS. If this line stops compiling, a member was
+-      // added to OrchestrationDispatchError and not classified above. Classify
+-      // it — and if it is a refusal, that is all you need to do: `isRefusal`
+-      // reads this function rather than keeping its own list.
+-      const unclassified: never = error;
+-      void unclassified;
+-      return "internal";
+-    }
+-  }
+-};
++/**
++ * The classification, as data, keyed by every dispatch-error tag.
++ *
++ * The mapped-type `satisfies` is the mechanism: a member added to
++ * `OrchestrationDispatchError` and not listed here is a MISSING KEY and the file
++ * does not compile, naming the tag you forgot. A key that is not a member is an
++ * excess property and also does not compile. `as const` keeps the values literal,
++ * which is what lets `OrchestrationRefusal` be derived from this table below
++ * instead of being a second hand-written list of the same three tags.
++ */
++const DISPATCH_ERROR_KIND = {
++  // Refusals: the command was understood and declined. The caller acts on these.
++  OrchestrationCommandInvariantError: "refusal",
++  CodevHierarchyInvalidError: "refusal",
++  CodevGateWriteError: "refusal",
++
++  // Everything else: the command may have been fine and something under it
++  // failed. The caller cannot act on these beyond retrying.
++  PersistenceSqlError: "internal",
++  PersistenceDecodeError: "internal",
++  OrchestrationCommandIdConflictError: "internal",
++  OrchestrationCommandPreviouslyRejectedError: "internal",
++  OrchestrationProjectorDecodeError: "internal",
++  OrchestrationListenerCallbackError: "internal",
++} as const satisfies { readonly [K in OrchestrationDispatchError["_tag"]]: DispatchErrorKind };
++
++export const dispatchErrorKind = (error: OrchestrationDispatchError): DispatchErrorKind =>
++  // The `??` is load-bearing at runtime even though the index signature is total:
++  // `isRefusal` reaches this with an `unknown` cause it has only shape-checked, so
++  // a foreign tag lands here and must answer "internal". That is the safe answer —
++  // a refusal misclassified as internal is a worse message, while an internal
++  // error misclassified as a refusal is a lie about whose fault it was.
++  DISPATCH_ERROR_KIND[error._tag] ?? "internal";
++
++/**
++ * A dispatch error the caller is meant to act on, as opposed to retry.
++ *
++ * DERIVED from `DISPATCH_ERROR_KIND`, not hand-listed. The previous spelling
++ * repeated the three refusal tags in an `Extract`, so classifying a fourth refusal
++ * in the table without also editing the `Extract` narrowed `isRefusal` to a type
++ * that excluded it — the runtime stayed correct and the types quietly lied. That
++ * is the same one-list-in-two-places shape that shipped this bug three times.
++ */
++type RefusalTag = {
++  readonly [K in keyof typeof DISPATCH_ERROR_KIND]: (typeof DISPATCH_ERROR_KIND)[K] extends "refusal"
++    ? K
++    : never;
++}[keyof typeof DISPATCH_ERROR_KIND];
+ 
+-/** A dispatch error the caller is meant to act on, as opposed to retry. */
+-export type OrchestrationRefusal = Extract<
+-  OrchestrationDispatchError,
+-  { readonly _tag: "OrchestrationCommandInvariantError" | "CodevHierarchyInvalidError" | "CodevGateWriteError" }
+->;
++export type OrchestrationRefusal = Extract<OrchestrationDispatchError, { readonly _tag: RefusalTag }>;
+ 
+ /**
+  * Errors that describe a REFUSAL and must reach the dispatcher intact.
+diff --git a/packages/contracts/src/orchestration.ts b/packages/contracts/src/orchestration.ts
+index 9f460701f..37cc4e914 100644
+--- a/packages/contracts/src/orchestration.ts
++++ b/packages/contracts/src/orchestration.ts
+@@ -2021,16 +2021,20 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<O
+ /**
+  * Codev customization (spec 250). A refused gate write, with a named reason.
+  *
+- * Three causes that a caller must act on differently:
+- *   CODEV_GATE_SCOPE_REQUIRED   the credential lacks `codev:gate-write`. Not a
+- *                               generic 403, and distinguishable from an
+- *                               unauthenticated 401 — one is "log in", the other
+- *                               is "you will never be allowed to do this".
++ * Four causes that a caller must act on differently. The literals below carry
++ * the two that need argument; these two are the plain ones:
+  *   CODEV_GATE_REVISION_STALE   the write carried a revision at or below the
+  *                               current high-water mark. Equal counts: two
+  *                               writers that computed the same number are
+  *                               colliding, not agreeing.
+  *   CODEV_GATE_THREAD_NOT_FOUND no such thread.
++ *
++ * A missing `codev:gate-write` scope is deliberately NOT a reason here. It is
++ * refused by the transport as `EnvironmentAuthorizationError` carrying
++ * `requiredScope: "codev:gate-write"`, before the handler runs — already
++ * distinguishable from an unauthenticated 401 and from any other scope failure.
++ * A reason literal for it would be unreachable except from a test that bypassed
++ * production, so do not add one back when you go looking for it.
+  */
+ export const CodevGateWriteErrorReason = Schema.Literals([
+   "CODEV_GATE_REVISION_STALE",

@@ -291,7 +291,8 @@ function verifyCheckout(identity, mismatchSignal) {
 /** The read-only clone of pingdotgg/t3code, pinned at `upstreamBase`. */
 function verifyUpstream(mismatchSignal = 'CHECKOUT_MISMATCH') {
   const head = verifyCheckout(upstream, mismatchSignal);
-  say(`verified upstream: ${upstream.root} is clean at ${head.slice(0, 12)} (${pin.commitDate})`);
+  // `upstreamBaseDate`, not `commitDate`: this line is about the UPSTREAM checkout.
+  say(`verified upstream: ${upstream.root} is clean at ${head.slice(0, 12)} (${pin.upstreamBaseDate})`);
   return head;
 }
 

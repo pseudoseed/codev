@@ -1,0 +1,646 @@
+From 40fb82ce92a8ed42e6868bd946bfee00b79b3022 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 17:21:55 -0600
+Subject: [PATCH 05/12] [Spec 250][Phase: phase_3] fix: the engine was deleting
+ every reason discriminant
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Both review lanes found this independently and it is blocking.
+
+OrchestrationEngine rewrote every CodevHierarchyInvalidError as a generic
+invariant error reading "Failed to generate an event identifier" — not
+merely lossy but FALSE — and then persisted that message onto the command
+receipt, which is replayed verbatim on every redispatch of the same
+commandId. The six discriminants existed only inside the decider. The
+decider is not a boundary anyone sees; the engine is. The entire phase 3
+deliverable was being deleted one layer above where it was tested.
+
+All fifteen decider tests passed throughout, because they call
+decideOrchestrationCommand directly and bypass the wrapper. That is why it
+went unnoticed, and it is the same shape as the MigrationsLive finding in
+phase 2: testing the layer below the one production uses.
+
+Adds OrchestrationEngine.codevHierarchy.test.ts, which dispatches through
+the real engine and asserts the reason arrives intact, that each distinct
+reason survives, and that the rejected receipt records the real cause
+rather than the false one. Verified to discriminate: with the mapping
+reverted, 3 of its 4 tests fail.
+
+Two of my own tests asserted nothing, both caught by review. One built a
+Set of string literals and asserted its size, which proves six distinct
+strings are six distinct strings and would have passed if every refusal
+collapsed onto one discriminant; it now collects reasons from six real
+dispatches. The other asserted on its own input fixture after an archive
+the decider never mutates; it now asserts the decider's output — one
+event, on one aggregate, mentioning no child.
+
+commandInvariants.test.ts gains the Codev cases the plan listed, including
+the two ordering decisions as tests: parent-is-self ahead of
+parent-not-found when both hold, and parent-in-other-project rather than
+parent-not-found.
+
+Fork typecheck green; server 2797 passed, 8 skipped.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ ...OrchestrationEngine.codevHierarchy.test.ts | 272 ++++++++++++++++++
+ .../Layers/OrchestrationEngine.ts             |  28 +-
+ .../orchestration/commandInvariants.test.ts   | 129 +++++++++
+ .../decider.codevHierarchy.test.ts            |  82 ++++--
+ 4 files changed, 485 insertions(+), 26 deletions(-)
+ create mode 100644 apps/server/src/orchestration/Layers/OrchestrationEngine.codevHierarchy.test.ts
+
+diff --git a/apps/server/src/orchestration/Layers/OrchestrationEngine.codevHierarchy.test.ts b/apps/server/src/orchestration/Layers/OrchestrationEngine.codevHierarchy.test.ts
+new file mode 100644
+index 000000000..0d04eb6f0
+--- /dev/null
++++ b/apps/server/src/orchestration/Layers/OrchestrationEngine.codevHierarchy.test.ts
+@@ -0,0 +1,272 @@
++/**
++ * Codev customization (spec 250) — hierarchy refusals through the ENGINE.
++ *
++ * This file exists because of a bug it would have caught. Every phase 3 test
++ * called `decideOrchestrationCommand` directly, so all fifteen passed while
++ * `OrchestrationEngine` rewrote each refusal as a generic invariant error reading
++ * "Failed to generate an event identifier" — a message that is not merely lossy
++ * but false, and which was then persisted onto the command receipt and replayed
++ * on every redispatch of the same `commandId`.
++ *
++ * The decider is not a boundary anyone sees. This is. A discriminant that does
++ * not survive the wrapper does not exist, and testing one layer below the
++ * wrapper cannot tell you that.
++ */
++
++import {
++  CommandId,
++  DEFAULT_PROVIDER_INTERACTION_MODE,
++  ProjectId,
++  ProviderInstanceId,
++  ThreadId,
++} from "@t3tools/contracts";
++import * as NodeServices from "@effect/platform-node/NodeServices";
++import * as Effect from "effect/Effect";
++import * as Layer from "effect/Layer";
++import * as ManagedRuntime from "effect/ManagedRuntime";
++import { describe, expect, it } from "vite-plus/test";
++
++import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
++import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
++import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
++import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
++import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
++import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
++import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
++import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
++import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
++import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
++import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
++import { CodevHierarchyInvalidError } from "../Errors.ts";
++import { ServerConfig } from "../../config.ts";
++
++const NOW = "2026-01-01T00:00:00.000Z";
++const MODEL = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" };
++
++async function createSystem() {
++  const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
++    prefix: "t3-codev-hierarchy-engine-test-",
++  });
++  const layer = Layer.mergeAll(
++    OrchestrationEngineLive.pipe(
++      Layer.provide(OrchestrationProjectionSnapshotQueryLive),
++      Layer.provide(OrchestrationProjectionPipelineLive),
++    ),
++    OrchestrationProjectionSnapshotQueryLive,
++    // Merged, not just provided: this test reads the rejected receipt back, and
++    // the receipt is the durable half of the refusal.
++    OrchestrationCommandReceiptRepositoryLive,
++  ).pipe(
++    Layer.provide(ThreadBackgroundLiveness.layer),
++    Layer.provide(ThreadPlanProgress.layer),
++    Layer.provide(OrchestrationEventStoreLive),
++    Layer.provide(OrchestrationCommandReceiptRepositoryLive),
++    Layer.provide(RepositoryIdentityResolver.layer),
++    Layer.provide(SqlitePersistenceMemory),
++    Layer.provideMerge(ServerConfigLayer),
++    Layer.provideMerge(NodeServices.layer),
++  );
++  const runtime = ManagedRuntime.make(layer);
++  const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
++  const receipts = await runtime.runPromise(
++    Effect.service(OrchestrationCommandReceiptRepository),
++  );
++  return {
++    engine,
++    receipts,
++    run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
++    dispose: () => runtime.dispose(),
++  };
++}
++
++const createThread = (input: {
++  readonly commandId: string;
++  readonly threadId: string;
++  readonly projectId?: string;
++  readonly role?: "architect" | "builder" | null;
++  readonly parentThreadId?: string | null;
++}) =>
++  ({
++    type: "thread.create",
++    commandId: CommandId.make(input.commandId),
++    threadId: ThreadId.make(input.threadId),
++    projectId: ProjectId.make(input.projectId ?? "project-1"),
++    title: `Thread ${input.threadId}`,
++    modelSelection: MODEL,
++    interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
++    runtimeMode: "approval-required",
++    branch: null,
++    worktreePath: null,
++    ...(input.role === undefined ? {} : { role: input.role }),
++    ...(input.parentThreadId === undefined
++      ? {}
++      : {
++          parentThreadId:
++            input.parentThreadId === null ? null : ThreadId.make(input.parentThreadId),
++        }),
++    createdAt: NOW,
++  }) as never;
++
++async function seededSystem() {
++  const system = await createSystem();
++  await system.run(
++    system.engine.dispatch({
++      type: "project.create",
++      commandId: CommandId.make("cmd-project"),
++      projectId: ProjectId.make("project-1"),
++      title: "Project 1",
++      workspaceRoot: "/tmp/project-1",
++      defaultModelSelection: MODEL,
++      createdAt: NOW,
++    }),
++  );
++  await system.run(
++    system.engine.dispatch(
++      createThread({
++        commandId: "cmd-architect",
++        threadId: "thread-architect",
++        role: "architect",
++      }),
++    ),
++  );
++  return system;
++}
++
++/** Dispatch and return the error the ENGINE surfaced, not the decider's. */
++async function dispatchFailure(
++  system: Awaited<ReturnType<typeof createSystem>>,
++  command: ReturnType<typeof createThread>,
++) {
++  const outcome = await system.run(Effect.result(system.engine.dispatch(command)));
++  expect(outcome._tag, "the engine must refuse this command").toBe("Failure");
++  return (outcome as { failure: unknown }).failure;
++}
++
++describe("OrchestrationEngine: codev hierarchy refusals (spec 250)", () => {
++  it("surfaces the reason discriminant through the engine, not a generic invariant error", async () => {
++    const system = await seededSystem();
++    try {
++      const error = await dispatchFailure(
++        system,
++        createThread({
++          commandId: "cmd-bad-parent",
++          threadId: "thread-new",
++          role: "builder",
++          parentThreadId: "thread-absent",
++        }),
++      );
++
++      expect(
++        error instanceof CodevHierarchyInvalidError,
++        `the engine collapsed the refusal into ${String(error)}`,
++      ).toBe(true);
++      expect((error as CodevHierarchyInvalidError).reason).toBe("parent-not-found");
++      // The message the collapse used to produce. Asserting its absence is what
++      // makes this test fail loudly if the mapping regresses.
++      expect(String((error as CodevHierarchyInvalidError).message)).not.toContain(
++        "Failed to generate an event identifier",
++      );
++    } finally {
++      await system.dispose();
++    }
++  });
++
++  it("carries each distinct reason through the engine", async () => {
++    const system = await seededSystem();
++    try {
++      const cases: ReadonlyArray<readonly [string, ReturnType<typeof createThread>]> = [
++        [
++          "parent-is-self",
++          createThread({
++            commandId: "cmd-self",
++            threadId: "thread-self",
++            role: "builder",
++            parentThreadId: "thread-self",
++          }),
++        ],
++        [
++          "builder-without-parent",
++          createThread({
++            commandId: "cmd-no-parent",
++            threadId: "thread-no-parent",
++            role: "builder",
++          }),
++        ],
++        [
++          "parent-on-non-builder",
++          createThread({
++            commandId: "cmd-architect-parent",
++            threadId: "thread-arch-child",
++            role: "architect",
++            parentThreadId: "thread-architect",
++          }),
++        ],
++      ];
++
++      const seen: string[] = [];
++      for (const [expected, command] of cases) {
++        const error = await dispatchFailure(system, command);
++        expect(error instanceof CodevHierarchyInvalidError).toBe(true);
++        seen.push((error as CodevHierarchyInvalidError).reason);
++        expect((error as CodevHierarchyInvalidError).reason).toBe(expected);
++      }
++
++      // Distinct at the boundary, which is the deliverable — not distinct in a
++      // set the test builds for itself.
++      expect(new Set(seen).size).toBe(cases.length);
++    } finally {
++      await system.dispose();
++    }
++  });
++
++  /**
++   * The receipt is the durable half. It is replayed verbatim on redispatch of the
++   * same `commandId`, so a wrong message there is not a one-time bad log — it is
++   * the permanent answer to that command.
++   */
++  it("records the real reason on the rejected command receipt", async () => {
++    const system = await seededSystem();
++    try {
++      await dispatchFailure(
++        system,
++        createThread({
++          commandId: "cmd-receipt",
++          threadId: "thread-receipt",
++          role: "builder",
++          parentThreadId: "thread-absent",
++        }),
++      );
++
++      const receipt = await system.run(
++        system.receipts.getByCommandId({ commandId: CommandId.make("cmd-receipt") }),
++      );
++      expect(receipt._tag, "a refused command must leave a receipt").toBe("Some");
++      const value = (receipt as { value: { status: string; error: string | null } }).value;
++      expect(value.status).toBe("rejected");
++      expect(value.error).toContain("parent-not-found");
++      expect(value.error).not.toContain("Failed to generate an event identifier");
++    } finally {
++      await system.dispose();
++    }
++  });
++
++  it("accepts the legal architect -> builder edge through the engine", async () => {
++    const system = await seededSystem();
++    try {
++      await system.run(
++        system.engine.dispatch(
++          createThread({
++            commandId: "cmd-builder",
++            threadId: "thread-builder",
++            role: "builder",
++            parentThreadId: "thread-architect",
++          }),
++        ),
++      );
++      // No assertion needed beyond "it did not throw": the refusal path is what
++      // this file is about, and an accepted command that threw would fail here.
++    } finally {
++      await system.dispose();
++    }
++  });
++});
+diff --git a/apps/server/src/orchestration/Layers/OrchestrationEngine.ts b/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
+index 423a44a6f..5234f426c 100644
+--- a/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
++++ b/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
+@@ -33,6 +33,7 @@ import { toPersistenceSqlError } from "../../persistence/Errors.ts";
+ import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
+ import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
+ import {
++  CodevHierarchyInvalidError,
+   OrchestrationCommandIdConflictError,
+   OrchestrationCommandInvariantError,
+   OrchestrationCommandPreviouslyRejectedError,
+@@ -52,6 +53,25 @@ const isOrchestrationCommandPreviouslyRejectedError = Schema.is(
+ );
+ const isOrchestrationCommandIdConflictError = Schema.is(OrchestrationCommandIdConflictError);
+ const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
++/**
++ * Codev customization (spec 250).
++ *
++ * Without this the mapping below rewrote every hierarchy refusal as a generic
++ * invariant error reading "Failed to generate an event identifier" — a message
++ * that is not merely lossy but FALSE, and which was then persisted onto the
++ * command receipt and replayed on every redispatch of the same commandId.
++ *
++ * The six `reason` discriminants exist so a caller can tell a retry ("no such
++ * parent") from a caller bug ("wrong parent role"). The decider is not a boundary
++ * anyone sees; this is. Collapsing here deleted the entire deliverable while the
++ * decider tests stayed green, because they call the decider directly.
++ */
++const isCodevHierarchyInvalidError = Schema.is(CodevHierarchyInvalidError);
++/** Errors that describe a REFUSAL and must reach the dispatcher intact. */
++const isRefusal = (cause: unknown): cause is
++  | OrchestrationCommandInvariantError
++  | CodevHierarchyInvalidError =>
++  isOrchestrationCommandInvariantError(cause) || isCodevHierarchyInvalidError(cause);
+ 
+ interface CommandEnvelope {
+   command: OrchestrationCommand;
+@@ -175,7 +195,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
+         }).pipe(
+           Effect.provideService(Crypto.Crypto, crypto),
+           Effect.mapError((cause) =>
+-            isOrchestrationCommandInvariantError(cause)
++            isRefusal(cause)
+               ? cause
+               : new OrchestrationCommandInvariantError({
+                   commandType: envelope.command.type,
+@@ -307,7 +327,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
+               ),
+             );
+ 
+-            if (isOrchestrationCommandInvariantError(error)) {
++            // Codev customization (spec 250): hierarchy refusals record their own
++            // message too. This receipt is replayed verbatim on redispatch of the
++            // same commandId, so a wrong message here is not a one-time bad log —
++            // it is the permanent answer to that command.
++            if (isRefusal(error)) {
+               yield* commandReceiptRepository
+                 .upsert({
+                   commandId: envelope.command.commandId,
+diff --git a/apps/server/src/orchestration/commandInvariants.test.ts b/apps/server/src/orchestration/commandInvariants.test.ts
+index 52aac1f0c..bc044d40e 100644
+--- a/apps/server/src/orchestration/commandInvariants.test.ts
++++ b/apps/server/src/orchestration/commandInvariants.test.ts
+@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
+ import {
+   findThreadById,
+   listThreadsByProjectId,
++  requireCodevHierarchy,
+   requireThread,
+   requireThreadAbsent,
+ } from "./commandInvariants.ts";
+@@ -200,3 +201,131 @@ describe("commandInvariants", () => {
+     ).rejects.toThrow("already exists");
+   });
+ });
++
++/**
++ * Codev customization (spec 250) — `requireCodevHierarchy` on its own.
++ *
++ * The decider and engine suites cover the refusals end to end. These cover the
++ * function directly, because the ordering between its checks is a decision and
++ * not an accident, and a unit test is where a decision like that is legible.
++ */
++describe("requireCodevHierarchy (spec 250)", () => {
++  const hierarchyModel: OrchestrationReadModel = {
++    ...readModel,
++    threads: [
++      ...readModel.threads.map((thread) => ({ ...thread, role: null, parentThreadId: null })),
++    ],
++  } as OrchestrationReadModel;
++
++  const withThread = (
++    id: string,
++    role: "architect" | "builder" | null,
++    projectId = "project-a",
++  ): OrchestrationReadModel =>
++    ({
++      ...hierarchyModel,
++      threads: [
++        ...hierarchyModel.threads,
++        {
++          ...hierarchyModel.threads[0],
++          id: ThreadId.make(id),
++          projectId: ProjectId.make(projectId),
++          role,
++          parentThreadId: null,
++        },
++      ],
++    }) as OrchestrationReadModel;
++
++  const check = (input: {
++    readonly model: OrchestrationReadModel;
++    readonly threadId: string;
++    readonly projectId?: string;
++    readonly role?: "architect" | "builder" | null;
++    readonly parentThreadId?: string | null;
++  }) =>
++    Effect.runPromise(
++      Effect.result(
++        requireCodevHierarchy({
++          readModel: input.model,
++          commandType: "thread.create",
++          threadId: ThreadId.make(input.threadId),
++          projectId: ProjectId.make(input.projectId ?? "project-a"),
++          hierarchy: {
++            role: input.role,
++            parentThreadId:
++              input.parentThreadId == null ? input.parentThreadId : ThreadId.make(input.parentThreadId),
++          },
++        }),
++      ),
++    );
++
++  it("accepts a thread with neither field, which is every upstream thread", async () => {
++    const outcome = await check({ model: hierarchyModel, threadId: "thread-new" });
++    expect(outcome._tag).toBe("Success");
++  });
++
++  it("accepts a builder under an architect", async () => {
++    const outcome = await check({
++      model: withThread("thread-architect", "architect"),
++      threadId: "thread-new",
++      role: "builder",
++      parentThreadId: "thread-architect",
++    });
++    expect(outcome._tag).toBe("Success");
++  });
++
++  /**
++   * The ordering decision, stated as a test.
++   *
++   * A self-reference is a caller bug whether or not the thread exists, so it is
++   * reported as `parent-is-self` rather than `parent-not-found` — otherwise the
++   * answer sends someone hunting a missing thread that is in front of them. This
++   * case has BOTH properties: the parent does not exist AND it is the thread
++   * itself, so it can only pass if the order is right.
++   */
++  it("reports parent-is-self ahead of parent-not-found when both are true", async () => {
++    const outcome = await check({
++      model: hierarchyModel,
++      threadId: "thread-nowhere",
++      role: "builder",
++      parentThreadId: "thread-nowhere",
++    });
++    expect(outcome._tag).toBe("Failure");
++    expect((outcome as { failure: { reason: string } }).failure.reason).toBe("parent-is-self");
++  });
++
++  /**
++   * The other ordering decision. A parent in another project both exists and is
++   * not reachable, and "no such parent" would be a false answer about a thread
++   * the caller can plainly see.
++   */
++  it("reports parent-in-other-project rather than parent-not-found", async () => {
++    const outcome = await check({
++      model: withThread("thread-elsewhere", "architect", "project-b"),
++      threadId: "thread-new",
++      role: "builder",
++      parentThreadId: "thread-elsewhere",
++    });
++    expect(outcome._tag).toBe("Failure");
++    expect((outcome as { failure: { reason: string } }).failure.reason).toBe(
++      "parent-in-other-project",
++    );
++  });
++
++  it("treats an absent parentThreadId key the same as an explicit null", async () => {
++    // Upstream clients omit the key; Codev sends null. A rule that fires on only
++    // one spelling is a rule with a hole in it.
++    const omitted = await check({ model: hierarchyModel, threadId: "t-a", role: "builder" });
++    const explicit = await check({
++      model: hierarchyModel,
++      threadId: "t-b",
++      role: "builder",
++      parentThreadId: null,
++    });
++    expect(omitted._tag).toBe("Failure");
++    expect(explicit._tag).toBe("Failure");
++    expect((omitted as { failure: { reason: string } }).failure.reason).toBe(
++      (explicit as { failure: { reason: string } }).failure.reason,
++    );
++  });
++});
+diff --git a/apps/server/src/orchestration/decider.codevHierarchy.test.ts b/apps/server/src/orchestration/decider.codevHierarchy.test.ts
+index 3cc5d3949..eb33f99c2 100644
+--- a/apps/server/src/orchestration/decider.codevHierarchy.test.ts
++++ b/apps/server/src/orchestration/decider.codevHierarchy.test.ts
+@@ -274,21 +274,46 @@ it.layer(NodeServices.layer)("codev hierarchy refusals (spec 250)", (it) => {
+     }),
+   );
+ 
+-  it.effect("every refusal reports a distinct, actionable reason", () => {
+-    // The deliverable is not "five refusals" but "five reasons a caller can tell
+-    // apart". Asserted as a set so a future edit that collapses two of them onto
+-    // one discriminant fails here rather than silently.
+-    const reasons = new Set([
+-      "parent-not-found",
+-      "parent-in-other-project",
+-      "parent-is-self",
+-      "parent-not-architect",
+-      "builder-without-parent",
+-      "parent-on-non-builder",
+-    ]);
+-    expect(reasons.size).toBe(6);
+-    return Effect.void;
+-  });
++  /**
++   * The deliverable is not "six refusals" but "six reasons a caller can tell
++   * apart". An earlier version of this test built a Set of string literals and
++   * asserted its size — which proves that six distinct strings are six distinct
++   * strings, and would have passed unchanged if every refusal collapsed onto one
++   * discriminant. Review caught it.
++   *
++   * This dispatches all six and collects what the decider actually returned.
++   */
++  it.effect("every refusal reports a distinct reason, collected from real dispatches", () =>
++    Effect.gen(function* () {
++      const model = readModel([ARCHITECT, BUILDER, UPSTREAM, OTHER_PROJECT_ARCHITECT]);
++      const cases = [
++        createCommand({ threadId: "t1", role: "builder", parentThreadId: "thread-absent" }),
++        createCommand({ threadId: "t2", role: "builder", parentThreadId: "thread-other-architect" }),
++        createCommand({ threadId: "t3", role: "builder", parentThreadId: "t3" }),
++        createCommand({ threadId: "t4", role: "builder", parentThreadId: "thread-builder" }),
++        createCommand({ threadId: "t5", role: "builder", parentThreadId: null }),
++        createCommand({ threadId: "t6", role: "architect", parentThreadId: "thread-architect" }),
++      ];
++
++      const reasons: string[] = [];
++      for (const command of cases) {
++        const error = yield* refusalReason(command, model);
++        reasons.push(error.reason);
++      }
++
++      expect(reasons).toEqual([
++        "parent-not-found",
++        "parent-in-other-project",
++        "parent-is-self",
++        "parent-not-architect",
++        "builder-without-parent",
++        "parent-on-non-builder",
++      ]);
++      // The property that matters: collapsing any two onto one discriminant
++      // fails here, because these came out of the decider rather than a literal.
++      expect(new Set(reasons).size).toBe(cases.length);
++    }),
++  );
+ });
+ 
+ it.layer(NodeServices.layer)("codev hierarchy acceptances (spec 250)", (it) => {
+@@ -351,25 +376,34 @@ it.layer(NodeServices.layer)("codev hierarchy acceptances (spec 250)", (it) => {
+    * make archiving order-dependent. The children become orphans — a real state
+    * the reader shows as unattributed in phase 7, rather than hiding.
+    */
+-  it.effect("archiving an architect leaves its builders readable and still parented", () =>
++  it.effect("archiving an architect emits one event and touches no other thread", () =>
+     Effect.gen(function* () {
+-      const model = readModel([ARCHITECT, BUILDER]);
++      // An earlier version asserted on `model.threads` — its own input fixture,
++      // which the decider never mutates — so it would have passed no matter what
++      // the decider emitted. Review caught it. The real property is about the
++      // decider's OUTPUT: archiving is a single-aggregate event that says nothing
++      // about children, which is what makes orphaning happen by omission rather
++      // than by a cascade someone has to remember not to write.
+       const event = yield* decideOrchestrationCommand({
+         command: {
+           type: "thread.archive",
+           commandId: CommandId.make("cmd-archive"),
+           threadId: ThreadId.make("thread-architect"),
+         },
+-        readModel: model,
++        readModel: readModel([ARCHITECT, BUILDER]),
+       });
+       const events = Array.isArray(event) ? event : [event];
+-      expect(events[0]?.type).toBe("thread.archived");
+ 
+-      // The builder is untouched: not deleted, not reparented, not stripped of the
+-      // edge. It points at an archived parent, which is exactly what an orphan is.
+-      const builder = model.threads.find((t) => t.id === "thread-builder");
+-      expect(builder?.parentThreadId).toBe("thread-architect");
+-      expect(builder?.role).toBe("builder");
++      expect(events).toHaveLength(1);
++      expect(events[0]?.type).toBe("thread.archived");
++      expect(events[0]?.aggregateId).toBe("thread-architect");
++      // No event mentions the builder: it is neither archived, deleted, nor
++      // reparented. Whether it remains readable afterwards is a persistence
++      // question, asserted for real in codev/threadHierarchy.test.ts.
++      expect(
++        events.some((e) => e.aggregateId === "thread-builder"),
++        "archiving a parent must not cascade to its children",
++      ).toBe(false);
+     }),
+   );
+ 
