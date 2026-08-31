@@ -89,11 +89,34 @@ gates:
   pr:
     status: pending
     requested_at: '2026-08-31T22:10:40.784Z'
+    request:
+      question: 'Merge PR #305 for issue #272? Both consultation lanes returned APPROVE and the one substantive finding is fixed.'
+      choices:
+        - label: Approve the pr gate
+          consequence: >-
+            I merge with --merge (not squash), record it with porch, and the Fixes #272 in the body closes the issue.
+            Workspaces become named top-level sidebar nodes and a workspace nobody has spawned into finally renders.
+          recommended: true
+        - label: Review the diff first
+          consequence: >-
+            Nothing is lost; the gate stays pending. The four spots worth your eye are listed under 'Things to Look At'
+            in the PR body, and the live 8-of-8 evidence is in codev/research/272-workspace-projection-evidence.json.
+      terminalExcerpt: |-
+        claude    VERDICT: APPROVE   (4 non-blocking items)
+        opencode  VERDICT: APPROVE   KEY_ISSUES: None
+
+        Finding 1 FIXED, not deferred: isCodevWorkspaceDirectory was injected away by every
+        test AND by the live harness, so the production filter had no coverage. Testing it
+        surfaced a real defect - existsSync accepted a .codev that is a FILE. Now requires a
+        directory; the assertion fails with the guard reverted. 33 tests in that file, was 28.
+
+        Items 2-4 (sweeper interval untested, token re-exchanged every 30s, WARN every 30s on
+        a down server) are real, documented in the review, and need issues - that call is yours.
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T16:47:04.075Z'
-updated_at: '2026-08-31T22:10:40.785Z'
+updated_at: '2026-08-31T22:10:55.896Z'
 pr_history:
   - phase: review
     pr_number: 305
