@@ -121,6 +121,27 @@ const counted = (n) => (typeof n === 'number' ? String(n) : '**not counted**');
  * generator was ever run on it. The second is always "no", and it is printed
  * rather than omitted so a reader cannot infer a shape-check from the silence.
  */
+/**
+ * REGENERATION, WHICH IS NOW RUN RATHER THAN DEFERRED.
+ *
+ * Three answers, kept apart: it was not attempted (and why), the generator did
+ * not complete, or it completed and the emitted shapes either held or moved. A
+ * moved shape is a RESULT — it is what adopting the new base costs — so it is
+ * rendered as a measurement, not as a failure.
+ */
+const regen = drill.contractRegeneration ?? {};
+const regenerated = !regen.attempted
+  ? `**not attempted** — ${regen.reason ?? 'no reason recorded'}`
+  : regen.generated === false
+    ? '**the generator did not complete** — see `contractRegeneration.generatorSaid`'
+    : `yes, from ${String(regen.source?.commit ?? '').slice(0, 12)}`;
+const shapeCheck = !regen.attempted || regen.generated === false
+  ? '**not answered** — the contract was not regenerated'
+  : regen.shapeCheckHolds
+    ? 'holds — the shapes Codev consumes are byte-identical to the vendored contract'
+    : `**${(regen.shapesDiffering ?? []).length} shape artifact(s) would change**: `
+      + `${(regen.shapesDiffering ?? []).map((f) => `\`${f}\``).join(', ')}`;
+
 const closureMoved = sourceHash.checked
   ? (sourceHash.moved?.length
     ? `**${sourceHash.moved.length} of ${(drill.contractClosure?.files ?? []).length}**: `
@@ -147,7 +168,8 @@ const lines = [
   `| ...classified | ${Object.entries(movement.counts ?? {}).sort().map(([verdict, n]) => `${n} \`${verdict}\``).join(', ') || '**none**'} | \`classify-churn --upstream-movement\` |`,
   `| regeneration blocked by the rebase | ${drill.contractClosure?.regenerationReachable ? 'no — zero closure conflicts' : '**yes** — the generator\'s own source conflicts'} | rebase drill |`,
   `| closure files the rebased tree would change | ${closureMoved} | rebase drill |`,
-  `| contract regenerated / \`shape-check\` run on the rebased tree | ${drill.contractRegeneration?.attempted ? 'yes' : '**no** — see the drill header'} | rebase drill |`,
+  `| contract regenerated from the rebased tree | ${regenerated} | rebase drill |`,
+  `| \`shape-check\` against the vendored contract | ${shapeCheck} | rebase drill |`,
   `| watermark at base | ${watermark.watermarkAtBase ?? 'unknown'} | rebase drill |`,
   `| migrations upstream added | ${(watermark.addedByUpstream ?? []).join(', ') || 'none'} | rebase drill |`,
   `| any shadowed (would be skipped) | ${watermark.checked ? (watermark.shadowed?.length ? `**${watermark.shadowed.join(', ')}**` : 'none') : '**not checked**'} | rebase drill |`,

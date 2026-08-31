@@ -185,17 +185,36 @@ It reports these, and they answer different questions:
 | `wholeSurface.conflictedFiles` | how much conflicts IN TOTAL — a rebase stops at the first, so the first understates the job every time |
 | `contractClosure.regenerationReachable` | can the vendored contract be regenerated afterwards, or is it stranded behind the conflicts |
 | `contractClosure.sourceHash.moved` | would the regenerated contract be the one we vendored — which closure files the merged tree hands the generator with different bytes |
-| `contractRegeneration.attempted` | **always `false`**, with the reason, on every result of a drill that ran. See below |
+| `contractRegeneration` | did the contract REGENERATE from the rebased tree, and do the shapes Codev consumes still match the vendored ones. See below |
 | `watermark` | does every migration upstream added land ABOVE the watermark our base leaves |
 
-**The drill does not regenerate the contract and does not run `shape-check`, and it says so in every
-result rather than leaving it to be inferred.** `generate.mjs` refuses any checkout whose `HEAD` is
-not `pin.commit`, and a rebased tree never satisfies that — its head is a commit that did not exist
-before the rebase. Regenerating from one means moving the pin, which is step 3 below, taken when a
-rebase is adopted for a reason. The drill measures the generator's *inputs* instead:
-`contractClosure.conflicted` says whether the generator would find its source, and
-`contractClosure.sourceHash.moved` says whether that source still hashes to what the vendored
-contract came from — the layer `generate.mjs` names as its load-bearing drift detector.
+**The drill DOES regenerate the contract, in a second throwaway, and it does it without moving
+anything.** `generate.mjs` refuses any checkout whose `HEAD` is not `pin.commit`, so pointed at this
+repository "regenerate from the rebased tree" would mean moving the real pin — which is step 3 below,
+taken when a rebase is adopted for a reason. The way around that is not to loosen the guard:
+
+1. `git merge-tree --write-tree` plus `git commit-tree` give the merged tree an identity **inside the
+   throwaway clone**. A sequential rebase stops at the first conflict, so there is usually no rebased
+   HEAD; the generator reads only the closure, and the closure is usually clean.
+2. A **scratch codegen root** is assembled beside it — `generate.mjs` resolves `pin.json`, its output
+   directory and its staging area from its own file location, so a copy of the tool under a scratch
+   directory reads a scratch pin naming the merged commit. The guard is satisfied honestly: the
+   artifacts really are reproducible from the commit they name.
+3. The output is compared byte for byte to the artifacts **vendored in this repository**, never to
+   what the scratch run just wrote.
+
+A regenerated contract that differs is a **result**, not a failure — it is what adopting the base
+costs. `shapesDiffering` is the load-bearing list; `embedsCommitId` names the two artifacts that
+carry the commit id and would differ after any rebase.
+
+**The generator needs Node >= 22** (it imports the closure's TypeScript). The drill itself runs under
+20. An interpreter that cannot run it reports `attempted: false` with `NO_INTERPRETER` — never "the
+contract does not regenerate", which would be a claim about the fork made from a fact about this
+machine. `T3_CODEGEN_NODE` overrides.
+
+The generator's *inputs* are still measured alongside: `contractClosure.conflicted` says whether the
+generator would find its source, and `contractClosure.sourceHash.moved` says whether that source
+still hashes to what the vendored contract came from.
 
 A `could-not-run` result carries none of these fields. That is deliberate: it means nothing was
 learned, and a measurement-shaped field on such a document is the first thing a reader would mistake
@@ -229,8 +248,9 @@ commits:
   but **4 of the 9 closure files come out of the merge with different bytes** (`auth.ts`,
   `baseSchemas.ts`, `environment.ts`, `orchestration.ts`), so the regenerated contract would not be
   the one vendored. Not blocked and not unchanged: two facts that had been reading as one.
-- **The contract was not regenerated and `shape-check` did not run** on the rebased tree. Recorded
-  as `contractRegeneration.attempted: false` with the reason, not left absent.
+- **The contract REGENERATES from the rebased tree** — the generator completes — and
+  **`schema.json`, `schema.ts` and `types.d.ts` all move**. The shapes Codev consumes change when
+  this base is adopted, and that is now a run rather than an open question.
 - **Watermark holds against a real new migration**: upstream added `043`, above the `042` our base
   leaves. Phase 2 tested that invariant with a synthetic migration; this is the first time a real
   one has arrived to test it with.

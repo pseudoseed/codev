@@ -165,10 +165,41 @@ describe('spec 250 phase 11: the rebase drill evidence', () => {
    * nobody having considered it. If the drill ever does regenerate, this test
    * fails and the evidence prose has to be rewritten with it.
    */
-  it('records that regeneration and shape-check did not run, with the reason', () => {
-    expect(evidence.contractRegeneration?.attempted).toBe(false);
-    expect(typeof evidence.contractRegeneration.reason).toBe('string');
-    expect(evidence.contractRegeneration.reason.length).toBeGreaterThan(80);
+  it.runIf(!zeroMovement)('regenerates the contract from the rebased tree, and says so', () => {
+    const regen = evidence.contractRegeneration;
+    expect(regen?.attempted).toBe(true);
+    expect(regen.generated).toBe(true);
+    // The commit generated from must be one that did not exist before the drill —
+    // if it were `pin.commit`, the generator ran against the FORK and the whole
+    // answer is the fork compared to itself.
+    expect(regen.source.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(regen.source.commit).not.toBe(pin.commit);
+    expect(regen.source.commit).not.toBe(evidence.base);
+    expect(regen.source.commit).not.toBe(evidence.target);
+    expect(typeof regen.shapeCheckHolds).toBe('boolean');
+    expect(Array.isArray(regen.artifactsDiffering)).toBe(true);
+    // Every shape artifact reported as moved must also be in the full list; two
+    // lists that can disagree are two answers to one question.
+    for (const file of regen.shapesDiffering as string[]) {
+      expect(regen.artifactsDiffering).toContain(file);
+    }
+    expect(regen.shapeCheckHolds).toBe(regen.shapesDiffering.length === 0);
+  });
+
+  /**
+   * `generate.mjs`'s own dangerous case, restated on this path because it is the
+   * other place it can occur: the closure source moved and the emitted schema did
+   * not. That is NOT "no effect" — every branded id in the contract emits
+   * unconstrained, so a relaxed constraint lands here with a zero-byte schema
+   * diff. The drill must compute it rather than leave it to a reader.
+   */
+  it.runIf(!zeroMovement)('computes the hash-moved-shapes-did-not case rather than implying it', () => {
+    const regen = evidence.contractRegeneration;
+    expect(typeof regen.hashMovedShapesDidNot).toBe('boolean');
+    expect(regen.hashMovedShapesDidNot).toBe(
+      (regen.artifactsDiffering as string[]).includes('source-hash.json')
+        && (regen.shapesDiffering as string[]).length === 0,
+    );
   });
 
   /**
@@ -258,7 +289,10 @@ describe('spec 250 phase 11: the rebase drill evidence', () => {
     expect(evidence.upstreamChurn.commits).toBe(0);
     expect(evidence.upstreamChurn.closureTouching).toBe(0);
     // The stated refusal is carried on this path too — it was the one most
-    // likely to be forgotten, being an early return.
+    // likely to be forgotten, being an early return. Nothing was rebased and
+    // nothing merged, so there is no tree to generate from, and that is spelled
+    // differently from "the contract does not regenerate".
     expect(evidence.contractRegeneration.attempted).toBe(false);
+    expect(evidence.contractRegeneration.reason).toContain('no tree to generate');
   });
 });

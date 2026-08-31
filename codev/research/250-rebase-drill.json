@@ -71,16 +71,41 @@
         "environment.ts",
         "orchestration.ts"
       ],
-      "detail": "4 of 9 closure files differ after the merge: auth.ts, baseSchemas.ts, environment.ts, orchestration.ts. The generator would emit a different contract from the rebased tree; how different is what classify-churn --upstream-movement answers, and what generate.mjs settles once a rebase is adopted."
+      "detail": "4 of 9 closure files differ after the merge: auth.ts, baseSchemas.ts, environment.ts, orchestration.ts. The generator therefore reads different bytes; WHAT it emits from them is contractRegeneration, which runs it rather than predicting."
     },
     "detail": "every file the generator reads merged without conflict, so regenerating the contract from the rebased tree is not blocked by the rebase. What the regenerated contract would CHANGE is bounded by sourceHash.moved and settled by classify-churn --upstream-movement."
   },
-  "startedAt": "2026-08-31T11:36:48.315Z",
-  "finishedAt": "2026-08-31T11:36:53.348Z",
   "contractRegeneration": {
-    "attempted": false,
-    "reason": "generate.mjs refuses any checkout whose HEAD is not pin.commit, and a rebased tree never satisfies that — its head is a commit that did not exist before the rebase. Regenerating from one means moving the pin, which is the adoption this drill exists in order not to perform (step 3 of tools/t3-codegen/REFRESH.md). contractClosure.sourceHash bounds the job instead. shape-check did not run."
+    "attempted": true,
+    "source": {
+      "commit": "44af25111869361f8966640bbbbd22832bf90d97",
+      "kind": "the three-way merge of the same two trees, written by git merge-tree. Conflicted paths carry markers; none of them is in the contract closure."
+    },
+    "method": "a scratch pin naming the merged commit, in a scratch copy of the codegen tool. The real pin.json was neither read nor written for this, and both real checkouts are untouched.",
+    "interpreter": "v22.22.2",
+    "generated": true,
+    "shapeCheckHolds": false,
+    "artifactsDiffering": [
+      "ATTRIBUTION.md",
+      "schema.json",
+      "schema.ts",
+      "source-hash.json",
+      "types.d.ts"
+    ],
+    "shapesDiffering": [
+      "schema.json",
+      "schema.ts",
+      "types.d.ts"
+    ],
+    "embedsCommitId": [
+      "ATTRIBUTION.md",
+      "source-hash.json"
+    ],
+    "hashMovedShapesDidNot": false,
+    "detail": "the contract regenerates, and 3 shape artifacts would change: schema.json, schema.ts, types.d.ts. That is what adopting this base costs, measured rather than predicted."
   },
+  "startedAt": "2026-08-31T11:53:48.831Z",
+  "finishedAt": "2026-08-31T11:53:54.842Z",
   "upstreamChurn": {
     "range": "082e6ea52186..9b2d04317c68",
     "commits": 104,
