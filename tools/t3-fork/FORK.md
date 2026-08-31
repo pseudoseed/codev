@@ -140,7 +140,7 @@ prediction; the drill is the measurement, and where they disagree the drill wins
 | `packages/contracts/src/orchestration.ts` | **High** | **auto-merged clean** — and upstream touched it twice in exactly the two unions we extend (`subscribeThread`, `dispatchCommand`) |
 | `apps/server/src/server.test.ts` | Low ("mostly one-hunk additions") | **conflicts**, and it is where the sequential rebase stops, at commit 6 of 42 |
 | `apps/web/src/components/Sidebar.tsx`, `Sidebar.logic.ts` | Medium | **conflicts** |
-| the pinned contract closure | — | **zero conflicts**, so the vendored contract is regenerable from the rebased tree |
+| the pinned contract closure | — | **zero conflicts**, so regeneration is not blocked — but **4 of the 9 closure files come out of the merge with different bytes** (`auth.ts`, `baseSchemas.ts`, `environment.ts`, `orchestration.ts`), so the regenerated contract would not be the one vendored. Hashed off the merged tree; the drill does not run the generator, and says so |
 
 The prediction was wrong in the direction that matters least (a High that came out clean) and right
 about the sidebar. What it under-rated was the upstream TEST — which is the half this table already

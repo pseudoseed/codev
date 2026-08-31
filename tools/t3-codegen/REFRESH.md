@@ -176,14 +176,31 @@ expects the preserved clone to be there and every spec 146 and 236 result tied t
 stops being re-runnable. Advancing the base is a decision taken when there is a reason — a
 security fix, a feature we need — never to satisfy a phase.
 
-It reports four things, and they answer four different questions:
+It reports these, and they answer different questions:
 
 | Field | Question |
 |---|---|
+| `upstreamChurn` | how far upstream has moved, and how much of that touches the pinned closure |
 | `stoppedAt` + `conflictedFiles` | where does a sequential `git rebase` stop |
 | `wholeSurface.conflictedFiles` | how much conflicts IN TOTAL — a rebase stops at the first, so the first understates the job every time |
 | `contractClosure.regenerationReachable` | can the vendored contract be regenerated afterwards, or is it stranded behind the conflicts |
+| `contractClosure.sourceHash.moved` | would the regenerated contract be the one we vendored — which closure files the merged tree hands the generator with different bytes |
+| `contractRegeneration.attempted` | **always `false`**, with the reason. See below |
 | `watermark` | does every migration upstream added land ABOVE the watermark our base leaves |
+
+**The drill does not regenerate the contract and does not run `shape-check`, and it says so in every
+result rather than leaving it to be inferred.** `generate.mjs` refuses any checkout whose `HEAD` is
+not `pin.commit`, and a rebased tree never satisfies that — its head is a commit that did not exist
+before the rebase. Regenerating from one means moving the pin, which is step 3 below, taken when a
+rebase is adopted for a reason. The drill measures the generator's *inputs* instead:
+`contractClosure.conflicted` says whether the generator would find its source, and
+`contractClosure.sourceHash.moved` says whether that source still hashes to what the vendored
+contract came from — the layer `generate.mjs` names as its load-bearing drift detector.
+
+The hash is taken off the merged worktree **before** the probe merge is aborted. After the abort the
+worktree is the fork again and the comparison is the fork against itself, which reports zero moved
+files on every run forever. If you move that call, the test that holds it is
+`packages/codev/src/__tests__/spec-250-rebase-drill.test.ts`.
 
 Outcomes: `ok` (including `NO_UPSTREAM_MOVEMENT`, which is a pass), `conflicts` — **a result, not a
 failure; it is the number the drill exists to produce** — and `could-not-run`, which must never be
@@ -202,7 +219,12 @@ commits:
   `apps/web/src/components/Sidebar.tsx` and `Sidebar.logic.ts`.
 - **`packages/contracts/src/orchestration.ts` auto-merged clean** — the file `FORK.md` rated High,
   and the one upstream changed twice in the unions we extend.
-- **The contract closure has zero conflicts**, so regeneration is reachable rather than stranded.
+- **The contract closure has zero conflicts**, so regeneration is reachable rather than stranded —
+  but **4 of the 9 closure files come out of the merge with different bytes** (`auth.ts`,
+  `baseSchemas.ts`, `environment.ts`, `orchestration.ts`), so the regenerated contract would not be
+  the one vendored. Not blocked and not unchanged: two facts that had been reading as one.
+- **The contract was not regenerated and `shape-check` did not run** on the rebased tree. Recorded
+  as `contractRegeneration.attempted: false` with the reason, not left absent.
 - **Watermark holds against a real new migration**: upstream added `043`, above the `042` our base
   leaves. Phase 2 tested that invariant with a synthetic migration; this is the first time a real
   one has arrived to test it with.

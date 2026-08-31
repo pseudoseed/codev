@@ -83,6 +83,27 @@ if (drill.forkHead !== pin.commit) {
 
 const surface = drill.wholeSurface?.conflictedFiles ?? [];
 const watermark = drill.watermark ?? {};
+const churn = drill.upstreamChurn ?? {};
+const sourceHash = drill.contractClosure?.sourceHash ?? {};
+
+/**
+ * `null` is "the drill could not count", `0` is "there was nothing to count".
+ * The collector must not render them the same way — that is the same defect the
+ * exit codes above exist to avoid, one layer up.
+ */
+const counted = (n) => (typeof n === 'number' ? String(n) : '**not counted**');
+
+/**
+ * What the rebased tree would hand the generator, and — separately — whether the
+ * generator was ever run on it. The second is always "no", and it is printed
+ * rather than omitted so a reader cannot infer a shape-check from the silence.
+ */
+const closureMoved = sourceHash.checked
+  ? (sourceHash.moved?.length
+    ? `**${sourceHash.moved.length} of ${(drill.contractClosure?.files ?? []).length}**: `
+      + `${sourceHash.moved.map((f) => `\`${f}\``).join(', ')}`
+    : 'none — the rebased tree regenerates the contract already vendored')
+  : `**not checked** — ${sourceHash.reason ?? 'no reason recorded'}`;
 
 const lines = [
   BEGIN,
@@ -98,7 +119,11 @@ const lines = [
   `| customization commits carried | ${drill.commitsCarried} | rebase drill |`,
   `| sequential rebase stops at | ${drill.stoppedAt ? `\`${drill.stoppedAt}\`, on ${(drill.conflictedFiles ?? []).join(', ')}` : 'did not stop'} | rebase drill |`,
   `| whole conflict surface | **${surface.length}** file${surface.length === 1 ? '' : 's'}${surface.length ? `: ${surface.map((f) => `\`${f}\``).join(', ')}` : ''} | rebase drill |`,
-  `| contract regenerable after | ${drill.contractClosure?.regenerationReachable ? '**yes** — zero closure conflicts' : '**no**'} | rebase drill |`,
+  `| upstream commits in the range | ${counted(churn.commits)} | rebase drill |`,
+  `| of those, touching the pinned closure | ${counted(churn.closureTouching)} | rebase drill |`,
+  `| regeneration blocked by the rebase | ${drill.contractClosure?.regenerationReachable ? 'no — zero closure conflicts' : '**yes** — the generator\'s own source conflicts'} | rebase drill |`,
+  `| closure files the rebased tree would change | ${closureMoved} | rebase drill |`,
+  `| contract regenerated / \`shape-check\` run on the rebased tree | ${drill.contractRegeneration?.attempted ? 'yes' : '**no** — see the drill header'} | rebase drill |`,
   `| watermark at base | ${watermark.watermarkAtBase ?? 'unknown'} | rebase drill |`,
   `| migrations upstream added | ${(watermark.addedByUpstream ?? []).join(', ') || 'none'} | rebase drill |`,
   `| any shadowed (would be skipped) | ${watermark.checked ? (watermark.shadowed?.length ? `**${watermark.shadowed.join(', ')}**` : 'none') : '**not checked**'} | rebase drill |`,
