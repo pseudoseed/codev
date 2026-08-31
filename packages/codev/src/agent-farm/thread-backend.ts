@@ -12,11 +12,12 @@
  * never be spelled the same way as a server that was never named.
  */
 import { join, resolve } from 'node:path';
-import { statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { DispatchJournal } from '@cluesmith/porch-driver/commands';
 import { TurnTracker } from '@cluesmith/porch-driver/turn';
 import { createPorchThreadEngine } from './porch-thread-engine.js';
 import { createThreadSubscriptionPool, type ThreadSubscriber } from './thread-subscriptions.js';
+import { startGateWatch } from './servers/t3-gate-publisher.js';
 import {
   canonicalWorkspaceKey,
   getThreadEngine,
@@ -70,6 +71,21 @@ export interface ThreadBackendConfig {
   readonly workspaceRoot: string;
   readonly defaultHarness?: string;
   readonly defaultModel?: string;
+  /**
+   * Spec 250 phase 6. Absolute path to the gate-writer token the fork's server
+   * writes at start (`<serverBaseDir>/codev/gate-writer.token`, mode 0600).
+   *
+   * Absent means gate publishing is off, and that is a configuration rather than
+   * a fault: a workspace can be thread-backed against an upstream t3code that has
+   * no gate block at all. Present-but-unreadable is a fault and is reported as
+   * one — "I was told where the credential is and could not read it" must not be
+   * spelled like "there is no credential".
+   *
+   * It is a PATH and not the token itself, so the credential never enters
+   * `.codev/config.json` and never reaches a config layer someone might commit.
+   * The server rotates it on every start; reading it late is the point.
+   */
+  readonly gateWriterTokenPath?: string;
 }
 
 /**
@@ -89,6 +105,7 @@ export function readThreadBackendConfig(workspaceRoot: string): ThreadBackendCon
       workspaceRoot,
       defaultHarness: process.env.CODEV_T3_HARNESS?.trim() || undefined,
       defaultModel: process.env.CODEV_T3_MODEL?.trim() || undefined,
+      gateWriterTokenPath: process.env.CODEV_T3_GATE_WRITER_TOKEN_PATH?.trim() || undefined,
     };
   }
 
@@ -121,7 +138,63 @@ export function readThreadBackendConfig(workspaceRoot: string): ThreadBackendCon
     workspaceRoot,
     defaultHarness: typeof threads.harness === 'string' ? threads.harness : undefined,
     defaultModel: typeof threads.model === 'string' ? threads.model : undefined,
+    // The env var wins, matching every other field in the env branch above. A
+    // path is not a secret, so unlike `bootstrapToken` it is safe in the
+    // committed config — what it points AT is the secret, and it stays on the
+    // server's disk at 0600.
+    gateWriterTokenPath:
+      process.env.CODEV_T3_GATE_WRITER_TOKEN_PATH?.trim()
+      || (typeof threads.gateWriterTokenPath === 'string' ? threads.gateWriterTokenPath.trim() : '')
+      || undefined,
   };
+}
+
+/**
+ * The gate-writer credential, read from where the fork's server wrote it.
+ *
+ * THREE ANSWERS, and the middle one is why this is not an inline `readFileSync`:
+ *
+ *   not-configured  no path was named. Gate publishing is off, deliberately —
+ *                   a workspace can be thread-backed against an upstream t3code
+ *                   that has no gate block at all.
+ *   unreadable      a path was named and could not be read, or held nothing.
+ *                   A FAULT: someone said where the credential is. Reporting it
+ *                   as "off" would leave every gate invisible with nothing said.
+ *   token           the credential.
+ *
+ * The token is never logged, never returned in an error message, and never put
+ * anywhere but the ticket request. `AuthError` already truncates a body that
+ * echoes one back.
+ */
+export type GateWriterCredential =
+  | { readonly kind: 'token'; readonly token: string }
+  | { readonly kind: 'not-configured' }
+  | { readonly kind: 'unreadable'; readonly detail: string };
+
+export function readGateWriterToken(path: string | undefined): GateWriterCredential {
+  if (!path) return { kind: 'not-configured' };
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch (error) {
+    const errno = error as NodeJS.ErrnoException;
+    return {
+      kind: 'unreadable',
+      detail:
+        `${path}: ${errno.code ?? (error instanceof Error ? error.message : String(error))}`
+        + (errno.code === 'ENOENT'
+          ? ' — the fork writes this at server start, so an absent file usually means the server '
+            + 'has not started, or is an upstream t3code with no gate support'
+          : ''),
+    };
+  }
+  const token = raw.trim();
+  // An empty file is not an empty credential, it is a half-written one — the
+  // fork writes to `.partial` and renames precisely so a reader never sees that,
+  // but a truncated token authenticates like a revoked one and would be reported
+  // as the server refusing us.
+  if (token === '') return { kind: 'unreadable', detail: `${path} is empty` };
+  return { kind: 'token', token };
 }
 
 /**
@@ -205,6 +278,22 @@ async function connectDispatcher(
   config: ThreadBackendConfig,
   upgradeTimeoutMs: number,
   onClosed: () => void,
+  /**
+   * An access token to use INSTEAD of exchanging the bootstrap token.
+   *
+   * Spec 250 phase 6. The gate writer holds its own credential — `codev-agent`,
+   * scoped to `orchestration:read` and `codev:gate-write` and nothing else — and
+   * that credential is already an access token, written to disk by the fork's
+   * server at start. So it needs a connection and not an exchange.
+   *
+   * The "one socket rather than two" note below still holds and is not being
+   * walked back: the reason for one socket is that a SECOND EXCHANGE spends a
+   * one-time bootstrap token. This path performs no exchange, so it spends
+   * nothing. Sharing the engine's socket instead is the thing that cannot be
+   * done — that socket carries `orchestration:operate`, and putting gate writes
+   * on it is precisely what phase 4 gave the method its own scope to prevent.
+   */
+  accessToken?: string,
 ): Promise<{
   dispatcher: { call: (m: string, p: unknown) => Promise<unknown> };
   /**
@@ -236,9 +325,11 @@ async function connectDispatcher(
 }> {
   const { T3Client } = await import('@cluesmith/t3-client/client');
   const auth = await import('@cluesmith/t3-client/auth');
-  const access = await auth.exchangeBootstrapToken(config.serverUrl, config.bootstrapToken, {
-    clientLabel: 'codev-afx',
-  });
+  const access = accessToken !== undefined
+    ? { access_token: accessToken }
+    : await auth.exchangeBootstrapToken(config.serverUrl, config.bootstrapToken, {
+      clientLabel: 'codev-afx',
+    });
   const ticket = await auth.issueWebSocketTicket(config.serverUrl, access.access_token);
   const WebSocketCtor = await webSocketCtor();
   const socket = new WebSocketCtor(auth.webSocketUrl(config.serverUrl, ticket.ticket));
@@ -909,6 +1000,73 @@ async function initialiseThreadBackend(
     throw closedDuringInit(config.serverUrl, config.workspaceRoot);
   }
   installThreadSpawnFactory(key);
+
+  /**
+   * Spec 250 phase 6. The gate publisher, on its OWN connection and credential.
+   *
+   * Started here because this is where the socket's life begins and ends, which
+   * is what makes "on reconnect it republishes current state" true with no code
+   * that knows about reconnects: a new connection builds a new `GatePublisher`,
+   * which remembers nothing, so its first cycle republishes everything.
+   *
+   * It does NOT reuse `dispatcher`. That socket carries `orchestration:operate`,
+   * and routing gate writes over it is exactly what phase 4 gave `codev.gateWrite`
+   * its own scope to prevent — the whole arrangement is that `codev-agent` holds
+   * the only `codev:gate-write` credential and nothing else does.
+   *
+   * NON-FATAL, in all three shapes. A workspace whose gates do not publish is a
+   * workspace where a human has to look at `status.yaml` instead of the sidebar;
+   * a workspace that cannot spawn is one where nothing runs at all. Trading the
+   * second for the first would be the wrong way round. Every failure is said out
+   * loud rather than inferred from a sidebar that shows no gates.
+   */
+  const credential = readGateWriterToken(config.gateWriterTokenPath);
+  if (credential.kind === 'unreadable') {
+    logger.warn(
+      `Gate publishing is off for ${config.workspaceRoot}: the gate-writer credential was named `
+      + `and could not be read (${credential.detail}). Porch gates will not appear on threads; `
+      + `status.yaml still carries all of them.`,
+    );
+  } else if (credential.kind === 'token') {
+    try {
+      const gateConnection = await connectDispatcher(
+        config,
+        upgradeTimeoutMs,
+        () => { /* the engine's own close handler owns eviction; this socket carries no engine */ },
+        credential.token,
+      );
+      const watch = startGateWatch({
+        workspaceRoot: config.workspaceRoot,
+        writer: gateConnection.dispatcher,
+        builderWorktrees: (root) => builderArtifactRoots(root),
+        log: (level, message) => {
+          if (level === 'ERROR') logger.error(message);
+          else if (level === 'WARN') logger.warn(message);
+          else logger.info(message);
+        },
+      });
+      gateWatches.set(key, () => {
+        watch.close();
+        gateConnection.close();
+      });
+      // The first cycle NOW, not on the first file change. A gate that reached
+      // `pending` while this process was down would otherwise stay invisible until
+      // something touched `status.yaml` — which, for a gate waiting on a human, is
+      // exactly never.
+      void watch.publishNow().catch((error: unknown) => {
+        logger.warn(
+          `The first gate publish cycle for ${config.workspaceRoot} failed: `
+          + `${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    } catch (error) {
+      logger.warn(
+        `Gate publishing is off for ${config.workspaceRoot}: the gate-writer connection to `
+        + `${config.serverUrl} could not be opened (${error instanceof Error ? error.message : String(error)}). `
+        + `Spawning is unaffected.`,
+      );
+    }
+  }
   // Remembered so a one-shot command can hang up when it is done — see
   // `closeThreadBackend`. Registered alongside the engine and dropped with it.
   //
@@ -932,6 +1090,33 @@ async function initialiseThreadBackend(
  * hangs up before it returns, so there is nothing left to close.
  */
 const hangUp = new Map<string, () => void>();
+
+/**
+ * A per-workspace gate-watch closer.
+ *
+ * Separate from `hangUp` because it is a separate socket with a separate
+ * credential, and because it may be absent on a workspace whose engine connected
+ * fine — gate publishing is optional and its failures are non-fatal.
+ */
+const gateWatches = new Map<string, () => void>();
+
+/**
+ * The builder worktrees under a workspace, for the gate watch's artifact roots.
+ *
+ * A builder's `status.yaml` lives in ITS worktree, not in the workspace, so a
+ * watch that fingerprints only the workspace root would never notice a builder
+ * gate at all — which is every gate that matters here.
+ */
+function builderArtifactRoots(workspaceRoot: string): string[] {
+  try {
+    return readdirSync(join(workspaceRoot, '.builders'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(workspaceRoot, '.builders', entry.name));
+  } catch {
+    // No `.builders` yet is the ordinary state of a fresh workspace.
+    return [];
+  }
+}
 
 /**
  * Hang up this workspace's t3code connection and drop what was registered on it.
@@ -960,6 +1145,16 @@ export function closeThreadBackend(workspaceRoot: string): void {
   const key = canonicalWorkspaceKey(workspaceRoot);
   const close = hangUp.get(key);
   hangUp.delete(key);
+  // BEFORE the early return below, and unconditionally.
+  //
+  // The gate watch is a separate socket AND a file watcher, and it can exist on a
+  // workspace whose engine never registered — gate publishing is optional and its
+  // failures are non-fatal, so `hangUp` being empty says nothing about it. Behind
+  // the `if (!close) return` it would have leaked a live `fs.watch` and a live
+  // WebSocket on exactly the path a one-shot command takes to exit.
+  const stopGates = gateWatches.get(key);
+  gateWatches.delete(key);
+  stopGates?.();
   // Dropped whether or not there was a socket to close: leaving an engine registered on a
   // connection nobody holds is the dead-engine state this module works to avoid.
   setThreadEngine(undefined, key);
