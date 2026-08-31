@@ -26,17 +26,17 @@ plan_phases:
     status: complete
   - id: phase_8
     title: Gate rendering in t3code
-    status: in_progress
+    status: complete
   - id: phase_9
     title: Builder tiling
-    status: pending
+    status: in_progress
   - id: phase_10
     title: Approval from t3code over the same-origin proxy
     status: pending
   - id: phase_11
     title: 'Acceptance run: tailnet iPad and the rebase drill'
     status: pending
-current_plan_phase: phase_8
+current_plan_phase: phase_9
 gates:
   spec-approval:
     status: approved
@@ -101,7 +101,7 @@ gates:
   verify-approval:
     status: pending
 iteration: 1
-build_complete: true
+build_complete: false
 history:
   - iteration: 1
     plan_phase: phase_1
@@ -202,7 +202,7 @@ history:
           /Users/chris/dev/codev-1455/.builders/spir-250/codev/projects/250-t3code-is-the-front-end-privat/250-phase_6-iter1-opencode.txt
         stated: true
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-31T07:01:44.304Z'
+updated_at: '2026-08-31T07:49:39.343Z'
 context_refreshes:
   - boundary: enter:implement
     at: '2026-08-30T20:09:29.526Z'
@@ -228,3 +228,5 @@ context_refreshes:
   - boundary: plan-phase:phase_8
     at: '2026-08-31T06:20:14.961Z'
     acknowledged_at: '2026-08-31T06:23:08.713Z'
+  - boundary: plan-phase:phase_9
+    at: '2026-08-31T07:49:39.343Z'
