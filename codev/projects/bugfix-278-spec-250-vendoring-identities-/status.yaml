@@ -12,9 +12,11 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T17:51:25.508Z'
-updated_at: '2026-08-31T18:42:27.436Z'
+updated_at: '2026-08-31T18:49:50.735Z'
 pr_history:
   - phase: pr
     pr_number: 288
     branch: builder/bugfix-278
     created_at: '2026-08-31T18:35:24.564Z'
+    merged: true
+    merged_at: '2026-08-31T18:49:50.732Z'
