@@ -184,3 +184,22 @@ processes `air-235-full-protocol.mjs` spawns — is #283, not this issue, and a 
 cannot see it.
 
 Branch synced with main (was 7 behind). 7 tests, all passing; re-CMAP dispatched.
+
+### Re-CMAP and the gate
+
+Re-CMAP on the updated PR: claude=APPROVE, opencode=APPROVE, codex=COMMENT.
+
+Codex's two items were README drift and are fixed: it listed `EXIT`/`INT`/`TERM` after `HUP` had
+joined them, and described the gate as any non-negative integer after it gained a nine-digit bound.
+The README now also records why the port's shape is matched before its value is compared.
+
+Claude's remaining notes are non-blocking and deliberately not acted on:
+
+- The `wait` in `stop_server` is unbounded, so a runner that ignored SIGTERM would hang rather than
+  leak. Theoretical for a node child, and a timeout would be a second mechanism to get wrong.
+- `kill "$RUNNER_PID"` does not reach grandchildren — the porch and t3 processes
+  `air-235-full-protocol.mjs` spawns. That is #283, and a stub with no children of its own cannot
+  test it.
+
+`pr` gate approved by the architect. Merge waits on CI, which is green-pending on the final push;
+the architect's instruction was explicit that a pending CI is not a merge.
