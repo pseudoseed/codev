@@ -312,9 +312,36 @@ the command**: absent means the server allocates, present means apply only if it
 Equal is refused as well as lower, because two writers that computed the same number are colliding,
 not agreeing.
 
-### The one defect, in four costumes — read this before wiring phase 6
+### The one defect, in five costumes — read this before wiring phase 6
 
-Four findings across phases 2, 3 and 4 are the same defect wearing different clothes. Every one of
+#### The remedy, first, because the diagnosis is the easy half
+
+**Assert the call site, not the module.**
+
+Every one of the five below was caught by that single move, and every one of them would have been
+prevented by it. Look at what the passing tests actually asserted:
+
+| The test said | The question it never asked |
+|---|---|
+| the provisioner writes a token | does the server ever run the provisioner? |
+| the guard alters a column | does anything build the layer the guard hangs off? |
+| the decider refuses, with a reason | does that reason survive the wrapper the caller talks to? |
+| the projector applies an event | do the decider's tests use a projected model, or one they built? |
+| the scope map has a row | does the transport read that row? |
+
+All green. All meaningless — not because the assertions were wrong, but because each asked whether
+the code *works* and none asked whether production *reaches* it. Those are different questions and
+only the second one was ever in doubt.
+
+So the remedy is mechanical and cheap: when the risk is "production may not reach this", the
+assertion goes on the caller. Read `serverRuntimeStartup.ts` and require the provisioner to appear
+in it. Read `Layers/Sqlite.ts` and require the guard to run after the migrator. Read `ws.ts` and
+require the scope lookup to wrap every RPC. These read as crude tests and they are the only ones
+that could have failed.
+
+#### And the diagnosis
+
+Five findings across phases 2, 3 and 4 are the same defect wearing different clothes. Every one of
 them passed its own tests. Every one was found by review or by a compiler, never by the suite that
 was supposed to cover it.
 
@@ -324,6 +351,7 @@ was supposed to cover it.
 | 2 | **A layer something wraps** | the decider's six discriminants, called directly | `OrchestrationEngine` rewrote them all as "Failed to generate an event identifier", then persisted it |
 | 3 | **A decider tested without its engine** | gate revision rules, decider-only | `isRefusal` dropped the new refusal type; criterion 10 was false at the wire |
 | 4 | **A read model every test hand-builds** | eleven decider tests, each building its own read model | a projector that dropped `gateRevision` would pass all of them while every write re-allocated revision 1 |
+| 5 | **A module nothing calls** | the gate credential's scopes, path and write, all unit-tested | nothing in the server provisioned it; written one commit *after* this table |
 
 The single sentence they share: **a test that supplies the boundary itself cannot tell you the
 boundary exists.** Constructing the layer, calling under the wrapper, hand-building the read model —

@@ -912,3 +912,17 @@ Fork `0254c84e1241`. Typecheck green, server 2839 passed.
 
 Four regression tests in phase 4 verified by removing their mechanism: `isRefusal`, the projector's
 mark, the wire decoding default, the startup provisioning.
+
+### The antidote, promoted above the table
+
+The architect's point: the review had the diagnosis five times and the remedy once, in passing. A
+table of failure modes without its remedy becomes a talisman someone cites instead of checking.
+
+**Assert the call site, not the module.** Every one of the five was caught by that move and would
+have been prevented by it. The passing tests each asked whether the code *works*; none asked whether
+production *reaches* it, and only the second was ever in doubt.
+
+Also recorded: the architect explicitly agreed with three judgement calls rather than letting
+silence stand for it — non-fatal provisioning, rotation over lookup, and declining the brittleness
+finding. And that two lanes disagreeing on severity is not a tie to split: opencode's
+REQUEST_CHANGES was right and treating it as blocking was right.
