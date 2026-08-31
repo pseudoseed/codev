@@ -57,10 +57,21 @@ the comparison is the fork against itself; hashing the unmerged fork directly re
 which is what that tautology would publish on every run.
 
 **A second door into the same tautology was found and closed** without either lane raising it: a
-`git merge` that refuses to start leaves the worktree unmerged with no conflicts to notice, so
-`mergeProducedATree` (`merge.ok || conflictedList.length > 0`) is now the outer condition. There is
-no test for that branch — it is not reachable from the committed evidence. **Say so if you think it
-needs one.**
+`git merge` that refuses to start leaves the worktree unmerged with no conflicts to notice, and a
+guard that only asks "did the closure conflict" is vacuously satisfied there.
+
+That decision now lives in `tools/t3-fork/drill-closure.mjs` as `closureMeasurability`, with **5 unit
+tests**. It was extracted rather than left inline because `rebase-drill.mjs` is a script — importing
+it runs a drill against two real checkouts — so an inline guard is covered only by whatever branch
+the last real run happened to take, which is the wrong coverage for a guard that exists to fire on
+cases no normal run reaches. Deleting the guard fails 2 of the 5.
+
+**One test in that file was written and then deleted, and the deletion is the part to check.** It
+asserted that the no-merge check runs before the closure-conflict check; swapping the two in the
+module left it passing. `closureConflicts` is a subset of `conflictedFiles`, so a non-empty closure
+conflict implies a non-empty conflict list, and the no-merge branch requires that list to be empty —
+the two cannot both hold for well-formed input, so there is no order to assert. A comment in the test
+file records that. **Tell me if you think the deletion was wrong.**
 
 ## The non-blocking note, actioned
 
@@ -74,6 +85,7 @@ skip-with-a-reason working as built.
 - `npm test -- --exclude='**/e2e/**'`: **7387 + 180 passed, 57 skipped, 0 failed**, exit 0
 - `porch done` checks: build 16.6s ✓, tests 196.1s ✓
 - drill re-run from the committed code; `collect-spec-250-evidence.mjs --check` exit 0
+- the three phase 11 test files: **20 passed**
 - fork clean at `3786b840e1a4`, upstream clean at `082e6ea52186`
 
 ## Out of scope, deliberately
