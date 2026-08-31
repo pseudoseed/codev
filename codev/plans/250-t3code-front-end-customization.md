@@ -1189,15 +1189,38 @@ This repository:
 
 #### Deliverables
 
-- [ ] The rebase drill: rebase the fork onto a later upstream commit **named in `pin.json` at the
-      time the drill runs**, regenerate the contract from the fork, pass `shape-check`, and pass
-      `verify` on both identities including the merge-base assertion.
+- [ ] The rebase drill runs on a **THROWAWAY clone of upstream, and the real pin is unchanged.**
+      Rebase the fork's customization onto a later upstream commit in that scratch checkout,
+      regenerate the contract from it, pass `shape-check`, and pass `verify` on both identities
+      including the merge-base assertion — then throw the scratch away.
+
+      **Amended 2026-08-31 at the architect's direction**, because the first wording ("rebase the
+      fork onto a later upstream commit named in `pin.json`") reads as an instruction to advance
+      `upstreamBase`, and doing that to satisfy a phase would spend the evidence base:
+
+      - `/Users/chris/dev/t3code` is the **preserved** upstream clone at `082e6ea52186`, and it is
+        under a standing read-only order. A `git fetch` is fine — it adds objects and moves
+        remote-tracking refs while HEAD and the working tree stay put, which is what the order
+        actually protects. **A checkout is not.**
+      - The moment `pin.json` names a new base, `verify-upstream` expects the preserved clone to be
+        THERE, and every spec 146 and spec 236 result tied to `082e6ea52186` stops being
+        re-runnable. Advancing the base is a decision taken when there is a REASON — a security
+        fix, a feature we need — never as a phase deliverable.
+
+      **Criterion 9 is met by the procedure completing and reporting**, not by adopting a new base.
+      A later reader who takes "rebases onto a later upstream commit" literally and moves the
+      preserved clone has broken the thing the criterion was measuring.
 - [ ] Upstream churn measured as `oldUpstreamBase..newUpstreamTarget` in the **upstream**
       checkout. This is the range that goes silent if nobody asks it, so it is the one asserted.
 - [ ] A zero churn result is reported `NO_UPSTREAM_MOVEMENT` and **passes** — the pin was days old
       and `classify-churn` counts only closure-touching commits, so a legitimate zero exists. The
       tool failing, or reading the wrong ref, does not pass. Criterion 9 is satisfied by the
       procedure running and reporting one of those three outcomes, never by an unexplained zero.
+
+      Reaffirmed 2026-08-31. **Which of the three outcomes it was is reported explicitly**; an
+      unexplained zero is the only failing answer. As of 2026-08-31 upstream `main` is at
+      `9b2d04317c68` against our base `082e6ea52186` (read with `git ls-remote`, clone untouched),
+      so this run has real churn to measure and will not exercise the zero path.
 - [ ] **The watermark is re-checked after the rebase**, which is the check that replaces the
       first draft's "upstream must not have reached 900". Assert that every upstream migration
       arriving with the rebase actually ran, by reading `effect_sql_migrations` and comparing it
@@ -1214,6 +1237,11 @@ This repository:
 
 - [ ] **Criterion 6**: the tree, the gate and the approval are reached from an iPad over the
       tailnet — no account, no cloud relay — and a builder is driven to completion.
+
+      **It closes one of two ways and never a third.** Either the run happens and it is met, or —
+      if no iPad is available — it closes **UNMET, with a stated reason and an executable runbook**
+      (`codev/resources/250-ipad-acceptance-runbook.md`). It does not close as passed on a
+      simulation, and it does not stay open. Ruled 2026-08-31.
 - [ ] **Criterion 9** end to end, with the three-outcome churn report recorded.
 - [ ] All eleven criteria (1, 2, 3, 4, 5, 5b, 6, 7, 8, 8b, 9, 10, 11) have a named test or a
       recorded run.
