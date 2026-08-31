@@ -1,7 +1,7 @@
 id: bugfix-273
 title: afx-send-delivers-a-truncated-
 protocol: bugfix
-phase: pr
+phase: verified
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -18,7 +18,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T16:47:29.331Z'
-updated_at: '2026-08-31T19:15:23.548Z'
+updated_at: '2026-08-31T19:43:56.066Z'
 pr_history:
   - phase: fix
     pr_number: 279
