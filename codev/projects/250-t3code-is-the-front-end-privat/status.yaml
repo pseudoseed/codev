@@ -150,11 +150,12 @@ gates:
       caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
   verify-approval:
     status: pending
+    requested_at: '2026-08-31T13:32:31.306Z'
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-31T13:28:17.242Z'
+updated_at: '2026-08-31T13:32:31.306Z'
 context_refreshes:
   - boundary: enter:implement
     at: '2026-08-30T20:09:29.526Z'
