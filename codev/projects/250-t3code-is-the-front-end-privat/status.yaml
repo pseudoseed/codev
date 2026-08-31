@@ -99,13 +99,56 @@ gates:
   pr:
     status: pending
     requested_at: '2026-08-31T12:29:13.290Z'
+    request:
+      question: 'Merge PR #266, or rule on the pane screenshots first? Both review lanes cleared it and criterion 6 closes UNMET.'
+      choices:
+        - label: Open the phase-10 screenshots, then merge
+          consequence: >-
+            12 screenshots at docs/codev/spec-250/phase-10/ in the fork at /Users/chris/dev/t3code-codev, plus
+            phase-7/8/9 at 390, 1440x900 and 1920. The tests and measurements pass; what the panes LOOK like has never
+            been ruled on, and a green Playwright run cannot judge that. This is the only part of the spec no machine
+            has signed off.
+          recommended: true
+        - label: Merge now on the two lane verdicts
+          consequence: >-
+            claude APPROVE, opencode COMMENT, no blocking findings. Merges with `gh pr merge 266 --merge` (never
+            squash). The pane appearance goes unruled and becomes a follow-up against a merged branch rather than a
+            change in this PR.
+        - label: 'Hold: criterion 6 must be run before merge'
+          consequence: >-
+            Needs an iPad on the tailnet, which was not available for the whole project. The 16-step runbook is at
+            codev/resources/250-ipad-acceptance-runbook.md and every step not needing the device was verified. Holding
+            blocks the PR on hardware, not on code.
+        - label: 'Hold: criterion 9''s literal wording must be met'
+          consequence: >-
+            Would mean advancing pin.json onto a new upstream base, which the phase-11 amendment forbids because every
+            spec 146 and 236 result tied to 082e6ea52186 stops being re-runnable. The rebase stops at commit 6 of 42;
+            the drill measured that rather than performing it.
+      terminalExcerpt: >-
+        porch next 250 -> gate_pending: pr
+
+        2 of 2 lanes actually reviewed. Did not approve: opencode: COMMENT.
+          claude: APPROVE
+          opencode: COMMENT
+
+        codev suite: 1859 passed, 18 skipped, 1 failed -> re-run alone 24 passed (spec-1280 T12 determinism; I committed
+        during the run)
+
+        collect-spec-250-evidence.mjs --check: evidence is up to date
+
+
+        UNMET: criterion 6 (iPad over the tailnet, no device available; runbook written)
+
+        AMENDED: criterion 9 met by the procedure completing and reporting, not by a clean rebase
+
+        UNRULED: the pane internals, 12 screenshots in the fork at docs/codev/spec-250/phase-10/
   verify-approval:
     status: pending
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-30T19:30:16.298Z'
-updated_at: '2026-08-31T12:29:13.290Z'
+updated_at: '2026-08-31T12:29:34.544Z'
 context_refreshes:
   - boundary: enter:implement
     at: '2026-08-30T20:09:29.526Z'
