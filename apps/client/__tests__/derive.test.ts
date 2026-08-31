@@ -211,7 +211,27 @@ describe('deriveRowStatus', () => {
       ),
     ) as { $defs: Record<string, { properties?: { status?: { enum?: string[] } } }> };
 
-    const session = schema.$defs.subscribeThreadOutput__Objects_6;
+    /*
+     * `_7`, not `_6`, and the number is generated rather than chosen.
+     *
+     * Spec 250 phase 5 regenerated the vendored contract FROM THE FORK, and the
+     * fork's `codevGate` object lands ahead of the session object in the
+     * generator's numbering — so the enum this test reads moved one along. The
+     * mapping below is unaffected; only the path was stale.
+     *
+     * The assertion message under this is what made that diagnosable, and it is
+     * why the message says what it says: "this test needing a new path, not a
+     * mapping change" is the difference between a one-character fix and an hour
+     * spent looking at `deriveRowStatus`.
+     *
+     * A positional key like this WILL move again whenever the contract is
+     * regenerated after a change ahead of it. That is the cost of reading a
+     * generated artifact positionally, and it is accepted here rather than
+     * hidden: the alternative — searching every `$def` for one carrying a status
+     * enum — would silently find a DIFFERENT object if the session one ever lost
+     * its enum, which is the failure this test exists to catch.
+     */
+    const session = schema.$defs.subscribeThreadOutput__Objects_7;
     const declared = session?.properties?.status?.enum;
     expect(
       declared,

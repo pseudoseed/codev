@@ -67,21 +67,69 @@ stated reason, not as passed and not left open.
 - What it would take: a device on the tailnet, `pnpm dev:share` from the fork root, and about
   fifteen minutes.
 
+## Regression runs, and what is red for reasons that are not ours
+
+| Tree | Command | Result |
+|---|---|---|
+| Codev | `npm test -- --exclude='**/e2e/**'` | see the review; 0 failed |
+| Fork, web | `apps/web && npx vp test run` | **2984 passed** |
+| Fork, server | `apps/server && npx vp test run src/codev/ src/http.test.ts src/server.test.ts` | **198 passed** |
+| Fork, typecheck | `vp run --filter @t3tools/contracts --filter t3 --filter @t3tools/web typecheck` | clean |
+| Fork, whole monorepo | `npx vp test run` from the fork root | **8949 passed, 1 failed, 24 suites failed to load** |
+
+**The 24 load failures and the 1 failure are all environmental or pre-existing, and none is in a
+package spec 250 touches.** Stated with the reason rather than waved at:
+
+- **22 × `apps/desktop/**`** — `Error: Electron failed to install correctly, please delete
+  node_modules/electron and try installing again`. The Electron binary is not installed in this
+  checkout. Spec 250 changes **0 files** under `apps/desktop` (measured:
+  `git diff <base>..HEAD -- apps/desktop .github` is empty).
+- **`.github/scripts/thread-transfer-report.test.cjs`** — "No test suite found in file". A CommonJS
+  script the runner collects and cannot read.
+- **`apps/web/src/terminal/ghostty/runtimeAbi.test.ts`** — needs a native artifact this checkout
+  does not build.
+- **`apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint`** — the one real
+  test failure, and it is pre-existing: byte-identical to the base commit, and macOS resolves
+  `/var` to `/private/var`. Not skipped and not modified — editing an upstream test we did not
+  break is gratuitous divergence on a fork that has to rebase.
+
 ## `apps/client`, the frozen fallback
 
 **Frozen: confirmed.** `git diff <phase-7 boundary>..HEAD -- apps/client` is empty; its last commit
 is spec 236's. Nothing from spec 250's phases 7-10 was backported.
 
-**Green: NO, and the cause is ours.** 278 of 279 pass.
-`__tests__/derive.test.ts` reads the session-status enum from the generated contract at
-`$defs.subscribeThreadOutput__Objects_6`; phase 5 regenerated that contract from the fork, our
-`codevGate` object landed ahead of it in the generated numbering, and the enum is now at `_7`. The
-mapping is unaffected — only the read path went stale, which is what the test's own failure message
-says.
+**Green: confirmed, and the suites are named** — "still green" should not itself be an unchecked
+claim.
 
-It went unnoticed because `apps/client` is not in the root `npm test` (that filters to
-`@cluesmith/codev`), so its suite had not run since phase 5. Phase 11's deliverable is the first
-thing that looked.
+| Suite | Command | Result |
+|---|---|---|
+| unit | `apps/client && npm test` (`vitest run`) | **16 files, 279 tests, 0 failed** |
+| types | `apps/client && npm run check-types` (`tsc --noEmit`) | **clean** |
+| e2e | `apps/client && npx playwright test` (3 specs, real servers) | **23 passed** |
 
-The fix is one character. **It is not applied here**, because `apps/client` is under a standing
-freeze — raised with the architect rather than decided by me.
+### It was red first, and the reason is worth keeping
+
+One of those 279 failed when phase 11 first looked. Spec 250's phase 5 regenerated the vendored
+contract **from the fork**, our `codevGate` object landed ahead of the session object in the
+generator's numbering, and the session-status enum moved from
+`$defs.subscribeThreadOutput__Objects_6` to `_7`. `derive.test.ts` still read `_6`.
+
+Fixed — one character, plus a comment saying why the number moved and that a positional read of a
+generated artifact will move again.
+
+**The freeze authorises this.** "Frozen means it keeps passing its tests and receives fixes, not
+that new front-end features land in both places." A fallback whose suite is red is not a fallback:
+the reason `apps/client` is kept is that if the t3code path fails there is still something that
+works, and *works* is a claim its suite is the only evidence for.
+
+**The assertion message is why this cost a minute instead of an hour.** It said: *"the generated
+contract no longer declares the session status enum where this test reads it. That is this test
+needing a new path, not a mapping change."* Two very different problems — a stale read path and a
+broken status mapping — look identical at the failure site, and the message named which one.
+`expected undefined to be defined` alone would have sent a reader into `deriveRowStatus`.
+
+**The real gap is filed, not fixed here: [#265](https://github.com/pseudoseed/codev/issues/265).**
+The root `npm test` filters to `@cluesmith/codev`, so nothing local runs `apps/client` at all — it
+went red at phase 5 and nothing noticed until phase 11. CI would have caught it at PR time, which
+makes it a near miss rather than a hole; "the frozen fallback's suite runs only in CI, and only once
+a PR exists" is still too long a loop for the one package whose job is to still work.
