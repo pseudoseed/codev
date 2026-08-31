@@ -17,7 +17,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -347,28 +348,46 @@ describe('spec 250: the refusal discriminant survives the ws boundary', () => {
    * the same reason: nothing else stops the ws layer changing while a green JSON
    * file says the discriminant still travels.
    */
-  it('is not older than the code it is evidence for', () => {
-    const evidenceAge = statSync(evidencePath).mtimeMs;
-    const sources = [
-      join(repoRoot, 'packages', 't3-client', 'live', 'spec-250-hierarchy.mjs'),
-      join(repoRoot, 'tools', 't3-server', 't3-server.mjs'),
-      // The CLIENT's read path, which review pointed out was missing. The whole
-      // claim is that a client can read the discriminant, and `envelope.ts` is
-      // where `RpcFailureError` decides what `error` and `tag` mean. A change
-      // there could stop the reading working while this evidence stayed green.
-      join(repoRoot, 'packages', 't3-client', 'src', 'envelope.ts'),
-      join(repoRoot, 'packages', 't3-client', 'src', 'client.ts'),
-    ];
-    for (const source of sources) {
+  /**
+   * Recorded evidence can outlive the code it describes.
+   *
+   * HASHES, not timestamps, and both alternatives were tried. mtime flakes on a
+   * fresh clone: git writes files in whatever order it likes, so the evidence can
+   * look older than a source it is perfectly current with. Commit time fixes that
+   * and breaks differently — a file written, run, and THEN committed always looks
+   * newer than the run it produced, which is the ordinary way this one is edited.
+   *
+   * A content hash is neither. It answers what the guard means, "is this evidence
+   * about the code that is here now?", and it is the mechanism
+   * `generated/source-hash.json` already uses for the contract.
+   */
+  it('was recorded against the code that is here now', () => {
+    expect(evidence.algorithm).toBe('sha256');
+    const recorded: Record<string, string> = evidence.sourceHashes;
+    expect(
+      Object.keys(recorded).length,
+      'the evidence records no source hashes, so this would pass against anything',
+    ).toBeGreaterThan(2);
+
+    // The client's read path must be among them: the claim is that a CLIENT can
+    // read the discriminant, so a change to how `RpcFailureError` exposes `error`
+    // and `tag` has to invalidate this evidence.
+    expect(Object.keys(recorded)).toContain('packages/t3-client/src/envelope.ts');
+    expect(Object.keys(recorded)).toContain('tools/t3-server/t3-server.mjs');
+
+    for (const [relative, hash] of Object.entries(recorded)) {
+      const actual = createHash('sha256')
+        .update(readFileSync(join(repoRoot, relative)))
+        .digest('hex');
       expect(
-        evidenceAge,
-        `${source} changed after the wire evidence was recorded — re-run it with\n`
+        actual,
+        `${relative} changed after the wire evidence was recorded — re-run it with\n`
           + `  export T3_NODE=/absolute/path/to/node T3CODE_FORK_ROOT=/path/to/fork\n`
           + `  export T3_HARNESS_PORT=<free port> T3_HARNESS_DIR=<scratch dir>\n`
           + `  node packages/t3-client/live/spec-250-hierarchy.mjs --out `
           + `codev/research/250-hierarchy-wire-evidence.json\n`
           + `rather than trusting a stale result.`,
-      ).toBeGreaterThanOrEqual(statSync(source).mtimeMs - 1000);
+      ).toBe(hash);
     }
   });
 });
