@@ -40,6 +40,7 @@ import {
   startAgentHost,
   type AgentHost,
 } from "./spec-250-agent-host";
+import { crossOrigin } from "./spec-250-same-origin";
 import {
   forkScreenshotPath,
   mintPairingCredential,
@@ -130,6 +131,7 @@ function ready(): { stack: ForkStackReady; seeded: SeededApproval; agent: AgentH
   return { stack, seeded, agent };
 }
 
+
 /**
  * Every request the page issued, as absolute URLs.
  *
@@ -199,7 +201,7 @@ test("the pairing form pairs this browser, and the page never leaves its own ori
    * it; if any of that traffic went direct, it is in this list.
    */
   const origin = new URL(live.webUrl).origin;
-  const foreign = requests.filter((url) => !url.startsWith(origin) && !url.startsWith("data:"));
+  const foreign = crossOrigin(requests, origin);
   expect(foreign, `the page issued cross-origin requests: ${foreign.join(", ")}`).toEqual([]);
   // And it did reach codev-agent — over the proxy path, on this origin. Without
   // this the assertion above passes on a page that made no agent request at all.
@@ -289,7 +291,7 @@ test("approving from t3code writes the approval porch recorded", async ({ page }
 
   // Still same-origin, through the whole approval.
   const origin = new URL(live.webUrl).origin;
-  const foreign = requests.filter((url) => !url.startsWith(origin) && !url.startsWith("data:"));
+  const foreign = crossOrigin(requests, origin);
   expect(foreign, `the page issued cross-origin requests: ${foreign.join(", ")}`).toEqual([]);
 });
 
