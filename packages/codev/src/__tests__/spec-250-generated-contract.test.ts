@@ -129,9 +129,14 @@ describe('spec 250: the vendored contract came from the fork', () => {
    * called. A fourth artifact acquiring a header is covered before it exists.
    */
   it('no generated artifact names upstream alone', () => {
-    const artifacts = readdirSync(generated).filter((f) => !f.endsWith('.json'));
+    // Every artifact, with no extension filter. An earlier draft skipped `.json`,
+    // which is the same enumeration shape this test exists to remove — a JSON
+    // artifact that starts carrying a `_comment` provenance line would be exempt
+    // for a reason nobody chose. Filtering on the CLAIM below is the whole test;
+    // nothing needs excluding in advance. Review flagged it as non-blocking.
+    const artifacts = readdirSync(generated);
     expect(artifacts.length, 'read no artifacts, so this test would pass against anything')
-      .toBeGreaterThan(2);
+      .toBeGreaterThan(4);
 
     const claiming = artifacts.filter((file) =>
       readFileSync(join(generated, file), 'utf8').includes(pin.repo),
