@@ -458,6 +458,141 @@ The fix is one line: insert a row first, so the constraint has something to refu
 that "assert the constraint, not the DDL" is not enough on its own — the assertion also needs
 something for the constraint to act on.
 
+## Phase 5 — The vendored contract, regenerated from the fork
+
+### The undecidable verdict, and why it was neither a pass nor a break
+
+`classify-churn.mjs --fork-drift` returns three commits as `consumed-change-undecidable`. The
+classifier sets `unknown` the moment a union's emitted JSON differs at all, additive or not, and
+says so instead of guessing. The named input for this phase was one of them; running it against
+the finished fork found three:
+
+| Commit | Method | Classifier |
+|---|---|---|
+| `1a414cee8409` (phase 2) | `orchestration.subscribeThread` | union shape changed; not decidable here |
+| `e1b7f7b04af5` (phase 3) | `orchestration.dispatchCommand` | union shape changed; not decidable here |
+| `3a1780bbf66f` (phase 4) | `orchestration.subscribeThread` | union shape changed; not decidable here |
+
+Deciding them means matching union members by their discriminant literal and comparing the matched
+pairs, which is exactly the step the classifier declines to take. Done that way over the whole
+range `upstreamBase..pin.commit`:
+
+```
+subscribeThread  output   <kind=snapshot>/snapshot/thread/{role,parentThreadId,codevGate,gateRevision}: added
+                          <kind=event>/event<type=thread.created>/payload/{role,parentThreadId}: added
+                          <kind=event>/event: alternative added codev.gate-set
+                          <kind=event>/event: alternative added codev.gate-cleared
+dispatchCommand  input    <type=thread.create>/{role,parentThreadId}: added, neither required
+```
+
+Ten findings, and not one removal, narrowed type, newly-required property, lost enum member, or
+tightened `additionalProperties`. Nine of the ten are non-breaking under the rules the classifier
+already states. **The tenth is not, and it is the reason the phase exists.**
+
+On an *output*, a new union alternative is a shape the client must now handle. A client
+shape-checking the `subscribeThread` stream against the pre-regeneration contract does not ignore a
+`codev.gate-set` frame — it *rejects* it, because the frame matches no member of the union that
+client knows. Phase 4 shipped the server side of gate writes into a repository whose vendored
+contract could not decode the events they produce.
+
+So the verdict is: **non-breaking in every respect but one, and that one is breaking against the
+upstream-generated contract and non-breaking against the regenerated one.** Regenerating is the
+fix, not a formality that follows it.
+
+`spec-250-generated-contract.test.ts` holds both halves. The second half is the one that matters:
+it rebuilds the pre-regeneration union by removing the two `codev.*` alternatives and asserts the
+frame fails against it. Without that, "the contract accepts the frame" would be a claim about
+nothing — the frame would have passed against a union that never rejected anything.
+
+### `codev.gateWrite` would have been vendored as nothing at all
+
+`generate.mjs` iterates `Object.entries(pin.methods)`, not the contract's RPC map. A method that
+exists in the fork and is missing from `pin.methods` is not an error: it produces no schema, no
+`methods.json` entry, and `checked.ts` then answers `unchecked` for every one of its payloads —
+which is the "I had nothing to look with" signal working exactly as designed, arriving for a reason
+nobody would have gone looking for.
+
+The precedent was already in the file. `vcs.*` are recorded by hand precisely because their method
+strings live in the unvendored `rpc.ts`; `codev.gateWrite` is the same situation. What did not
+transfer was the resolution: the non-`OrchestrationRpcSchemas` branch resolved schema names from
+`git.ts` and nothing else, and `CodevGateWriteInput` lives in `orchestration.ts`. The branch now
+takes the module from `spec.source`, and reverting that change makes generation fail with
+`pin.json names CodevGateWriteInput for codev.gateWrite, but git.ts does not export it.` rather than
+silently emitting nothing.
+
+`classify-churn.mjs` carried the same hardcoding and is fixed with it. Left alone it would have
+reported `codev.gateWrite: <absent>` at every commit — "the method is not in the contract" spelled
+identically to "this tool looked in the wrong file".
+
+### The checker threw on the payload it was vendored to check
+
+The round-trip test for the new method did not fail an assertion. It raised
+`UnsupportedKeywordError: shape-check does not implement JSON Schema keyword "minItems"`.
+
+Phase 4 bounded the gate's `choices` to one-to-five entries, which is the first schema in the
+vendored closure to emit `minItems`/`maxItems`, and `shapeCheck` throws rather than passing on a
+keyword it has not implemented — a refusal to report a match for something it did not check. So
+`checked.ts` would have thrown at the call site on every gate-write payload, having been given a
+schema it could not walk.
+
+Implementing the two keywords is a strengthening, not the relaxation the phase deliverable forbids:
+nothing that passed before fails now, nothing that failed before passes, and the checker's stated
+semantics — lower bound on branded ids, excess ignored to mirror the decoder — are untouched. Both
+halves were verified by reverting: dropping the keywords from `SUPPORTED` makes the round-trip throw
+again, and keeping them supported while deleting the two bound checks makes only the bounds test
+fail.
+
+This is the fourth time on this project that a thing was wired and its call site was not exercised.
+The test that caught it is the one that constructs the payload a caller would send and runs the
+production checker over it, rather than asserting that the schema contains a `minItems` key.
+
+### The cold-start evidence had to be re-scoped, and its collector with it
+
+`spec-146-t3-contract.test.ts` asserted `evidence.pinnedCommit === pin.commit`. That held only while
+the two identities were equal. This phase moves `pin.commit` onto the fork head, and the evidence
+describes the **upstream** harness starting the **upstream** server from the read-only clone, so the
+commit it should be checked against is `pin.upstreamBase`.
+
+Re-collecting it against the fork would have been the wrong fix — it changes what the evidence is
+evidence *of* while every assertion stays green, and spec 146's criteria about the pinned harness
+would quietly stop meaning what they said.
+
+Re-scoping only the test would have been half a fix. `smoke.mjs` still wrote `pinnedCommit:
+pin.commit`, so the next collection would have recorded a fork sha as the provenance of an upstream
+run. The field is therefore **renamed** — `pinnedCommit` to `upstreamCommit` — and reads
+`pin.upstreamBase`. A rename rather than a re-point, so evidence written under the old meaning
+cannot be read as though it were written under the new one; the test asserts the old key is absent,
+which is what makes that true rather than merely intended. `collect-phase10-evidence.mjs` carried
+the same expression and is fixed the same way.
+
+### A gate that had to reopen without being touched
+
+The fork-hash live suite is gated on `FORK_AT_CONTRACT` — fork HEAD equals `pin.commit`. It was
+false by design for three phases and the suite skipped, naming its reason. Moving the pin makes it
+true again with no edit to the gate.
+
+That is worth asserting because the failure is silent in the other direction: a regeneration that
+put `pin.commit` somewhere the checkout is not would leave the suite skipping forever, reported as a
+skip reason nobody reads, while `contractSource` claimed the contract was fork-sourced. The
+assertion lives **outside** the gated block, because a gate cannot assert that it opened.
+
+### The flip, asserted against what actually ships
+
+Phase 1 built `FORK_AHEAD_OF_CONTRACT` exiting `0` under `contractSource: "upstream"` and `1` under
+`"fork"`, with fixture repositories proving both. Those fixtures build their own pin, so they would
+have kept passing if the shipped pin never flipped. The phase adds two assertions they cannot make:
+one reading `pin.contractSource` from the file that ships, and one running the harness against the
+**real** fork checkout with a pin whose `commit` is the real HEAD's parent — a genuine ancestor,
+which makes the real checkout genuinely ahead, with the same run repeated under `"upstream"` so the
+test cannot pass against a harness that simply exits 1 on every ahead-ness.
+
+### What can a human see or do now that they could not before
+
+Nothing yet. This is infrastructure. What changed is that `porch-driver` and `codev-agent` can now
+send `role`, `parentThreadId` and `codev.gateWrite` against a vendored contract that knows them, and
+a `codev.gate-set` frame arriving on the stream shape-checks instead of being rejected as
+unrecognized. Phase 7 is still the first that renders.
+
 ## Flaky Tests
 
 `apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint` fails in the fork.

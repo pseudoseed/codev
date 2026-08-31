@@ -963,3 +963,73 @@ isolated scope and the provisioned credential are all machinery with no rendered
 the first that renders.
 
 Porch has accepted phase 4 and moved to phase_5 iteration 1, opening with a context-refresh boundary.
+
+---
+
+## Phase 5 — the vendored contract, regenerated from the fork
+
+The named input was one undecidable churn verdict. Running the classifier against the finished fork
+found **three**, not one: `subscribeThread` at the phase 2 and phase 4 commits, and
+`dispatchCommand` at the phase 3 commit. All the same class, so all three were decided.
+
+Deciding them means the step the classifier declines to take: match union members by their
+discriminant literal and compare the matched pairs. Over `upstreamBase..51b55d4899e4` that gives ten
+findings, no removals, no narrowed types, no newly-required properties, no lost enum members, no
+tightened `additionalProperties`. Nine are non-breaking under the classifier's own stated rules.
+
+**The tenth is not.** Two alternatives were added to the `OrchestrationEvent` union —
+`codev.gate-set` and `codev.gate-cleared` — and on an *output* a new alternative is a shape the
+client must now handle. A client shape-checking the stream against the pre-regeneration contract
+does not ignore a gate-set frame, it *rejects* it: the frame matches no member of the union that
+client knows. Phase 4 shipped the server half of gate writes into a repository whose vendored
+contract could not decode the events they produce. Regenerating is the fix, not a formality that
+follows it.
+
+So: non-breaking in every respect but one, and that one breaks against the old contract and not the
+new one. The test holds both halves, and the half that matters is the second — it rebuilds the
+pre-regeneration union by removing the two alternatives and asserts the frame fails against it.
+Without that, "the new contract accepts the frame" is a claim about nothing.
+
+### Three things the phase found that the plan did not name
+
+**`codev.gateWrite` nearly vendored as nothing.** The plan flagged that `generate.mjs` iterates
+`pin.methods` rather than the RPC map, so an unlisted method is silently skipped — correct, and it
+stopped one step short. The non-`OrchestrationRpcSchemas` branch resolved schema names from `git.ts`
+and only `git.ts`, and `CodevGateWriteInput` lives in `orchestration.ts`. Adding the pin entry alone
+would have failed generation. The branch now takes its module from `spec.source`; reverting that
+makes generation say `pin.json names CodevGateWriteInput for codev.gateWrite, but git.ts does not
+export it.` `classify-churn.mjs` had the same hardcoding and would have reported the method as
+`<absent>` at every commit — "not in the contract" spelled identically to "this tool looked in the
+wrong file".
+
+**The checker threw on the payload it was vendored to check.** The round-trip test did not fail an
+assertion, it raised `UnsupportedKeywordError: ... "minItems"`. Phase 4's one-to-five bound on gate
+`choices` is the first schema in the closure to emit `minItems`/`maxItems`, and `shapeCheck` throws
+rather than passing on a keyword it has not implemented. `checked.ts` would have thrown at the call
+site on every gate-write payload. Implementing the two keywords is a strengthening — nothing that
+passed now fails, nothing that failed now passes — so it does not touch the "shape-check is not
+relaxed" deliverable. Caught by running the payload a caller would send through the production
+checker, not by reading the schema.
+
+**Re-scoping the cold-start evidence test was half a fix.** `smoke.mjs` still wrote `pinnedCommit:
+pin.commit`, so the next collection would have recorded a fork sha as the provenance of an upstream
+run. The field is renamed to `upstreamCommit` and reads `pin.upstreamBase`; the test asserts the old
+key is *absent*, which is what stops evidence written under the old meaning being read under the
+new. `collect-phase10-evidence.mjs` had the same expression.
+
+### Deliverables
+
+Pin at `51b55d4899e4`, `contractSource: "fork"`. Closure still nine files — checked in advance, the
+import graph of the fork's `orchestration.ts` is byte-identical to upstream's. `source-hash.json`
+carries both sections and `forkDrift.changedFiles` is `auth.ts, orchestration.ts`. Twelve patches
+exported to `tools/t3-fork/patches/` with `--no-signature`, review aid only, and FORK.md says so
+plus the four-step abandonment procedure. The fork-hash live suite reopened by itself and a test
+outside the gate asserts it — a gate cannot assert that it opened.
+
+Every new mechanism verified by reverting it: the two shape-check keywords (twice — dropped from
+`SUPPORTED`, then supported but unchecked), `contractSource`, `pin.commit`, the `pin.methods` entry,
+the generator's module map, and the evidence field rename.
+
+**What can a human see or do now that they could not before? Nothing yet.** Still infrastructure.
+What changed is that a `codev.gate-set` frame arriving on the stream now shape-checks instead of
+being rejected as unrecognized. Phase 7 is the first that renders.

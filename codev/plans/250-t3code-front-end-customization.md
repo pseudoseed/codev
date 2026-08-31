@@ -638,6 +638,26 @@ This repository:
 - `packages/codev/src/__tests__/spec-146-t3-contract.test.ts` — `:231`'s assertion re-scoped
   (see deliverables).
 
+**Amended during phase 5 to match what shipped.** Four files the plan did not name had to change,
+each for a reason found by running the work rather than reading it:
+
+- `tools/t3-codegen/generate.mjs` and `tools/t3-codegen/classify-churn.mjs` — the plan is right
+  that a method absent from `pin.methods` is silently never vendored, and stops one step short.
+  The non-`OrchestrationRpcSchemas` branch resolved schema names from `git.ts` and only `git.ts`;
+  `CodevGateWriteInput` lives in `orchestration.ts`, so adding the pin entry alone fails
+  generation. Both tools now take the module from the entry's `source`.
+- `packages/types/src/t3/shape-check.ts` — `minItems`/`maxItems` implemented. Phase 4's
+  one-to-five bound on gate `choices` is the first schema in the closure to emit them, and
+  `shapeCheck` THROWS on an unimplemented keyword rather than passing, so every gate-write payload
+  check raised `UnsupportedKeywordError` at the call site. This is a strengthening and does not
+  contradict the "shape-check is not relaxed" deliverable below: nothing that passed now fails,
+  nothing that failed now passes, and the file's stated semantics are untouched.
+- `tools/t3-server/smoke.mjs` and `tools/t3-server/collect-phase10-evidence.mjs` — re-scoping the
+  test alone was half a fix. Both collectors wrote `pinnedCommit: pin.commit`, so the next
+  collection would have recorded a fork sha as the provenance of an upstream run. The field is
+  renamed to `upstreamCommit` and reads `pin.upstreamBase`; the rename (rather than a re-point) is
+  what stops evidence written under the old meaning being read under the new one.
+
 #### Named inputs from earlier phases
 
 - **`orchestration.subscribeThread` is `consumed-change-undecidable`.** Measured, not guessed:
@@ -700,6 +720,10 @@ This repository:
       `contractSource` back to `"upstream"`, regenerate, re-run `verify`. Four lines, written
       while the mechanism is fresh.
 - [ ] Tests for this phase.
+- [ ] **The undecidable verdict covers all three commits, not the one named.** Running
+      `--fork-drift` against the finished fork reports `consumed-change-undecidable` for the phase
+      2 and phase 4 `subscribeThread` commits AND the phase 3 `dispatchCommand` commit. Same class
+      of question; all three are decided.
 
 #### Acceptance Criteria
 
