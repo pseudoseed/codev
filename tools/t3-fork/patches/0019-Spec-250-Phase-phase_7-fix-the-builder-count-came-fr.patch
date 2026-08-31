@@ -1,0 +1,57 @@
+From 7c7096d49de9f7aef8dfd0fc6f97aa81ec33ddac Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Mon, 31 Aug 2026 00:10:31 -0600
+Subject: [PATCH 19/19] [Spec 250][Phase: phase_7] fix: the builder count came
+ from the render, so it could only agree with it
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Review finding. `data-codev-builder-count` was fed by the render-side run scan
+that gathers a subtree's builder rows — the same scan the Playwright assertion
+counts. Two derivations of one fact, and the attribute could only ever agree with
+the thing it was there to check.
+
+It comes from `entry.builderCount` now, which the GROUPING decided. The rows
+beneath it are still what was DRAWN, so the DOM cross-checks logic against render
+and the test asserting a count of 3 beside three builder rows is a real check
+rather than a tautology.
+
+Also parenthesised `(props.projectTitle ?? props.codevRoleLabel)`. `??` does bind
+tighter and the expression was correct; a reader who has to check a precedence
+table to know whether a line is a bug is paying a cost the parentheses save.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/components/Sidebar.tsx | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/apps/web/src/components/Sidebar.tsx b/apps/web/src/components/Sidebar.tsx
+index 3c56f1e34..fa1224068 100644
+--- a/apps/web/src/components/Sidebar.tsx
++++ b/apps/web/src/components/Sidebar.tsx
+@@ -1433,7 +1433,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+                 faviconPath={props.projectFaviconPath}
+                 className="size-4 shrink-0"
+               />
+-              {props.projectTitle ?? props.codevRoleLabel ? (
++              {(props.projectTitle ?? props.codevRoleLabel) ? (
+                 <span
+                   className={cn(
+                     "min-w-0 flex-1 truncate text-secondary-label text-xs",
+@@ -3968,7 +3968,14 @@ export default function Sidebar() {
+                           key={`codev-architect-${codevRowKey(entry.thread)}`}
+                           data-testid="sidebar-codev-architect"
+                           data-codev-architect-thread-id={entry.thread.id}
+-                          data-codev-builder-count={builders.length}
++                          // `entry.builderCount`, NOT `builders.length`. The
++                          // run scan below and the grouping are two derivations
++                          // of one fact, and an attribute fed by the scan can
++                          // only ever agree with the scan. Sourced from the
++                          // grouping, the DOM cross-checks logic against render:
++                          // the count says what the tree decided and the rows
++                          // beneath it say what was drawn.
++                          data-codev-builder-count={entry.builderCount}
+                           className="list-none"
+                         >
+                           <ul role="list" className="flex flex-col gap-px">

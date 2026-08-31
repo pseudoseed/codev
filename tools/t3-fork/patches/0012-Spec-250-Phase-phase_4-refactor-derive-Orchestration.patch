@@ -1,7 +1,7 @@
 From 51b55d4899e4d900dfa0a7995f6f9200c53d10c0 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 20:48:18 -0600
-Subject: [PATCH 12/18] [Spec 250][Phase: phase_4] refactor: derive
+Subject: [PATCH 12/19] [Spec 250][Phase: phase_4] refactor: derive
  OrchestrationRefusal from the classification table
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

@@ -1162,3 +1162,15 @@ regression and is not.
 
 Pin ended at `48a9aa399e5d` after four fork commits this phase; contract regenerated, 18 patches,
 both evidence files re-collected.
+
+**3-way review (2 lanes this protocol): both APPROVE, HIGH.** No blocking issues. Four non-blocking
+notes from the Claude lane, all four acted on: `data-codev-builder-count` now comes from
+`entry.builderCount` rather than the render-side run scan (it could only ever agree with the scan
+the test counts — the same shape as the five costumes); the Active-only scoping of the tree is
+recorded in the review so phase 8 inherits it rather than rediscovering it; `test:e2e:spec250`
+added to `packages/codev/package.json`; the `??` expression parenthesised. Rebuttals at
+`codev/projects/250-t3code-is-the-front-end-privat/250-phase_7-iter1-rebuttals.md`.
+
+Pin finished at `7c7096d49de9`, 19 patches, both evidence files re-collected. Codev suite green
+(7370 + 180, 54 skipped, 0 failed) under node v20; fork web suite 2887 passed; 9 Playwright tests
+green against the live fork.

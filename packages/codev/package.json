@@ -39,7 +39,8 @@
     "test:e2e:cli": "pnpm build && vitest run --config vitest.cli.config.ts",
     "postinstall": "node ./scripts/postinstall.mjs",
     "prepublishOnly": "pnpm build",
-    "copy-client": "pnpm --filter @cluesmith/codev-client build && rm -rf client-dist && cp -r ../../apps/client/dist client-dist"
+    "copy-client": "pnpm --filter @cluesmith/codev-client build && rm -rf client-dist && cp -r ../../apps/client/dist client-dist",
+    "test:e2e:spec250": "playwright test --config playwright.spec250.config.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.41",

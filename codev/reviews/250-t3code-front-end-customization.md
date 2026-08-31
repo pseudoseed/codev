@@ -843,6 +843,19 @@ tree, no row inside the tree repeating the project name, rows outside it still c
 architect row captioned and its builders not. The third is a colour, and the screenshot is its
 evidence.
 
+### The tree covers the Active section only, and phase 8 inherits that
+
+Named here because it is an unstated narrowing of "the sidebar renders the tree", and the only other
+place it is written down is a code comment.
+
+t3code splits a project into Pinned / Active / Snoozed / Settled before any grouping runs. The tree
+is built over **Active**; the other three keep the flat rendering they have always had and reach the
+grouping as `alsoVisible`, which is what lets a builder whose architect is pinned say
+`parent-elsewhere` instead of `parent-missing`. That is the right scope for this phase — the split
+is t3code's own and predates us — but a phase that assumes "every Codev thread is in the tree" will
+be wrong for any thread the user has pinned, snoozed or settled. Phase 8's gate panel should read
+gate state off the thread rather than off a position in the tree.
+
 ### Live per-row status is t3code's, and it is not a gap
 
 Every row in the screenshots reads "now" with no working/turning indicator, which looks like spec
