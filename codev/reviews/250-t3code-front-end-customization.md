@@ -312,6 +312,30 @@ the command**: absent means the server allocates, present means apply only if it
 Equal is refused as well as lower, because two writers that computed the same number are colliding,
 not agreeing.
 
+### The one defect, in four costumes — read this before wiring phase 6
+
+Four findings across phases 2, 3 and 4 are the same defect wearing different clothes. Every one of
+them passed its own tests. Every one was found by review or by a compiler, never by the suite that
+was supposed to cover it.
+
+| # | Costume | What was tested | What production did |
+|---|---|---|---|
+| 1 | **A layer nothing builds** | `MigrationsLive` constructed by the test, columns appear | `MigrationsLive` is exported and nothing builds it; the real path is `Layers/Sqlite.ts`'s `setup` |
+| 2 | **A layer something wraps** | the decider's six discriminants, called directly | `OrchestrationEngine` rewrote them all as "Failed to generate an event identifier", then persisted it |
+| 3 | **A decider tested without its engine** | gate revision rules, decider-only | `isRefusal` dropped the new refusal type; criterion 10 was false at the wire |
+| 4 | **A read model every test hand-builds** | eleven decider tests, each building its own read model | a projector that dropped `gateRevision` would pass all of them while every write re-allocated revision 1 |
+
+The single sentence they share: **a test that supplies the boundary itself cannot tell you the
+boundary exists.** Constructing the layer, calling under the wrapper, hand-building the read model —
+each substitutes the thing whose absence or misbehaviour is the actual risk.
+
+The rule that follows, and the one phase 6 needs: **when a value is produced in one layer and
+consumed in another, test the seam, not the two ends.** Phase 6 wires `porch-driver` across the
+ws/RPC boundary — the last untested hop, and already an acceptance item — and it is the fifth place
+this can happen. A `porch-driver` test that constructs its own transport would be costume five.
+
+Costume 3 is now closed by construction rather than by care: see below.
+
 ### The same function, the third time
 
 `isRefusal` in `OrchestrationEngine` decides which errors reach a dispatcher intact. Phase 3 fixed
@@ -324,7 +348,27 @@ Both lanes found it independently. What generalizes is narrow and mechanical: **
 enumerates a category has to be extended whenever the category grows, and nothing in the type system
 says so.** The union it feeds is structural; the predicate is a hand-written disjunction. Adding a
 member to the union and forgetting the predicate compiles cleanly and silently drops the new member.
-A type-level exhaustiveness check would have caught all three occurrences.
+A type-level exhaustiveness check would have caught all three occurrences — so phase 4 added one
+rather than filing a follow-up, on the reasoning that a follow-up issue is a promise to hit it a
+fourth time.
+
+`dispatchErrorKind` now classifies **every** member of `OrchestrationDispatchError` in a switch whose
+`default` assigns to `never`. `isRefusal` reads that classification instead of keeping its own list,
+so there is one place to update. Adding a member without classifying it **does not compile**, and the
+error names the forgotten type:
+
+```
+src/orchestration/Layers/OrchestrationEngine.ts(122,13):
+  error TS2322: Type 'ProbeUnclassifiedError' is not assignable to type 'never'.
+```
+
+Verified the way everything else on this project now is: a fourth member was added, the build was
+confirmed to fail, and it was removed. At runtime an unrecognised error classifies as `internal` —
+the safe direction, because a refusal misclassified as internal is a worse message, while an
+internal error misclassified as a refusal is a lie about whose fault it was.
+
+This is worth more than the three fixes it replaces: it converts a recurring runtime falsehood into
+a build error.
 
 ### No test saw the projector, and the decider tests could not
 

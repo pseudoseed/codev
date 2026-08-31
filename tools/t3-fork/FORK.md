@@ -144,6 +144,7 @@ against that file rather than against a layer it assembles.
 | 4 | `57d24ddcb3be` | 29 tests: revision monotonicity and criterion 10, the scope exclusions, the payload bounds. |
 | 4 | `6e8bdec207d6` | The two tests the optional-on-the-wire deviation rests on: the column rejects NULL, and an absent `gateRevision` decodes to a number. |
 | 4 | `3d0e76776cd9` | `isRefusal` was deleting gate refusals — the phase 3 bug in the same function. Reason taxonomy split, projector gate coverage added, and the single gate-write credential named. |
+| 4 | `570cc29dc63c` | `dispatchErrorKind` makes an unclassified dispatch error a **compile error**, replacing the hand-written disjunction that shipped the same bug three times. |
 
 ### Migration 900 is abandoned, and must stay abandoned
 

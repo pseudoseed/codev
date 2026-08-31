@@ -856,3 +856,32 @@ Fork `3d0e76776cd9`. Typecheck green, contracts 304, server 2832.
 **New flaky observation:** `server.test.ts > routes websocket rpc server.upsertKeybinding` failed
 once under the full parallel run, passes in isolation and on re-run. Same shared-resource class as
 issue #263. Not fixed, recorded.
+
+### The exhaustiveness check — ruled in, not deferred
+
+The architect refused a follow-up issue: three occurrences of one mistake in one project is a
+structural defect, and a follow-up is a promise to hit it a fourth time.
+
+`isRefusal` was a hand-written disjunction over a structural union, so adding a member and
+forgetting the predicate compiled cleanly. `dispatchErrorKind` now classifies **every** member of
+`OrchestrationDispatchError` in a switch whose `default` assigns to `never`, and `isRefusal` reads
+that classification rather than keeping a second list.
+
+**Proven, not asserted**: a fourth member was added and the build refused it by name —
+`error TS2322: Type 'ProbeUnclassifiedError' is not assignable to type 'never'` — then removed.
+
+Runtime default is `internal`, the safe direction: a refusal misclassified as internal is a worse
+message; an internal error misclassified as a refusal is a lie about whose fault it was.
+
+Fork `570cc29dc63c`. Server 2835 passed.
+
+### The four costumes, now one list in the review
+
+Phases 2-4 produced the same defect four times, and the review carries them as a single table for
+phase 6 to read first: a layer nothing builds, a layer something wraps, a decider tested without its
+engine, a read model every test hand-builds. Each passed its own tests; each was found by review or
+by a compiler.
+
+One sentence: **a test that supplies the boundary itself cannot tell you the boundary exists.**
+Phase 6 crosses the ws/RPC seam, which is costume five if a `porch-driver` test constructs its own
+transport.
