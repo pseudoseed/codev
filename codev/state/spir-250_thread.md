@@ -1432,3 +1432,36 @@ with no fork history touched.
 
 Pin at `3786b840e1a4`, 33 patches. Fork web 2984, fork server 198, 32/32 Playwright across all four
 spec-250 specs, e2e 8 passed. Both branches pushed.
+
+**Phase 10 CLOSED after iteration 2: Claude COMMENT/HIGH, opencode APPROVE/HIGH with no issues.**
+opencode verified the iteration-1 fixes in the code rather than in my rebuttals — `ctx.skip` typed
+`never`, the idle-timeout wording, four-to-four attribute mapping, and the proxy registered in
+`server.ts` beside the targets route (the wiring, not just the module).
+
+Iteration 2's one finding, and it is the same family as iteration 1's one layer in. Iteration 1 was
+a test that **could not run** and reported a pass. Iteration 2 was a test that **could run and
+could not fail**: `url.startsWith(origin)` is a prefix match, `webAppUrl()` defaults to a fixed
+`http://localhost:5733`, and the agent host binds an ephemeral port — so ports 57330-57339 (ten,
+inside macOS's ephemeral range, ~0.06% of runs) would have had a genuinely direct browser-to-agent
+request counted as same-origin, and the phase's central security assertion would have passed anyway.
+
+A rare false pass is worse than a common one: it makes the test look reliable while it is not, and
+0.06% is the rate at which nobody ever sees it fail.
+
+The durable half of the fix is not the comparison — it is that the predicate **moved out of the
+Playwright spec into its own module so it could be tested at all.** The function deciding whether a
+security claim passed was the one piece of the suite with no test of its own, which is how it stayed
+wrong. Five unit tests now, in the default suite; restoring the prefix match fails three of them.
+Non-http schemes are exempt as a CLASS (`data:`, `blob:`, `about:`), because naming `blob:` beside
+`data:` would have left `about:` to break a later run.
+
+**Phase 11 groundwork, done during phase 10's review waits.** Architect ruled the rebase drill runs
+on a THROWAWAY clone with the real pin unchanged, and the plan now records why: advancing
+`upstreamBase` to satisfy a phase would strand every spec 146 and 236 result tied to `082e6ea52186`.
+Criterion 6 closes run-and-met or UNMET-with-a-runbook, never open and never on a simulation. The
+runbook is `codev/resources/250-ipad-acceptance-runbook.md`, and verifying it against the fork
+rather than writing it from memory caught three wrong instructions — the worst being that it sent
+the human to `t3-server.mjs start-fork`, a throwaway data dir with empty data, for a criterion that
+says a builder is driven to completion.
+
+Pin `3786b840e1a4`, 33 patches. Both branches pushed. **No PR yet — phase 11 opens it.**
