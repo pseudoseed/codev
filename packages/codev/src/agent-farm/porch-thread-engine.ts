@@ -90,7 +90,7 @@ export const DEFAULT_THREAD_HARNESS = 'codex';
 /**
  * How long a spawn waits to hear the session refused, before it stops listening.
  *
- * A SECOND IS ENOUGH, AND IT HAS TO BE (issue #260).
+ * TWO SECONDS IS ENOUGH, AND IT HAS TO BE (issue #260).
  *
  * This bound does not measure how long a turn takes to start — that is
  * provider-latency-bound and unbounded in practice, and waiting for it here would
