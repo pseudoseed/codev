@@ -1585,3 +1585,47 @@ whose id tail-matches, in any workspace on this machine** — a cross-workspace 
 message class carrying human authority. Recorded there with what would have happened had I trusted
 it: porch state was untouched, so `porch next` would have run against an unapproved gate, and porch
 would have been the only thing between a fixture and an advanced project.
+
+### Phase 11, iteration 2 review — the defect inverted, in my own new tests
+
+**claude APPROVE/HIGH, opencode COMMENT/HIGH, nothing blocking.** Four notes, all actioned.
+
+**The one worth carrying: my new tests would have FAILED a correct drill.** The drill has two
+shapes, and `NO_UPSTREAM_MOVEMENT` is a pass — with upstream still at our base there are no new
+migrations to shadow and no merged tree to hash, so that result legitimately carries
+`watermark.checked: false`, `contractClosure.checked: false`, zero churn, and no `preserved` block at
+all. My suite asserted the other shape unconditionally: three assertions would have failed and a
+fourth would have thrown.
+
+Two iterations went into tests that pass when they should fail. This is a test that fails when it
+should pass. **It is the same missing question in both directions — which claim is this artifact
+actually making — and I did not think to ask it of the tests I had just written to fix asking it of
+the code.** Verified the fix the only way that means anything: ran the suite against a synthetic
+zero-movement evidence file. 6 passed, 7 skipped. The old suite failed 3 and threw on 1.
+
+While there I found `if (evidence.outcome !== 'conflicts') return;` inside a test body — a pass with
+zero assertions, which is precisely the phase 10 finding, still sitting in a file I wrote. Now
+`it.runIf`.
+
+**A comment outlived the test it described by one commit, and opencode caught it.** The
+drill-closure header still claimed the check order was asserted below, one commit after that test was
+deleted for being unfalsifiable — with the accurate comment contradicting it at the bottom of the
+same file. Iteration 1's finding was a header claiming a check the code did not perform. This is
+that, one file over, introduced by the fix for it.
+
+**I defended the hand-typed churn split and the defence was a description of the problem.** "3
+`source-only`, 2 `consumed-change-undecidable`" stayed prose because it comes from a separate run.
+That is exactly why it rots. `classify-churn --upstream-movement` is now persisted to
+`codev/research/250-upstream-movement.json` and printed into the generated block, with two refusals:
+a classification covering a different range than the drill, and one run against the fork instead of
+upstream. The counts matched what had been typed — which is the point. The fix was not prompted by a
+wrong number; the next drill is where a typed one goes wrong silently.
+
+**Both lanes were asked directly whether deleting the order test was right, and both said yes**, for
+the reason I had given. claude added the caveat: the subset relation is a caller obligation the
+exported function does not enforce, so a malformed input would make order observable. Left alone —
+defending against an input no caller produces is defending against a hypothetical.
+
+**Restarted both lanes mid-review.** The first pair began reading `rebase-drill.mjs` while I was
+extracting `closureMeasurability` out of it. A review of a tree that moves underneath it is not a
+review, and five minutes is cheaper than a finding I could not trust either way.
