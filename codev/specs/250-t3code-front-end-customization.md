@@ -382,8 +382,16 @@ client instead.
   and revocable by design (`afx pair revoke <machine>`) and it is never Tower's shared key, which
   cannot be revoked for one machine without rotating it for all.
 - **Cross-origin is decided: there is none.** t3code's app reaches `codev-agent` through a
-  same-origin path proxied by t3code's own server, the way `apps/client` proxies `/m/<id>/`. A
-  design that widened `connect-src` to reach a second port would not be testing what runs.
+  same-origin path proxied by t3code's own server, the way `apps/client` proxies `/m/<id>/`.
+
+  **This is structural, not enforced, and an earlier revision of this spec said otherwise.**
+  It claimed `connect-src 'self'` stays closed, which asserts a header t3code never sends:
+  upstream sets no page-level CSP at all, only one on `.svg` responses (`http.ts:51,62`).
+  `apps/client` does send one and the guarantee was copied across without checking. So the
+  property holds because the page makes no cross-origin request, not because anything would
+  stop it — which means it is a **test** obligation, watching the network for requests leaving
+  the origin, and not a header to point at. Adding a page-level CSP is a reasonable later
+  hardening and is not claimed here.
 - **Gate writes are authenticated, and t3code's existing scopes cannot express it.** The pinned
   contract has only a coarse `orchestration:operate`, which every thread-driving client already
   holds — so "requires `codev-agent`'s credential" is not realizable by reusing it, and saying so
