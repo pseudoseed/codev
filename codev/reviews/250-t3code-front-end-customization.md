@@ -611,6 +611,115 @@ send `role`, `parentThreadId` and `codev.gateWrite` against a vendored contract 
 a `codev.gate-set` frame arriving on the stream shape-checks instead of being rejected as
 unrecognized. Phase 7 is still the first that renders.
 
+## Phase 6 — Hierarchy and gate state published by the Codev side
+
+### The finding, and it needed a server the harness could not start
+
+The plan's acceptance criterion for this phase is a live round trip: dispatch an
+illegal hierarchy edge over a socket and assert the client can still tell "no such parent" from
+"wrong parent role". The reason it is written that way is the record. Phase 2's schema guard was
+wired to a layer nothing builds. Phase 3's six discriminants were rewritten by
+`OrchestrationEngine` into a message that was not merely lossy but false. Both were green in every
+test beneath the layer that broke them.
+
+**The harness could not run it.** `t3-server.mjs start` runs the published `t3@<pin.cliVersion>`
+CLI against the upstream checkout — that is what every spec 146 measurement is about, and that
+server has no `codev.*` anything. `parentThreadId` is not in its contract, so an illegal edge is
+not illegal there; it is an unknown field the decoder strips. A "wire test" against it would have
+passed and proved nothing.
+
+So the harness gained `start-fork`, which runs the fork's `apps/server/src/bin.ts` directly under
+the same interpreter. There is no build step because there does not need to be one — the server
+runs from source under Node's type stripping, the same way the codegen does — and adding a bundle
+would put a build artifact between the source we changed and the server under test. It is a
+separate verb rather than a flag on `start`, and it takes its own `T3_HARNESS_DIR` and
+`T3_HARNESS_PORT`: the two bring up different servers from different checkouts, and a caller who
+means one must not get the other by dropping a flag.
+
+**The first run failed on all four cases.** Every refusal arrived as
+`OrchestrationDispatchCommandError` with the reason inside `message`, as English, behind a `cause`
+holding a serialized `Error`. A client could not tell `parent-not-found` from
+`parent-not-architect` without parsing a sentence. Phase 3 fixed the ENGINE deleting these; the ws
+layer was flattening them one hop further out — the same shape, a third time, in the layer nothing
+had yet crossed.
+
+### The fix, and the two things it taught
+
+`OrchestrationDispatchCommandError` gains an optional `refusal` carrying the refusing error's tag
+and its machine-readable reason. `bootstrapThreadDisposition`, one field above it, is the
+precedent: an optional machine-readable field so a client branches without reading prose. Optional
+for the same reason — most dispatch errors are internal and have no reason to give, and
+`refusal: null` on all of them would be a claim rather than an absence.
+
+`CodevHierarchyInvalidReason` **moved into the contract**, because it travels. A vocabulary that
+reaches a client and is declared only in `apps/server` means every client keeps its own copy of six
+string literals and checks it by hand against a file it does not import. Once it was in the
+contract it could be vendored, and `porch-driver`'s copy is now checked against
+`generated/schema.json` unconditionally rather than against a fork checkout the test had to skip
+without.
+
+**Four wrapping sites, not one.** The test that asserts them found two the first fix missed —
+including one that rebuilds an existing dispatch error in order to add a field, and would have
+deleted the discriminant while adding it. That site is the more instructive of the two: it is not a
+place that forgot to lift the reason, it is a place that copies three fields by name and therefore
+drops every field nobody remembered to add.
+
+**The second run failed too, differently.** The live script read `domain.reason` — a true reading
+of the old server and the wrong one for the new. That is worth recording because it is the shape of
+a false negative: a test that was right about the world at the moment it was written, and whose
+failure after the fix looks exactly like the fix not working.
+
+### Losing the question is better than losing the gate
+
+Codev bounds a gate request in BYTES (`GATE_REQUEST_LIMITS`); the fork bounds `CodevGate` in string
+length, and tighter — a 1024-byte question porch accepts can exceed the fork's 500-character cap.
+The fork refuses an oversize gate WHOLE, because a gate that partially applied would leave a human
+looking at half a question.
+
+So the publisher narrows, and it narrows only the optional content: the question is dropped, the
+choices capped at five, a second recommendation demoted, a terminal excerpt kept tail-first behind
+a truncation marker. `gateName` and `requestedAt` always travel, because they are what say a human
+is needed. Every drop is named to the caller — a silently shortened question reads as the whole one.
+
+The single case where the gate IS dropped is an unusable gate name. A name cannot be shortened
+without changing which gate it names, and showing a human a gate they cannot match to their
+protocol is worse than showing none.
+
+### The publisher invents no revision, and that is what makes a restart safe
+
+`codev.gate.set` takes an optional `revision` and this never sends one. A counter held in a
+writer's memory resets when the writer restarts, and a reset counter makes every later write stale
+— which renders as "no gate pending" exactly where a human is waiting.
+
+The corollary is that reconnect republishes CURRENT state rather than replaying history, and the
+publisher gets that for free by living with the connection: a new socket builds a new
+`GatePublisher`, which remembers nothing. Spec test scenario 4 — kill and restart mid-gate — is
+therefore not a special case in the code at all, and the test models it by building a second watch
+over the same workspace after changing `status.yaml` while nothing was running.
+
+**Only a confirmed write updates the publish memory.** A memory updated on failure would suppress
+the retry, and for a gate waiting on a human "the next change to `status.yaml`" is forever.
+
+### A dropped cycle, spelled like nothing to do
+
+The first version of the publish cycle skipped a request while one was in flight and returned `[]`.
+That is "I did nothing" spelled exactly like "there was nothing to do", and it is worse than it
+sounds: the watcher fires on the same file change a caller is reacting to, so the dropped request
+was reliably the caller's. Found by an integration test whose explicit `publishNow` silently did
+nothing. Cycles are chained now, so every request runs, in order.
+
+### An unreadable status.yaml publishes nothing
+
+It does not clear. Clearing would spell "I could not read the file" like "no gate is pending", on
+the one thread where a human may be waiting.
+
+### What can a human see or do now that they could not before
+
+Still nothing rendered — phase 7 is the first that renders. What is now true is that a spawned
+builder lands on the fork with `role: "builder"` and its architect's thread id, a porch gate
+reaching `pending` appears on the thread within one publish cycle, and a client that dispatches an
+illegal edge gets back a discriminant it can branch on instead of a sentence it would have to parse.
+
 ## Flaky Tests
 
 `apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint` fails in the fork.

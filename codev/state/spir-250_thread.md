@@ -1047,3 +1047,53 @@ that drifted. Extending the list to three would have caught this instance and no
 reads the directory: every generated artifact naming the upstream repo must also name the fork and
 the base, with a guard that it found artifacts at all. Reverting the header fails that test and
 nothing else.
+
+---
+
+## Phase 6 — hierarchy and gate state published, and the hop that had never been crossed
+
+Three things landed and one thing was found.
+
+**Landed.** `porch-driver` sends `role` and `parentThreadId`, omitted rather than nulled when the
+caller names no role, so an upstream server sees the same payload it always did. Two of the fork's
+six hierarchy reasons need no projection to decide, so they are refused before the worktree is laid
+down. `launchSpawnedBuilder` resolves the spawning architect's thread id once — three answers, and
+the middle one is a thread-backed workspace whose architect runs on a terminal, which gets neither
+field and says so. And the gate publisher: `status.yaml` projected onto the thread, on its own
+socket with the `codev:gate-write` credential, sending no revision.
+
+**Found.** The plan's acceptance criterion is a live round trip, and the harness could not run one:
+`start` runs the published `t3@0.0.36` CLI against upstream, which has no `codev.*` anything. So
+`start-fork` now runs the fork's `apps/server/src/bin.ts` directly, on its own port and runtime dir.
+
+The first run failed on all four cases. Every refusal arrived as
+`OrchestrationDispatchCommandError` with the reason inside `message`, as English. Phase 3 fixed the
+engine deleting discriminants; the ws layer was flattening them one hop further out, and every test
+beneath that hop was green. Third time this spec has produced that shape.
+
+Fork `804e56f8f864`: `OrchestrationDispatchCommandError` gains an optional `refusal`,
+`CodevHierarchyInvalidReason` moves into the contract because it travels, four wrapping sites lift
+or forward it. The test that asserts those sites found two the first fix missed — one of them
+rebuilds an existing error to add a field, and would have deleted the discriminant while adding it.
+
+The second run also failed, and it is worth naming why: the script read `domain.reason`, a true
+reading of the old server and the wrong one for the new. A test that was right about the world when
+it was written, whose failure after the fix looks exactly like the fix not working.
+
+Third run: four illegal edges, four distinct readable reasons, all carrying
+`CodevHierarchyInvalidError`. Recorded in `codev/research/250-hierarchy-wire-evidence.json` behind
+an mtime guard.
+
+**Costs paid.** The fork moving meant `verify` reported `FORK_AHEAD_OF_CONTRACT` at exit 1 — phase
+5's flip firing for a real reason one phase after it was armed — so the contract regenerated at the
+new head. `OrchestrationDispatchRefusal` is vendored now, so porch-driver's copied reason list is
+checked against `generated/schema.json` unconditionally instead of skipping without a fork checkout.
+Both evidence files re-collected, again, because `t3-server.mjs` changed.
+
+**One design note for phase 7.** The gate block's optional content is narrowed to fit the fork's
+caps — question dropped over 500 chars, choices capped at 5, excerpt truncated tail-first — and
+every drop is reported. `gateName` and `requestedAt` always travel. A renderer should not assume the
+question is present, and should not read a truncated excerpt as complete; the marker says so inline.
+
+Codev suite green: 7367 + 180 passed, 54 skipped, 0 failed. Fork suite 2845 passed, 8 skipped, 1
+pre-existing (entrypoint symlink).
