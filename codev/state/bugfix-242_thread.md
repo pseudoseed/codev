@@ -155,3 +155,32 @@ under vitest (6 tests, one file).
 A seventh assertion — the runner still receives all ten `RUN_*` variables now that it is a
 background job, and the `/`-bearing model `xai/grok-4.6` passes through — was checked by having the
 stub runner print its environment: all ten arrive intact and status 7 propagates.
+
+## PR (2026-08-31)
+
+PR #282. First CMAP: claude=APPROVE, opencode=APPROVE, codex=REQUEST_CHANGES.
+
+### What review caught, and it was real
+
+**The port guard failed open** (codex). `[ "$PORT" -lt 1 ]` on a 30-digit port prints "integer
+expression expected" and returns 2, which the `if` reads as false — so the run continued and the
+refusal that eventually arrived was `NO_INTERPRETER`, about something else entirely. A guard whose
+failure mode is falling through reads as a guard while being none. Fixed by matching the shape
+first — at most five digits, no leading zero, so `[ 08 … ]` cannot be read as octal either — and
+comparing only after. Gate bounded at 9 digits for the same reason.
+
+**SIGHUP was untrapped** (claude). The 24-hour gate outlives the terminal that started it.
+
+**`stop_server` did not reap the runner** (claude), so the teardown could race its last write and
+leave a truncated `$LABEL.json` — an evidence file that exists and is wrong.
+
+**The stub runner leaked a `sleep`** (architect). It slept in the foreground, so the `sleep` was a
+grandchild the launcher never names and it outlived each signal test by five minutes. The stub now
+sleeps in the background under its own TERM/INT/HUP trap, and both signal tests bound
+`FAKE_RUN_SECONDS` at 30. Verified by hand: nothing from the sandbox survives the SIGTERM.
+
+The remaining grandchildren gap — `kill RUNNER_PID` reaches the runner but not the porch and t3
+processes `air-235-full-protocol.mjs` spawns — is #283, not this issue, and a stub with no children
+cannot see it.
+
+Branch synced with main (was 7 behind). 7 tests, all passing; re-CMAP dispatched.
