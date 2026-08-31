@@ -137,16 +137,20 @@ function logSpawnSuccess(
 /**
  * Where this builder sits in Workspace > Architect > Builders (spec 250).
  *
- * THREE ANSWERS, and the middle one is the reason this is a function.
+ * TWO ANSWERS, and `unowned` carries its own reason rather than splitting into a
+ * third case. Review caught an earlier version of this comment claiming three and
+ * then listing `unowned` twice, which is the kind of drift a doc acquires when the
+ * union changes under it.
  *
  *   owned        the spawning architect is thread-backed; the builder gets
  *                `role: "builder"` and that architect's thread id.
- *   unowned      the architect exists but has no thread — a PTY architect in a
- *                thread-backed workspace, which is an ordinary configuration
- *                today. The builder gets NEITHER field, exactly as before this
- *                spec, and the reason is reported rather than left to be
- *                inferred from a thread that quietly has no role.
- *   unowned      the architect is not registered at all.
+ *   unowned      no architect thread to name, with `detail` saying which of the
+ *                three ways that happened: no workspace root was given, the
+ *                architect is not registered, or it is registered and running on
+ *                a terminal rather than a thread. The last is an ordinary
+ *                configuration today. The builder gets NEITHER field, exactly as
+ *                before this spec, and the reason is reported rather than left to
+ *                be inferred from a thread that quietly has no role.
  *
  * Sending `role: "builder"` without a parent is not an option in any of them:
  * `DriverThread.create` refuses it before dispatch, and the server refuses it

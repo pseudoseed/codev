@@ -523,6 +523,86 @@ describe('spec 250: a status.yaml walked from pending to approved', () => {
     }
   });
 
+  /**
+   * The serialization, tested for the property it was written for.
+   *
+   * The first version dropped a request while one was in flight and returned
+   * `[]`. The integration test above catches that indirectly — the watcher fires
+   * on the same write a caller reacts to — but indirectly is not the same as
+   * deliberately, and review was right that a documented bug fix with no direct
+   * test is one line from regressing silently.
+   *
+   * Two cycles started WITHOUT awaiting the first: both must run, in order, and
+   * neither may return `[]` for having been skipped. The writer blocks until
+   * released, so the second cycle provably starts while the first is in flight.
+   */
+  it('runs every requested cycle, in order, when they overlap', async () => {
+    const root = workspace();
+    let release: (() => void) | null = null;
+    let blocked = true;
+    let inFlight = 0;
+    let peak = 0;
+    const writer = {
+      calls: [] as Array<{ method: string; payload: any }>,
+      async call(method: string, payload: unknown) {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        writer.calls.push({ method, payload: payload as any });
+        if (blocked) {
+          blocked = false;
+          await new Promise<void>((res) => { release = res; });
+        }
+        inFlight -= 1;
+        return { threadId: 'thr-1', gateRevision: writer.calls.length, cleared: false };
+      },
+    };
+    writeStatus(root, '250-a-project', statusYaml(
+      `  plan-approval:\n    status: pending\n    requested_at: "2026-08-30T09:00:00.000Z"\n`,
+    ));
+    // A long debounce so the WATCHER does not fire during this test. The claim
+    // here is about two explicit requests overlapping; a third cycle arriving from
+    // the file watcher would publish first and let suppression hide a dropped one.
+    const watch = startGateWatch({
+      workspaceRoot: root, writer: writer as never, debounceMs: 60_000, reconcileMs: 60_000,
+    });
+    try {
+      const first = watch.publishNow();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(release, 'the first cycle never reached the writer').not.toBeNull();
+
+      // The gate CHANGES while the first cycle is still in flight, and the second
+      // request goes in behind it. If the second were dropped, this new gate would
+      // never publish — which is the failure the serialization exists to prevent.
+      writeStatus(root, '250-a-project', statusYaml(
+        `  plan-approval:\n    status: approved\n    approved_at: "2026-08-30T10:00:00.000Z"\n`
+        + `  pr:\n    status: pending\n    requested_at: "2026-08-30T11:00:00.000Z"\n`,
+      ));
+      const second = watch.publishNow();
+      (release as unknown as () => void)();
+
+      await Promise.all([first, second]);
+
+      /**
+       * Asserted on the WRITES, not on which promise carried which result.
+       *
+       * `watchAgentState` queues a cycle of its own when it subscribes, so the
+       * number of cycles is three and which one publishes what is an
+       * implementation detail of the queue. What the serialization has to
+       * guarantee is visible here and nowhere else: BOTH gates reached the
+       * server, in the order `status.yaml` held them. A dropped request publishes
+       * `plan-approval` and never `pr`, which is precisely the bug — the gate a
+       * human is now waiting on is the one that goes missing.
+       */
+      expect(
+        writer.calls.map((call) => call.payload.gate?.gateName),
+        'a cycle was dropped: the gate that opened during the in-flight write never published',
+      ).toEqual(['plan-approval', 'pr']);
+      expect(peak, 'two cycles overlapped, so they could race each other’s revisions').toBe(1);
+    } finally {
+      watch.close();
+    }
+  });
+
   it('publishes nothing for a status.yaml with no thread_id', async () => {
     const root = workspace();
     const writer = recordingWriter();

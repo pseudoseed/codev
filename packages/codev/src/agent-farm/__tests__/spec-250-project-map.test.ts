@@ -248,6 +248,53 @@ describe('spec 250: production reaches the gate watch', () => {
   });
 
   /**
+   * A RECONNECT must stop the previous watch, not overwrite the reference to it.
+   *
+   * Raised in review, and the teardown in `closeThreadBackend` does not cover it:
+   * a reconnect never goes through `closeThreadBackend`. `ensureThreadBackendReady`
+   * re-initialises a workspace whose engine was evicted — which is exactly what a
+   * t3code restart causes — so `gateWatches.set` alone drops the previous closer
+   * on the floor, leaking a live `fs.watch` AND a WebSocket per reconnect, in
+   * Tower, which runs for days.
+   *
+   * A source assertion for the same reason the rest of this block is one:
+   * executing the path needs a live server, a bootstrap exchange and two
+   * WebSockets, and a test that builds those itself would be supplying the very
+   * boundary whose absence is the risk. What it CAN do is fail when the stop
+   * disappears — verified by removing it.
+   */
+  it('stops the previous watch before installing a new one', () => {
+    const block = threadBackendSource.slice(
+      threadBackendSource.indexOf('const credential = readGateWriterToken('),
+      threadBackendSource.indexOf('hangUp.set(key, abandonConnection)'),
+    );
+    const stop = block.indexOf('gateWatches.get(key)?.()');
+    const install = block.indexOf('gateWatches.set(key');
+    expect(stop, 'a reconnect installs a second watch without stopping the first').toBeGreaterThan(-1);
+    expect(install).toBeGreaterThan(-1);
+    expect(stop, 'the previous watch is stopped after the new one is installed').toBeLessThan(install);
+  });
+
+  /**
+   * And the gate socket evicts its own entry when it closes.
+   *
+   * Nothing else will: this socket carries no engine, so the engine's close
+   * handler — which is what evicts everything else on the main connection — never
+   * sees it. Without this the map entry outlives its own connection, and a later
+   * `closeThreadBackend` closes a socket that is already gone while the watch it
+   * points at publishes into a dead wire.
+   */
+  it('gives the gate socket a close handler that evicts its own entry', () => {
+    const connect = threadBackendSource.slice(
+      threadBackendSource.indexOf('const gateConnection = await connectDispatcher('),
+      threadBackendSource.indexOf('const watch = startGateWatch({'),
+    );
+    expect(connect).toContain('gateWatches.delete(key)');
+    expect(connect, 'the close handler must not evict a watch that replaced it')
+      .toContain('gateWatches.get(key) === stopThisWatch');
+  });
+
+  /**
    * Torn down with the backend, and BEFORE its early return.
    *
    * The watch is a separate socket and a live `fs.watch`, and it can exist on a

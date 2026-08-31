@@ -1020,6 +1020,10 @@ async function initialiseThreadBackend(
    * second for the first would be the wrong way round. Every failure is said out
    * loud rather than inferred from a sidebar that shows no gates.
    */
+  // Declared before the connection so the socket's close handler can name the
+  // teardown it belongs to — the handler is passed in at connect time and the
+  // watch does not exist yet.
+  let stopThisWatch: (() => void) | undefined;
   const credential = readGateWriterToken(config.gateWriterTokenPath);
   if (credential.kind === 'unreadable') {
     logger.warn(
@@ -1029,10 +1033,30 @@ async function initialiseThreadBackend(
     );
   } else if (credential.kind === 'token') {
     try {
+      /**
+       * Stop whatever was watching before starting a new one.
+       *
+       * `ensureThreadBackendReady` re-initialises a workspace whose engine was
+       * evicted — which is exactly what a t3code restart causes — so this block
+       * runs again for the same key. `gateWatches.set` alone would drop the
+       * previous closer on the floor, leaking a live `fs.watch` AND a WebSocket
+       * per reconnect, in Tower, which runs for days. Raised in review; the
+       * teardown in `closeThreadBackend` did not cover it because a reconnect
+       * never goes through `closeThreadBackend`.
+       */
+      gateWatches.get(key)?.();
+      gateWatches.delete(key);
       const gateConnection = await connectDispatcher(
         config,
         upgradeTimeoutMs,
-        () => { /* the engine's own close handler owns eviction; this socket carries no engine */ },
+        // The gate socket carries no engine, so nothing else evicts it. Without
+        // this the entry outlives its own connection and `closeThreadBackend`
+        // later closes a socket that is already gone while the watch it points
+        // at has been publishing into a dead wire.
+        () => {
+          if (gateWatches.get(key) === stopThisWatch) gateWatches.delete(key);
+          stopThisWatch?.();
+        },
         credential.token,
       );
       const watch = startGateWatch({
@@ -1045,10 +1069,11 @@ async function initialiseThreadBackend(
           else logger.info(message);
         },
       });
-      gateWatches.set(key, () => {
+      stopThisWatch = () => {
         watch.close();
         gateConnection.close();
-      });
+      };
+      gateWatches.set(key, stopThisWatch);
       // The first cycle NOW, not on the first file change. A gate that reached
       // `pending` while this process was down would otherwise stay invisible until
       // something touched `status.yaml` — which, for a gate waiting on a human, is

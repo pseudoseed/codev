@@ -352,6 +352,12 @@ describe('spec 250: the refusal discriminant survives the ws boundary', () => {
     const sources = [
       join(repoRoot, 'packages', 't3-client', 'live', 'spec-250-hierarchy.mjs'),
       join(repoRoot, 'tools', 't3-server', 't3-server.mjs'),
+      // The CLIENT's read path, which review pointed out was missing. The whole
+      // claim is that a client can read the discriminant, and `envelope.ts` is
+      // where `RpcFailureError` decides what `error` and `tag` mean. A change
+      // there could stop the reading working while this evidence stayed green.
+      join(repoRoot, 'packages', 't3-client', 'src', 'envelope.ts'),
+      join(repoRoot, 'packages', 't3-client', 'src', 'client.ts'),
     ];
     for (const source of sources) {
       expect(
