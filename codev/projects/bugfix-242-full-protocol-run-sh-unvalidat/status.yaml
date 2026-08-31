@@ -1,7 +1,7 @@
 id: bugfix-242
 title: full-protocol-run-sh-unvalidat
 protocol: bugfix
-phase: pr
+phase: verified
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -18,7 +18,7 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T16:47:18.298Z'
-updated_at: '2026-08-31T18:07:02.226Z'
+updated_at: '2026-08-31T18:07:08.328Z'
 pr_history:
   - phase: pr
     pr_number: 282
