@@ -22,6 +22,35 @@ export interface WritableSession {
 // and swallowing the final Enter.
 const PACED_WRITE_LINE_THRESHOLD = 4;
 const INTER_LINE_DELAY_MS = 10;
+
+/**
+ * Hard ceiling on the bytes handed to a single `session.write` (Bugfix #273).
+ *
+ * A tty's input queue is finite — on macOS it is 1024 bytes — and a write larger
+ * than what the queue can hold is truncated **silently**: `pty.write()` returns
+ * without error, so {@link writeMessagePaced} resolves `true` and the mailbox row is
+ * marked `delivered` for bytes that never reached the agent. Issue #273 lost the first
+ * 1021 characters of a 1274-character message that way, and the loss was spelled
+ * `delivered`.
+ *
+ * Line count is not a proxy for byte count. The message that broke was **three lines**
+ * — header, a 1173-character body on one line, footer — so it took the short path below
+ * and went out as one 1274-byte write; the paced path would have been no better, since
+ * it writes one line at a time and that body *is* one line. The bound has to be on
+ * bytes, at the write itself.
+ *
+ * **The cap counts UTF-16 units; the hazard is UTF-8 bytes.** The conversion is not 1:1,
+ * and the bound only holds because of the ratio: the worst case is 3 bytes per unit (a
+ * 3-byte BMP character such as 日 is one unit; a 4-byte character is a surrogate PAIR, so
+ * it costs two units for four bytes, which is cheaper per unit). So 256 units emit **at
+ * most 768 bytes** — still inside the 1024-byte queue, with room for several chunks to
+ * sit there while the reader drains between them.
+ *
+ * That is the constraint to preserve if this number is ever changed: `3 × cap < 1024`,
+ * so **the cap must stay at or below 341**. Raising it to 512 on the reasoning that it
+ * is "still half the queue" would emit 1536-byte writes and reopen this bug.
+ */
+export const MAX_WRITE_CHUNK_CHARS = 256;
 const PACED_ENTER_DELAY_MS = 80;
 const SIMPLE_ENTER_DELAY_MS = 50;
 
@@ -90,12 +119,64 @@ export function writeEscapeToSession(session: WritableSession, noEnter: boolean)
 }
 
 /**
- * Write a message to a PTY session, pacing multi-line output to prevent
- * the terminal from treating it as a paste (Bugfix #584).
+ * Split a message into the exact chunks that will be handed to `session.write`
+ * (Bugfix #273): one per line, and any line longer than {@link MAX_WRITE_CHUNK_CHARS}
+ * further split so no single write can overflow the receiving tty's input queue.
  *
- * Short messages (≤3 lines): single write + delayed Enter.
- * Long messages (>3 lines): line-by-line writes with 10ms gaps, then Enter
- * after all lines are delivered.
+ * The `\n` stays attached to the tail chunk of its line, so concatenating the result
+ * reproduces the message byte for byte — the split is invisible to the receiver.
+ *
+ * A chunk boundary never lands between the two halves of a surrogate pair: slicing
+ * UTF-16 at a fixed index can cut an emoji in two, and each half would then be written
+ * as a lone surrogate and encoded as U+FFFD, silently corrupting the character. When
+ * the boundary falls on a high surrogate the chunk gives that unit up to the next one.
+ *
+ * That guard is also what keeps a multi-byte UTF-8 sequence whole. `session.write`
+ * takes a JS string, not a Buffer, so the UTF-8 encoding happens per chunk at the write
+ * — and a chunk that is well-formed UTF-16 always encodes to complete UTF-8 sequences.
+ * A 2- or 3-byte character (é, 日) is a single UTF-16 unit and cannot be split at all;
+ * only the 4-byte characters, which are surrogate pairs, could be, and this is where
+ * they are protected. Split on a Buffer instead and the guard would have to count
+ * continuation bytes.
+ */
+export function segmentMessageForWrite(message: string): string[] {
+  const lines = message.split('\n');
+  const segments: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const text = i < lines.length - 1 ? lines[i] + '\n' : lines[i];
+    if (text.length <= MAX_WRITE_CHUNK_CHARS) {
+      segments.push(text);
+      continue;
+    }
+    let offset = 0;
+    while (offset < text.length) {
+      let end = Math.min(offset + MAX_WRITE_CHUNK_CHARS, text.length);
+      // Don't cut a surrogate pair in half. `Math.max` keeps the loop finite: giving a
+      // unit back can only ever move `end` to `offset`, and a chunk of zero length would
+      // never advance.
+      const code = text.charCodeAt(end - 1);
+      if (end < text.length && code >= 0xd800 && code <= 0xdbff) end = Math.max(offset + 1, end - 1);
+      segments.push(text.slice(offset, end));
+      offset = end;
+    }
+  }
+
+  return segments;
+}
+
+/**
+ * Write a message to a PTY session, pacing output so the terminal neither treats it
+ * as a paste (Bugfix #584) nor silently drops the part of it that did not fit in the
+ * tty's input queue (Bugfix #273).
+ *
+ * Short messages (<4 lines AND <= MAX_WRITE_CHUNK_CHARS): single write + delayed
+ * Enter. Everything else: {@link segmentMessageForWrite} chunks with 10ms gaps, then
+ * Enter once every chunk is out.
+ *
+ * The second condition is the #273 fix. A three-line message can still be 1274 bytes
+ * long, and one write that big is truncated by the receiving tty without any layer
+ * reporting a failure - so the fast path is only for messages that genuinely are small.
  *
  * @param delayOffset  ms offset for all scheduled writes (used to serialize
  *                     multiple messages to the same session without interleaving)
@@ -106,7 +187,7 @@ export function writeMessageToSession(
 ): number {
   const lines = message.split('\n');
 
-  if (lines.length < PACED_WRITE_LINE_THRESHOLD) {
+  if (lines.length < PACED_WRITE_LINE_THRESHOLD && message.length <= MAX_WRITE_CHUNK_CHARS) {
     // Short messages: single write (existing behavior, works fine)
     if (delayOffset === 0) {
       session.write(message);
@@ -120,11 +201,13 @@ export function writeMessageToSession(
     return enterTime;
   }
 
-  // Multi-line: pace output line-by-line to avoid paste detection.
-  // Writing all lines in a single write() causes the terminal to treat it
-  // as a paste, swallowing the final Enter.
-  for (let i = 0; i < lines.length; i++) {
-    const text = i < lines.length - 1 ? lines[i] + '\n' : lines[i];
+  // Pace output chunk-by-chunk: one write per line, and a long line split further so
+  // no single write exceeds MAX_WRITE_CHUNK_CHARS. Writing all lines in a single
+  // write() causes the terminal to treat it as a paste and swallow the final Enter
+  // (#584); writing more than the input queue holds loses the excess in silence (#273).
+  const segments = segmentMessageForWrite(message);
+  for (let i = 0; i < segments.length; i++) {
+    const text = segments[i];
     const lineDelay = delayOffset + i * INTER_LINE_DELAY_MS;
     if (lineDelay === 0) {
       session.write(text);
@@ -133,7 +216,7 @@ export function writeMessageToSession(
     }
   }
 
-  const lastLineTime = delayOffset + (lines.length - 1) * INTER_LINE_DELAY_MS;
+  const lastLineTime = delayOffset + (segments.length - 1) * INTER_LINE_DELAY_MS;
   if (!noEnter) {
     const enterTime = lastLineTime + PACED_ENTER_DELAY_MS;
     setTimeout(() => session.write('\r'), enterTime);
