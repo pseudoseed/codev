@@ -156,6 +156,11 @@ describe('bugfix 278: the dirty state is the one that decides the exit code', ()
    * flip is what turned the spec 250 assertion red, and `inspectCheckoutTree`
    * must call exactly that tree dirty. Asserting the guard's verdict without
    * asserting the exit code it stands in for would test one end of the seam.
+   *
+   * The mutation lands BETWEEN two `verify` processes on purpose. That is the
+   * window a check made only at test entry cannot see: same pin, same fork,
+   * same distance ahead, and the second run answers differently because someone
+   * saved a file in the meantime.
    */
   it('verify exits 0 on the tolerated ahead state and 1 once the same tree is dirty', () => {
     const scratch = mkdtempSync(join(tmpdir(), 'b278-seam-'));
@@ -219,5 +224,24 @@ describe('bugfix 278: the dirty state is the one that decides the exit code', ()
       .toContain('realCheckoutSkipReason');
     expect(src, 'the reason comes from the checkout probe, not a hand-written string')
       .toContain('firstUnobservable');
+  });
+
+  /**
+   * The window a module-load or test-entry check cannot close.
+   *
+   * `verify` runs twice, in two processes, and a builder saving a file between
+   * them leaves the first run observing a clean tree and the second a dirty one.
+   * A guard that checks once at entry narrows the original failure rather than
+   * removing it, so the trees are re-read after EACH run, before its result is
+   * believed — including the fork-sourced run, where a dirty tree would exit 1
+   * for the wrong reason and the assertion would pass anyway.
+   */
+  it('re-reads the trees after each verify run, not only at test entry', () => {
+    const src = readFileSync(join(here, 'spec-250-vendoring-identities.test.ts'), 'utf8');
+    expect(src).toContain("skipIfUnobservable('when the test started')");
+    expect(src, 'a dirty tree exits 1 too, so the MISMATCH assertion needs the guard as well')
+      .toContain("skipIfUnobservable('during the fork-sourced run')");
+    expect(src, 'this is the run the original bug decided')
+      .toContain("skipIfUnobservable('during the upstream-sourced run')");
   });
 });

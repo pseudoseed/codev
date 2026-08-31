@@ -770,14 +770,23 @@ describe('spec 250: ahead of the contract is not the same as on the wrong commit
     'exits 1 against the real fork checkout when it is ahead of a fork-sourced pin' +
       (REAL_CHECKOUTS_OBSERVABLE ? '' : ` [skipped: ${realCheckoutSkipReason}]`),
     (ctx) => {
-    // Re-checked here, not just at module load: these are live working trees, and
-    // a builder committing or editing mid-run would otherwise land as a failure.
-    for (const root of [UPSTREAM_ROOT, FORK_ROOT]) {
-      const now = inspectCheckoutTree(root);
-      if (now.state !== CLEAN) {
-        ctx.skip(`${root} stopped being observable while the suite ran: ${now.reason}`);
+    /**
+     * Re-checked at every point an assertion depends on, not once at module load.
+     *
+     * These are live working trees and the two `verify` runs below are separate
+     * processes: a builder saving a file between them leaves the first run
+     * observing a clean tree and the second a dirty one, which is the original
+     * failure with a smaller window rather than a fixed one. Each run is followed
+     * by "was this still the tree I asked about?" before its result is believed.
+     */
+    const skipIfUnobservable = (when: string) => {
+      for (const root of [UPSTREAM_ROOT, FORK_ROOT]) {
+        const now = inspectCheckoutTree(root);
+        if (now.state !== CLEAN) ctx.skip(`${root} was not observable ${when}: ${now.reason}`);
       }
-    }
+    };
+
+    skipIfUnobservable('when the test started');
 
     const parent = execFileSync('git', ['-C', FORK_ROOT, 'rev-parse', 'HEAD~1'], { encoding: 'utf8' }).trim();
     const scratch = mkdtempSync(join(tmpdir(), 't3-real-ahead-'));
@@ -785,6 +794,9 @@ describe('spec 250: ahead of the contract is not the same as on the wrong commit
       const pinFile = join(scratch, 'pin.json');
       writeFileSync(pinFile, JSON.stringify({ ...pin, commit: parent, contractSource: 'fork' }, null, 2));
       const errored = runVerify({ pinFile, upstreamRoot: UPSTREAM_ROOT, forkRoot: FORK_ROOT });
+      // A dirty tree also exits 1, so an unchecked pass here would be the right
+      // answer for the wrong reason — "could not tell" spelled as "yes".
+      skipIfUnobservable('during the fork-sourced run');
       expect(errored.stderr).toContain('FORK_AHEAD_OF_CONTRACT');
       expect(errored.status, 'a fork-sourced contract the checkout has moved past is an error').toBe(MISMATCH);
 
@@ -794,6 +806,7 @@ describe('spec 250: ahead of the contract is not the same as on the wrong commit
       // to have.
       writeFileSync(pinFile, JSON.stringify({ ...pin, commit: parent, contractSource: 'upstream' }, null, 2));
       const tolerated = runVerify({ pinFile, upstreamRoot: UPSTREAM_ROOT, forkRoot: FORK_ROOT });
+      skipIfUnobservable('during the upstream-sourced run');
       expect(tolerated.stderr).toContain('FORK_AHEAD_OF_CONTRACT');
       expect(tolerated.status, 'only contractSource changed, so only the exit code may').toBe(OK);
     } finally {
