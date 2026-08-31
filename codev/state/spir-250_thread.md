@@ -1404,3 +1404,31 @@ the mitigation as well as the defect. `notifyTerminal` no-ops under vitest (`not
 is why the sibling vitest e2e performs the same approval silently and only the Playwright run fires
 it. **Not fixed here** — it is porch/tower, and folding it in would put an unrelated change in a
 fork PR.
+
+**Phase 10 review: Claude APPROVE/HIGH, opencode REQUEST_CHANGES/HIGH.** Stricter binding; every
+finding accepted, nothing in a disagree column. Rebuttals at
+`codev/projects/250-t3code-is-the-front-end-privat/250-phase_10-iter1-rebuttals.md`.
+
+**The binding one is the most useful finding in the whole spec so far.** My vitest e2e's
+availability guard logged a warning and RETURNED — which vitest records as a **pass**. On a run
+where the fork server never started, criterion 4 and every SSRF refusal reported green with zero
+assertions executed. This project keeps catching "I could not tell" spelled as "no"; that is the
+same defect spelled as **"yes"**, on the phase's own acceptance criterion. The file's header stated
+the rule ("Skips, never passes") and the code broke it — a header is not a mechanism. It was
+invisible to me because every run I did had the fork up. `ctx.skip` now, and demonstrated rather
+than asserted: `T3_NODE` unset gives **8 skipped** where it used to give **8 passed**.
+
+Two more, both fixed. `UPSTREAM_TIMEOUT_MS` is an **idle-socket** timeout and the comment claimed
+it bounded the whole exchange — the same class of error as the `connect-src` claim this phase
+existed to correct; the comment now states the residual (a trickling upstream is not bounded, and
+that upstream is one the operator named). And `data-codev-approval-state` collapsed `sessionEnded`
+into `refused`, which **both lanes found independently**; four outcomes, four words, in an exported
+pure function so the attribute and the rendering cannot drift.
+
+One I found myself between the lanes: the proxy buffered request bodies with **no bound** — Effect's
+`MaxBodySize` defaults to unbounded. Capped at 64 KiB, declared oversize refused before the read.
+Verified by running the same test against the fork commit before the fix: fails there, passes now,
+with no fork history touched.
+
+Pin at `3786b840e1a4`, 33 patches. Fork web 2984, fork server 198, 32/32 Playwright across all four
+spec-250 specs, e2e 8 passed. Both branches pushed.
