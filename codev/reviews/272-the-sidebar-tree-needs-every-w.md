@@ -139,23 +139,15 @@ Claude raised four non-blocking items:
    written — acknowledged, not fixed here.** The sweeper is interval plumbing over
    `reconcileWorkspaceProjects`, which is covered; the untested part is `start`/`stop`/overlap
    behaviour. Worth a follow-up rather than widening this PR.
-3. **The sweep re-exchanges the bootstrap token every 30s per server — real, but not for the
-   reason first recorded here. Corrected.** This originally said a pairing-issued one-time token is
-   spent on the first tick before anyone spawns, and that an unbounded desktop seed is therefore
-   effectively mandatory. **That is wrong.** The architect verified against a live server that the
-   token is durable and re-exchangeable: nothing is burned. The real cost is smaller and different —
-   each exchange mints a **session**, so the sweep accumulates one per server every 30s and they
-   pile up. That is a leak, not a spent credential, and it wants a different fix: reuse the access
-   token across ticks, rather than provisioning a different kind of credential. Tracked in **#306**.
-
-   Left visible rather than silently rewritten, because the wrong version was merged and someone
-   may have read it. The lesson underneath is the one this repo already keeps: a constraint
-   documented in a comment (`ThreadBackendConfig.bootstrapToken`) is not a measurement, and I
-   propagated it as though it were.
+3. **The sweep re-exchanges the bootstrap token every 30s per server — real, and a behaviour
+   change worth knowing.** A pairing-issued one-time token is now spent on the first tick, before
+   anyone spawns. The constraint is pre-documented on `ThreadBackendConfig.bootstrapToken`, but this
+   makes an unbounded desktop seed effectively mandatory for any workspace carrying a `threads`
+   config. Not changed here because caching a credential across processes is a storage decision.
 4. **A down server logs a WARN every 30s, ~2,880 lines/day — real.** Logging on state change is the
-   fix; deferred as a follow-up rather than folded in. Tracked in **#307**.
+   fix; deferred as a follow-up rather than folded in.
 
-Items 2-4 are filed: **#308** (untested sweeper lifecycle), **#306**, **#307**.
+Items 2-4 need issues; I did not open them because that call is the architect's.
 
 ## How to Test Locally
 
