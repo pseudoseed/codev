@@ -50,7 +50,16 @@ case "$*" in
   *t3-server.mjs\\ restart*) exit 0;;
   *t3-server.mjs\\ ready*) echo '{"port": 1, "token": "tok"}'; exit 0;;
   *t3-server.mjs\\ stop*) echo "STOP" >> "$STOP_LOG"; exit 0;;
-  *air-235-full-protocol.mjs*) echo "RUNNER" >> "$STOP_LOG"; sleep "\${FAKE_RUN_SECONDS:-300}"; exit 7;;
+  *air-235-full-protocol.mjs*)
+    echo "RUNNER" >> "$STOP_LOG"
+    # The stub sleeps in the BACKGROUND and traps, so the signal that ends the
+    # launcher ends this too. A foreground \`sleep\` is a grandchild the launcher
+    # never names, and it outlived every run of this file by five minutes — a
+    # test that leaks a process is a test that costs someone an afternoon.
+    trap 'kill "$SLEEP_PID" 2>/dev/null; exit 143' TERM INT HUP
+    sleep "\${FAKE_RUN_SECONDS:-30}" & SLEEP_PID=$!
+    wait "$SLEEP_PID"
+    exit 7;;
 esac
 exit 0
 `;
@@ -190,7 +199,13 @@ describe('Issue #242 — the launcher stops the server it started, on every exit
     let child: ReturnType<typeof spawn> | undefined;
     try {
       child = spawn('bash', [box.script, String(port), 'claude', 'model', '60', 'trap-check'], {
-        env: { ...process.env, PATH: `${box.binDir}:${process.env.PATH ?? ''}`, T3_NODE: '/usr/bin/true', STOP_LOG: box.stopLog },
+        env: {
+          ...process.env,
+          PATH: `${box.binDir}:${process.env.PATH ?? ''}`,
+          T3_NODE: '/usr/bin/true',
+          STOP_LOG: box.stopLog,
+          FAKE_RUN_SECONDS: '30',
+        },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stderr = '';
@@ -229,7 +244,13 @@ describe('Issue #242 — the launcher stops the server it started, on every exit
     let child: ReturnType<typeof spawn> | undefined;
     try {
       child = spawn('bash', [box.script, String(port), 'claude', 'model', '60', 'hup-check'], {
-        env: { ...process.env, PATH: `${box.binDir}:${process.env.PATH ?? ''}`, T3_NODE: '/usr/bin/true', STOP_LOG: box.stopLog },
+        env: {
+          ...process.env,
+          PATH: `${box.binDir}:${process.env.PATH ?? ''}`,
+          T3_NODE: '/usr/bin/true',
+          STOP_LOG: box.stopLog,
+          FAKE_RUN_SECONDS: '30',
+        },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stderr = '';
