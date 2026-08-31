@@ -27,6 +27,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '.
 const collector = join(repoRoot, 'tools', 't3-server', 'collect-spec-250-evidence.mjs');
 const evidenceMd = join(repoRoot, 'codev', 'resources', '250-acceptance-evidence.md');
 const criterion8b = join(repoRoot, 'codev', 'research', '250-criterion-8b-evidence.json');
+const movement = join(repoRoot, 'codev', 'research', '250-upstream-movement.json');
 
 const run = (...args: string[]) =>
   spawnSync(process.execPath, [collector, ...args], { encoding: 'utf8', cwd: repoRoot });
@@ -82,6 +83,47 @@ describe('spec 250 phase 11: the acceptance evidence collector', () => {
    * Without markers the collector would have to guess where the block goes, and
    * a guess produces a SECOND, contradictory table rather than an error.
    */
+  /**
+   * TWO RUNS, ONE RANGE.
+   *
+   * The churn totals come from the drill and the verdict split from
+   * `classify-churn`. If those two describe different ranges the table pairs
+   * "5 commits touch the closure" with a conflict surface measured across a
+   * different span, and nothing in the rendered output would say so — every cell
+   * is individually correct.
+   *
+   * Exit 3, not 1: a mismatched range is "I cannot make this claim", not "the
+   * committed evidence has drifted".
+   */
+  it('refuses a churn classification covering a different range', () => {
+    const result = withRestored(movement, () => {
+      const parsed = JSON.parse(readFileSync(movement, 'utf8'));
+      parsed.range = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef..origin/main';
+      writeFileSync(movement, JSON.stringify(parsed, null, 2));
+      return run('--check');
+    });
+    expect(result.status).toBe(3);
+    expect(result.stderr).toContain('STALE_RUN');
+    expect(result.stderr).toContain('Two ranges in one table');
+  });
+
+  /**
+   * Criterion 9 asks what UPSTREAM did. `classify-churn` will happily run
+   * `--fork-drift` over the fork and emit the same JSON shape, and the fork
+   * answering "what changed upstream" is a tautology that reports our own work
+   * back to us.
+   */
+  it('refuses a churn classification run against the fork', () => {
+    const result = withRestored(movement, () => {
+      const parsed = JSON.parse(readFileSync(movement, 'utf8'));
+      parsed.identity = 'fork';
+      writeFileSync(movement, JSON.stringify(parsed, null, 2));
+      return run('--check');
+    });
+    expect(result.status).toBe(3);
+    expect(result.stderr).toContain('WRONG_IDENTITY');
+  });
+
   it('refuses to guess where the block goes', () => {
     const result = withRestored(evidenceMd, () => {
       const markdown = readFileSync(evidenceMd, 'utf8');

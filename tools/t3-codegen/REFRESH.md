@@ -185,7 +185,7 @@ It reports these, and they answer different questions:
 | `wholeSurface.conflictedFiles` | how much conflicts IN TOTAL — a rebase stops at the first, so the first understates the job every time |
 | `contractClosure.regenerationReachable` | can the vendored contract be regenerated afterwards, or is it stranded behind the conflicts |
 | `contractClosure.sourceHash.moved` | would the regenerated contract be the one we vendored — which closure files the merged tree hands the generator with different bytes |
-| `contractRegeneration.attempted` | **always `false`**, with the reason. See below |
+| `contractRegeneration.attempted` | **always `false`**, with the reason, on every result of a drill that ran. See below |
 | `watermark` | does every migration upstream added land ABOVE the watermark our base leaves |
 
 **The drill does not regenerate the contract and does not run `shape-check`, and it says so in every
@@ -196,6 +196,10 @@ rebase is adopted for a reason. The drill measures the generator's *inputs* inst
 `contractClosure.conflicted` says whether the generator would find its source, and
 `contractClosure.sourceHash.moved` says whether that source still hashes to what the vendored
 contract came from — the layer `generate.mjs` names as its load-bearing drift detector.
+
+A `could-not-run` result carries none of these fields. That is deliberate: it means nothing was
+learned, and a measurement-shaped field on such a document is the first thing a reader would mistake
+for a finding. Its `reason` is the whole document.
 
 The hash is taken off the merged worktree **before** the probe merge is aborted. After the abort the
 worktree is the fork again and the comparison is the fork against itself, which reports zero moved
@@ -211,9 +215,11 @@ read as "no conflicts". Exit 0 for the first two, 3 for the last.
 Against upstream `9b2d04317c68`, 104 commits past `082e6ea52186`, carrying 42 customization
 commits:
 
-- `classify-churn --upstream-movement`: 5 commits touch the pinned closure — 3 `source-only`, 2
-  `consumed-change-undecidable` (`orchestration.subscribeThread` and `orchestration.dispatchCommand`
-  union shapes, which are the two unions our customization adds members to).
+- `classify-churn --upstream-movement`: the counts live in
+  `codev/research/250-upstream-movement.json` and are printed into the acceptance evidence by the
+  collector, so they cannot drift from the run. **Which** commits are undecidable is the part worth
+  writing down: the `orchestration.subscribeThread` and `orchestration.dispatchCommand` union
+  shapes, which are the two unions our customization adds members to.
 - The sequential rebase stops at **commit 6 of 42** on `apps/server/src/server.test.ts`.
 - The whole surface is **3 files of the 35 we modify**: that test, plus
   `apps/web/src/components/Sidebar.tsx` and `Sidebar.logic.ts`.

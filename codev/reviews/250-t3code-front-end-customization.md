@@ -1446,7 +1446,12 @@ The second door was found re-reading the fix, and neither lane raised it. Guardi
 `closureConflicts.length === 0` is the right question **once a merge has happened**. A `git merge`
 that refuses to start — already up to date, a wedged index — leaves the worktree as the unmerged
 fork with no conflicts to notice, and walks into the same comparison through a different branch.
-`mergeProducedATree` is now the outer condition.
+
+That decision is `closureMeasurability`, and it lives in `tools/t3-fork/drill-closure.mjs` rather
+than inline. `rebase-drill.mjs` is a script — importing it runs a drill against two real checkouts —
+so an inline guard is covered only by whatever branch the last real run happened to take, which is
+precisely the wrong coverage for a guard whose job is to fire on a case no normal run reaches. Five
+unit tests reach it; deleting the guard fails two of them.
 
 ### A number that is typed is a number that will be wrong
 

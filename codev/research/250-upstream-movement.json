@@ -1,0 +1,48 @@
+{
+  "mode": "upstream-movement",
+  "identity": "upstream",
+  "root": "/Users/chris/dev/t3code",
+  "range": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6..origin/main",
+  "total": 5,
+  "counts": {
+    "consumed-change-undecidable": 2,
+    "source-only": 3
+  },
+  "rows": [
+    {
+      "sha": "3b86ef941c218a000a2ea9920480f469b726f437",
+      "date": "2026-08-25",
+      "subject": "fix(app): un-settled threads return to the top of the list (#8231)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.subscribeThread: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "88be5631ff6a48b98ead48fa5af6a2be0a4d63e4",
+      "date": "2026-08-28",
+      "subject": "feat(analytics): report connected client platforms (#8481)",
+      "verdict": "source-only",
+      "detail": "auth.ts, baseSchemas.ts"
+    },
+    {
+      "sha": "8f49132214a40c85cf46bf5e3d8ea11c04a9610a",
+      "date": "2026-08-28",
+      "subject": "feat(server): accept PDF, ZIP, and other file uploads up to 50MB (#8235)",
+      "verdict": "consumed-change-undecidable",
+      "detail": "orchestration.dispatchCommand: unknown (union shape changed; not decidable here)"
+    },
+    {
+      "sha": "94f1948166620c804937f5548a68f5739d76c9fb",
+      "date": "2026-08-29",
+      "subject": "fix(connect): explain DPoP connection failures (#8351)",
+      "verdict": "source-only",
+      "detail": "baseSchemas.ts"
+    },
+    {
+      "sha": "c1c2d5401de5a352cf6722959de076c3da63d233",
+      "date": "2026-08-29",
+      "subject": "feat: let an environment publish themes as a file (#8569)",
+      "verdict": "source-only",
+      "detail": "environment.ts"
+    }
+  ]
+}

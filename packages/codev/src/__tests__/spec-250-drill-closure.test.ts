@@ -11,8 +11,13 @@
  * the contract generated from that same fork: `moved: []`, on every run, forever,
  * looking exactly like good news. A guard that only asks "did the closure
  * conflict" is vacuously satisfied there — zero conflicts, because there was no
- * merge to conflict — which is why the order of the two checks is asserted below
- * rather than left to reading.
+ * merge to conflict.
+ *
+ * **The order of the two checks is NOT asserted here, and the comment where the
+ * assertion would go explains why.** An earlier draft of this header said it was;
+ * that sentence outlived the test it described by one commit, which is the
+ * iteration 1 defect in miniature — a comment claiming a check that is not
+ * there. The opencode lane caught it.
  */
 
 import { describe, expect, it } from 'vitest';

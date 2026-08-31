@@ -73,8 +73,14 @@
  * documents at length why `source-hash.json`, and not the emitted schema, is what
  * detects a moved contract — read off the merged tree rather than predicted. It
  * bounds the regeneration job without claiming shape-check ran, because it did
- * not, and `contractRegeneration.attempted` is `false` in every result to keep
- * that from being inferred from silence.
+ * not, and `contractRegeneration.attempted` is `false` in every result of a drill
+ * that RAN — `ok` and `conflicts` — to keep that from being inferred from
+ * silence.
+ *
+ * `could-not-run` carries none of these fields, and that is deliberate rather
+ * than an omission: it means NOTHING was learned, so a measurement-shaped field
+ * on it would be the first thing a reader mistook for a finding. Its `reason` is
+ * the whole document.
  *
  * Usage:
  *   node tools/t3-fork/rebase-drill.mjs [--onto <ref>] [--out <file>] [--keep]

@@ -24,6 +24,24 @@ const pin = JSON.parse(
   readFileSync(join(repoRoot, 'packages', 'types', 'src', 't3', 'pin.json'), 'utf8'),
 ) as Record<string, any>;
 
+/**
+ * WHICH OF THE TWO SHAPES THIS EVIDENCE HAS.
+ *
+ * A completed drill produces one of two, and they are NOT the same document.
+ * With upstream ahead of our base there is churn, a merged tree, a watermark to
+ * check and a closure to hash. With upstream still AT our base the drill returns
+ * early: it is a pass — `NO_UPSTREAM_MOVEMENT` — and it legitimately carries
+ * `watermark.checked: false`, `contractClosure.checked: false`, zero churn, and
+ * no `preserved` block, because nothing was cloned to preserve anything from.
+ *
+ * The claude lane caught this suite hard-asserting the first shape. A correct
+ * zero-movement re-run would have failed three assertions and thrown on a
+ * fourth, which is a test failing on a right answer — the mirror of the defect
+ * this phase spent two iterations on. So the shape is named once, and each
+ * branch asserts its OWN contract rather than being skipped past.
+ */
+const zeroMovement = evidence.signal === 'NO_UPSTREAM_MOVEMENT';
+
 describe('spec 250 phase 11: the rebase drill evidence', () => {
   /**
    * `could-not-run` is the outcome that must never be mistaken for a pass, so it
@@ -32,8 +50,19 @@ describe('spec 250 phase 11: the rebase drill evidence', () => {
   it('records a run that actually happened', () => {
     expect(evidence.outcome).not.toBe('could-not-run');
     expect(['ok', 'conflicts']).toContain(evidence.outcome);
-    expect(typeof evidence.startedAt).toBe('string');
-    expect(Number.isNaN(Date.parse(evidence.startedAt))).toBe(false);
+    if (!zeroMovement) {
+      expect(typeof evidence.startedAt).toBe('string');
+      expect(Number.isNaN(Date.parse(evidence.startedAt))).toBe(false);
+    }
+  });
+
+  /**
+   * The two shapes are distinguished by a fact, not by a guess. `signal` and
+   * "target equals base" must agree; if they ever disagree, every branch below
+   * is keyed on the wrong one and this is where that surfaces.
+   */
+  it('agrees with itself about which shape it is', () => {
+    expect(zeroMovement).toBe(evidence.target === evidence.base);
   });
 
   /**
@@ -43,7 +72,7 @@ describe('spec 250 phase 11: the rebase drill evidence', () => {
    * self-check load-bearing rather than decorative: an evidence file recording a
    * moved checkout fails here instead of sitting in the repository looking green.
    */
-  it('proves nothing real moved', () => {
+  it.runIf(!zeroMovement)('proves nothing real moved', () => {
     expect(evidence.preserved.upstreamStillAtBase).toBe(true);
     expect(evidence.preserved.upstreamClean).toBe(true);
     expect(evidence.preserved.forkUnmoved).toBe(true);
@@ -62,7 +91,7 @@ describe('spec 250 phase 11: the rebase drill evidence', () => {
    * `commitsCarried` is what makes "3 files conflict" a fact about our
    * customization rather than about an empty range.
    */
-  it('carried the customization rather than an empty range', () => {
+  it.runIf(!zeroMovement)('carried the customization rather than an empty range', () => {
     expect(evidence.commitsCarried).toBeGreaterThan(0);
     expect(evidence.target).not.toBe(evidence.base);
   });
@@ -72,20 +101,25 @@ describe('spec 250 phase 11: the rebase drill evidence', () => {
    * first conflict always understates it. Asserted as a superset so the two
    * measurements cannot silently disagree.
    */
-  it('measures the whole conflict surface, not just where the rebase stopped', () => {
-    if (evidence.outcome !== 'conflicts') return;
-    expect(Array.isArray(evidence.wholeSurface?.conflictedFiles)).toBe(true);
-    for (const file of evidence.conflictedFiles as string[]) {
-      expect(evidence.wholeSurface.conflictedFiles).toContain(file);
-    }
-  });
+  it.runIf(evidence.outcome === 'conflicts')(
+    'measures the whole conflict surface, not just where the rebase stopped',
+    () => {
+      // `it.runIf` rather than an early `return`: a return inside a test body is
+      // recorded by vitest as a PASS with zero assertions, which is the shape
+      // this whole phase exists to refuse.
+      expect(Array.isArray(evidence.wholeSurface?.conflictedFiles)).toBe(true);
+      for (const file of evidence.conflictedFiles as string[]) {
+        expect(evidence.wholeSurface.conflictedFiles).toContain(file);
+      }
+    },
+  );
 
   /**
    * Whether the vendored contract survives is a different size of problem from
    * whether the customization conflicts somewhere, so it is its own field — and
    * this asserts it was actually computed, not merely absent.
    */
-  it('says whether the contract is regenerable after the rebase', () => {
+  it.runIf(!zeroMovement)('says whether the contract is regenerable after the rebase', () => {
     expect(typeof evidence.contractClosure?.regenerationReachable).toBe('boolean');
     expect(evidence.contractClosure.files).toEqual(
       (pin.closure as string[]).map((file) => `${pin.contractsRoot}/${file}`),
@@ -150,7 +184,7 @@ describe('spec 250 phase 11: the rebase drill evidence', () => {
    * hashing the unmerged fork, which reports exactly that. So a non-empty
    * `moved` here is evidence the measurement is reading the merged tree.
    */
-  it('measures the closure off the merged tree rather than the fork against itself', () => {
+  it.runIf(!zeroMovement)('measures the closure off the merged tree rather than the fork against itself', () => {
     const sourceHash = evidence.contractClosure?.sourceHash;
     expect(sourceHash?.checked).toBe(true);
     expect(sourceHash.comparedTo).toBe(pin.commit);
@@ -172,7 +206,7 @@ describe('spec 250 phase 11: the rebase drill evidence', () => {
    * range the drill rebased across, so the two can never describe different
    * ranges, and `null` (could not count) is not 0 (nothing to count).
    */
-  it('counts upstream churn over the range it rebased across', () => {
+  it.runIf(!zeroMovement)('counts upstream churn over the range it rebased across', () => {
     expect(typeof evidence.upstreamChurn?.commits).toBe('number');
     expect(typeof evidence.upstreamChurn.closureTouching).toBe('number');
     expect(evidence.upstreamChurn.commits).toBeGreaterThan(0);
@@ -191,7 +225,7 @@ describe('spec 250 phase 11: the rebase drill evidence', () => {
    * `checked: false` is a legitimate state and is NOT a pass — asserted here so
    * an unreadable migration directory cannot masquerade as a holding invariant.
    */
-  it('re-checks the watermark, and does not count "not checked" as holding', () => {
+  it.runIf(!zeroMovement)('re-checks the watermark, and does not count "not checked" as holding', () => {
     expect(evidence.watermark?.checked).toBe(true);
     expect(evidence.watermark.holds).toBe(true);
     expect(evidence.watermark.shadowed).toEqual([]);
@@ -201,5 +235,30 @@ describe('spec 250 phase 11: the rebase drill evidence', () => {
     for (const id of evidence.watermark.addedByUpstream as number[]) {
       expect(id).toBeGreaterThan(evidence.watermark.watermarkAtBase);
     }
+  });
+
+  /**
+   * THE OTHER SHAPE, ASSERTED ON ITS OWN TERMS.
+   *
+   * `NO_UPSTREAM_MOVEMENT` is a pass, and its three "not checked" fields are the
+   * right answer rather than a gap: with upstream still at our base there are no
+   * new migrations to shadow and no merged tree to hash. What must never happen
+   * is those fields going ABSENT, because an absent field reads as an oversight
+   * and a `checked: false` with a reason reads as the fact it is.
+   *
+   * Skipped while the committed evidence is a moved-upstream run, and it reports
+   * as skipped rather than as passed.
+   */
+  it.runIf(zeroMovement)('spells its three vacuous checks as refusals carrying reasons', () => {
+    expect(evidence.outcome).toBe('ok');
+    expect(evidence.watermark.checked).toBe(false);
+    expect(typeof evidence.watermark.reason).toBe('string');
+    expect(evidence.contractClosure.checked).toBe(false);
+    expect(typeof evidence.contractClosure.reason).toBe('string');
+    expect(evidence.upstreamChurn.commits).toBe(0);
+    expect(evidence.upstreamChurn.closureTouching).toBe(0);
+    // The stated refusal is carried on this path too — it was the one most
+    // likely to be forgotten, being an early return.
+    expect(evidence.contractRegeneration.attempted).toBe(false);
   });
 });
