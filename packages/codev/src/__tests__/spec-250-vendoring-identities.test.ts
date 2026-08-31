@@ -49,6 +49,16 @@ const churn = join(repoRoot, 'tools', 't3-codegen', 'classify-churn.mjs');
 const readJson = (p: string) => JSON.parse(readFileSync(p, 'utf8'));
 const pin = readJson(pinPath);
 
+/**
+ * The REAL checkouts, for the handful of assertions that must not be made against
+ * a fixture. Most of this suite builds throwaway repositories on purpose — an
+ * exit-code claim should not depend on a developer's working tree. But the phase 5
+ * flip is a claim about what ships, and a fixture cannot carry it.
+ */
+const UPSTREAM_ROOT: string = process.env.T3CODE_ROOT ?? DEFAULT_UPSTREAM_ROOT;
+const FORK_ROOT: string = process.env.T3CODE_FORK_ROOT ?? DEFAULT_FORK_ROOT;
+const FORK_ROOT_PRESENT = existsSync(FORK_ROOT) && existsSync(UPSTREAM_ROOT);
+
 // ---------------------------------------------------------------- throwaway repos
 
 /**
@@ -671,10 +681,65 @@ describe('spec 250: ahead of the contract is not the same as on the wrong commit
     expect(wrong.signal).toBe('FORK_CHECKOUT_MISMATCH');
   });
 
-  it('the shipped pin says the contract is still upstream-sourced', () => {
-    // Phase 5 flips this. Until it does, phases 2-4 can commit to the fork
-    // without every `verify` reporting a mismatch.
-    expect(pin.contractSource).toBe('upstream');
+  it('the shipped pin says the contract is fork-sourced', () => {
+    // Phase 5 flipped this. Through phases 2-4 it read `upstream`, so the fork
+    // could carry customization commits without every `verify` reporting a
+    // mismatch. Regeneration has happened, so a checkout ahead of `pin.commit`
+    // now means the contract is stale — an error, not a tolerated state.
+    expect(pin.contractSource).toBe('fork');
+  });
+
+  /**
+   * The flip, asserted through the SHIPPED pin rather than a synthetic one.
+   *
+   * The fixtures below prove `verify` honours `contractSource`; they build their
+   * own pin, so they would keep passing if the shipped pin said `upstream`. This
+   * one reads what actually ships, which is the thing the deliverable is about:
+   * after phase 5, a fork HEAD one commit past `pin.commit` must NOT come back
+   * tolerated.
+   */
+  it('a checkout ahead of the shipped pin is an error, not a tolerated signal', () => {
+    const ahead = classifyForkHead({
+      head: 'a-later-commit', commit: pin.commit, descendant: true, contractSource: pin.contractSource,
+    });
+    expect(ahead.signal).toBe('FORK_AHEAD_OF_CONTRACT');
+    expect(ahead.ok, 'the contract is fork-sourced, so being ahead of it is stale, not expected').toBe(false);
+  });
+
+  /**
+   * The same claim end to end, against the REAL fork checkout.
+   *
+   * `classifyForkHead` is a pure function and a test that calls it directly does
+   * not show that `verify` exits 1 — the process could classify correctly and
+   * still return 0. So this runs the harness against the real fork repository
+   * with a pin whose `commit` is the real fork HEAD's PARENT: a genuine ancestor,
+   * which makes the real HEAD genuinely ahead, with no fixture repository
+   * standing in for the thing under test.
+   *
+   * Skips rather than passes when the fork checkout is absent — "I had nothing to
+   * run against" is not "it exited 1".
+   */
+  it.skipIf(!FORK_ROOT_PRESENT)('exits 1 against the real fork checkout when it is ahead of a fork-sourced pin', () => {
+    const parent = execFileSync('git', ['-C', FORK_ROOT, 'rev-parse', 'HEAD~1'], { encoding: 'utf8' }).trim();
+    const scratch = mkdtempSync(join(tmpdir(), 't3-real-ahead-'));
+    try {
+      const pinFile = join(scratch, 'pin.json');
+      writeFileSync(pinFile, JSON.stringify({ ...pin, commit: parent, contractSource: 'fork' }, null, 2));
+      const errored = runVerify({ pinFile, upstreamRoot: UPSTREAM_ROOT, forkRoot: FORK_ROOT });
+      expect(errored.stderr).toContain('FORK_AHEAD_OF_CONTRACT');
+      expect(errored.status, 'a fork-sourced contract the checkout has moved past is an error').toBe(MISMATCH);
+
+      // The same checkout, the same distance ahead, with only `contractSource`
+      // changed. Without this the test above would pass against a harness that
+      // exits 1 on every ahead-ness, which is the behaviour phases 2-4 needed not
+      // to have.
+      writeFileSync(pinFile, JSON.stringify({ ...pin, commit: parent, contractSource: 'upstream' }, null, 2));
+      const tolerated = runVerify({ pinFile, upstreamRoot: UPSTREAM_ROOT, forkRoot: FORK_ROOT });
+      expect(tolerated.stderr).toContain('FORK_AHEAD_OF_CONTRACT');
+      expect(tolerated.status, 'only contractSource changed, so only the exit code may').toBe(OK);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 
   /** Builds a fork whose HEAD is a real descendant of the contract commit. */

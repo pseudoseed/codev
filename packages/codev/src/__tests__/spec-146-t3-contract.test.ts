@@ -232,6 +232,37 @@ describe.skipIf(!HAS_CHECKOUT)(`spec 146 [live: needs upstream t3code checkout a
   });
 });
 
+/**
+ * The gate above closed itself for three phases and had to reopen on its own.
+ *
+ * `FORK_AT_CONTRACT` is fork HEAD === `pin.commit`. Through phases 2-4 that was
+ * false by design and the fork-hash suite skipped. Phase 5 moved `pin.commit`
+ * onto the fork head, so it is true again and the suite runs — without anyone
+ * editing the gate.
+ *
+ * That is worth an assertion because the failure mode is silent in the wrong
+ * direction: a regeneration that moved `pin.commit` somewhere the checkout is not
+ * would leave the suite skipping forever, reported as a skip reason nobody reads,
+ * while `contractSource` claimed the contract was fork-sourced. This test is NOT
+ * inside the gated block — a gate cannot assert that it opened.
+ */
+describe('spec 250: the fork-hash gate reopens once the contract is fork-sourced', () => {
+  it.skipIf(!HAS_FORK_CHECKOUT)('is open, not skipping, now that pin.commit is the fork head', () => {
+    const pin = readJson(join(t3Root, 'pin.json'));
+    if (pin.contractSource !== 'fork') {
+      // Phases 1-4. Ahead is the expected state and the gate is correctly shut.
+      expect(forkRelation).toBe('ahead');
+      return;
+    }
+    expect(
+      forkRelation,
+      `the contract says it was generated from ${pin.commit.slice(0, 12)} but the fork checkout is `
+        + `${forkRelation} that commit, so the hash suite would skip forever while claiming to be fork-sourced`,
+    ).toBe('at');
+    expect(FORK_AT_CONTRACT).toBe(true);
+  });
+});
+
 describe.skipIf(!FORK_AT_CONTRACT)(`spec 250 [live: needs the fork checkout ON pin.commit — ${forkSkipReason}]`, () => {
   it('generated hashes match the fork checkout the artifacts came from', () => {
     const pin = readJson(join(t3Root, 'pin.json'));
@@ -321,13 +352,49 @@ describe('spec 146: the harness criterion that gates Phase 2', () => {
     }
   });
 
-  it('was run against the commit this repo pins', () => {
+  /**
+   * Spec 250 phase 5 re-scoped this, deliberately.
+   *
+   * It used to assert `evidence.pinnedCommit === pin.commit`, which held only
+   * while the two identities were equal. Phase 5 regenerates the vendored
+   * contract from the fork and moves `pin.commit` onto the fork head — but this
+   * evidence describes the UPSTREAM harness starting the UPSTREAM server from the
+   * read-only upstream clone. The commit it should be checked against is
+   * therefore `pin.upstreamBase`.
+   *
+   * Re-collecting against the fork would be the wrong fix. It would silently
+   * change what the evidence is evidence OF, and spec 146's criteria about the
+   * pinned harness would stop meaning what they said while staying green.
+   *
+   * The collector's field was RENAMED at the same time (`pinnedCommit` ->
+   * `upstreamCommit`), so evidence written under the old meaning cannot be read
+   * as though it were written under the new one. The absent-field assertion below
+   * is what makes that true: without it, stale evidence carrying the old key
+   * would arrive as `undefined` and only the rename's own test would notice.
+   */
+  it('was run against the upstream commit, which is no longer pin.commit', () => {
     const pin = readJson(join(t3Root, 'pin.json'));
-    expect(evidence.pinnedCommit).toBe(pin.commit);
+    expect(
+      evidence.pinnedCommit,
+      'this evidence predates the pinnedCommit -> upstreamCommit rename; re-collect it with '
+        + 'tools/t3-server/smoke.mjs rather than reading the old key',
+    ).toBeUndefined();
+    expect(evidence.upstreamCommit).toBe(pin.upstreamBase);
     expect(evidence.pinnedCliVersion).toBe(pin.cliVersion);
     for (const run of evidence.runs) {
       expect(run.serverRuntime.cliVersion).toBe(pin.cliVersion);
     }
+  });
+
+  /**
+   * The two identities have diverged, so "asserted against upstreamBase" is a
+   * real constraint now rather than a restatement of the previous one. If they
+   * were still equal the assertion above would pass either way and this suite
+   * would be claiming a distinction it had not tested.
+   */
+  it('is checking a commit that actually differs from pin.commit', () => {
+    const pin = readJson(join(t3Root, 'pin.json'));
+    expect(pin.commit).not.toBe(pin.upstreamBase);
   });
 
   it('passed every run', () => {
