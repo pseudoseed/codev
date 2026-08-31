@@ -3,7 +3,7 @@
 ## Summary
 
 t3code became Codev's front end through a private fork (`pseudoseed/t3code@codev`), across **11
-plan phases** landed as **105 `[Spec 250]` commits** on one branch — 128 files, ~40k insertions.
+plan phases** landed as **106 `[Spec 250]` commits** on one branch — 130 files, ~40.6k insertions.
 The fork gained a thread hierarchy (`parentThreadId` + `role`), a porch gate block with a
 server-allocated revision, nested Workspace > Architect > Builders rendering in t3code's own
 sidebar, a builder tile grid, and gate approval driven from t3code over a same-origin proxy.
@@ -83,9 +83,13 @@ Lanes: **Claude** and **opencode** on every implementation phase, plus **codex**
 round. The **Gemini/agy lane produced no output for this project** and is absent from every
 round rather than recorded as an approval. No `CONSULT_ERROR` was raised in any round.
 
-Full per-round responses are committed under
-`codev/projects/250-t3code-is-the-front-end-privat/` as `*-rebuttals.md`; the raw lane outputs are
-alongside them. What follows is the disposition of each round.
+Across **21 rounds** — 20 on implementation phases, 1 on the plan. Full per-round responses are
+committed under
+`codev/projects/250-t3code-is-the-front-end-privat/` as `*-rebuttals.md`. The **43 raw lane outputs
+are `.txt` and gitignored** (`.gitignore:69`, `codev/projects/*/*.txt`) — they sit in the builder
+worktree and do not travel with the PR, so the rebuttals are the durable record and the verdicts
+below were transcribed from the raw files while they were still on disk. What follows is the
+disposition of each round.
 
 ### Plan Phase (Round 1)
 
@@ -332,6 +336,7 @@ gratuitous divergence on a fork that has to rebase.
 - **Issue #263** — a harness run poisons the next suite run. Filed, not fixed here.
 - **Issue #264** — a spurious "gate approved, run `porch next`" message reaches a builder from its own Playwright fixture. Filed, and the architect ruled it out of scope for this spec. It fired twice in this worktree; both times `porch status` showed no pending gate. **Any gate-approval message should be checked against `porch status` before acting on it.**
 - **Issue #265** — root `npm test` filters to `@cluesmith/codev`, so nothing local runs the frozen `apps/client` suite. That is how it stayed red from phase 5 to phase 11 without anyone noticing.
+- **Issue #267** — `consult --type pr` cannot review a PR over GitHub's 20,000-line diff cap, and exits 0 when it refuses. Hit on this PR: `gh pr diff 266` returns HTTP 406 at 43,714 diff lines, both lanes correctly refused to review a 0-byte diff, and both returned exit 0 — so a caller checking the exit status sees a successful consultation with no output. Filed with a `pr-diff` fallback to `git diff <base>...<head>`, which has no cap and was verified to produce the same 130 changed files.
 - **Issue #251** — folding the two t3code subscriptions per watched thread. Pre-existing, unrelated to this spec, noted because phase 6 touched the neighbourhood.
 - **The architect has not ruled on the pane internals.** 12 screenshots at `docs/codev/spec-250/phase-10/` in the fork. The tests and measurements pass; what the panes *look like* is a human call and has not been made.
 

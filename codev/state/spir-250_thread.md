@@ -1685,7 +1685,8 @@ into four headings would lose the thing that makes them worth keeping, and a dif
 every line of a document nobody asked to have rewritten is worse than an appendix.
 
 **The Consultation Feedback section is reconstructed from the committed artifacts, not from
-memory.** Every verdict came from grepping `VERDICT:` out of the 44 raw lane files; every
+memory.** Every verdict came from grepping `VERDICT:` out of the 43 raw lane files across 21
+rounds (20 implementation, 1 plan); every
 disposition came from the `*-rebuttals.md` written at the time. Two files carry two verdict
 blocks (a lane reviewing twice in one output); the **last** one is the binding one, which is
 what the rebuttal responded to — checked rather than assumed, because taking the first would
@@ -1716,3 +1717,22 @@ not be spelled the same way.
 Nothing about the code — but writing criterion 6 as a checkbox forced the question of what an
 unrun criterion *is*. It is not met and not open. `[ ] 6. UNMET` with the runbook, and a
 methodology note that the template's two checkbox states cannot express it.
+
+### The PR review could not be fetched, and the refusal exited 0
+
+`consult --type pr` refused on both lanes: `gh pr diff 266` returns **HTTP 406 — the diff exceeded
+the maximum number of lines (20000)**, and this PR is 43,714 lines across 130 files. The refusal
+message is the right one ("a reviewer cannot tell an empty diff from a failed fetch, and neither
+can you once three lanes have returned APPROVE") — and then **both lanes exited 0**, so a caller
+checking the exit status sees a successful consultation that wrote no file. Filed as **#267**.
+
+The cap is on the API, not the content. `git diff origin/main...builder/spir-250` returns the same
+diff with no cap, and consult already writes the diff to a temp file for the model to read rather
+than inlining it, so size was never the constraint anywhere else in the path.
+
+Fixed for this run with a `gh` shim on PATH that intercepts `pr diff` only and passes everything
+else through. **`.codev/config.json` was deliberately not edited: it is a symlink to
+`/Users/chris/dev/codev-1455/.codev/config.json`, so a `forge.pr-diff` override there would have
+changed the forge for every builder and the architect to work around one oversized PR.** The
+equivalence was checked rather than assumed — the shim's diff reports 130 changed files, which is
+what `gh pr view 266 --json changedFiles` reports.
