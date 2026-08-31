@@ -1261,6 +1261,32 @@ would have inherited the conflation the file's own header exists to prevent.
 
 Two lanes reaching it separately is the signal that it was not a stylistic note.
 
+### Every phase 10 deliverable, and what holds it up
+
+Written out because "the deliverables are met" is the sentence that hides the one that is not.
+
+| Deliverable | Held up by |
+|---|---|
+| Machine credential AND `client-session`, neither alone | `spec-250-t3code-approval.e2e.test.ts` — the two refusals asserted `not.toBe` each other |
+| The page holds the target and the workspace path | `pairing.test.ts` round-trip; the e2e drives the real ceremony with both |
+| Both travel the existing ceremony | The e2e mints through `PairingStore` with the real purposes; the Playwright spec types into the real form |
+| t3code's session is never an approval credential | `agentProxy.test.ts` "never forwards t3code's own session"; the e2e sends a valid bearer with no machine credential and gets `MACHINE_CREDENTIAL_REQUIRED` |
+| Credential in per-origin browser storage, with the trade stated | `pairing.test.ts` — three storage states, including a store that throws |
+| **No cross-origin request, asserted by watching the network** | `spec-250-approval.spec.ts` records every request and asserts `foreign === []`, plus a positive assertion that the proxy WAS reached |
+| No page-level CSP is added | Not done, and recorded here and in the plan as deliberate |
+| **Upstream target server-configured, never browser-selected** | `readCodevAgentTargets` tests; the e2e's SSRF block; the targets route answers ids and the test asserts the agent's port is absent from the body |
+| Scheme/address rules, no credentials in the URL, redirects not followed | `originProblem` tests (5); the redirect refusal driven against a real 302 |
+| **Hop-by-hop stripping is dynamic** | The `Connection: keep-alive, X-Codev-Machine-Credential` test, which fails when the subtraction is removed |
+| Two proxy failure signals | Two socket-level tests: a closed port and a server that accepts and never answers |
+| **The approval record comes from the server** | `approval.test.ts` "reports a success it cannot read as unconfirmed"; criterion 4 asserts the same three fields in `status.yaml` AND in the response |
+| Four outcomes, not three | Four branches in `approval.test.ts`, plus `approvalStateAttribute` mapping four to four |
+| The ceremony named in full | The e2e walks all four requests in order, each through the proxy |
+| Tests for this phase | 28 proxy unit + 46 web unit + 8 vitest e2e + 6 Playwright |
+
+Two things beyond the list, both found while building rather than planned: the **unbounded request
+body** (Effect's `MaxBodySize` defaults to unbounded on a route that buffers) and the review's
+finding that the e2e **reported a pass on a run that never happened**.
+
 ### What can a human see or do now that they could not before
 
 Approve a porch gate from t3code, on a phone or an iPad, without a terminal: pair the browser once
