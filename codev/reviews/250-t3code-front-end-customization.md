@@ -330,7 +330,10 @@ boundary exists.** Constructing the layer, calling under the wrapper, hand-build
 each substitutes the thing whose absence or misbehaviour is the actual risk.
 
 The rule that follows, and the one phase 6 needs: **when a value is produced in one layer and
-consumed in another, test the seam, not the two ends.** Phase 6 wires `porch-driver` across the
+consumed in another, test the seam, not the two ends.** That sentence is now the hot-tier lesson at
+slot 8, which previously read *"a test that constructs the collaborator itself proves the
+collaborator works, never that production constructs it"* — the same idea, one costume wide. The
+collaborator case survives as an example clause. Phase 6 wires `porch-driver` across the
 ws/RPC boundary — the last untested hop, and already an acceptance item — and it is the fifth place
 this can happen. A `porch-driver` test that constructs its own transport would be costume five.
 
