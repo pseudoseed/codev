@@ -1,0 +1,90 @@
+{
+  "issue": 272,
+  "recordedAt": "2026-08-31",
+  "serverUrl": "http://127.0.0.1:3809",
+  "forkRoot": "/Users/chris/dev/t3code-codev",
+  "projects": [
+    {
+      "id": "a3fc2415-2e60-425f-8d44-b7bf5d60a389",
+      "title": "Entriq (do not rename)",
+      "workspaceRoot": "/var/folders/vz/jm6y7wsx7jx93kvhrqtk7sbw0000gn/T/issue-272-yY9xnW/entriq"
+    },
+    {
+      "id": "4cc07826-1cda-4d8a-86e5-928e4507c941",
+      "title": "backend/api",
+      "workspaceRoot": "/var/folders/vz/jm6y7wsx7jx93kvhrqtk7sbw0000gn/T/issue-272-yY9xnW/backend/api"
+    },
+    {
+      "id": "6eb11428-88e8-4776-ad68-e5bba22e8c81",
+      "title": "codev-1455",
+      "workspaceRoot": "/var/folders/vz/jm6y7wsx7jx93kvhrqtk7sbw0000gn/T/issue-272-yY9xnW/codev-1455"
+    },
+    {
+      "id": "03c01a84-fac0-4b3e-9aa2-70f21be250fb",
+      "title": "dvarr",
+      "workspaceRoot": "/var/folders/vz/jm6y7wsx7jx93kvhrqtk7sbw0000gn/T/issue-272-yY9xnW/dvarr"
+    },
+    {
+      "id": "72b6b890-0c8f-477d-be34-a9779d4dd92e",
+      "title": "mobile/api",
+      "workspaceRoot": "/var/folders/vz/jm6y7wsx7jx93kvhrqtk7sbw0000gn/T/issue-272-yY9xnW/mobile/api"
+    }
+  ],
+  "firstPass": {
+    "workspaces": 5,
+    "servers": 1,
+    "created": 3,
+    "renamed": 1,
+    "failures": []
+  },
+  "secondPass": {
+    "workspaces": 5,
+    "servers": 1,
+    "created": 0,
+    "renamed": 0,
+    "failures": []
+  },
+  "claims": [
+    {
+      "name": "the sweep reported no failures",
+      "held": true,
+      "detail": "none"
+    },
+    {
+      "name": "a workspace with no project gets one named after its directory",
+      "held": true,
+      "detail": "title=codev-1455"
+    },
+    {
+      "name": "the legacy codev:<path> title is rewritten to the directory name",
+      "held": true,
+      "detail": "title=dvarr"
+    },
+    {
+      "name": "a title a human chose is left alone",
+      "held": true,
+      "detail": "title=Entriq (do not rename)"
+    },
+    {
+      "name": "two workspaces sharing a directory name come out distinguishable",
+      "held": true,
+      "detail": "backend/api / mobile/api"
+    },
+    {
+      "name": "no project is created for a builder worktree, a deleted checkout, or a non-workspace",
+      "held": true,
+      "detail": "5 rows for 5 workspaces"
+    },
+    {
+      "name": "the rename kept the project id rather than creating a second row",
+      "held": true,
+      "detail": "1 row(s) for that root"
+    },
+    {
+      "name": "a second pass writes nothing",
+      "held": true,
+      "detail": "created=0 renamed=0 failures=0"
+    }
+  ],
+  "passed": true
+}

@@ -104,12 +104,23 @@ async function main() {
   const outFlag = process.argv.indexOf('--out');
   const outPath = outFlag === -1 ? null : process.argv[outFlag + 1];
 
-  let token;
+  let bootstrapToken;
   try {
+    // A server left behind by an earlier run is not a reason to refuse: `start-fork`
+    // wants an empty data directory anyway, and the assertions about which rows
+    // exist are only meaningful on one. `stop` on an idle port is not a failure.
+    try {
+      sh(process.execPath, [SERVER, 'stop'], { stdio: 'inherit' });
+    } catch {
+      // Nothing was running, or it is not ours. `start-fork` decides which.
+    }
     sh(process.execPath, [SERVER, 'start-fork'], { stdio: 'inherit' });
     const ready = sh(process.execPath, [SERVER, 'ready']);
-    token = /Token:\s*([A-Z0-9]+)/.exec(ready)?.[1] ?? null;
-    if (!token) die(UNDETERMINED, `the fork server started but printed no pairing token:\n${ready}`);
+    // `ready` prints JSON after its log lines. Parsing from the first brace is
+    // what `spec-250-fork-stack.ts` does, for the same reason.
+    const parsed = JSON.parse(ready.slice(ready.indexOf('{')));
+    bootstrapToken = typeof parsed.token === 'string' ? parsed.token : null;
+    if (!bootstrapToken) die(UNDETERMINED, `the fork server started but printed no pairing token:\n${ready}`);
   } catch (err) {
     die(UNDETERMINED, `could not start the fork server: ${err.message}`);
   }
@@ -117,6 +128,47 @@ async function main() {
   const port = process.env.T3_HARNESS_PORT ?? '3799';
   const serverUrl = `http://127.0.0.1:${port}`;
   const scratch = mkdtempSync(join(tmpdir(), 'issue-272-'));
+
+  /**
+   * A FRESH credential per gateway, because the harness's is one-time.
+   *
+   * `start-fork` issues a pairing-issued bootstrap token and the server consumes
+   * it on the first exchange. Production configures a desktop bootstrap seed,
+   * issued unbounded, precisely so a gateway can exchange on every sweep — the
+   * constraint `ThreadBackendConfig.bootstrapToken` documents. This fixture has
+   * the other kind, so it mints one per gateway rather than pretending a spent
+   * token is a server fault.
+   */
+  const SEED_SCOPES = [
+    'orchestration:read', 'orchestration:operate', 'terminal:operate',
+    'review:write', 'relay:read', 'access:write',
+  ].join(' ');
+  const exchange = await fetch(`${serverUrl}/oauth/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+      subject_token: bootstrapToken,
+      subject_token_type: 'urn:t3:params:oauth:token-type:environment-bootstrap',
+      requested_token_type: 'urn:ietf:params:oauth:token-type:access_token',
+      scope: SEED_SCOPES,
+      client_label: 'issue-272-projection',
+      client_device_type: 'bot',
+    }),
+  });
+  if (!exchange.ok) die(UNDETERMINED, `the bootstrap exchange failed with ${exchange.status}`);
+  const { access_token: accessToken } = await exchange.json();
+
+  const mintToken = async () => {
+    const response = await fetch(`${serverUrl}/api/auth/pairing-token`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'issue-272-projection' }),
+    });
+    if (!response.ok) die(UNDETERMINED, `could not mint a credential: ${response.status}`);
+    const { credential } = await response.json();
+    return credential;
+  };
 
   try {
     const { reconcileWorkspaceProjects } = await import(
@@ -126,18 +178,18 @@ async function main() {
       '../../packages/codev/dist/agent-farm/thread-backend.js'
     );
 
-    const plain = makeWorkspace(scratch, 'codev-1455', serverUrl, token);
-    const legacy = makeWorkspace(scratch, 'dvarr', serverUrl, token);
-    const named = makeWorkspace(scratch, 'entriq', serverUrl, token);
-    const backendApi = makeWorkspace(join(scratch, 'backend'), 'api', serverUrl, token);
-    const mobileApi = makeWorkspace(join(scratch, 'mobile'), 'api', serverUrl, token);
+    const plain = makeWorkspace(scratch, 'codev-1455', serverUrl, bootstrapToken);
+    const legacy = makeWorkspace(scratch, 'dvarr', serverUrl, bootstrapToken);
+    const named = makeWorkspace(scratch, 'entriq', serverUrl, bootstrapToken);
+    const backendApi = makeWorkspace(join(scratch, 'backend'), 'api', serverUrl, bootstrapToken);
+    const mobileApi = makeWorkspace(join(scratch, 'mobile'), 'api', serverUrl, bootstrapToken);
     const roots = [plain, legacy, named, backendApi, mobileApi];
 
     // The two rows a sweep must find already there: one wearing the legacy title
     // this issue is about, one wearing a name a human chose. They are seeded
     // through the same gateway, because a row hand-written into sqlite would not
     // have gone through the decider that owns `project.created`.
-    const seed = await openProjectGateway({ serverUrl, bootstrapToken: token });
+    const seed = await openProjectGateway({ serverUrl, bootstrapToken: await mintToken() });
     try {
       await seed.createProject(legacy, `codev:${legacy}`);
       await seed.createProject(named, 'Entriq (do not rename)');
@@ -157,8 +209,8 @@ async function main() {
         scratch,
       ],
       isCodevWorkspace: (path) => existsSync(join(path, '.codev')),
-      serverFor: () => ({ serverUrl, bootstrapToken: token }),
-      openGateway: (target) => openProjectGateway(target),
+      serverFor: () => ({ serverUrl, bootstrapToken }),
+      openGateway: async () => openProjectGateway({ serverUrl, bootstrapToken: await mintToken() }),
       log: (level, message) => log.push(`${level} ${message}`),
     };
 

@@ -19,7 +19,7 @@
     "Auto-merging packages/contracts/src/auth.ts",
     "Auto-merging packages/contracts/src/orchestration.ts",
     "Auto-merging packages/contracts/src/rpc.ts",
-    "Rebasing (1/43)\rRebasing (2/43)\rRebasing (3/43)\rRebasing (4/43)\rRebasing (5/43)\rRebasing (6/43)\rerror: could not apply 3a1780bbf... [Spec 250][Phase: phase_4] feat: gate block with a server-allocated revision",
+    "Rebasing (1/44)\rRebasing (2/44)\rRebasing (3/44)\rRebasing (4/44)\rRebasing (5/44)\rRebasing (6/44)\rerror: could not apply 3a1780bbf... [Spec 250][Phase: phase_4] feat: gate block with a server-allocated revision",
     "hint: Resolve all conflicts manually, mark them as resolved with",
     "hint: \"git add/rm <conflicted_files>\", then run \"git rebase --continue\".",
     "hint: You can instead skip this commit: run \"git rebase --skip\".",
@@ -53,7 +53,7 @@
     "sourceHash": {
       "checked": true,
       "algorithm": "sha256",
-      "comparedTo": "2f64a1b0ee2b35cd858a8b601b4d425216e73ae5",
+      "comparedTo": "26b4c2dc09f0fe2f6798e9b781df6722603b5bfe",
       "files": {
         "auth.ts": "89374198ca06cfc7d21e7080f291de79df34cdc3f9bd9453a1e68895388e16d4",
         "baseSchemas.ts": "0fea5d24348912260361716e01cf1c9ce1cd4d456a434471069a9215c4e8f1d7",
@@ -78,11 +78,11 @@
   "contractRegeneration": {
     "attempted": true,
     "source": {
-      "commit": "704c037d98934892213590fe41801e62cc88cce6",
+      "commit": "994fc2ce8007a0905bb304ee04ef270b3bc6d0f1",
       "kind": "the three-way merge of the same two trees, written by git merge-tree. Conflicted paths carry markers; none of them is in the contract closure."
     },
     "method": "a scratch pin naming the merged commit, in a scratch copy of the codegen tool. The real pin.json was neither read nor written for this, and both real checkouts are untouched.",
-    "interpreter": "v22.22.2",
+    "interpreter": "v26.4.0",
     "generated": true,
     "shapeCheckHolds": false,
     "artifactsDiffering": [
@@ -104,8 +104,8 @@
     "hashMovedShapesDidNot": false,
     "detail": "the contract regenerates, and 3 shape artifacts would change: schema.json, schema.ts, types.d.ts. That is what adopting this base costs, measured rather than predicted."
   },
-  "startedAt": "2026-08-31T12:47:23.529Z",
-  "finishedAt": "2026-08-31T12:47:29.073Z",
+  "startedAt": "2026-08-31T17:36:48.061Z",
+  "finishedAt": "2026-08-31T17:36:55.444Z",
   "upstreamChurn": {
     "range": "082e6ea52186..9b2d04317c68",
     "commits": 104,
@@ -127,8 +127,8 @@
   "base": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
   "target": "9b2d04317c68233782e0630464ac86d77d0686f3",
   "targetRef": "origin/main",
-  "forkHead": "2f64a1b0ee2b35cd858a8b601b4d425216e73ae5",
-  "commitsCarried": 43,
+  "forkHead": "26b4c2dc09f0fe2f6798e9b781df6722603b5bfe",
+  "commitsCarried": 44,
   "scratch": null,
   "watermark": {
     "checked": true,
@@ -145,7 +145,7 @@
     "upstreamHead": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
     "upstreamStillAtBase": true,
     "upstreamClean": true,
-    "forkHead": "2f64a1b0ee2b35cd858a8b601b4d425216e73ae5",
+    "forkHead": "26b4c2dc09f0fe2f6798e9b781df6722603b5bfe",
     "forkUnmoved": true,
     "forkClean": true,
     "pinCommitUnchanged": true
