@@ -219,7 +219,15 @@ console.log(
   JSON.stringify(
     {
       criterion: 'Phase 1: harness brings up a live pinned server, twice, with a real dispatched command',
-      pinnedCommit: pin.commit,
+      // `upstreamCommit`, not `pinnedCommit`. This harness starts the UPSTREAM
+      // server from the read-only upstream clone, so the commit it ran against is
+      // `pin.upstreamBase`. Spec 250 phase 5 moved `pin.commit` onto the fork head,
+      // and emitting that here would have recorded a fork sha as the provenance of
+      // an upstream run — the evidence would still be green while describing
+      // something that never happened. The field is RENAMED rather than
+      // re-pointed so evidence collected under the old meaning cannot be mistaken
+      // for evidence collected under the new one.
+      upstreamCommit: pin.upstreamBase,
       pinnedCliVersion: pin.cliVersion,
       runs: results,
       allRunsPassed: allOk,
