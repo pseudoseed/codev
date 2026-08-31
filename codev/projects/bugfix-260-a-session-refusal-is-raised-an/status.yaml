@@ -1,7 +1,7 @@
 id: bugfix-260
 title: a-session-refusal-is-raised-an
 protocol: bugfix
-phase: fix
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T16:52:18.422Z'
-updated_at: '2026-08-31T16:55:30.430Z'
+updated_at: '2026-08-31T18:01:36.542Z'
