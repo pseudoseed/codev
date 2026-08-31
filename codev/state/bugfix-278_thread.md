@@ -84,5 +84,8 @@ fixed by it:
 That is the criterion-8b staleness guard giving a TRUE answer: the fork moved
 (pir-272's work) and the recorded evidence predates it. It is not a "could not
 tell", so skipping it would be wrong — the fix is regenerating the evidence
-against the fork, which belongs with the fork work, not here. Reported to the
-architect.
+against the fork, which belongs with the fork work, not here.
+
+Architect (2026-08-31): no separate issue. pir-272 re-ran all four collectors and
+its branch already names 26b4c2dc09f0 in that evidence file; main still names
+2f64a1b0ee2b. It resolves when 272 merges. Documented in the PR body.
