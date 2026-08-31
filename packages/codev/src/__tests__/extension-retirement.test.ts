@@ -89,6 +89,17 @@ function packListIn(root: string): string[] {
  * (`node_modules`, `src`, `*.config.*`, `tsconfig*`) plus npm's default excludes decide 55 tracked
  * files, and a second copy of those rules is the copy that drifts.
  *
+ * **The honest limit: this fixture holds only tracked files, so it cannot answer anything about
+ * build output.** `dist/`, `dashboard-dist/`, `v2-dist/` and `client-dist/` are gitignored, and a
+ * `files` array outranks `.gitignore` in npm-packlist — so a live walk of a *built* tree carries
+ * them (measured: 4,702 entries against the fixture's 3,575, 950 of the difference being build
+ * output) while the fixture never will. That is deliberate. This test asks what the repository
+ * ships, and the four assertions below all turn on tracked paths: `apps/web` and `apps/v2` package
+ * manifests are tracked, and 216 tracked `apps/vscode/` files would appear here the moment the
+ * `!apps/vscode` negation stopped excluding them. A question about the *built* tarball is a
+ * different question and needs a built tree — `bugfix-214-publish-scrub.test.ts` asks it, per
+ * package.
+ *
  * Note the path shape: `--dry-run --json` yields paths **without** the `package/` prefix that
  * `tar -tzf` shows, so the assertions below match on the bare repo-relative path.
  */
@@ -140,11 +151,11 @@ describe('extension retirement', () => {
   });
 
   /**
-   * 30s, against a measured ~2s: ~1.7s of that is npm's own startup and walk of the fixture, and
-   * the rest is materialising 3,846 paths. Both grow with the repo, not with what is on disk, so
-   * the budget no longer has to absorb a built `dist/` — which is what pushed the old live-tree
-   * walk past its 10s default in #215 and then to 60s in #216. 15x the measured cost leaves room
-   * for ordinary growth and a cold runner while still failing a genuine hang.
+   * 30s against a measured 2.0s: 0.3s to materialise 3,846 paths, 1.7s for npm's own startup and
+   * walk of the fixture. 15x, and the multiple is the point — the old live-tree walk needed 60s
+   * because its cost tracked whatever happened to be on disk, crossing the 10s default in #215
+   * the first time a runner had `dist/` present and forcing the 60s budget in #216. This one
+   * tracks the tracked-file count, which moves with the repo and slowly.
    */
   it('packs neither retired extension while retaining supported apps', () => {
     const files = packedFiles();

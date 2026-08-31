@@ -158,3 +158,21 @@ The root cause named `pir-832-migration.test.ts` as the concurrent writer. It is
 distinct `.test-*` scratch directories, all created and removed under `packages/codev` from
 `process.cwd()`. Verified by grep, not taken from the review. That is why the failure was reliable
 rather than occasional.
+
+### Architect's two pre-merge asks
+
+1. **State the fixture's limit in `packedFiles`' doc comment.** Measured it rather than asserting
+   it: a live walk of a *built* tree returns 4,702 entries against the fixture's 3,575, and 950 of
+   that difference is build output. `dist/`, `dashboard-dist/`, `v2-dist/` and `client-dist/` are
+   gitignored, but a `files` array outranks `.gitignore` in npm-packlist, so the live walk ships
+   them and the tracked-only fixture never will. The comment says so, says it is deliberate, and
+   names where the built-tarball question is actually asked (`bugfix-214-publish-scrub.test.ts`,
+   per package). It also records why the four assertions still bite: all turn on tracked paths, and
+   216 tracked `apps/vscode/` files would surface the moment the `!apps/vscode` negation stopped
+   excluding them.
+2. **Measured rationale for the 30s timeout.** 2.0s measured, split 0.3s to materialise 3,846
+   paths and 1.7s for npm's startup and walk. The multiple carries the point: the old budget had to
+   be 60s because its cost tracked whatever was on disk (#215 crossed the 10s default the first
+   time a runner had `dist/`; #216 raised it to 60s). This one tracks the tracked-file count.
+
+`.test-*` gitignoring is #302, not carried here.
