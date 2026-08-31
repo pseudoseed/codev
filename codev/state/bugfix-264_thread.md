@@ -116,3 +116,14 @@ lane rather than counting the skip as a verdict.
 
 Post-review changes: `exact` now removes the tail match and nothing else (shells
 and architects still resolve), pinned by a new test; JSDoc reattached.
+
+## Gate (2026-08-31)
+
+`pr` gate approved by the architect from the workspace root. Verified against
+`status.yaml` before acting on it — `status: approved`, `approved_at:
+2026-08-31T14:37:14.217Z`, `authorization: flag-only`, caller
+`CODEV_ARCHITECT_NAME=main`. That verification is the behaviour this whole
+project exists to make unnecessary to reason about, so it is recorded here.
+
+Merging on green with `--merge` (never squash). PR head `7627777a0` is the
+commit CI is running and the one that merges.
