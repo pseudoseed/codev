@@ -1,0 +1,19 @@
+id: '271'
+title: safety-adjacent-an-architect-c
+protocol: air
+phase: pr
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: pending
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-31T15:42:55.843Z'
+updated_at: '2026-08-31T16:51:31.821Z'
+pr_history:
+  - phase: implement
+    pr_number: 274
+    branch: builder/air-271
+    created_at: '2026-08-31T16:24:29.278Z'
