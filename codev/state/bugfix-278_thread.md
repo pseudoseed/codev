@@ -89,3 +89,26 @@ against the fork, which belongs with the fork work, not here.
 Architect (2026-08-31): no separate issue. pir-272 re-ran all four collectors and
 its branch already names 26b4c2dc09f0 in that evidence file; main still names
 2f64a1b0ee2b. It resolves when 272 merges. Documented in the PR body.
+
+## PR (2026-08-31)
+
+PR #288. CMAP on 3 lanes:
+
+- claude: APPROVE
+- opencode: APPROVE
+- codex: REQUEST_CHANGES → COMMENT after the fix
+
+**codex's finding, and it was real.** The guard checked cleanliness once at test
+entry. The two `verify` calls are separate processes, so a builder saving a file
+*between* them leaves the first run observing a clean tree and the second a dirty
+one — the original red result with a smaller window, not a fixed one. Fixed in
+d0a9530cc: the trees are re-read after each run before its result is believed,
+including the fork-sourced run, where a dirty tree also exits 1 and would have let
+that assertion pass for the wrong reason.
+
+codex's second pass (COMMENT) flagged the PR body claiming "All tests pass" while
+also documenting a pre-existing failure. Corrected: the checkbox now says what
+actually passed (targeted files 85/86, `porch check` green) and states plainly that
+the full suite is not green because of the criterion-8b evidence assertion.
+
+Consult needs `--issue 278`; without it the lane exits 1 listing every project.
