@@ -1779,3 +1779,19 @@ where both lanes approved on round 1.
 So a phase reviewed cleanly reads identically to a phase never reviewed, and `history` understates
 review effort *selectively*, biased toward the phases that went badly. That is this project's own
 recurring defect living in the protocol's state file. Filed rather than hand-edited.
+
+### A red suite that was my own fault, and the test was right
+
+The `src/__tests__/` run came back **1 failed, 1859 passed**:
+`spec-1280-measurement-instrument.test.ts > T12 — determinism > emits byte-identical output twice
+at the same commit`.
+
+I had been committing review fixes **while that suite ran**. The test invokes the instrument twice
+and compares the bytes; a commit landing between the two invocations changes what the instrument
+reads. So it caught exactly what it exists to catch, on a change it was not meant to be measuring.
+
+Re-run alone with no concurrent commits: **24 passed**. Not recorded as flaky, and not skipped —
+nothing about it is timing-sensitive, and calling it flaky would remove a real determinism check to
+hide an operator error. The rule that resolved it in one step is #263's: re-run a suspect suite
+alone before believing the failure. The corollary is new: **do not commit while a suite that reads
+git state is running.**
