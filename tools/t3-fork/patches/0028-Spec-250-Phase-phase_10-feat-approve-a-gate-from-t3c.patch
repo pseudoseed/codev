@@ -1,7 +1,7 @@
 From 0b90c36682a4cbc569938b94e52845a9a7d00aee Mon Sep 17 00:00:00 2001
 From: pseudo <aws@pseudoseed.com>
 Date: Mon, 31 Aug 2026 03:41:21 -0600
-Subject: [PATCH 28/34] [Spec 250][Phase: phase_10] feat: approve a gate from
+Subject: [PATCH 28/35] [Spec 250][Phase: phase_10] feat: approve a gate from
  t3code, over a same-origin proxy
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
