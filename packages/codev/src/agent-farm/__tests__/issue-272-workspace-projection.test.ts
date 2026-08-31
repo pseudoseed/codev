@@ -11,7 +11,11 @@
  * checkouts and three `.builders/` worktrees. Every filter below exists because that
  * table contains a row it would otherwise let through.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { isCodevWorkspaceDirectory } from '../workspace-projection-sweep.js';
 import {
   codevWorkspaceRoots,
   isMachineWrittenTitle,
@@ -407,5 +411,65 @@ describe('reconcileWorkspaceProjects', () => {
     expect(result).toMatchObject({ created: 0, renamed: 0, failures: [] });
     expect(fake.created).toEqual([]);
     expect(fake.renamed).toEqual([]);
+  });
+});
+
+/**
+ * The PRODUCTION predicate, against a real filesystem.
+ *
+ * Every test above injects `isCodevWorkspace`, and so does
+ * `tools/t3-fork/issue-272-projection.mjs`. So the filter that actually decides
+ * "deleted checkout" and "not a workspace" in Tower was substituted by every check
+ * that claimed to cover it — a test that supplies the boundary itself cannot tell
+ * you the boundary exists. Raised by the review consultation; this closes it.
+ */
+describe('isCodevWorkspaceDirectory', () => {
+  const made: string[] = [];
+  const dir = (): string => {
+    const d = mkdtempSync(join(tmpdir(), 'issue-272-fs-'));
+    made.push(d);
+    return d;
+  };
+
+  afterEach(() => {
+    for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('accepts a directory carrying .codev', () => {
+    const root = dir();
+    mkdirSync(join(root, '.codev'));
+    expect(isCodevWorkspaceDirectory(root)).toBe(true);
+  });
+
+  it('rejects a directory with no .codev', () => {
+    // The real `known_workspaces` table holds `/Users/chris/dev` — a parent a
+    // terminal was once opened in. A heading for it is a heading for something no
+    // Codev command would accept.
+    expect(isCodevWorkspaceDirectory(dir())).toBe(false);
+  });
+
+  it('rejects a path that does not exist', () => {
+    // A deleted checkout whose row outlived it. This is the case the sweep must
+    // not mint a permanent sidebar heading for.
+    const root = dir();
+    rmSync(root, { recursive: true, force: true });
+    expect(isCodevWorkspaceDirectory(root)).toBe(false);
+  });
+
+  it('rejects a FILE, even one named like a workspace', () => {
+    // `existsSync` alone would accept this; the `statSync().isDirectory()` guard is
+    // what refuses it, and nothing else in the suite exercises that line.
+    const root = dir();
+    const file = join(root, 'not-a-dir');
+    writeFileSync(file, '');
+    expect(isCodevWorkspaceDirectory(file)).toBe(false);
+  });
+
+  it('rejects a path whose .codev is a file rather than a directory', () => {
+    // `codev init` creates a directory. A stray file of that name is not a
+    // workspace, and treating it as one would put an unopenable heading in the tree.
+    const root = dir();
+    writeFileSync(join(root, '.codev'), '');
+    expect(isCodevWorkspaceDirectory(root)).toBe(false);
   });
 });

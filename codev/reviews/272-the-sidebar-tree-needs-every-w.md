@@ -121,6 +121,34 @@ Nothing promoted to `lessons-critical.md`, for the same cap-and-displacement rea
   `spec-250-hierarchy.spec.ts` asserts the heading's presence, position and `data-codev-project-empty`
   attribute, so the behaviour is pinned by a test rather than by an image.
 
+### Consultation findings and what I did with them
+
+Both reviewers returned **APPROVE** (claude, opencode — this repo runs a 2-way pass per
+`.codev/config.json`, not the 3-way the protocol prompt describes). No `REQUEST_CHANGES`.
+Claude raised four non-blocking items:
+
+1. **`isCodevWorkspaceDirectory` was substituted by every test and by the live harness — FIXED.**
+   The unit tests inject `isCodevWorkspace` and `issue-272-projection.mjs:211` injects its own
+   predicate, so the filter that actually decides "deleted checkout" and "not a workspace" in Tower
+   was never executed by anything claiming to cover it. That is exactly the repo's own hot-tier
+   lesson about a test supplying the boundary it means to check. Five tests added against a real
+   filesystem — and writing them surfaced a second, real defect: `existsSync(join(path, '.codev'))`
+   accepted a `.codev` that is a **file**. `codev init` creates a directory; the check now requires
+   one. Confirmed to fail with the guard reverted.
+2. **`createWorkspaceProjectionSweeper` has no test, and `options.deps` exists for tests not
+   written — acknowledged, not fixed here.** The sweeper is interval plumbing over
+   `reconcileWorkspaceProjects`, which is covered; the untested part is `start`/`stop`/overlap
+   behaviour. Worth a follow-up rather than widening this PR.
+3. **The sweep re-exchanges the bootstrap token every 30s per server — real, and a behaviour
+   change worth knowing.** A pairing-issued one-time token is now spent on the first tick, before
+   anyone spawns. The constraint is pre-documented on `ThreadBackendConfig.bootstrapToken`, but this
+   makes an unbounded desktop seed effectively mandatory for any workspace carrying a `threads`
+   config. Not changed here because caching a credential across processes is a storage decision.
+4. **A down server logs a WARN every 30s, ~2,880 lines/day — real.** Logging on state change is the
+   fix; deferred as a follow-up rather than folded in.
+
+Items 2-4 need issues; I did not open them because that call is the architect's.
+
 ## How to Test Locally
 
 - **View diff**: VSCode sidebar → right-click builder `pir-272` → **Review Diff**

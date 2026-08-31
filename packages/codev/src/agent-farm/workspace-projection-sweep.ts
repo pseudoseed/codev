@@ -8,7 +8,7 @@
  * is where `global.db`, `.codev/`, the thread-backend config and a real t3code
  * connection are named.
  */
-import { existsSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   openProjectGateway,
@@ -65,7 +65,15 @@ export function isCodevWorkspaceDirectory(path: string): boolean {
     // case for a `known_workspaces` row pointing at a deleted checkout.
     return false;
   }
-  return existsSync(join(path, '.codev'));
+  // `.codev` must be a DIRECTORY, not merely present. `codev init` creates a
+  // directory; a stray file of that name is not a workspace, and `existsSync` alone
+  // accepts it. Found by testing this predicate for the first time — every other
+  // check in the suite injects a substitute for it.
+  try {
+    return statSync(join(path, '.codev')).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 export function createWorkspaceProjectionSweeper(
