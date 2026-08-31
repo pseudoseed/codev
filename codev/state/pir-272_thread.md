@@ -139,3 +139,41 @@ group whose other member holds the architects, same name on both.
   restart, and a Tower restart kills every builder session. So the gate evidence
   is a live run against the harness fork server
   (`tools/t3-fork/issue-272-projection.mjs`), not a Tower restart.
+
+### The shared suite lock
+
+`vitest-global-setup.ts` holds a **loopback port** (13999) as the suite mutex, so it is
+shared across every builder worktree on this machine, not just this one. While I was
+running, `.builders/bugfix-273` held it for ~12 minutes and my `npm test` sat waiting
+with the message "Another Vitest run owns shared Tower state". The wait budget is 900 s,
+so a run survives that; it does not survive two of them.
+
+Do not kill the lock holder. It belongs to another builder.
+
+### `spec-250-approval.spec.ts` is intermittently red, and it is not this change
+
+`openThread` waits 5 s for a `sidebar-row-card`, clicks the sidebar toggle, then waits
+30 s. Across five runs it timed out at FOUR DIFFERENT tests (180, 213, 261, 305) and
+passed 6 of 6 once. A deterministic break fails the same test every time.
+
+My first guess was machine load from the concurrent sibling suite. **That was wrong** —
+it failed again on a quiet box. So I ran a controlled A/B: reverted my
+`spec-250-fork-stack.ts` and `spec-250-hierarchy.spec.ts` edits to HEAD, changed nothing
+else, re-ran. **It still failed**, at a third different test. My fixture edit is not the
+cause.
+
+Change C is not plausibly the cause either: every one of these failures is `openThread`
+waiting for a row, and `spec-250-hierarchy.spec.ts` — which renders far more rows through
+the same sidebar — is 10 of 10 green, including the new empty-project test.
+
+NOT skipped. Skipping would remove coverage of the approval path to hide a timing artifact
+I did not introduce; it is documented under Flaky Tests in the review instead.
+
+### The parked fork file: resolved, not restored
+
+The architect had already copied `tools/lan-serve.mjs` out to
+`/Users/chris/dev/lan-serve/lan-serve.mjs` before I parked it, and the script defaults its
+dist path absolutely, so it runs from outside the repo. I compared: sha1
+`3e1743325d5ca1a4b0a10398fdae80d3d342297a`, 5972 bytes, `cmp` identical. **Nothing was
+restored into the fork**, so the checkout stays clean permanently rather than returning to
+`DIRTY_FORK_CHECKOUT` for every builder. Filed as #278.

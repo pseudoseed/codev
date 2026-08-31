@@ -210,7 +210,12 @@ test("the project is a heading, and its name is not repeated on every row", asyn
   if (fixture === null) throw new Error("unreachable: seeded in beforeAll");
   await openSidebar(page);
 
-  const heading = page.getByTestId("sidebar-codev-project-heading");
+  // The heading of a project that HAS a tree. There is a second heading on the
+  // page now — the idle project's, issue #272 — and counting both here would
+  // make this assertion about the wrong thing.
+  const heading = page
+    .getByTestId("sidebar-codev-project-heading")
+    .filter({ hasText: fixture.projectTitle });
   await expect(heading).toHaveCount(1);
   await expect(heading).toContainText(fixture.projectTitle);
 
@@ -241,6 +246,52 @@ test("the project is a heading, and its name is not repeated on every row", asyn
  * "Builder alpha one". Real ones are called `builder/spir-250`, and at that point
  * one level of subtle indent is the entire signal.
  */
+/**
+ * Issue #272 — a workspace with nothing running in it still gets a heading.
+ *
+ * The project level is derived from architects, so before this a project with
+ * none contributed no entry and drew nothing. Codev registers a project per
+ * workspace whether or not anything has been spawned there, which makes this the
+ * ordinary state of a fresh workspace — and it was rendering identically to a
+ * workspace that does not exist.
+ *
+ * The unit test proves the ORDER contains the entry. This proves a browser draws
+ * it, which is the half a passing grouping test cannot see.
+ */
+test("a project with no threads renders as a heading with nothing under it", async ({ page }) => {
+  const fixture = seeded;
+  if (fixture === null) throw new Error("unreachable: seeded in beforeAll");
+  await openSidebar(page);
+
+  const idle = page
+    .getByTestId("sidebar-codev-project-heading")
+    .filter({ hasText: fixture.idleProjectTitle });
+  await expect(idle).toHaveCount(1);
+  // Marked as empty, so this assertion cannot be satisfied by the populated
+  // project's heading drifting into the filter.
+  await expect(idle).toHaveAttribute("data-codev-project-empty", "true");
+
+  // Below the populated project's run, and with no rows of its own between it
+  // and the bottom of the tree. An empty heading that swallowed the next
+  // project's rows would look like a populated one.
+  const populated = page
+    .getByTestId("sidebar-codev-project-heading")
+    .filter({ hasText: fixture.projectTitle });
+  const idleBox = await idle.boundingBox();
+  const populatedBox = await populated.boundingBox();
+  expect(idleBox).not.toBeNull();
+  expect(populatedBox).not.toBeNull();
+  expect(populatedBox!.y).toBeLessThan(idleBox!.y);
+
+  // Every architect subtree sits above it, which is what "after the architect
+  // run" means once it is pixels rather than an array index.
+  for (const box of await page.getByTestId("sidebar-codev-architect").all()) {
+    const architectBox = await box.boundingBox();
+    expect(architectBox).not.toBeNull();
+    expect(architectBox!.y).toBeLessThan(idleBox!.y);
+  }
+});
+
 test("the architect row says it is an architect", async ({ page }) => {
   const fixture = seeded;
   if (fixture === null) throw new Error("unreachable: seeded in beforeAll");

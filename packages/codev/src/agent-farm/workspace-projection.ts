@@ -74,7 +74,7 @@ export function workspaceLeafName(workspaceRoot: string): string {
 /**
  * Name every workspace by the shortest trailing path segments that make it unique.
  *
- * `/Users/chris/dev/codev-1455` is `codev-1455`. Two workspaces both called `api`
+ * `/Users/<user>/dev/codev-1455` is `codev-1455`. Two workspaces both called `api`
  * become `backend/api` and `mobile/api` — because two rows reading `api` in a
  * sidebar is the same failure as a column of identical path prefixes, arrived at
  * from the other direction.
