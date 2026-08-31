@@ -43,6 +43,70 @@ const readSchemas = () => readJson(join(generated, 'schema.json')).schemas as Re
 const T3_ROOT = process.env.T3CODE_ROOT ?? '';
 const HAS_CHECKOUT = T3_ROOT !== '' && existsSync(join(T3_ROOT, 'packages', 'contracts', 'src'));
 
+/**
+ * Spec 250 adds a second checkout, so `T3CODE_ROOT` alone no longer says which
+ * tree a live assertion is about. `T3_ROOT` keeps its spec 146 meaning — the
+ * UPSTREAM clone at `upstreamBase` — and the fork gets its own variable and its
+ * own gate. Two questions, two skips: a run with only the upstream checkout must
+ * report the fork suite as skipped rather than passing it by comparing upstream
+ * to itself.
+ */
+const T3_FORK_ROOT = process.env.T3CODE_FORK_ROOT ?? '';
+const HAS_FORK_CHECKOUT =
+  T3_FORK_ROOT !== '' && existsSync(join(T3_FORK_ROOT, 'packages', 'contracts', 'src'));
+
+/**
+ * Is the fork checkout ON the commit the artifacts were generated from?
+ *
+ * Having a fork checkout is not the same question. `pin.commit` means "the
+ * vendored contract came from this commit" and only regeneration moves it, so
+ * between the fork's first customization commit and that regeneration the
+ * checkout is legitimately AHEAD — and hashing its files against artifacts
+ * generated from an older commit compares two different trees.
+ *
+ * That window is three plan phases long. Letting the suite fail through it would
+ * train everyone to ignore a red suite, which is the failure the whole
+ * ahead-vs-wrong distinction exists to prevent. So it SKIPS, and the suite name
+ * says which of the two reasons it skipped for — never silently passing.
+ */
+const forkHead = (() => {
+  if (!HAS_FORK_CHECKOUT) return null;
+  const result = spawnSync('git', ['-C', T3_FORK_ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+  return result.status === 0 ? result.stdout.trim() : null;
+})();
+const FORK_AT_CONTRACT =
+  forkHead !== null && forkHead === readJson(join(t3Root, 'pin.json')).commit;
+/**
+ * WHICH way the fork differs, not merely that it does.
+ *
+ * "Ahead" is the expected state until phase 5; behind or unrelated is a real
+ * problem someone has to look at. Reporting all three as "ahead" would let a
+ * genuinely broken checkout hide inside the tolerated case for three phases.
+ */
+const forkRelation = (() => {
+  if (forkHead === null) return null;
+  const contract = readJson(join(t3Root, 'pin.json')).commit;
+  if (forkHead === contract) return 'at';
+  const ancestor = (a: string, b: string) =>
+    spawnSync('git', ['-C', T3_FORK_ROOT, 'merge-base', '--is-ancestor', a, b]).status === 0;
+  if (ancestor(contract, forkHead)) return 'ahead';
+  if (ancestor(forkHead, contract)) return 'behind';
+  return 'unrelated';
+})();
+const forkSkipReason = !HAS_FORK_CHECKOUT
+  ? `no fork checkout at ${T3_FORK_ROOT || '$T3CODE_FORK_ROOT (unset)'}`
+  : forkHead === null
+    ? `could not read HEAD of ${T3_FORK_ROOT}`
+    : forkRelation === 'ahead'
+      ? `fork is at ${forkHead.slice(0, 12)}, ahead of contract commit ` +
+        `${readJson(join(t3Root, 'pin.json')).commit.slice(0, 12)} (expected until phase 5 regenerates)`
+      : forkRelation === 'behind'
+        ? `fork is at ${forkHead.slice(0, 12)}, BEHIND contract commit ` +
+          `${readJson(join(t3Root, 'pin.json')).commit.slice(0, 12)} — this is not the expected ` +
+          `pre-phase-5 state and wants looking at`
+        : `fork is at ${forkHead.slice(0, 12)}, UNRELATED to contract commit ` +
+          `${readJson(join(t3Root, 'pin.json')).commit.slice(0, 12)} — no ancestry either way`;
+
 describe('spec 146: packages/types stays dependency-free', () => {
   it('declares no runtime dependencies', () => {
     const pkg = readJson(join(typesRoot, 'package.json'));
@@ -140,11 +204,71 @@ describe('spec 146: the emitter is lossy, and says so', () => {
  * is none, so its absence is legible in the run output instead of disappearing
  * into a green unit run.
  */
-describe.skipIf(!HAS_CHECKOUT)(`spec 146 [live: needs t3code checkout at ${T3_ROOT || '$T3CODE_ROOT (unset)'}]`, () => {
-  it('hashes match the pinned checkout', () => {
+describe.skipIf(!HAS_CHECKOUT)(`spec 146 [live: needs upstream t3code checkout at ${T3_ROOT || '$T3CODE_ROOT (unset)'}]`, () => {
+  /**
+   * Spec 250: this compares the UPSTREAM section against the UPSTREAM clone.
+   *
+   * Before the fork existed, `hashes.files` and this checkout were the same tree,
+   * so one assertion covered both. `hashes.files` is now the fork's closure, and
+   * checking it here would start failing the moment we customize anything — and,
+   * worse, would report our own deliberate change as upstream drift.
+   */
+  it('upstream hashes match the upstream checkout at upstreamBase', () => {
     const pin = readJson(join(t3Root, 'pin.json'));
     const contracts = join(T3_ROOT, pin.contractsRoot);
     const hashes = readJson(join(generated, 'source-hash.json'));
+
+    expect(
+      hashes.upstream?.available,
+      `source-hash.json records no upstream measurement (${hashes.upstream?.reason ?? 'no reason given'}); ` +
+        'regenerate with the upstream clone present rather than treating an unmeasured section as a match',
+    ).toBe(true);
+    expect(hashes.upstream.commit).toBe(pin.upstreamBase);
+
+    for (const [file, expected] of Object.entries<string>(hashes.upstream.files)) {
+      const actual = createHash('sha256').update(readFileSync(join(contracts, file))).digest('hex');
+      expect(actual, `${file} drifted from the recorded upstream hash`).toBe(expected);
+    }
+  });
+});
+
+/**
+ * The gate above closed itself for three phases and had to reopen on its own.
+ *
+ * `FORK_AT_CONTRACT` is fork HEAD === `pin.commit`. Through phases 2-4 that was
+ * false by design and the fork-hash suite skipped. Phase 5 moved `pin.commit`
+ * onto the fork head, so it is true again and the suite runs — without anyone
+ * editing the gate.
+ *
+ * That is worth an assertion because the failure mode is silent in the wrong
+ * direction: a regeneration that moved `pin.commit` somewhere the checkout is not
+ * would leave the suite skipping forever, reported as a skip reason nobody reads,
+ * while `contractSource` claimed the contract was fork-sourced. This test is NOT
+ * inside the gated block — a gate cannot assert that it opened.
+ */
+describe('spec 250: the fork-hash gate reopens once the contract is fork-sourced', () => {
+  it.skipIf(!HAS_FORK_CHECKOUT)('is open, not skipping, now that pin.commit is the fork head', () => {
+    const pin = readJson(join(t3Root, 'pin.json'));
+    if (pin.contractSource !== 'fork') {
+      // Phases 1-4. Ahead is the expected state and the gate is correctly shut.
+      expect(forkRelation).toBe('ahead');
+      return;
+    }
+    expect(
+      forkRelation,
+      `the contract says it was generated from ${pin.commit.slice(0, 12)} but the fork checkout is `
+        + `${forkRelation} that commit, so the hash suite would skip forever while claiming to be fork-sourced`,
+    ).toBe('at');
+    expect(FORK_AT_CONTRACT).toBe(true);
+  });
+});
+
+describe.skipIf(!FORK_AT_CONTRACT)(`spec 250 [live: needs the fork checkout ON pin.commit — ${forkSkipReason}]`, () => {
+  it('generated hashes match the fork checkout the artifacts came from', () => {
+    const pin = readJson(join(t3Root, 'pin.json'));
+    const contracts = join(T3_FORK_ROOT, pin.contractsRoot);
+    const hashes = readJson(join(generated, 'source-hash.json'));
+    expect(hashes.commit).toBe(pin.commit);
     for (const [file, expected] of Object.entries<string>(hashes.files)) {
       const actual = createHash('sha256').update(readFileSync(join(contracts, file))).digest('hex');
       expect(actual, `${file} drifted from the pinned hash`).toBe(expected);
@@ -228,13 +352,49 @@ describe('spec 146: the harness criterion that gates Phase 2', () => {
     }
   });
 
-  it('was run against the commit this repo pins', () => {
+  /**
+   * Spec 250 phase 5 re-scoped this, deliberately.
+   *
+   * It used to assert `evidence.pinnedCommit === pin.commit`, which held only
+   * while the two identities were equal. Phase 5 regenerates the vendored
+   * contract from the fork and moves `pin.commit` onto the fork head — but this
+   * evidence describes the UPSTREAM harness starting the UPSTREAM server from the
+   * read-only upstream clone. The commit it should be checked against is
+   * therefore `pin.upstreamBase`.
+   *
+   * Re-collecting against the fork would be the wrong fix. It would silently
+   * change what the evidence is evidence OF, and spec 146's criteria about the
+   * pinned harness would stop meaning what they said while staying green.
+   *
+   * The collector's field was RENAMED at the same time (`pinnedCommit` ->
+   * `upstreamCommit`), so evidence written under the old meaning cannot be read
+   * as though it were written under the new one. The absent-field assertion below
+   * is what makes that true: without it, stale evidence carrying the old key
+   * would arrive as `undefined` and only the rename's own test would notice.
+   */
+  it('was run against the upstream commit, which is no longer pin.commit', () => {
     const pin = readJson(join(t3Root, 'pin.json'));
-    expect(evidence.pinnedCommit).toBe(pin.commit);
+    expect(
+      evidence.pinnedCommit,
+      'this evidence predates the pinnedCommit -> upstreamCommit rename; re-collect it with '
+        + 'tools/t3-server/smoke.mjs rather than reading the old key',
+    ).toBeUndefined();
+    expect(evidence.upstreamCommit).toBe(pin.upstreamBase);
     expect(evidence.pinnedCliVersion).toBe(pin.cliVersion);
     for (const run of evidence.runs) {
       expect(run.serverRuntime.cliVersion).toBe(pin.cliVersion);
     }
+  });
+
+  /**
+   * The two identities have diverged, so "asserted against upstreamBase" is a
+   * real constraint now rather than a restatement of the previous one. If they
+   * were still equal the assertion above would pass either way and this suite
+   * would be claiming a distinction it had not tested.
+   */
+  it('is checking a commit that actually differs from pin.commit', () => {
+    const pin = readJson(join(t3Root, 'pin.json'));
+    expect(pin.commit).not.toBe(pin.upstreamBase);
   });
 
   it('passed every run', () => {
@@ -286,7 +446,10 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
       join(repoRoot, 'tools', 't3-codegen', 'classify-churn.mjs'),
       'utf8',
     );
-    const emptyBranch = /no commits touch the closure in that range[\s\S]{0,400}?process\.exit\((\d)\)/.exec(src);
+    // Spec 250 gave the empty result a mode-specific signal, so the message names
+    // the range rather than saying "that range". The property under test is
+    // unchanged: an empty range exits 0.
+    const emptyBranch = /no commits touch the closure in \$\{rangeSpec\}[\s\S]{0,600}?process\.exit\((\d)\)/.exec(src);
     expect(emptyBranch, 'the empty-range branch should still exist').not.toBeNull();
     expect(emptyBranch?.[1], 'an empty range is not a failure').toBe('0');
   });
@@ -294,8 +457,17 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
   it('the harness keeps a third exit code for "could not determine"', () => {
     // 0 verified, 1 mismatch, 3 could-not-determine. Collapsing 3 into either of
     // the others is what makes a missing checkout read as a passing check.
+    //
+    // Spec 250 moved the constants into `tools/t3-fork/identities.mjs` so both
+    // checkout identities spell them the same way. The assertion follows them
+    // there and additionally pins that the harness uses the shared definition
+    // rather than redeclaring its own.
+    const shared = readFileSync(join(repoRoot, 'tools', 't3-fork', 'identities.mjs'), 'utf8');
+    expect(shared).toMatch(/export const UNDETERMINED = 3/);
+    expect(shared).toMatch(/export const MISMATCH = 1/);
+
     const src = readFileSync(join(repoRoot, 'tools', 't3-server', 't3-server.mjs'), 'utf8');
-    expect(src).toMatch(/const UNDETERMINED = 3/);
+    expect(src).toMatch(/UNDETERMINED[\s\S]{0,120}from '\.\.\/t3-fork\/identities\.mjs'/);
     expect(src).toMatch(/die\(\s*UNDETERMINED/);
   });
 
@@ -357,7 +529,13 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
     const src = readFileSync(harness, 'utf8');
     // `start` still wipes by default: the phase-1 cold-start evidence is only
     // evidence if each run begins with an empty database.
-    expect(src).toContain('function start({ keepData = false } = {})');
+    //
+    // Matched on the DEFAULT rather than on the whole parameter list. Spec 250
+    // phase 6 added an `identity` parameter for `start-fork`, and this assertion
+    // — which is about `keepData` defaulting to false — failed on a signature
+    // change that left its subject untouched. A source assertion should break
+    // when its claim stops holding, not when a neighbouring word appears.
+    expect(src).toMatch(/function start\(\{ keepData = false[,}]/);
     expect(src).toContain('start({ keepData: true })');
 
     // And a restart exits "could not determine" rather than quietly cold-starting,

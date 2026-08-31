@@ -67,16 +67,21 @@ const { ResumingSubscription } = await import(join(distDir, 'subscription.js'));
 const clients = [];
 
 /**
- * The checkout the server operates on.
+ * The checkout the server operates on: the UPSTREAM identity (spec 250).
+ *
+ * These are the spec 146 / #241 live tests. Their meaning is unchanged by the fork existing,
+ * and they must keep measuring the tree the recorded evidence describes, so this stays
+ * `T3CODE_ROOT` and never falls back to `T3CODE_FORK_ROOT`.
  *
  * Required rather than defaulted (#214). The default was one machine's absolute path, so
  * anyone else running this got a failure somewhere inside the server rather than a sentence
  * naming the missing input. `live/` is not in the package's `files`, so this never reached a
  * tarball — it was committed, which is a smaller problem and still not one worth keeping.
+ * Keeping it required also means the fork's path cannot arrive here by accident.
  */
 const T3CODE_ROOT = process.env.T3CODE_ROOT;
 if (!T3CODE_ROOT) {
-  console.error('T3CODE_ROOT is not set. Point it at your t3code checkout and re-run.');
+  console.error('T3CODE_ROOT is not set. Point it at your upstream t3code checkout and re-run.');
   process.exit(2);
 }
 
@@ -194,7 +199,7 @@ try {
   run('stop');
 } catch { /* nothing running */ }
 run('acquire');
-run('verify');
+run('verify-upstream'); // upstream identity (spec 250): these tests never read the fork
 run('start');
 
 let project;

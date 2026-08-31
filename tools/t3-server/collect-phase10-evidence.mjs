@@ -168,7 +168,9 @@ const evidence = {
     + 'this against the runner that produced it.',
   recordedAt: new Date().toISOString(),
   server: {
-    pinnedCommit: JSON.parse(readFileSync(join(repoRoot, 'packages/types/src/t3/pin.json'), 'utf8')).commit,
+    // The upstream server, so the upstream identity. See smoke.mjs for why this
+    // is `upstreamBase` and not `pin.commit` (spec 250 phase 5).
+    upstreamCommit: JSON.parse(readFileSync(join(repoRoot, 'packages/types/src/t3/pin.json'), 'utf8')).upstreamBase,
     pinnedCli: JSON.parse(readFileSync(join(repoRoot, 'packages/types/src/t3/pin.json'), 'utf8')).cliVersion,
     interpreter: 'Node 26.4.0 (outside t3code engines.node ^24.13.1; the harness emits its ADVISORY and continues)',
     bind: '127.0.0.1 only, one server and one data directory per run',

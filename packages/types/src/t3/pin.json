@@ -1,8 +1,15 @@
 {
   "_comment": "The pinned t3code contract. Edited only by the refresh procedure in tools/t3-codegen/REFRESH.md. Spec 146.",
+  "_identities": "Spec 250: two identities, not one. `commit` keeps its spec 146 meaning (the commit the generated artifacts came from) and that source is the FORK from phase 5 onward. `upstreamBase` is the pingdotgg commit the fork branched from, and the pin the read-only upstream clone must stay on. They are equal until the fork diverges, which is deliberate: while they are equal every two-identity assertion has a known answer.",
   "repo": "https://github.com/pingdotgg/t3code",
-  "commit": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
-  "commitDate": "2026-08-25",
+  "commit": "2f64a1b0ee2b35cd858a8b601b4d425216e73ae5",
+  "upstreamBase": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
+  "forkRepo": "https://github.com/pseudoseed/t3code.git",
+  "forkBranch": "codev",
+  "contractSource": "fork",
+  "commitDate": "2026-08-31",
+  "upstreamBaseDate": "2026-08-25",
+  "_dates": "One per identity, like the commits themselves. `commitDate` belongs to `commit` (the fork head the vendored contract was generated from) and `upstreamBaseDate` to `upstreamBase` (the pingdotgg commit the fork branched from). They were one field while the two commits were equal; phase 5 made them differ, and a single date would then have been right for one identity and wrong for the other with nothing to say which.",
   "cliVersion": "0.0.36",
   "effectVersion": "4.0.0-beta.103",
   "contractsRoot": "packages/contracts/src",
@@ -19,7 +26,7 @@
   ],
   "closureNote": "Transitive import closure of orchestration.ts + git.ts + auth.ts. 9 files, 3663 lines. rpc.ts is deliberately excluded: its own closure is 27 files / 11120 lines because it names every unrelated subsystem's RPCs. The generator FAILS if the real import graph reaches a file not on this list.",
   "methods": {
-    "_comment": "The mapping rpc.ts would have given us, pinned explicitly instead. Orchestration entries are DERIVED from OrchestrationRpcSchemas in the closure and verified against this list. The vcs method strings live in the unvendored rpc.ts, so they are recorded here and their schemas resolved from the vendored git.ts.",
+    "_comment": "The mapping rpc.ts would have given us, pinned explicitly instead. Orchestration entries are DERIVED from OrchestrationRpcSchemas in the closure and verified against this list. Entries with a `source` naming a vendored FILE are the ones whose method string lives in the unvendored rpc.ts while their schemas live in the closure: the vcs.* entries resolve from git.ts, and spec 250's codev.gateWrite from orchestration.ts. A method absent from this map is never vendored, however present it is in the contract — generate.mjs iterates these entries, not OrchestrationRpcSchemas.",
     "orchestration.dispatchCommand": {
       "key": "dispatchCommand",
       "source": "OrchestrationRpcSchemas"
@@ -36,6 +43,11 @@
     "orchestration.searchThreads": {
       "key": "searchThreads",
       "source": "OrchestrationRpcSchemas"
+    },
+    "codev.gateWrite": {
+      "input": "CodevGateWriteInput",
+      "output": "CodevGateWriteResult",
+      "source": "orchestration.ts"
     },
     "vcs.createWorktree": {
       "input": "VcsCreateWorktreeInput",
@@ -57,5 +69,6 @@
       "output": "VcsStatusResult",
       "source": "git.ts"
     }
-  }
+  },
+  "_contractSource": "Where the VENDORED CONTRACT under packages/types/src/t3/generated was generated from, which is not the same question as where the fork checkout is. 'upstream' meant the contract had not been regenerated from the fork yet, so a fork HEAD that DESCENDED from `commit` was expected and verify reported FORK_AHEAD_OF_CONTRACT at exit 0. Phase 5 regenerated from the fork and set this to 'fork', so being ahead is now an error: the checkout has moved past the contract and the contract must be regenerated. A fork HEAD that does not descend from `commit` is FORK_CHECKOUT_MISMATCH and an error either way. To abandon the fork, set `commit` back to `upstreamBase` and this back to 'upstream', then regenerate — the procedure is in tools/t3-fork/FORK.md."
 }

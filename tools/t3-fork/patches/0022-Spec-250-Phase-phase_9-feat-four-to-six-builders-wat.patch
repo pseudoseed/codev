@@ -1,0 +1,877 @@
+From 36038cdcb28382ad09d4612c5d86bab337c9ebfe Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Mon, 31 Aug 2026 02:05:17 -0600
+Subject: [PATCH 22/34] [Spec 250][Phase: phase_9] feat: four to six builders
+ watchable at once, inside t3code's chrome
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The geometry is ported from `apps/client/src/responsive/layout.ts` and
+**re-measured**, which is the whole point of porting it rather than copying it.
+
+**The width it lays out against is measured, not derived.** `apps/client`
+computed columns from the viewport because its grid was the page. This one is a
+route inside the chat shell, behind a sidebar that is 232px at rest, narrower
+when resized and gone at 390 — so a viewport number would describe a page nobody
+is looking at. Every function takes the AVAILABLE width and the grid measures its
+own container with a `ResizeObserver`, because the sidebar can be collapsed
+without the window changing size at all.
+
+That is not cosmetic. Six panes at 1440 have 1176px to work with rather than
+1404. Three columns fit either way, so criterion 5 would have passed on the
+viewport version by luck; seven at 1920 is the case that keeps it honest.
+
+**The rule is "as few rows as fit", not "as square as possible"**, which
+`apps/client` records as considered and rejected. Both give three columns for six
+panes at 1440 — which is why criterion 5 alone cannot tell them apart — and they
+diverge at seven panes on 1920: near-square gives 3x3, three columns of a
+five-column-wide screen with a last row holding one tile beside two tiles' worth
+of nothing. Fewest-rows gives 4x2.
+
+`PAGE_PADDING` drops from 18 to 12 because t3code's shell already pays for
+horizontal inset and the grid should not double it; `GRID_GAP` stays at 12
+because that was already t3code's rhythm. Both are recorded in the file with the
+measurement, not carried across silently.
+
+**Two of the four things a pane should show are published and unreachable from
+here.** `codev-agent` carries the porch phase and the last three messages,
+workspace-scoped, in ONE request for the whole grid — which is why the plan's ban
+on six continuous subscriptions was never in tension with showing them. This page
+cannot read it until phase 10 wires the same-origin proxy, so those two lines say
+exactly that. They do NOT say the data does not exist: "never published" and
+"this page cannot see it" are different facts, one of them is false, and writing
+the false one is the defect this project keeps catching.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/codev/BuilderGrid.tsx           | 154 ++++++++++++++++
+ apps/web/src/codev/BuilderPane.tsx           | 137 +++++++++++++++
+ apps/web/src/codev/layout.test.ts            | 174 +++++++++++++++++++
+ apps/web/src/codev/layout.ts                 | 139 +++++++++++++++
+ apps/web/src/routeTree.gen.ts                |  21 +++
+ apps/web/src/routes/_chat.codev-builders.tsx |  81 +++++++++
+ 6 files changed, 706 insertions(+)
+ create mode 100644 apps/web/src/codev/BuilderGrid.tsx
+ create mode 100644 apps/web/src/codev/BuilderPane.tsx
+ create mode 100644 apps/web/src/codev/layout.test.ts
+ create mode 100644 apps/web/src/codev/layout.ts
+ create mode 100644 apps/web/src/routes/_chat.codev-builders.tsx
+
+diff --git a/apps/web/src/codev/BuilderGrid.tsx b/apps/web/src/codev/BuilderGrid.tsx
+new file mode 100644
+index 000000000..c1e7acf85
+--- /dev/null
++++ b/apps/web/src/codev/BuilderGrid.tsx
+@@ -0,0 +1,154 @@
++/**
++ * Codev customization (spec 250), phase 9 — four to six builders, watchable at once.
++ *
++ * ## The width it lays out against is MEASURED, not derived
++ *
++ * `apps/client` computed columns from the viewport because its grid was the
++ * whole page. This one is a route inside t3code's chat shell, behind a sidebar
++ * that is 232px at rest, narrower when resized, and gone at 390. A viewport
++ * number would be describing a page nobody is looking at, so the grid measures
++ * its own container and hands that to `columnsFor`.
++ *
++ * `ResizeObserver` rather than a window listener: the sidebar can be collapsed
++ * without the window changing size at all, and a grid that only listened to the
++ * window would keep three columns in a space that now fits four.
++ */
++
++import { useCallback, useEffect, useMemo, useRef, useState } from "react";
++
++import { cn } from "~/lib/utils";
++import { BuilderPane, type BuilderPaneStatus, type BuilderPaneThread } from "./BuilderPane";
++import {
++  columnsFor,
++  GRID_GAP,
++  layoutModeFor,
++  MIN_BODY_PX,
++  PAGE_PADDING,
++  PAGED_PANES_PER_PAGE,
++  pageCountFor,
++} from "./layout";
++
++/**
++ * The container's inner width, or `null` until it has been measured.
++ *
++ * `null` is not zero. Laying out against zero for one frame gives one column,
++ * which then reflows to three — a visible jump on every mount, and on a slow
++ * machine a screenshot of the wrong layout. Nothing renders until the width is
++ * known.
++ */
++function useMeasuredWidth(): {
++  readonly ref: (node: HTMLElement | null) => void;
++  readonly width: number | null;
++} {
++  const [width, setWidth] = useState<number | null>(null);
++  const observerRef = useRef<ResizeObserver | null>(null);
++
++  const ref = useCallback((node: HTMLElement | null) => {
++    observerRef.current?.disconnect();
++    observerRef.current = null;
++    if (node === null) return;
++    setWidth(node.getBoundingClientRect().width);
++    const observer = new ResizeObserver((entries) => {
++      const entry = entries[0];
++      if (entry === undefined) return;
++      setWidth(entry.contentRect.width);
++    });
++    observer.observe(node);
++    observerRef.current = observer;
++  }, []);
++
++  useEffect(() => () => observerRef.current?.disconnect(), []);
++  return { ref, width };
++}
++
++export function BuilderGrid(props: {
++  readonly threads: readonly BuilderPaneThread[];
++  readonly statusFor: (thread: BuilderPaneThread) => BuilderPaneStatus;
++}) {
++  const { threads, statusFor } = props;
++  const { ref, width } = useMeasuredWidth();
++  const [page, setPage] = useState(0);
++
++  const columns = width === null ? 1 : columnsFor(threads.length, width);
++  const mode = width === null ? "standard" : layoutModeFor(width);
++  const pageCount = width === null ? 1 : pageCountFor(threads.length, width);
++  // A page index outliving the list it indexed shows an empty grid on a screen
++  // that has panes in it.
++  const currentPage = Math.min(page, pageCount - 1);
++  const visible = useMemo(() => {
++    if (mode !== "paged") return threads;
++    const start = currentPage * PAGED_PANES_PER_PAGE;
++    return threads.slice(start, start + PAGED_PANES_PER_PAGE);
++  }, [threads, mode, currentPage]);
++
++  return (
++    <div
++      ref={ref}
++      data-testid="codev-builder-grid"
++      data-codev-grid-columns={width === null ? undefined : columns}
++      data-codev-grid-mode={width === null ? undefined : mode}
++      style={{ padding: PAGE_PADDING, ["--codev-pane-body" as string]: `${MIN_BODY_PX}px` }}
++      className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-x-hidden"
++    >
++      {width === null ? null : (
++        <>
++          <div
++            data-testid="codev-builder-grid-panes"
++            style={{
++              display: "grid",
++              gap: GRID_GAP,
++              gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
++            }}
++            className="min-w-0"
++          >
++            {visible.map((thread) => (
++              <BuilderPane key={thread.id} thread={thread} status={statusFor(thread)} />
++            ))}
++          </div>
++          {pageCount <= 1 ? null : (
++            /*
++              Paging, not shrinking. Below 700px of AVAILABLE width a grid that
++              kept tiling would put panes under the 340px floor, and a pane under
++              the floor is not a smaller pane, it is an unreadable one.
++            */
++            <nav
++              data-testid="codev-builder-grid-paging"
++              aria-label="Builder pages"
++              className="flex shrink-0 items-center justify-center gap-2 text-xs"
++            >
++              <button
++                type="button"
++                onClick={() => setPage((value) => Math.max(0, value - 1))}
++                disabled={currentPage === 0}
++                className={cn(
++                  "rounded-md px-2 py-1 font-medium",
++                  currentPage === 0
++                    ? "text-muted-foreground/40"
++                    : "cursor-pointer text-info hover:underline",
++                )}
++              >
++                Previous
++              </button>
++              <span data-testid="codev-builder-grid-page-label" className="text-muted-foreground">
++                Page {currentPage + 1} of {pageCount}
++              </span>
++              <button
++                type="button"
++                onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}
++                disabled={currentPage >= pageCount - 1}
++                className={cn(
++                  "rounded-md px-2 py-1 font-medium",
++                  currentPage >= pageCount - 1
++                    ? "text-muted-foreground/40"
++                    : "cursor-pointer text-info hover:underline",
++                )}
++              >
++                Next
++              </button>
++            </nav>
++          )}
++        </>
++      )}
++    </div>
++  );
++}
+diff --git a/apps/web/src/codev/BuilderPane.tsx b/apps/web/src/codev/BuilderPane.tsx
+new file mode 100644
+index 000000000..c13ec7366
+--- /dev/null
++++ b/apps/web/src/codev/BuilderPane.tsx
+@@ -0,0 +1,137 @@
++/**
++ * Codev customization (spec 250), phase 9 — one builder, at a glance.
++ *
++ * ## It is deliberately not a transcript
++ *
++ * The plan is explicit: six live transcripts is six continuous subscriptions,
++ * which is a different feature at a different cost. A full transcript is read by
++ * opening one thread full-size, which t3code already does. So this pane renders
++ * only what the SHELL carries — the list every sidebar row is already built from
++ * — and opening the pane is a link to the real thread.
++ *
++ * ## Two of the four things are PUBLISHED, and this page cannot reach them yet
++ *
++ * The plan asks for a porch phase and the last three messages. Neither is on the
++ * thread — Codev writes `role`, `parentThreadId`, `codevGate` and `gateRevision`
++ * and nothing else, and `latestTurn` is ids and timestamps with no message text.
++ * But both ARE published, by `codev-agent`, workspace-scoped, in one request for
++ * the whole grid rather than one per pane: `GET /api/agent/v1/workspaces/<b64>/state`
++ * carries `porch.phase` and the last three messages per identity. That is where
++ * `apps/client` reads them, and it is why the plan's ban on six continuous
++ * subscriptions was never in tension with showing them.
++ *
++ * This page does not read it yet: the same-origin proxy that lets it is phase
++ * 10's deliverable. So these two lines say **that** — not that the data does not
++ * exist. "The phase was never published" and "this page cannot see the phase"
++ * are different facts, one of them is false, and writing the false one is the
++ * defect this project has caught repeatedly.
++ */
++
++import { Link } from "@tanstack/react-router";
++import { GavelIcon } from "lucide-react";
++
++import { cn } from "~/lib/utils";
++import { resolveCodevGateState, type CodevGateFields } from "./gateState";
++import { MIN_PANE_H, MIN_PANE_W } from "./layout";
++
++export interface BuilderPaneThread extends CodevGateFields {
++  readonly id: string;
++  readonly environmentId: string;
++  readonly title: string;
++  readonly role?: "architect" | "builder" | null | undefined;
++  readonly branch: string | null;
++}
++
++/** The status line, from what the shell carries and nothing more. */
++export interface BuilderPaneStatus {
++  readonly label: string;
++  readonly colorClass: string;
++}
++
++export function BuilderPane(props: {
++  readonly thread: BuilderPaneThread;
++  readonly status: BuilderPaneStatus;
++}) {
++  const { thread, status } = props;
++  const gate = resolveCodevGateState(thread);
++  // Role-prefixed, because a grid of six panes is read by scanning the corner of
++  // each one and `builder/` there is the difference between "one of the six" and
++  // "the one running them".
++  const rolePrefix = thread.role === null || thread.role === undefined ? "thread" : thread.role;
++
++  return (
++    <article
++      data-testid="codev-builder-pane"
++      data-codev-pane-thread-id={thread.id}
++      style={{ minWidth: MIN_PANE_W, minHeight: MIN_PANE_H }}
++      className="flex min-w-0 flex-col gap-2 overflow-hidden rounded-xl border border-sidebar-border/60 bg-card p-3"
++    >
++      <header className="flex min-w-0 items-baseline gap-2">
++        <span
++          data-testid="codev-pane-id"
++          className="min-w-0 truncate font-medium text-card-foreground text-sm"
++        >
++          <span className="text-muted-foreground">{rolePrefix}/</span>
++          {thread.title}
++        </span>
++        <span
++          data-testid="codev-pane-status"
++          className={cn("ml-auto shrink-0 font-medium text-xs", status.colorClass)}
++        >
++          {status.label}
++        </span>
++      </header>
++
++      <p data-testid="codev-pane-phase" className="flex min-w-0 items-center gap-1 text-xs">
++        {gate.kind === "none" ? (
++          /*
++            NOT "phase not published" — it is published, and this page cannot
++            read it until phase 10 wires the same-origin proxy. The distinction
++            is the whole reason this line has words in it at all.
++          */
++          <span className="text-muted-foreground/70">
++            Phase not read here yet — published by codev-agent
++          </span>
++        ) : (
++          <>
++            <GavelIcon aria-hidden className="size-3 shrink-0 text-rose-600 dark:text-rose-300/90" />
++            <span className="min-w-0 truncate font-medium text-rose-600 dark:text-rose-300/90">
++              {gate.gateName}
++            </span>
++          </>
++        )}
++      </p>
++
++      <div
++        data-testid="codev-pane-messages"
++        className="min-h-0 flex-1 overflow-auto rounded-md bg-muted/30 p-2 text-muted-foreground text-[13px]"
++      >
++        {/*
++          The fourth thing the plan asks for. `codev-agent` publishes it in the
++          same workspace-scoped request as the phase; this page is not wired to
++          that yet. A blank box would read as "this builder has said nothing",
++          which is a claim about the builder rather than about what reached the
++          browser — and it would be wrong.
++        */}
++        Recent messages come from codev-agent, which this page does not read yet. Open the thread
++        to read them now.
++      </div>
++
++      <footer className="flex min-w-0 items-baseline gap-2 text-muted-foreground text-xs">
++        {thread.branch === null ? (
++          <span className="min-w-0 truncate text-muted-foreground/70">no branch</span>
++        ) : (
++          <span className="min-w-0 truncate font-mono">{thread.branch}</span>
++        )}
++        <Link
++          data-testid="codev-pane-open"
++          to="/$environmentId/$threadId"
++          params={{ environmentId: thread.environmentId, threadId: thread.id }}
++          className="ml-auto shrink-0 font-medium text-info hover:underline"
++        >
++          Open
++        </Link>
++      </footer>
++    </article>
++  );
++}
+diff --git a/apps/web/src/codev/layout.test.ts b/apps/web/src/codev/layout.test.ts
+new file mode 100644
+index 000000000..66e4e43b8
+--- /dev/null
++++ b/apps/web/src/codev/layout.test.ts
+@@ -0,0 +1,174 @@
++/**
++ * Codev customization (spec 250), phase 9 — the tiling arithmetic, as a function.
++ *
++ * These prove the RULE. They cannot prove the rendered pane is 340px wide inside
++ * t3code's chrome — that is the Playwright measurement in
++ * `packages/codev/src/__tests__/e2e/spec-250-tiling.spec.ts`, and the two are
++ * deliberately not the same test.
++ */
++
++import { describe, expect, it } from "vite-plus/test";
++
++import {
++  columnsFor,
++  columnsThatFit,
++  contentWidth,
++  GRID_GAP,
++  layoutModeFor,
++  MIN_PANE_W,
++  pageCountFor,
++  paneWidthAt,
++  PAGED_PANES_PER_PAGE,
++  PAGING_MAX_WIDTH,
++} from "./layout";
++
++/**
++ * The available widths these tests are about.
++ *
++ * NOT viewport widths. The grid lives behind t3code's sidebar, so the number
++ * that decides the layout is the container's, and `apps/client`'s viewport-based
++ * version would have been right about a page nobody is looking at. 1176 is 1440
++ * with the sidebar open; 1688 is 1920 with it open; 1404 is 1440 with it
++ * collapsed, kept here because a user can collapse it and the arithmetic must
++ * not care which of the two it was handed.
++ */
++const AT_1440_WITH_SIDEBAR = 1176;
++const AT_1920_WITH_SIDEBAR = 1688;
++const AT_1440_NO_SIDEBAR = 1404;
++const AT_390 = 390;
++
++describe("columnsThatFit", () => {
++  it("adds the gap to both sides of the division", () => {
++    // N columns need N panes and N-1 gaps. Dividing by (MIN_PANE_W + gap) alone
++    // charges a gap for the last column, which loses a column at every width
++    // that is exactly full.
++    expect(columnsThatFit(MIN_PANE_W)).toBe(1);
++    expect(columnsThatFit(MIN_PANE_W * 2 + GRID_GAP)).toBe(2);
++    expect(columnsThatFit(MIN_PANE_W * 2 + GRID_GAP - 1)).toBe(1);
++  });
++
++  it("never returns zero, however narrow", () => {
++    // One column at 200px is a pane under the floor, which the caller resolves
++    // by paging. Zero columns is a division by zero in every caller.
++    expect(columnsThatFit(200)).toBe(1);
++    expect(columnsThatFit(0)).toBe(1);
++  });
++});
++
++describe("columnsFor: the fewest rows that fit", () => {
++  it("gives six panes three columns at 1440 with the sidebar open", () => {
++    // Criterion 5's case. 3x2.
++    expect(columnsFor(6, AT_1440_WITH_SIDEBAR)).toBe(3);
++  });
++
++  /**
++   * CRITERION 5b, and the reason this rule is written out rather than left to
++   * `auto-fill` or to a near-square heuristic.
++   *
++   * Near-square gives 3x3 here: three columns of a five-column-wide screen, and
++   * a last row holding one tile beside two tiles' worth of nothing. Both rules
++   * agree at 1440, so criterion 5 alone cannot tell them apart — this is the
++   * case that can.
++   */
++  it("gives seven panes FOUR columns at 1920, not three", () => {
++    expect(columnsFor(7, AT_1920_WITH_SIDEBAR)).toBe(4);
++    // Said the other way, so a regression to near-square fails here too.
++    expect(columnsFor(7, AT_1920_WITH_SIDEBAR)).not.toBe(3);
++    expect(Math.ceil(7 / columnsFor(7, AT_1920_WITH_SIDEBAR))).toBe(2);
++  });
++
++  it("walks 1 to 8 panes at 1440 without ever dropping a pane under the floor", () => {
++    // 3 columns is all that fits in 1152px of content, so 7 and 8 panes take
++    // three rows rather than widening — the rule stops at the floor, it does not
++    // negotiate with it.
++    const expected = [1, 2, 3, 2, 3, 3, 3, 3];
++    for (let count = 1; count <= 8; count += 1) {
++      const columns = columnsFor(count, AT_1440_WITH_SIDEBAR);
++      expect(columns, `${count} panes at 1440`).toBe(expected[count - 1]);
++      expect(paneWidthAt(count, AT_1440_WITH_SIDEBAR)).toBeGreaterThanOrEqual(MIN_PANE_W);
++    }
++  });
++
++  it("walks 1 to 8 panes at 1920 without ever dropping a pane under the floor", () => {
++    const expected = [1, 2, 3, 4, 3, 3, 4, 4];
++    for (let count = 1; count <= 8; count += 1) {
++      const columns = columnsFor(count, AT_1920_WITH_SIDEBAR);
++      expect(columns, `${count} panes at 1920`).toBe(expected[count - 1]);
++      expect(paneWidthAt(count, AT_1920_WITH_SIDEBAR)).toBeGreaterThanOrEqual(MIN_PANE_W);
++    }
++  });
++
++  it("is one column for every count at 700 and below", () => {
++    for (let count = 1; count <= 8; count += 1) {
++      expect(columnsFor(count, PAGING_MAX_WIDTH)).toBe(1);
++      expect(columnsFor(count, AT_390)).toBe(1);
++    }
++  });
++
++  it("reads the width it is given, not a viewport it cannot see", () => {
++    // 1440 with the sidebar open and 1440 with it collapsed are 1176 and 1404,
++    // and both fit exactly three columns — so they answer the same. The point is
++    // that the answer comes from the ARGUMENT: 1688 fits four, and the function
++    // has no idea any of the three came from a 1440 or a 1920 window.
++    expect(columnsFor(7, AT_1440_NO_SIDEBAR)).toBe(columnsFor(7, AT_1440_WITH_SIDEBAR));
++    expect(columnsFor(7, AT_1920_WITH_SIDEBAR)).toBeGreaterThan(
++      columnsFor(7, AT_1440_NO_SIDEBAR),
++    );
++  });
++
++  it("returns one column for no panes rather than dividing by zero", () => {
++    expect(columnsFor(0, AT_1440_WITH_SIDEBAR)).toBe(1);
++    expect(columnsFor(-1, AT_1440_WITH_SIDEBAR)).toBe(1);
++  });
++});
++
++describe("paneWidthAt: the floor holds at every count these tests cover", () => {
++  it("keeps every pane at or above 340px wherever the grid is not paged", () => {
++    for (const available of [700, 900, AT_1440_WITH_SIDEBAR, AT_1440_NO_SIDEBAR, AT_1920_WITH_SIDEBAR]) {
++      for (let count = 1; count <= 8; count += 1) {
++        expect(
++          paneWidthAt(count, available),
++          `${count} panes in ${available}px`,
++        ).toBeGreaterThanOrEqual(MIN_PANE_W);
++      }
++    }
++  });
++
++  it("keeps the floor at 390 too, by paging instead of shrinking", () => {
++    // This is the criterion's real claim at phone width: the grid does not fit
++    // four panes into 390px, it shows one column of full-width panes and pages
++    // through them. The single column is 366px — over the floor, not under it —
++    // which is why nothing overflows horizontally there.
++    expect(layoutModeFor(AT_390)).toBe("paged");
++    expect(columnsFor(4, AT_390)).toBe(1);
++    expect(paneWidthAt(4, AT_390)).toBeGreaterThanOrEqual(MIN_PANE_W);
++    expect(paneWidthAt(4, AT_390)).toBeLessThanOrEqual(contentWidth(AT_390));
++  });
++});
++
++describe("layoutModeFor and paging", () => {
++  it("pages at 699 and tiles at 700", () => {
++    expect(layoutModeFor(PAGING_MAX_WIDTH)).toBe("paged");
++    expect(layoutModeFor(PAGING_MAX_WIDTH + 1)).toBe("standard");
++  });
++
++  it("splits a paged grid into pages rather than shrinking it", () => {
++    expect(pageCountFor(6, AT_390)).toBe(3);
++    expect(pageCountFor(PAGED_PANES_PER_PAGE, AT_390)).toBe(1);
++    expect(pageCountFor(0, AT_390)).toBe(1);
++  });
++
++  it("has one page when it is not paging", () => {
++    expect(pageCountFor(6, AT_1440_WITH_SIDEBAR)).toBe(1);
++  });
++});
++
++describe("contentWidth", () => {
++  it("takes the grid's own padding off both sides", () => {
++    expect(contentWidth(1000)).toBe(1000 - 12 * 2);
++  });
++
++  it("never goes negative", () => {
++    expect(contentWidth(10)).toBe(0);
++  });
++});
+diff --git a/apps/web/src/codev/layout.ts b/apps/web/src/codev/layout.ts
+new file mode 100644
+index 000000000..5cd417264
+--- /dev/null
++++ b/apps/web/src/codev/layout.ts
+@@ -0,0 +1,139 @@
++/**
++ * Codev customization (spec 250), phase 9 — the tiling arithmetic.
++ *
++ * Ported from `apps/client/src/responsive/layout.ts` and **re-measured**, which
++ * is the whole point of the port: `apps/client` owned the entire viewport, and
++ * this grid lives inside t3code's chrome behind a sidebar. Carrying the old
++ * constants across unchanged would have produced numbers that are right about a
++ * page nobody is looking at.
++ *
++ * These are the numbers a component test cannot check — they are measured from a
++ * rendered page under Playwright — so the rules that produce them live here as
++ * pure functions with their own unit tests, and the components do nothing but
++ * apply what these return.
++ *
++ * ## Why the column count is computed rather than left to `auto-fill`
++ *
++ * `repeat(auto-fill, minmax(340px, 1fr))` looks like the obvious spelling and
++ * gives the wrong answer: `auto-fill` maximises columns, and the criterion wants
++ * the FEWEST ROWS that fit without a pane going under the floor. Those are
++ * different rules and only one of them is expressible in CSS.
++ *
++ * ## What changed in the port, and why
++ *
++ * `apps/client` computed everything from `viewportWidth` because its grid was
++ * the page. Here the grid is a route inside the chat shell, so the sidebar —
++ * 232px at rest, zero when collapsed or off-canvas at 390 — is not a constant
++ * this file can know. Every function therefore takes the **available width**:
++ * the grid container's own inner width, measured from the DOM.
++ *
++ * That is not a cosmetic change. Six panes at 1440 with the sidebar open have
++ * 1440 - 232 - 2*PAGE_PADDING = 1176px to work with, not 1404. Three columns fit
++ * either way, so criterion 5 would have passed on the viewport-based version by
++ * luck; the seven-at-1920 case in criterion 5b is the one that keeps it honest.
++ */
++
++/** Criterion 5's floor. Below this a pane stops being readable at a glance. */
++export const MIN_PANE_W = 340;
++export const MIN_PANE_H = 240;
++/** Criterion 5's body-text floor. Applied as a CSS custom property, asserted from the DOM. */
++export const MIN_BODY_PX = 13;
++
++/**
++ * Re-measured against t3code, not inherited.
++ *
++ * `apps/client` used a 12px gap and 18px page padding on a page it owned
++ * outright. t3code's own content surfaces sit on a 12px rhythm — the sidebar's
++ * rows, the composer's shell and the settings panes all step in multiples of it
++ * — and the chat body already carries horizontal inset from the shell, so the
++ * grid adds a smaller one of its own rather than doubling up. 12 and 12: the gap
++ * survives the port unchanged because it was already t3code's number, and the
++ * padding drops from 18 to 12 because the shell is paying for the rest.
++ */
++export const GRID_GAP = 12;
++export const PAGE_PADDING = 12;
++
++/**
++ * Below this the grid PAGES rather than shrinks.
++ *
++ * 700 rather than 680 (= 2 x 340 + gap): a two-column grid whose panes are
++ * exactly at the floor with no padding left is the arithmetic minimum, not a
++ * usable layout. One column below 700, two at 700 and above.
++ *
++ * Measured against AVAILABLE width, so a 1024px window with the sidebar open
++ * (792px available) is a two-column grid, and the same window with the sidebar
++ * collapsed is three. That is the honest reading: the user widened the grid.
++ */
++export const PAGING_MAX_WIDTH = 699;
++
++export type LayoutMode = "paged" | "standard";
++
++export function layoutModeFor(availableWidth: number): LayoutMode {
++  return availableWidth <= PAGING_MAX_WIDTH ? "paged" : "standard";
++}
++
++/** The width the grid itself gets, once its own padding is taken out. */
++export function contentWidth(availableWidth: number): number {
++  return Math.max(0, availableWidth - PAGE_PADDING * 2);
++}
++
++/**
++ * How many columns fit at this width without any pane falling under the floor.
++ *
++ * N columns need N panes plus N-1 gaps, which is why the gap is added to both
++ * sides of the division rather than only the numerator.
++ */
++export function columnsThatFit(available: number, gap = GRID_GAP): number {
++  return Math.max(1, Math.floor((available + gap) / (MIN_PANE_W + gap)));
++}
++
++/**
++ * The column count for `count` panes in `availableWidth`.
++ *
++ * THE RULE IS "AS FEW ROWS AS FIT", not "as square as possible", and
++ * `apps/client/src/responsive/layout.ts` records the near-square rule as
++ * considered and rejected. Both give 3 columns for six panes at 1440, which is
++ * why criterion 5 alone cannot tell them apart — they diverge as soon as the
++ * grid is not a neat rectangle. A near-square rule puts seven panes at 1920 into
++ * 3x3: three columns of a five-column-wide screen, and a last row holding one
++ * tile beside two tiles' worth of nothing. Fewest-rows gives 4x2 — every pane
++ * larger, one short row instead of two-thirds of one empty.
++ *
++ * So: try one row, then two, and stop at the first row count whose columns fit
++ * without any pane falling under the floor.
++ */
++export function columnsFor(count: number, availableWidth: number): number {
++  if (count <= 0) return 1;
++  if (layoutModeFor(availableWidth) === "paged") return 1;
++  const fits = columnsThatFit(contentWidth(availableWidth));
++  for (let rows = 1; rows <= count; rows += 1) {
++    const columns = Math.ceil(count / rows);
++    if (columns <= fits) return columns;
++  }
++  return 1;
++}
++
++/**
++ * The width one pane will actually get, for the tests that assert the floor
++ * holds rather than trusting that it does.
++ */
++export function paneWidthAt(count: number, availableWidth: number): number {
++  const columns = columnsFor(count, availableWidth);
++  const available = contentWidth(availableWidth);
++  return (available - GRID_GAP * (columns - 1)) / columns;
++}
++
++/**
++ * How many panes fit on one page in paged mode.
++ *
++ * Paged mode is one column, and a phone showing one pane at a time is a list
++ * with extra steps. Two: the pane floor is 240px tall, so two of them plus a gap
++ * fit a 390x844 viewport with the chrome, and a user swiping through six
++ * builders takes three pages rather than six.
++ */
++export const PAGED_PANES_PER_PAGE = 2;
++
++export function pageCountFor(count: number, availableWidth: number): number {
++  if (layoutModeFor(availableWidth) !== "paged") return 1;
++  return Math.max(1, Math.ceil(count / PAGED_PANES_PER_PAGE));
++}
+diff --git a/apps/web/src/routeTree.gen.ts b/apps/web/src/routeTree.gen.ts
+index f7c47ace6..52988aafa 100644
+--- a/apps/web/src/routeTree.gen.ts
++++ b/apps/web/src/routeTree.gen.ts
+@@ -27,6 +27,7 @@ import { Route as SettingsAppearanceRouteImport } from './routes/settings.appear
+ import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
+ import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
+ import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
++import { Route as ChatCodevBuildersRouteImport } from './routes/_chat.codev-builders'
+ import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
+ import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
+ 
+@@ -119,6 +120,11 @@ const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
+   path: '/pull-requests',
+   getParentRoute: () => ChatRoute,
+ } as any)
++const ChatCodevBuildersRoute = ChatCodevBuildersRouteImport.update({
++  id: '/codev-builders',
++  path: '/codev-builders',
++  getParentRoute: () => ChatRoute,
++} as any)
+ const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
+   id: '/draft/$draftId',
+   path: '/draft/$draftId',
+@@ -137,6 +143,7 @@ export interface FileRoutesByFullPath {
+   '/pair': typeof PairRoute
+   '/settings': typeof SettingsRouteWithChildren
+   '/usage': typeof UsageRoute
++  '/codev-builders': typeof ChatCodevBuildersRoute
+   '/pull-requests': typeof ChatPullRequestsRoute
+   '/connect/callback': typeof ConnectCallbackRoute
+   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+@@ -157,6 +164,7 @@ export interface FileRoutesByTo {
+   '/pair': typeof PairRoute
+   '/settings': typeof SettingsRouteWithChildren
+   '/usage': typeof UsageRoute
++  '/codev-builders': typeof ChatCodevBuildersRoute
+   '/pull-requests': typeof ChatPullRequestsRoute
+   '/connect/callback': typeof ConnectCallbackRoute
+   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+@@ -180,6 +188,7 @@ export interface FileRoutesById {
+   '/pair': typeof PairRoute
+   '/settings': typeof SettingsRouteWithChildren
+   '/usage': typeof UsageRoute
++  '/_chat/codev-builders': typeof ChatCodevBuildersRoute
+   '/_chat/pull-requests': typeof ChatPullRequestsRoute
+   '/connect_/callback': typeof ConnectCallbackRoute
+   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+@@ -204,6 +213,7 @@ export interface FileRouteTypes {
+     | '/pair'
+     | '/settings'
+     | '/usage'
++    | '/codev-builders'
+     | '/pull-requests'
+     | '/connect/callback'
+     | '/projects/$projectKey'
+@@ -224,6 +234,7 @@ export interface FileRouteTypes {
+     | '/pair'
+     | '/settings'
+     | '/usage'
++    | '/codev-builders'
+     | '/pull-requests'
+     | '/connect/callback'
+     | '/projects/$projectKey'
+@@ -246,6 +257,7 @@ export interface FileRouteTypes {
+     | '/pair'
+     | '/settings'
+     | '/usage'
++    | '/_chat/codev-builders'
+     | '/_chat/pull-requests'
+     | '/connect_/callback'
+     | '/projects/$projectKey'
+@@ -401,6 +413,13 @@ declare module '@tanstack/react-router' {
+       preLoaderRoute: typeof ChatPullRequestsRouteImport
+       parentRoute: typeof ChatRoute
+     }
++    '/_chat/codev-builders': {
++      id: '/_chat/codev-builders'
++      path: '/codev-builders'
++      fullPath: '/codev-builders'
++      preLoaderRoute: typeof ChatCodevBuildersRouteImport
++      parentRoute: typeof ChatRoute
++    }
+     '/_chat/draft/$draftId': {
+       id: '/_chat/draft/$draftId'
+       path: '/draft/$draftId'
+@@ -419,6 +438,7 @@ declare module '@tanstack/react-router' {
+ }
+ 
+ interface ChatRouteChildren {
++  ChatCodevBuildersRoute: typeof ChatCodevBuildersRoute
+   ChatPullRequestsRoute: typeof ChatPullRequestsRoute
+   ChatIndexRoute: typeof ChatIndexRoute
+   ChatEnvironmentIdThreadIdRoute: typeof ChatEnvironmentIdThreadIdRoute
+@@ -426,6 +446,7 @@ interface ChatRouteChildren {
+ }
+ 
+ const ChatRouteChildren: ChatRouteChildren = {
++  ChatCodevBuildersRoute: ChatCodevBuildersRoute,
+   ChatPullRequestsRoute: ChatPullRequestsRoute,
+   ChatIndexRoute: ChatIndexRoute,
+   ChatEnvironmentIdThreadIdRoute: ChatEnvironmentIdThreadIdRoute,
+diff --git a/apps/web/src/routes/_chat.codev-builders.tsx b/apps/web/src/routes/_chat.codev-builders.tsx
+new file mode 100644
+index 000000000..1cde3215f
+--- /dev/null
++++ b/apps/web/src/routes/_chat.codev-builders.tsx
+@@ -0,0 +1,81 @@
++/**
++ * Codev customization (spec 250), phase 9 — the builder grid, inside t3code's chrome.
++ *
++ * A child of `_chat`, deliberately: the criteria are about how many panes fit
++ * BESIDE the sidebar, and a route that escaped the shell would be measuring a
++ * page Codev does not ship. The sidebar is 232px of the 1440 the criterion
++ * names, and that is the whole reason the geometry was re-measured rather than
++ * ported.
++ */
++
++import { createFileRoute } from "@tanstack/react-router";
++import { useMemo } from "react";
++
++import { BuilderGrid } from "../codev/BuilderGrid";
++import type { BuilderPaneStatus, BuilderPaneThread } from "../codev/BuilderPane";
++import { buildCodevSidebarOrder, resolveSidebarThreadStatus } from "../components/Sidebar.logic";
++import { useThreadShells } from "../state/entities";
++
++/**
++ * One status vocabulary, t3code's own.
++ *
++ * `resolveSidebarThreadStatus` is what every sidebar row already answers with,
++ * so a pane and its row cannot disagree about what a builder is doing. A second
++ * derivation here would be two sources of truth for one fact.
++ */
++const STATUS_LABELS: Record<ReturnType<typeof resolveSidebarThreadStatus>, BuilderPaneStatus> = {
++  approval: { label: "Approval", colorClass: "text-amber-700 dark:text-amber-300" },
++  input: { label: "Input", colorClass: "text-indigo-600 dark:text-indigo-300" },
++  working: { label: "Working", colorClass: "text-sky-600 dark:text-sky-400" },
++  monitoring: { label: "Monitoring", colorClass: "text-sky-600 dark:text-sky-400" },
++  failed: { label: "Failed", colorClass: "text-red-700 dark:text-red-300" },
++  ready: { label: "Ready", colorClass: "text-muted-foreground" },
++};
++
++function CodevBuilderGridRoute() {
++  const threads = useThreadShells();
++
++  /**
++   * Architect first, then its builders — the same order the sidebar draws.
++   *
++   * `buildCodevSidebarOrder` already answers this, so the grid and the tree
++   * cannot drift into two different ideas of who owns whom. Threads Codev did
++   * not create are not here at all: this page is about the agents Codev is
++   * running, and an upstream thread in the grid would be a pane about something
++   * the grid cannot say anything useful about.
++   */
++  const panes = useMemo<readonly BuilderPaneThread[]>(() => {
++    const visible = threads.filter((thread) => thread.archivedAt === null);
++    const order = buildCodevSidebarOrder(visible, {
++      projectKeyOf: (thread) => `${thread.environmentId}:${thread.projectId}`,
++    });
++    return order.entries
++      .filter((entry) => entry.kind === "architect" || entry.kind === "builder")
++      .map((entry) => entry.thread);
++  }, [threads]);
++
++  const statusFor = useMemo(
++    () => (thread: BuilderPaneThread) => {
++      const shell = threads.find((candidate) => candidate.id === thread.id);
++      if (shell === undefined) return STATUS_LABELS.ready;
++      return STATUS_LABELS[resolveSidebarThreadStatus(shell)];
++    },
++    [threads],
++  );
++
++  return (
++    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
++      {panes.length === 0 ? (
++        <p className="px-4 py-8 text-center text-muted-foreground text-sm">
++          No Codev agents in this workspace yet.
++        </p>
++      ) : (
++        <BuilderGrid threads={panes} statusFor={statusFor} />
++      )}
++    </div>
++  );
++}
++
++export const Route = createFileRoute("/_chat/codev-builders")({
++  component: CodevBuilderGridRoute,
++});

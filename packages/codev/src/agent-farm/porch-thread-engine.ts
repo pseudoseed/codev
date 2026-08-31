@@ -164,6 +164,23 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
           defaultModel: options.defaultModel,
           worktreePath: input.worktreePath,
           branch: input.branch,
+          /**
+           * Spec 250. Forwarded, and OMITTED rather than nulled when absent.
+           *
+           * `input.role` is `'builder' | 'architect' | undefined`, and undefined
+           * is a real third case: a caller that did not name a role gets a thread
+           * with none, exactly as before this spec. Writing `?? null` here would
+           * turn "not told" into "decided", and `DriverThread.create` would then
+           * send `role: null` on a payload it was never given a role for.
+           *
+           * `parentThreadId` is deliberately NOT defaulted either. A builder
+           * whose architect is not thread-backed arrives here with both fields
+           * absent, and `DriverThread.create` accepts that — it is an unowned
+           * thread, which is what the old behaviour produced. What it will not
+           * accept is a role without its parent.
+           */
+          ...(input.role === undefined ? {} : { role: input.role }),
+          ...(input.parentThreadId === undefined ? {} : { parentThreadId: input.parentThreadId }),
           // The PTY path injects a role through harness-specific script fragments and
           // env; a thread has none of that, and `DriverThread` already carries a role
           // into the first turn. Forwarded rather than reimplemented.

@@ -23,9 +23,18 @@ import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { resolveIdentities } from '../t3-fork/identities.mjs';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
 const pin = JSON.parse(readFileSync(join(repoRoot, 'packages', 'types', 'src', 't3', 'pin.json'), 'utf8'));
+
+// Spec 250: the UPSTREAM identity, deliberately. This file records the spec 146
+// cold-start evidence, and that evidence is only reproducible against the clone
+// pinned at `upstreamBase`. Pointing it at the fork would silently re-baseline
+// the measurement onto a tree the original evidence never saw.
+const UPSTREAM_ROOT = resolveIdentities(pin).upstream.root;
+
 const port = Number(process.env.T3_HARNESS_PORT ?? 3799);
 const base = `http://127.0.0.1:${port}`;
 
@@ -154,7 +163,7 @@ for (let run = 1; run <= runs; run += 1) {
     // second look at a server run 1 left behind.
     try { harness('stop'); } catch { /* nothing running */ }
     harness('acquire');
-    harness('verify');
+    harness('verify-upstream'); // upstream identity: this run is spec 146 evidence
     harness('start');
     record.serverRuntime = JSON.parse(harness('status')).runtime;
     const readyOut = harness('ready');
@@ -174,7 +183,7 @@ for (let run = 1; run <= runs; run += 1) {
       commandId: id(),
       projectId: id(),
       title: `phase-1 harness smoke run ${run}`,
-      workspaceRoot: process.env.T3CODE_ROOT ?? '/Users/chris/dev/t3code',
+      workspaceRoot: UPSTREAM_ROOT,
       defaultModelSelection: { instanceId: 'codex', model: 'gpt-5.6-luna' },
       createdAt: now(),
     });
@@ -210,7 +219,15 @@ console.log(
   JSON.stringify(
     {
       criterion: 'Phase 1: harness brings up a live pinned server, twice, with a real dispatched command',
-      pinnedCommit: pin.commit,
+      // `upstreamCommit`, not `pinnedCommit`. This harness starts the UPSTREAM
+      // server from the read-only upstream clone, so the commit it ran against is
+      // `pin.upstreamBase`. Spec 250 phase 5 moved `pin.commit` onto the fork head,
+      // and emitting that here would have recorded a fork sha as the provenance of
+      // an upstream run — the evidence would still be green while describing
+      // something that never happened. The field is RENAMED rather than
+      // re-pointed so evidence collected under the old meaning cannot be mistaken
+      // for evidence collected under the new one.
+      upstreamCommit: pin.upstreamBase,
       pinnedCliVersion: pin.cliVersion,
       runs: results,
       allRunsPassed: allOk,

@@ -44,6 +44,15 @@ export interface CodevConfig {
     bootstrapToken?: string;
     harness?: string;
     model?: string;
+    /**
+     * Spec 250. Absolute path to the gate-writer token the fork's t3code server
+     * writes at start (`<serverBaseDir>/codev/gate-writer.token`).
+     *
+     * A path, not the credential — safe in the committed layer, unlike
+     * `bootstrapToken`. Absent turns gate publishing off; naming a path that
+     * cannot be read is a fault and is reported as one.
+     */
+    gateWriterTokenPath?: string;
   };
   shell?: {
     architect?: string | string[];

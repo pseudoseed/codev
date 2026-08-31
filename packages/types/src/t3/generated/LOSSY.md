@@ -56,7 +56,7 @@ Found by scanning the generated schemas rather than the source symbols. The sour
 `ModelSelectionSource` is one, and its fields land here. A `{}` accepts any value whatsoever,
 which is a stronger loss than a bare typed schema.
 
-- `OrchestrationEvent/anyOf/28/payload/activity/payload` → `{}` — no constraints at all: accepts any value
+- `OrchestrationEvent/anyOf/30/payload/activity/payload` → `{}` — no constraints at all: accepts any value
 - `$defs/dispatchCommandInput__Objects_/provider/anyOf/0` → `{}` — no constraints at all: accepts any value
 - `$defs/dispatchCommandInput__Objects_/instanceId/anyOf/0` → `{}` — no constraints at all: accepts any value
 - `$defs/dispatchCommandInput__Objects_/model` → `{}` — no constraints at all: accepts any value
@@ -65,7 +65,7 @@ which is a stronger loss than a bare typed schema.
 - `$defs/subscribeThreadOutput__Objects_/instanceId/anyOf/0` → `{}` — no constraints at all: accepts any value
 - `$defs/subscribeThreadOutput__Objects_/model` → `{}` — no constraints at all: accepts any value
 - `$defs/subscribeThreadOutput__Objects_/options/anyOf/0` → `{}` — no constraints at all: accepts any value
-- `$defs/subscribeThreadOutput__Objects_4/payload` → `{}` — no constraints at all: accepts any value
+- `$defs/subscribeThreadOutput__Objects_5/payload` → `{}` — no constraints at all: accepts any value
 - `$defs/OrchestrationEvent__Objects_2/provider/anyOf/0` → `{}` — no constraints at all: accepts any value
 - `$defs/OrchestrationEvent__Objects_2/instanceId/anyOf/0` → `{}` — no constraints at all: accepts any value
 - `$defs/OrchestrationEvent__Objects_2/model` → `{}` — no constraints at all: accepts any value

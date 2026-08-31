@@ -1,0 +1,203 @@
+From 3786b840e1a4a26c062138889cd72bcaed2fbdc1 Mon Sep 17 00:00:00 2001
+From: pseudo <aws@pseudoseed.com>
+Date: Mon, 31 Aug 2026 04:19:48 -0600
+Subject: [PATCH 33/34] =?UTF-8?q?[Spec=20250][Phase:=20phase=5F10]=20fix:?=
+ =?UTF-8?q?=20act=20on=20the=203-way=20review=20=E2=80=94=20a=20bound=20th?=
+ =?UTF-8?q?at=20claimed=20more=20than=20it=20gives,=20and=20an=20attribute?=
+ =?UTF-8?q?=20coarser=20than=20its=20words?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two findings, both non-blocking, both worth fixing before anything depends on
+them.
+
+UPSTREAM_TIMEOUT_MS is applied through ClientRequest.setTimeout, which is an
+IDLE-socket timeout: the clock restarts on activity. The comment called it a
+bound on the whole exchange, which is a guarantee this code does not have, and
+overstating a bound is the same class of error as overstating a CSP. The
+comment now says what the mechanism gives and states the residual — a
+trickling upstream is not bounded by it, and that upstream is one the operator
+named.
+
+data-codev-approval-state computed three values, so a session-ended outcome
+tagged as "refused" while the visible text and testid distinguished it.
+Nothing asserts on the attribute yet, which is exactly why it was worth
+fixing: the first test written against it would have inherited the conflation
+this file exists to prevent. Four outcomes, four words, and a test that fails
+when the branch is removed.
+---
+ apps/server/src/codev/agentProxy.ts | 29 +++++++++++++----
+ apps/web/src/codev/GateApproval.tsx | 39 +++++++++++++++++++++--
+ apps/web/src/codev/approval.test.ts | 49 ++++++++++++++++++++++++++++-
+ 3 files changed, 107 insertions(+), 10 deletions(-)
+
+diff --git a/apps/server/src/codev/agentProxy.ts b/apps/server/src/codev/agentProxy.ts
+index bdbd9a7cd..c13b2ef66 100644
+--- a/apps/server/src/codev/agentProxy.ts
++++ b/apps/server/src/codev/agentProxy.ts
+@@ -353,13 +353,27 @@ export function forwardableHeaders(
+ }
+ 
+ /**
+- * Bound on how long the upstream may take to produce response headers.
++ * How long the upstream may be SILENT before this hop gives up.
+  *
+- * Every route this proxy carries is a bounded request/response, so unlike
+- * `client-static.ts` this is a bound on the whole exchange rather than on headers
+- * alone — there is no SSE stream here that is meant to outlive it. An approval
+- * SUBMIT returns at once and is polled; it is the poll that waits, one request at
+- * a time.
++ * **It is an idle-socket timeout, not a total-duration bound**, because that is
++ * what `ClientRequest.setTimeout` gives: the clock restarts on socket activity.
++ * The first draft's comment called it "a bound on the whole exchange", which is a
++ * guarantee this code does not have, and overstating a bound is the same class of
++ * error as overstating a CSP — it reads as protection that is not there.
++ *
++ * An idle bound is the right one here anyway. Unlike `client-static.ts` there is
++ * no SSE stream to outlive it — the stream route is deliberately not carried —
++ * and every route that IS carried is a bounded request/response: an approval
++ * submit returns at once and is polled, one request at a time. What the bound
++ * exists to catch is a machine that accepts a socket and never answers, because
++ * each of those holds a request open on this server's event loop.
++ *
++ * The residual, stated rather than left implicit: an upstream that trickles a
++ * byte every 14 seconds is not bounded by this. That upstream is one the operator
++ * named in `T3CODE_CODEV_AGENT_ORIGINS`, so it is not a stranger, and closing it
++ * would mean a total-duration bound that has to be large enough for the slowest
++ * legitimate answer — a worse trade for a threat the allowlist already narrows to
++ * the operator's own hosts.
+  */
+ export const UPSTREAM_TIMEOUT_MS = 15_000;
+ 
+@@ -476,6 +490,9 @@ export function proxyToAgent(input: {
+        * wanting different next actions: one host refused the connection, the
+        * other accepted it and then said nothing. Reporting a silent host as a
+        * dead one sends an operator to check whether it is running, which it is.
++       *
++       * `silent` is the accurate word for what this fires on — see
++       * {@link UPSTREAM_TIMEOUT_MS}: it is inactivity, not elapsed time.
+        */
+       upstream.destroy();
+       settle({ kind: "silent", timeoutMs });
+diff --git a/apps/web/src/codev/GateApproval.tsx b/apps/web/src/codev/GateApproval.tsx
+index 486991ed5..8147c1550 100644
+--- a/apps/web/src/codev/GateApproval.tsx
++++ b/apps/web/src/codev/GateApproval.tsx
+@@ -33,6 +33,29 @@ import { approveGate, openHumanSession, type ApprovalOutcome, type ApprovalProgr
+ import { PairingPanel } from "./PairingPanel";
+ import { useCodevAgent } from "./useCodevAgent";
+ 
++/**
++ * The outcome as one word, for a test and for anything reading the DOM.
++ *
++ * Kept beside the rendering rather than inlined so the two cannot drift: the
++ * branch order here is the branch order below.
++ */
++export type ApprovalStateAttribute =
++  | "idle"
++  | "approved"
++  | "unconfirmed"
++  | "session-ended"
++  | "refused";
++
++export function approvalStateAttribute(
++  outcome: ApprovalOutcome | null,
++): ApprovalStateAttribute {
++  if (outcome === null) return "idle";
++  if (outcome.ok) return "approved";
++  if (outcome.unconfirmed === true) return "unconfirmed";
++  if (outcome.sessionEnded === true) return "session-ended";
++  return "refused";
++}
++
+ function porchProjectFor(
+   state: ReturnType<typeof useCodevAgent>["state"],
+   threadId: string,
+@@ -126,9 +149,19 @@ export function GateApproval(props: {
+   return (
+     <section
+       data-testid="codev-gate-approval"
+-      data-codev-approval-state={
+-        outcome === null ? "idle" : outcome.ok ? "approved" : outcome.unconfirmed === true ? "unconfirmed" : "refused"
+-      }
++      /*
++        FOUR OUTCOMES, FOUR VALUES — the attribute says what the words say.
++
++        Review finding. This computed `approved | unconfirmed | refused`, so a
++        session-ended outcome tagged as `refused` in the machine-readable
++        attribute while the visible text and its testid distinguished it
++        correctly. Nothing asserts on the attribute yet, which is precisely why
++        it was worth fixing now: the first test written against it would have
++        inherited the exact conflation this file's header exists to prevent —
++        "the session idled out" spelled the same as "your approval was refused",
++        one layer below where a human reads it.
++      */
++      data-codev-approval-state={approvalStateAttribute(outcome)}
+       className="mx-auto flex w-full max-w-3xl min-w-0 flex-col gap-2 text-sm"
+     >
+       {pairing === null ? (
+diff --git a/apps/web/src/codev/approval.test.ts b/apps/web/src/codev/approval.test.ts
+index 5d08f1941..04dba82c1 100644
+--- a/apps/web/src/codev/approval.test.ts
++++ b/apps/web/src/codev/approval.test.ts
+@@ -16,7 +16,8 @@
+ 
+ import { describe, expect, it } from "vite-plus/test";
+ 
+-import { approveGate, openHumanSession, type HumanSession } from "./approval";
++import { approveGate, openHumanSession, type ApprovalOutcome, type HumanSession } from "./approval";
++import { approvalStateAttribute } from "./GateApproval";
+ import type { CodevPairing } from "./pairing";
+ 
+ const pairing: CodevPairing = {
+@@ -449,3 +450,49 @@ describe("approveGate (spec 250, phase 10)", () => {
+     expect(seen.every((url) => !url.includes("rcpt-secret"))).toBe(true);
+   });
+ });
++
++/**
++ * The machine-readable outcome, which must not be coarser than the words.
++ *
++ * Review finding, and the reason it was worth fixing before anything asserted on
++ * it: the attribute computed three values, so `sessionEnded` tagged as `refused`
++ * while the visible text distinguished them. The first test written against the
++ * attribute would have inherited "the session idled out" spelled the same as
++ * "your approval was refused" — the conflation this whole module exists to stop,
++ * one layer below where a human reads it.
++ */
++describe("approval state attribute (spec 250, phase 10)", () => {
++  const refusal: ApprovalOutcome = {
++    ok: false,
++    signal: "GATE_NOT_PENDING",
++    message: "that gate is not pending",
++  };
++
++  it("gives each of the four outcomes its own word, plus idle", () => {
++    expect(approvalStateAttribute(null)).toBe("idle");
++    expect(
++      approvalStateAttribute({ ok: true, approvedAt: "t", machine: "m", sessionId: null }),
++    ).toBe("approved");
++    expect(approvalStateAttribute({ ...refusal, unconfirmed: true })).toBe("unconfirmed");
++    expect(approvalStateAttribute({ ...refusal, sessionEnded: true })).toBe("session-ended");
++    expect(approvalStateAttribute(refusal)).toBe("refused");
++  });
++
++  it("does not spell a session that ended the same way as a refusal", () => {
++    expect(approvalStateAttribute({ ...refusal, sessionEnded: true })).not.toBe(
++      approvalStateAttribute(refusal),
++    );
++  });
++
++  /**
++   * `unconfirmed` wins over `sessionEnded` when a body carries both: the poll's
++   * 401 path sets `sessionEnded`, and an unreadable answer is the stronger claim
++   * about what is unknown. Pinned so the precedence is a decision rather than an
++   * accident of branch order.
++   */
++  it("prefers unconfirmed when an outcome carries both flags", () => {
++    expect(
++      approvalStateAttribute({ ...refusal, unconfirmed: true, sessionEnded: true }),
++    ).toBe("unconfirmed");
++  });
++});

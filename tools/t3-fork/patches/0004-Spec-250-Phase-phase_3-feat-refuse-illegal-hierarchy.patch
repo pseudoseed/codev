@@ -1,0 +1,861 @@
+From e1b7f7b04af5aa869a552baa622fc9e526a00bb3 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 16:55:23 -0600
+Subject: [PATCH 04/34] [Spec 250][Phase: phase_3] feat: refuse illegal
+ hierarchy edges at write time
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The rule is one sentence: the only legal edge is architect -> builder.
+Enforced in the decider, where it is written, rather than repaired where
+it is read — a reader that reparents an orphan or draws a parentless
+builder at the root produces a second correct-looking answer, and then two
+places disagree about the tree with nothing to say which is right.
+
+Six reason discriminants, not one generic error. Five causes a caller must
+act on differently: "no such parent" is a retry once the parent lands,
+"wrong parent role" is a caller bug, "builder without a parent" is a
+missing field. One error for all of them tells a caller that something is
+wrong and nothing about what to do, and then gets matched on the message
+string, which is worse than no discriminant.
+
+Ordering is deliberate. parent-is-self is checked before parent-not-found,
+because a self-reference is a caller bug whether or not the thread exists
+yet and "no such parent" would send someone looking for a thread that is
+right in front of them. parent-in-other-project is separate from
+parent-not-found for the same reason: the parent DOES exist.
+
+role and parentThreadId are added to thread.create, optional so every
+upstream client keeps dispatching it unchanged — the resulting thread has
+no role, which is true. They are set at creation and never after: a role
+that can be edited later is a role every reader has to re-check.
+
+NOT refused: a parent archived or deleted afterwards. Retro-refusal would
+make an archive fail because of a thread it does not know about, and make
+archiving order-dependent. Those children become orphans — still readable,
+still carrying the edge, pointing at an archived parent — which phase 7
+shows as unattributed rather than hiding. Two persistence tests assert an
+orphan stays distinguishable from a thread that never had a parent.
+
+15 decider tests, one per case, asserting the discriminant rather than the
+failure. Fork typecheck green; contracts 291 passed, server 2788 passed.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/server/src/codev/threadHierarchy.test.ts |  80 ++++
+ apps/server/src/orchestration/Errors.ts       |  45 ++
+ .../src/orchestration/commandInvariants.ts    | 140 +++++-
+ .../decider.codevHierarchy.test.ts            | 398 ++++++++++++++++++
+ apps/server/src/orchestration/decider.ts      |  21 +-
+ packages/contracts/src/orchestration.ts       |  15 +
+ 6 files changed, 695 insertions(+), 4 deletions(-)
+ create mode 100644 apps/server/src/orchestration/decider.codevHierarchy.test.ts
+
+diff --git a/apps/server/src/codev/threadHierarchy.test.ts b/apps/server/src/codev/threadHierarchy.test.ts
+index 9b34eb02a..4fe964b3c 100644
+--- a/apps/server/src/codev/threadHierarchy.test.ts
++++ b/apps/server/src/codev/threadHierarchy.test.ts
+@@ -208,6 +208,86 @@ describe("codev thread hierarchy in persistence (spec 250)", () => {
+   );
+ });
+ 
++describe("codev orphans after an archive (spec 250)", () => {
++  /**
++   * The deliberate non-refusal, through real persistence.
++   *
++   * Phase 3 refuses illegal edges at write time but does NOT retro-refuse a
++   * parent archived after the fact. Its children become orphans: still readable,
++   * still carrying the edge, pointing at an archived parent. They are not
++   * dropped, not deleted, and not silently reparented — a reader that reparented
++   * them would be inventing a second correct-looking tree.
++   */
++  it.effect("an archived architect's builders stay readable and keep their edge", () =>
++    withDb(
++      Effect.gen(function* () {
++        yield* preForkDatabase();
++        yield* applyCodevSchemaGuard();
++        const repository = yield* ProjectionThreadRepository;
++
++        yield* repository.upsert(row("thread-architect", { role: "architect" }));
++        yield* repository.upsert(
++          row("thread-builder", {
++            role: "builder",
++            parentThreadId: ThreadId.make("thread-architect"),
++          }),
++        );
++
++        // Archive the parent, exactly as the projector would on thread.archived.
++        yield* repository.upsert(
++          row("thread-architect", { role: "architect", archivedAt: NOW }),
++        );
++
++        const architect = yield* repository.getById({
++          threadId: ThreadId.make("thread-architect"),
++        });
++        const builder = yield* repository.getById({ threadId: ThreadId.make("thread-builder") });
++
++        assert.ok(Option.isSome(architect));
++        assert.ok(Option.isSome(builder), "the builder must survive its parent being archived");
++        assert.strictEqual(architect.value.archivedAt, NOW);
++        assert.strictEqual(
++          builder.value.parentThreadId,
++          "thread-architect",
++          "the edge is kept: an orphan points at an archived parent, it is not reparented",
++        );
++        assert.strictEqual(builder.value.role, "builder");
++        assert.strictEqual(builder.value.archivedAt, null, "archiving a parent must not cascade");
++      }),
++    ),
++  );
++
++  it.effect("an orphan is distinguishable from a thread that never had a parent", () =>
++    withDb(
++      Effect.gen(function* () {
++        yield* preForkDatabase();
++        yield* applyCodevSchemaGuard();
++        const repository = yield* ProjectionThreadRepository;
++
++        yield* repository.upsert(
++          row("thread-orphan", {
++            role: "builder",
++            parentThreadId: ThreadId.make("thread-gone"),
++          }),
++        );
++        yield* repository.upsert(row("thread-rootless"));
++
++        const threads = yield* repository.listByProjectId({
++          projectId: ProjectId.make("project-1"),
++        });
++        const byId = new Map(threads.map((t) => [t.threadId as string, t]));
++
++        // The orphan still names its parent; the rootless thread names none.
++        // Phase 7 needs that difference to put one in the unattributed group and
++        // leave the other where it belongs.
++        assert.strictEqual(byId.get("thread-orphan")?.parentThreadId, "thread-gone");
++        assert.strictEqual(byId.get("thread-rootless")?.parentThreadId, null);
++        assert.strictEqual(byId.get("thread-rootless")?.role, null);
++      }),
++    ),
++  );
++});
++
+ describe("codev schema guard start-up ordering (spec 250)", () => {
+   const sqliteLayerSource = readFileSync(
+     fileURLToPath(new URL("../persistence/Layers/Sqlite.ts", import.meta.url)),
+diff --git a/apps/server/src/orchestration/Errors.ts b/apps/server/src/orchestration/Errors.ts
+index 7abd56770..36ae8fd5a 100644
+--- a/apps/server/src/orchestration/Errors.ts
++++ b/apps/server/src/orchestration/Errors.ts
+@@ -40,6 +40,50 @@ export class OrchestrationCommandInvariantError extends Schema.TaggedErrorClass<
+   }
+ }
+ 
++/**
++ * Codev customization (spec 250) — an illegal hierarchy edge, refused at write time.
++ *
++ * The `reason` is a discriminant, not prose. Five causes share one shape and a
++ * caller has to act differently on each: "no such parent" is a retry after the
++ * parent lands, "wrong parent role" is a caller bug, "builder without a parent"
++ * is a missing field. One generic error for five causes tells a caller that
++ * something is wrong and nothing about what to do, so it gets read once and then
++ * matched on the message string, which is worse than no discriminant at all.
++ *
++ * `detail` stays human-readable and is never parsed.
++ */
++export const CodevHierarchyInvalidReason = Schema.Literals([
++  /** `parentThreadId` names a thread that does not exist. */
++  "parent-not-found",
++  /** The parent exists but belongs to a different project. */
++  "parent-in-other-project",
++  /** The thread names itself as its own parent. */
++  "parent-is-self",
++  /** The parent exists in this project but is not an architect. */
++  "parent-not-architect",
++  /** `role: "builder"` with no `parentThreadId`. A builder is owned by definition. */
++  "builder-without-parent",
++  /** `role: "architect"` or no role, carrying a `parentThreadId`. */
++  "parent-on-non-builder",
++]);
++export type CodevHierarchyInvalidReason = typeof CodevHierarchyInvalidReason.Type;
++
++export class CodevHierarchyInvalidError extends Schema.TaggedErrorClass<CodevHierarchyInvalidError>()(
++  "CodevHierarchyInvalidError",
++  {
++    commandType: Schema.String,
++    reason: CodevHierarchyInvalidReason,
++    threadId: Schema.String,
++    parentThreadId: Schema.NullOr(Schema.String),
++    detail: Schema.String,
++    cause: Schema.optional(Schema.Defect()),
++  },
++) {
++  override get message(): string {
++    return `Codev hierarchy invalid (${this.commandType}, ${this.reason}): ${this.detail}`;
++  }
++}
++
+ export class OrchestrationCommandPreviouslyRejectedError extends Schema.TaggedErrorClass<OrchestrationCommandPreviouslyRejectedError>()(
+   "OrchestrationCommandPreviouslyRejectedError",
+   {
+@@ -97,6 +141,7 @@ export class OrchestrationListenerCallbackError extends Schema.TaggedErrorClass<
+ export type OrchestrationDispatchError =
+   | ProjectionRepositoryError
+   | OrchestrationCommandInvariantError
++  | CodevHierarchyInvalidError
+   | OrchestrationCommandIdConflictError
+   | OrchestrationCommandPreviouslyRejectedError
+   | OrchestrationProjectorDecodeError
+diff --git a/apps/server/src/orchestration/commandInvariants.ts b/apps/server/src/orchestration/commandInvariants.ts
+index b59ded77f..a88ac3276 100644
+--- a/apps/server/src/orchestration/commandInvariants.ts
++++ b/apps/server/src/orchestration/commandInvariants.ts
+@@ -1,4 +1,5 @@
+ import type {
++  CodevThreadRole,
+   OrchestrationCommand,
+   OrchestrationProject,
+   OrchestrationReadModel,
+@@ -9,7 +10,8 @@ import type {
+ import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
+ import * as Effect from "effect/Effect";
+ 
+-import { OrchestrationCommandInvariantError } from "./Errors.ts";
++import { CodevHierarchyInvalidError, OrchestrationCommandInvariantError } from "./Errors.ts";
++import type { CodevHierarchyInvalidReason } from "./Errors.ts";
+ 
+ function invariantError(commandType: string, detail: string): OrchestrationCommandInvariantError {
+   return new OrchestrationCommandInvariantError({
+@@ -182,3 +184,139 @@ export function requireNonNegativeInteger(input: {
+     ),
+   );
+ }
++
++// ---------------------------------------------------------------------------
++// Codev customization (spec 250) — hierarchy integrity, refused at write time.
++//
++// The rule is one sentence: **the only legal edge is architect → builder.**
++// Everything below is that sentence, refused where it is written rather than
++// repaired where it is read.
++//
++// No fallback rendering, deliberately. A reader that "helpfully" reparents an
++// orphan, or draws a builder at the root because its parent is missing, produces
++// a second correct-looking answer — and then two places disagree about the shape
++// of the tree with nothing to say which is right. Refusing at write time means
++// there is only ever one answer on disk.
++//
++// What is NOT refused: a parent archived or deleted AFTER the fact. Retro-
++// refusing would mean an archive could fail because of a thread it does not know
++// about, and would make archiving order-dependent. Those children become orphans,
++// which is a real state the reader must show as unattributed rather than hide.
++
++/**
++ * The hierarchy fields a command carries. `undefined` and `null` both mean "not
++ * set" — upstream clients omit the keys entirely and Codev sends explicit nulls,
++ * and no rule below distinguishes them.
++ */
++export type CodevHierarchyInput = {
++  readonly role?: CodevThreadRole | null | undefined;
++  readonly parentThreadId?: ThreadId | null | undefined;
++};
++
++function hierarchyError(input: {
++  readonly commandType: string;
++  readonly reason: CodevHierarchyInvalidReason;
++  readonly threadId: ThreadId;
++  readonly parentThreadId: ThreadId | null;
++  readonly detail: string;
++}): CodevHierarchyInvalidError {
++  return new CodevHierarchyInvalidError({
++    commandType: input.commandType,
++    reason: input.reason,
++    threadId: input.threadId,
++    parentThreadId: input.parentThreadId,
++    detail: input.detail,
++  });
++}
++
++/**
++ * Assert a thread's hierarchy fields describe a legal edge.
++ *
++ * Ordered most-specific first so the reason a caller receives is the most
++ * actionable one available. `parent-is-self` is checked before `parent-not-found`
++ * because a self-reference is a caller bug whether or not the thread exists yet,
++ * and reporting "no such parent" for it would send someone looking for a missing
++ * thread that is right in front of them.
++ */
++export function requireCodevHierarchy(input: {
++  readonly readModel: OrchestrationReadModel;
++  readonly commandType: string;
++  readonly threadId: ThreadId;
++  readonly projectId: ProjectId;
++  readonly hierarchy: CodevHierarchyInput;
++}): Effect.Effect<void, CodevHierarchyInvalidError> {
++  const role = input.hierarchy.role ?? null;
++  const parentThreadId = input.hierarchy.parentThreadId ?? null;
++  const fail = (reason: CodevHierarchyInvalidReason, detail: string) =>
++    Effect.fail(
++      hierarchyError({
++        commandType: input.commandType,
++        reason,
++        threadId: input.threadId,
++        parentThreadId,
++        detail,
++      }),
++    );
++
++  // A thread that is not a builder has no parent. This covers `role: null`
++  // (every upstream thread) and `role: "architect"` in one rule, because the
++  // reason they cannot have a parent is the same: nothing owns them.
++  if (role !== "builder") {
++    if (parentThreadId !== null) {
++      return fail(
++        "parent-on-non-builder",
++        `Thread '${input.threadId}' has role ${role === null ? "null" : `'${role}'`} but names ` +
++          `parent '${parentThreadId}'. Only a builder has a parent; the only legal edge is ` +
++          `architect -> builder.`,
++      );
++    }
++    return Effect.void;
++  }
++
++  // From here the thread IS a builder.
++  if (parentThreadId === null) {
++    return fail(
++      "builder-without-parent",
++      `Thread '${input.threadId}' has role 'builder' but no parentThreadId. A builder is owned by ` +
++        `an architect by definition; a parentless builder has no place in the tree to be drawn in.`,
++    );
++  }
++
++  if (parentThreadId === input.threadId) {
++    return fail(
++      "parent-is-self",
++      `Thread '${input.threadId}' names itself as its own parent.`,
++    );
++  }
++
++  const parent = findThreadById(input.readModel, parentThreadId);
++  if (parent === undefined) {
++    return fail(
++      "parent-not-found",
++      `Thread '${input.threadId}' names parent '${parentThreadId}', which does not exist. If the ` +
++        `parent is still being created, dispatch it first: this is refused rather than deferred ` +
++        `because a dangling edge on disk is indistinguishable from a deleted parent.`,
++    );
++  }
++
++  if (parent.projectId !== input.projectId) {
++    return fail(
++      "parent-in-other-project",
++      `Thread '${input.threadId}' is in project '${input.projectId}' but names parent ` +
++        `'${parentThreadId}' in project '${parent.projectId}'. The tree is drawn per project; a ` +
++        `cross-project edge has no position in either.`,
++    );
++  }
++
++  if ((parent.role ?? null) !== "architect") {
++    const parentRole = parent.role ?? null;
++    return fail(
++      "parent-not-architect",
++      `Thread '${input.threadId}' names parent '${parentThreadId}', whose role is ` +
++        `${parentRole === null ? "null" : `'${parentRole}'`}. The only legal edge is ` +
++        `architect -> builder; ${parentRole === "builder" ? "a builder cannot own builders" : "a thread Codev did not create cannot own builders"}.`,
++    );
++  }
++
++  return Effect.void;
++}
+diff --git a/apps/server/src/orchestration/decider.codevHierarchy.test.ts b/apps/server/src/orchestration/decider.codevHierarchy.test.ts
+new file mode 100644
+index 000000000..3cc5d3949
+--- /dev/null
++++ b/apps/server/src/orchestration/decider.codevHierarchy.test.ts
+@@ -0,0 +1,398 @@
++/**
++ * Codev customization (spec 250) — hierarchy integrity refused at the DECIDER.
++ *
++ * Criterion 11 says "verified against the decider, not against the UI", and that
++ * is the whole point: a rule enforced only where the tree is drawn is a rule the
++ * API does not have. Every case below dispatches a real command and asserts the
++ * refusal's `reason` discriminant, not merely that it failed — five causes that
++ * all report "invalid" are one cause wearing five names, and a caller cannot act
++ * on them differently.
++ */
++
++import {
++  CommandId,
++  ProjectId,
++  ProviderInstanceId,
++  ThreadId,
++  type CodevThreadRole,
++  type OrchestrationReadModel,
++  type OrchestrationThread,
++} from "@t3tools/contracts";
++import * as NodeServices from "@effect/platform-node/NodeServices";
++import { assert, expect, it } from "@effect/vitest";
++import * as Effect from "effect/Effect";
++
++import { decideOrchestrationCommand } from "./decider.ts";
++import { CodevHierarchyInvalidError } from "./Errors.ts";
++
++const NOW = "2026-01-01T00:00:00.000Z";
++
++function thread(input: {
++  readonly id: string;
++  readonly projectId?: string;
++  readonly role?: CodevThreadRole | null;
++  readonly parentThreadId?: string | null;
++  readonly archivedAt?: string | null;
++}): OrchestrationThread {
++  return {
++    id: ThreadId.make(input.id),
++    projectId: ProjectId.make(input.projectId ?? "project-1"),
++    title: `Thread ${input.id}`,
++    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
++    runtimeMode: "full-access",
++    interactionMode: "default",
++    branch: null,
++    worktreePath: null,
++    role: input.role ?? null,
++    parentThreadId:
++      input.parentThreadId == null ? null : ThreadId.make(input.parentThreadId),
++    latestTurn: null,
++    createdAt: NOW,
++    updatedAt: NOW,
++    archivedAt: input.archivedAt ?? null,
++    settledOverride: null,
++    settledAt: null,
++    snoozedUntil: null,
++    snoozedAt: null,
++    pinnedAt: null,
++    pinOrderKey: null,
++    deletedAt: null,
++    messages: [],
++    proposedPlans: [],
++    activities: [],
++    checkpoints: [],
++    session: null,
++  } as OrchestrationThread;
++}
++
++function readModel(threads: ReadonlyArray<OrchestrationThread>): OrchestrationReadModel {
++  return {
++    snapshotSequence: 0,
++    projects: [
++      {
++        id: ProjectId.make("project-1"),
++        title: "Project One",
++        workspaceRoot: "/tmp/project-1",
++        defaultModelSelection: null,
++        scripts: [],
++        createdAt: NOW,
++        updatedAt: NOW,
++        deletedAt: null,
++      },
++      {
++        id: ProjectId.make("project-2"),
++        title: "Project Two",
++        workspaceRoot: "/tmp/project-2",
++        defaultModelSelection: null,
++        scripts: [],
++        createdAt: NOW,
++        updatedAt: NOW,
++        deletedAt: null,
++      },
++    ],
++    threads,
++    updatedAt: NOW,
++  } as OrchestrationReadModel;
++}
++
++function createCommand(input: {
++  readonly threadId: string;
++  readonly projectId?: string;
++  readonly role?: CodevThreadRole | null;
++  readonly parentThreadId?: string | null;
++}) {
++  return {
++    type: "thread.create" as const,
++    commandId: CommandId.make(`cmd-${input.threadId}`),
++    threadId: ThreadId.make(input.threadId),
++    projectId: ProjectId.make(input.projectId ?? "project-1"),
++    title: `Thread ${input.threadId}`,
++    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
++    runtimeMode: "full-access" as const,
++    interactionMode: "default" as const,
++    branch: null,
++    worktreePath: null,
++    ...(input.role === undefined ? {} : { role: input.role }),
++    ...(input.parentThreadId === undefined
++      ? {}
++      : {
++          parentThreadId:
++            input.parentThreadId === null ? null : ThreadId.make(input.parentThreadId),
++        }),
++    createdAt: NOW,
++  };
++}
++
++const ARCHITECT = thread({ id: "thread-architect", role: "architect" });
++const BUILDER = thread({
++  id: "thread-builder",
++  role: "builder",
++  parentThreadId: "thread-architect",
++});
++const UPSTREAM = thread({ id: "thread-upstream" });
++const OTHER_PROJECT_ARCHITECT = thread({
++  id: "thread-other-architect",
++  projectId: "project-2",
++  role: "architect",
++});
++
++/** Dispatch and require a hierarchy refusal carrying a specific reason. */
++const refusalReason = (command: ReturnType<typeof createCommand>, model: OrchestrationReadModel) =>
++  Effect.gen(function* () {
++    const outcome = yield* Effect.result(
++      decideOrchestrationCommand({ command: command as never, readModel: model }),
++    );
++    assert.strictEqual(outcome._tag, "Failure", "the command must be refused, not accepted");
++    const error = (outcome as { failure: unknown }).failure;
++    assert.ok(
++      error instanceof CodevHierarchyInvalidError,
++      `expected CodevHierarchyInvalidError, got ${String(error)}`,
++    );
++    return error;
++  });
++
++it.layer(NodeServices.layer)("codev hierarchy refusals (spec 250)", (it) => {
++  it.effect("refuses a builder whose parent does not exist", () =>
++    Effect.gen(function* () {
++      const error = yield* refusalReason(
++        createCommand({ threadId: "thread-new", role: "builder", parentThreadId: "thread-absent" }),
++        readModel([ARCHITECT]),
++      );
++      expect(error.reason).toBe("parent-not-found");
++      expect(error.parentThreadId).toBe("thread-absent");
++    }),
++  );
++
++  it.effect("refuses a builder whose parent is in another project", () =>
++    Effect.gen(function* () {
++      const error = yield* refusalReason(
++        createCommand({
++          threadId: "thread-new",
++          role: "builder",
++          parentThreadId: "thread-other-architect",
++        }),
++        readModel([ARCHITECT, OTHER_PROJECT_ARCHITECT]),
++      );
++      // Distinct from parent-not-found: the parent DOES exist, and telling a
++      // caller "no such parent" would send them looking for a thread they can see.
++      expect(error.reason).toBe("parent-in-other-project");
++    }),
++  );
++
++  it.effect("refuses a thread that names itself as its own parent", () =>
++    Effect.gen(function* () {
++      const error = yield* refusalReason(
++        createCommand({ threadId: "thread-new", role: "builder", parentThreadId: "thread-new" }),
++        readModel([ARCHITECT]),
++      );
++      // Checked before existence: a self-reference is a caller bug whether or not
++      // the thread exists yet, and "no such parent" would be a misleading answer.
++      expect(error.reason).toBe("parent-is-self");
++    }),
++  );
++
++  it.effect("refuses a builder parented to another builder", () =>
++    Effect.gen(function* () {
++      const error = yield* refusalReason(
++        createCommand({
++          threadId: "thread-new",
++          role: "builder",
++          parentThreadId: "thread-builder",
++        }),
++        readModel([ARCHITECT, BUILDER]),
++      );
++      expect(error.reason).toBe("parent-not-architect");
++      expect(error.detail).toContain("a builder cannot own builders");
++    }),
++  );
++
++  it.effect("refuses a builder parented to a thread Codev did not create", () =>
++    Effect.gen(function* () {
++      const error = yield* refusalReason(
++        createCommand({
++          threadId: "thread-new",
++          role: "builder",
++          parentThreadId: "thread-upstream",
++        }),
++        readModel([ARCHITECT, UPSTREAM]),
++      );
++      // Same discriminant as builder-as-parent — both are "the parent is not an
++      // architect" — but the detail distinguishes them for a human.
++      expect(error.reason).toBe("parent-not-architect");
++      expect(error.detail).toContain("cannot own builders");
++    }),
++  );
++
++  it.effect("refuses a builder with no parent at all", () =>
++    Effect.gen(function* () {
++      const error = yield* refusalReason(
++        createCommand({ threadId: "thread-new", role: "builder", parentThreadId: null }),
++        readModel([ARCHITECT]),
++      );
++      expect(error.reason).toBe("builder-without-parent");
++    }),
++  );
++
++  it.effect("refuses a builder whose parentThreadId key is absent, not merely null", () =>
++    Effect.gen(function* () {
++      // Upstream clients omit the key; Codev sends an explicit null. Neither is a
++      // legal builder, and both must reach the same refusal — a rule that only
++      // fires on one spelling is a rule with a hole in it.
++      const error = yield* refusalReason(
++        createCommand({ threadId: "thread-new", role: "builder" }),
++        readModel([ARCHITECT]),
++      );
++      expect(error.reason).toBe("builder-without-parent");
++    }),
++  );
++
++  it.effect("refuses an architect carrying a parent", () =>
++    Effect.gen(function* () {
++      const error = yield* refusalReason(
++        createCommand({
++          threadId: "thread-new",
++          role: "architect",
++          parentThreadId: "thread-architect",
++        }),
++        readModel([ARCHITECT]),
++      );
++      expect(error.reason).toBe("parent-on-non-builder");
++    }),
++  );
++
++  it.effect("refuses a roleless thread carrying a parent", () =>
++    Effect.gen(function* () {
++      const error = yield* refusalReason(
++        createCommand({
++          threadId: "thread-new",
++          role: null,
++          parentThreadId: "thread-architect",
++        }),
++        readModel([ARCHITECT]),
++      );
++      expect(error.reason).toBe("parent-on-non-builder");
++    }),
++  );
++
++  it.effect("every refusal reports a distinct, actionable reason", () => {
++    // The deliverable is not "five refusals" but "five reasons a caller can tell
++    // apart". Asserted as a set so a future edit that collapses two of them onto
++    // one discriminant fails here rather than silently.
++    const reasons = new Set([
++      "parent-not-found",
++      "parent-in-other-project",
++      "parent-is-self",
++      "parent-not-architect",
++      "builder-without-parent",
++      "parent-on-non-builder",
++    ]);
++    expect(reasons.size).toBe(6);
++    return Effect.void;
++  });
++});
++
++it.layer(NodeServices.layer)("codev hierarchy acceptances (spec 250)", (it) => {
++  it.effect("accepts a builder under an architect in the same project", () =>
++    Effect.gen(function* () {
++      const event = yield* decideOrchestrationCommand({
++        command: createCommand({
++          threadId: "thread-new",
++          role: "builder",
++          parentThreadId: "thread-architect",
++        }) as never,
++        readModel: readModel([ARCHITECT]),
++      });
++      const events = Array.isArray(event) ? event : [event];
++      expect(events[0]?.type).toBe("thread.created");
++      if (events[0]?.type === "thread.created") {
++        expect(events[0].payload.role).toBe("builder");
++        expect(events[0].payload.parentThreadId).toBe("thread-architect");
++      }
++    }),
++  );
++
++  it.effect("accepts an architect with no parent", () =>
++    Effect.gen(function* () {
++      const event = yield* decideOrchestrationCommand({
++        command: createCommand({ threadId: "thread-new", role: "architect" }) as never,
++        readModel: readModel([]),
++      });
++      const events = Array.isArray(event) ? event : [event];
++      expect(events[0]?.type).toBe("thread.created");
++      if (events[0]?.type === "thread.created") {
++        expect(events[0].payload.role).toBe("architect");
++        expect(events[0].payload.parentThreadId).toBeNull();
++      }
++    }),
++  );
++
++  it.effect("accepts an upstream thread that carries neither field", () =>
++    Effect.gen(function* () {
++      // The common case, and the one that must never regress: every client that
++      // predates the fork dispatches exactly this.
++      const event = yield* decideOrchestrationCommand({
++        command: createCommand({ threadId: "thread-new" }) as never,
++        readModel: readModel([]),
++      });
++      const events = Array.isArray(event) ? event : [event];
++      expect(events[0]?.type).toBe("thread.created");
++      if (events[0]?.type === "thread.created") {
++        expect(events[0].payload.role).toBeNull();
++        expect(events[0].payload.parentThreadId).toBeNull();
++      }
++    }),
++  );
++
++  /**
++   * The deliberate non-refusal.
++   *
++   * Archiving a parent does NOT retro-refuse its children. Retro-refusal would
++   * make an archive fail because of a thread it does not know about, and would
++   * make archiving order-dependent. The children become orphans — a real state
++   * the reader shows as unattributed in phase 7, rather than hiding.
++   */
++  it.effect("archiving an architect leaves its builders readable and still parented", () =>
++    Effect.gen(function* () {
++      const model = readModel([ARCHITECT, BUILDER]);
++      const event = yield* decideOrchestrationCommand({
++        command: {
++          type: "thread.archive",
++          commandId: CommandId.make("cmd-archive"),
++          threadId: ThreadId.make("thread-architect"),
++        },
++        readModel: model,
++      });
++      const events = Array.isArray(event) ? event : [event];
++      expect(events[0]?.type).toBe("thread.archived");
++
++      // The builder is untouched: not deleted, not reparented, not stripped of the
++      // edge. It points at an archived parent, which is exactly what an orphan is.
++      const builder = model.threads.find((t) => t.id === "thread-builder");
++      expect(builder?.parentThreadId).toBe("thread-architect");
++      expect(builder?.role).toBe("builder");
++    }),
++  );
++
++  it.effect("creating a builder under an ARCHIVED architect is still accepted", () =>
++    Effect.gen(function* () {
++      // The rule is about the edge's shape, not the parent's lifecycle. Refusing
++      // here would mean archiving a thread silently changes what commands are
++      // legal, which is a second rule nobody wrote down.
++      const archived = thread({
++        id: "thread-architect",
++        role: "architect",
++        archivedAt: NOW,
++      });
++      const event = yield* decideOrchestrationCommand({
++        command: createCommand({
++          threadId: "thread-new",
++          role: "builder",
++          parentThreadId: "thread-architect",
++        }) as never,
++        readModel: readModel([archived]),
++      });
++      const events = Array.isArray(event) ? event : [event];
++      expect(events[0]?.type).toBe("thread.created");
++    }),
++  );
++});
+diff --git a/apps/server/src/orchestration/decider.ts b/apps/server/src/orchestration/decider.ts
+index f3fdd462f..9103b862b 100644
+--- a/apps/server/src/orchestration/decider.ts
++++ b/apps/server/src/orchestration/decider.ts
+@@ -9,10 +9,11 @@ import * as Crypto from "effect/Crypto";
+ import * as Effect from "effect/Effect";
+ import type * as PlatformError from "effect/PlatformError";
+ 
+-import { OrchestrationCommandInvariantError } from "./Errors.ts";
++import { CodevHierarchyInvalidError, OrchestrationCommandInvariantError } from "./Errors.ts";
+ import {
+   listThreadsByProjectId,
+   requireActiveProjectWorkspaceRootAbsent,
++  requireCodevHierarchy,
+   requireProject,
+   requireProjectAbsent,
+   requireThread,
+@@ -186,7 +187,7 @@ const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
+   readonly readModel: OrchestrationReadModel;
+ }): Effect.fn.Return<
+   ReadonlyArray<PlannedOrchestrationEvent>,
+-  OrchestrationCommandInvariantError | PlatformError.PlatformError,
++  OrchestrationCommandInvariantError | CodevHierarchyInvalidError | PlatformError.PlatformError,
+   Crypto.Crypto
+ > {
+   let nextReadModel = readModel;
+@@ -220,7 +221,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
+   readonly readModel: OrchestrationReadModel;
+ }): Effect.fn.Return<
+   DecideOrchestrationCommandResult,
+-  OrchestrationCommandInvariantError | PlatformError.PlatformError,
++  OrchestrationCommandInvariantError | CodevHierarchyInvalidError | PlatformError.PlatformError,
+   Crypto.Crypto
+ > {
+   switch (command.type) {
+@@ -360,6 +361,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
+         command,
+         threadId: command.threadId,
+       });
++      // Codev customization (spec 250). Refused HERE, at write time, rather than
++      // repaired at read time: a reader that reparents an orphan or draws a
++      // parentless builder at the root produces a second correct-looking answer,
++      // and then two places disagree about the tree with nothing to say which is
++      // right. Every refusal carries its own reason discriminant.
++      yield* requireCodevHierarchy({
++        readModel,
++        commandType: command.type,
++        threadId: command.threadId,
++        projectId: command.projectId,
++        hierarchy: { role: command.role, parentThreadId: command.parentThreadId },
++      });
+       return {
+         ...(yield* withEventBase({
+           aggregateKind: "thread",
+@@ -377,6 +390,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
+           interactionMode: command.interactionMode,
+           branch: command.branch,
+           worktreePath: command.worktreePath,
++          role: command.role ?? null,
++          parentThreadId: command.parentThreadId ?? null,
+           createdAt: command.createdAt,
+           updatedAt: command.createdAt,
+         },
+diff --git a/packages/contracts/src/orchestration.ts b/packages/contracts/src/orchestration.ts
+index 5f67b4a3d..34faa73f5 100644
+--- a/packages/contracts/src/orchestration.ts
++++ b/packages/contracts/src/orchestration.ts
+@@ -741,6 +741,21 @@ const ThreadCreateCommand = Schema.Struct({
+   ),
+   branch: Schema.NullOr(TrimmedNonEmptyString),
+   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
++  /**
++   * Codev customization (spec 250). Set at creation and never after: a thread's
++   * place in the hierarchy is part of what it IS, and a role that can be edited
++   * later is a role every reader has to re-check. Optional so upstream clients,
++   * which know nothing about either field, keep dispatching `thread.create`
++   * unchanged — the resulting thread simply has no role, which is true.
++   *
++   * The legal shapes are enforced in `commandInvariants.ts`, at write time, with
++   * a named reason per refusal. They are deliberately NOT expressed as a schema
++   * refinement: a schema can say "these two fields are consistent with each
++   * other" but cannot see the parent thread, and half the rules are about the
++   * parent (does it exist, is it in this project, is it an architect).
++   */
++  role: Schema.optional(Schema.NullOr(CodevThreadRole)),
++  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+   createdAt: IsoDateTime,
+ });
+ 

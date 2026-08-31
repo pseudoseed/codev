@@ -1,0 +1,200 @@
+id: '250'
+title: t3code-is-the-front-end-privat
+protocol: spir
+phase: review
+plan_phases:
+  - id: phase_1
+    title: Two-identity vendoring harness
+    status: complete
+  - id: phase_2
+    title: Thread hierarchy in the fork's contract and projection
+    status: complete
+  - id: phase_3
+    title: Hierarchy integrity refused at write time
+    status: complete
+  - id: phase_4
+    title: Porch gate block with a server-allocated revision
+    status: complete
+  - id: phase_5
+    title: Vendored contract regenerated from the fork
+    status: complete
+  - id: phase_6
+    title: Hierarchy and gate state published by porch-driver and codev-agent
+    status: complete
+  - id: phase_7
+    title: Workspace to architect to builder sidebar
+    status: complete
+  - id: phase_8
+    title: Gate rendering in t3code
+    status: complete
+  - id: phase_9
+    title: Builder tiling
+    status: complete
+  - id: phase_10
+    title: Approval from t3code over the same-origin proxy
+    status: complete
+  - id: phase_11
+    title: 'Acceptance run: tailnet iPad and the rebase drill'
+    status: complete
+current_plan_phase: null
+gates:
+  spec-approval:
+    status: approved
+    approved_at: '2026-08-30T19:30:31.598Z'
+    approval:
+      authorization: pre-approved-artifact
+      approved_at: '2026-08-30T19:30:31.598Z'
+      machine: chriss-MacBook-Pro.local
+      caller: pre-approval frontmatter on codev/specs/250-t3code-front-end-customization.md
+  plan-approval:
+    status: approved
+    requested_at: '2026-08-30T20:06:28.609Z'
+    request:
+      question: >-
+        Approve the 11-phase plan for spec 250, which now deviates from the spec in three places you have ruled on or
+        been told about?
+      choices:
+        - label: Approve as written
+          consequence: >-
+            Phase 1 begins: gh repo fork pingdotgg/t3code creates a PUBLIC fork under pseudoseed, clones it to
+            /Users/chris/dev/t3code-codev, adds upstreamBase to pin.json, rewires verify/acquire/start/status to two
+            identities, splits classify-churn into two ranges, and re-collects the spec-146 cold-start evidence. That
+            fork creation is outward-facing and not quietly undoable.
+          recommended: true
+        - label: Approve, but I create the fork myself first
+          consequence: >-
+            Same plan, but phase 1 waits until you have run gh repo fork and told me the fork exists. Removes the only
+            outward-facing act from my hands; costs a round trip.
+        - label: Send back for changes
+          consequence: >-
+            Name what to change. The plan has had three review lanes and two rounds of my own verification, so a fourth
+            pass has diminishing returns unless you disagree with a specific decision.
+      terminalExcerpt: |-
+        RUNNING CHECKS...
+          plan_exists OK
+          has_phases_json OK
+          min_two_phases OK (11 phases)
+
+        Reviews: claude REQUEST_CHANGES, codex REQUEST_CHANGES, opencode REQUEST_CHANGES
+        All findings accepted; nothing in the disagree column.
+
+        Three deviations from the spec as written:
+        1. Migration mechanism - you already ruled on this; spec risk row amended.
+        2. Spec Security section asserts connect-src 'self' stays closed. t3code sets
+           CSP on .svg responses only (http.ts:51,62); there is no page-level CSP.
+           You said you are fixing the Security section.
+        3. Spec test scenarios imply browser verification in t3code. t3code has no
+           Playwright; apps/web is vitest-only. Harness moved into this repo.
+
+        Most damaging finding caught: acquire() checks pin.commit out into the
+        read-only upstream clone (t3-server.mjs:94), called from smoke.mjs:156 and
+        live/integration.mjs:196, so it would have fired from an ordinary test run
+        once pin.commit named the fork.
+    approved_at: '2026-08-30T20:09:05.175Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-30T20:09:05.175Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
+  pr:
+    status: approved
+    requested_at: '2026-08-31T12:29:13.290Z'
+    request:
+      question: 'Merge PR #266, or rule on the pane screenshots first? Both review lanes cleared it and criterion 6 closes UNMET.'
+      choices:
+        - label: Open the phase-10 screenshots, then merge
+          consequence: >-
+            12 screenshots at docs/codev/spec-250/phase-10/ in the fork at /Users/chris/dev/t3code-codev, plus
+            phase-7/8/9 at 390, 1440x900 and 1920. The tests and measurements pass; what the panes LOOK like has never
+            been ruled on, and a green Playwright run cannot judge that. This is the only part of the spec no machine
+            has signed off.
+          recommended: true
+        - label: Merge now on the two lane verdicts
+          consequence: >-
+            claude APPROVE, opencode COMMENT, no blocking findings. Merges with `gh pr merge 266 --merge` (never
+            squash). The pane appearance goes unruled and becomes a follow-up against a merged branch rather than a
+            change in this PR.
+        - label: 'Hold: criterion 6 must be run before merge'
+          consequence: >-
+            Needs an iPad on the tailnet, which was not available for the whole project. The 16-step runbook is at
+            codev/resources/250-ipad-acceptance-runbook.md and every step not needing the device was verified. Holding
+            blocks the PR on hardware, not on code.
+        - label: 'Hold: criterion 9''s literal wording must be met'
+          consequence: >-
+            Would mean advancing pin.json onto a new upstream base, which the phase-11 amendment forbids because every
+            spec 146 and 236 result tied to 082e6ea52186 stops being re-runnable. The rebase stops at commit 6 of 42;
+            the drill measured that rather than performing it.
+      terminalExcerpt: >-
+        porch next 250 -> gate_pending: pr
+
+        2 of 2 lanes actually reviewed. Did not approve: opencode: COMMENT.
+          claude: APPROVE
+          opencode: COMMENT
+
+        codev suite: 1859 passed, 18 skipped, 1 failed -> re-run alone 24 passed (spec-1280 T12 determinism; I committed
+        during the run)
+
+        collect-spec-250-evidence.mjs --check: evidence is up to date
+
+
+        UNMET: criterion 6 (iPad over the tailnet, no device available; runbook written)
+
+        AMENDED: criterion 9 met by the procedure completing and reporting, not by a clean rebase
+
+        UNRULED: the pane internals, 12 screenshots in the fork at docs/codev/spec-250/phase-10/
+    approved_at: '2026-08-31T12:56:55.750Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-31T12:56:55.750Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
+  verify-approval:
+    status: pending
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-30T19:30:16.298Z'
+updated_at: '2026-08-31T12:56:56.619Z'
+context_refreshes:
+  - boundary: enter:implement
+    at: '2026-08-30T20:09:29.526Z'
+    acknowledged_at: '2026-08-30T20:10:57.176Z'
+  - boundary: plan-phase:phase_2
+    at: '2026-08-30T21:09:20.044Z'
+    acknowledged_at: '2026-08-30T21:21:49.883Z'
+  - boundary: plan-phase:phase_3
+    at: '2026-08-30T22:46:35.537Z'
+    acknowledged_at: '2026-08-30T22:47:44.711Z'
+  - boundary: plan-phase:phase_4
+    at: '2026-08-30T23:46:47.337Z'
+    acknowledged_at: '2026-08-30T23:47:47.970Z'
+  - boundary: plan-phase:phase_5
+    at: '2026-08-31T02:49:02.911Z'
+    acknowledged_at: '2026-08-31T02:51:24.420Z'
+  - boundary: plan-phase:phase_6
+    at: '2026-08-31T03:38:38.360Z'
+    acknowledged_at: '2026-08-31T03:38:44.502Z'
+  - boundary: plan-phase:phase_7
+    at: '2026-08-31T05:03:44.179Z'
+    acknowledged_at: '2026-08-31T05:07:15.264Z'
+  - boundary: plan-phase:phase_8
+    at: '2026-08-31T06:20:14.961Z'
+    acknowledged_at: '2026-08-31T06:23:08.713Z'
+  - boundary: plan-phase:phase_9
+    at: '2026-08-31T07:49:39.343Z'
+    acknowledged_at: '2026-08-31T07:51:54.890Z'
+  - boundary: plan-phase:phase_10
+    at: '2026-08-31T09:15:37.962Z'
+    acknowledged_at: '2026-08-31T09:17:32.814Z'
+  - boundary: plan-phase:phase_11
+    at: '2026-08-31T10:38:24.893Z'
+    acknowledged_at: '2026-08-31T10:40:39.570Z'
+  - boundary: enter:review
+    at: '2026-08-31T11:47:09.000Z'
+    acknowledged_at: '2026-08-31T12:00:11.403Z'
+pr_history:
+  - phase: review
+    pr_number: 266
+    branch: builder/spir-250
+    created_at: '2026-08-31T11:58:28.994Z'
+pr_ready_for_human: false

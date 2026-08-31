@@ -116,6 +116,112 @@
     "subscribeThreadOutput__Objects_3": {
       "type": "object",
       "properties": {
+        "gateName": {
+          "type": "string"
+        },
+        "requestedAt": {
+          "type": "string"
+        },
+        "question": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "choices": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string"
+                      },
+                      "consequence": {
+                        "type": "string"
+                      },
+                      "recommended": {
+                        "anyOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "label",
+                      "consequence"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "allOf": [
+                    {
+                      "minItems": 1
+                    },
+                    {
+                      "maxItems": 5
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "terminalExcerpt": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "allOf": [
+                    {
+                      "maxLength": 8000
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "gateName",
+        "requestedAt"
+      ],
+      "additionalProperties": false
+    },
+    "subscribeThreadOutput__Objects_4": {
+      "type": "object",
+      "properties": {
         "requestId": {
           "type": "string"
         },
@@ -172,7 +278,7 @@
         }
       ]
     },
-    "subscribeThreadOutput__Objects_4": {
+    "subscribeThreadOutput__Objects_5": {
       "type": "object",
       "properties": {
         "id": {
@@ -234,7 +340,7 @@
       ],
       "additionalProperties": false
     },
-    "subscribeThreadOutput__Objects_5": {
+    "subscribeThreadOutput__Objects_6": {
       "type": "object",
       "properties": {
         "path": {
@@ -268,7 +374,7 @@
       ],
       "additionalProperties": false
     },
-    "subscribeThreadOutput__Objects_6": {
+    "subscribeThreadOutput__Objects_7": {
       "type": "object",
       "properties": {
         "threadId": {
@@ -356,7 +462,7 @@
       ],
       "additionalProperties": false
     },
-    "subscribeThreadOutput__Objects_7": {
+    "subscribeThreadOutput__Objects_8": {
       "type": "object",
       "properties": {
         "providerTurnId": {
@@ -450,7 +556,7 @@
       },
       "additionalProperties": false
     },
-    "subscribeThreadOutput__Objects_8": {
+    "subscribeThreadOutput__Objects_9": {
       "type": "object",
       "properties": {
         "canonicalKey": {
@@ -501,7 +607,7 @@
       ],
       "additionalProperties": false
     },
-    "subscribeThreadOutput__Objects_9": {
+    "subscribeThreadOutput__Objects_10": {
       "type": "object",
       "properties": {
         "id": {
@@ -1217,6 +1323,44 @@
               "anyOf": [
                 {
                   "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "role": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "architect",
+                        "builder"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "parentThreadId": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 {
                   "type": "null"
@@ -2493,6 +2637,83 @@
                         }
                       ]
                     },
+                    "role": {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "architect",
+                                "builder"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "parentThreadId": {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "codevGate": {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            {
+                              "$ref": "#/$defs/subscribeThreadOutput__Objects_3"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "gateRevision": {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "allOf": [
+                                {
+                                  "minimum": 0
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "createdAt": {
                       "type": "string"
                     },
@@ -2627,7 +2848,7 @@
                         {
                           "anyOf": [
                             {
-                              "$ref": "#/$defs/subscribeThreadOutput__Objects_3"
+                              "$ref": "#/$defs/subscribeThreadOutput__Objects_4"
                             },
                             {
                               "type": "null"
@@ -2795,7 +3016,7 @@
                     "activities": {
                       "type": "array",
                       "items": {
-                        "$ref": "#/$defs/subscribeThreadOutput__Objects_4"
+                        "$ref": "#/$defs/subscribeThreadOutput__Objects_5"
                       }
                     },
                     "checkpoints": {
@@ -2828,7 +3049,7 @@
                           "files": {
                             "type": "array",
                             "items": {
-                              "$ref": "#/$defs/subscribeThreadOutput__Objects_5"
+                              "$ref": "#/$defs/subscribeThreadOutput__Objects_6"
                             }
                           },
                           "assistantMessageId": {
@@ -2860,7 +3081,7 @@
                     "session": {
                       "anyOf": [
                         {
-                          "$ref": "#/$defs/subscribeThreadOutput__Objects_6"
+                          "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                         },
                         {
                           "type": "null"
@@ -3024,7 +3245,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -3049,7 +3270,7 @@
                             {
                               "anyOf": [
                                 {
-                                  "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
+                                  "$ref": "#/$defs/subscribeThreadOutput__Objects_9"
                                 },
                                 {
                                   "type": "null"
@@ -3091,7 +3312,7 @@
                         "scripts": {
                           "type": "array",
                           "items": {
-                            "$ref": "#/$defs/subscribeThreadOutput__Objects_9"
+                            "$ref": "#/$defs/subscribeThreadOutput__Objects_10"
                           }
                         },
                         "createdAt": {
@@ -3193,7 +3414,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -3232,7 +3453,7 @@
                             {
                               "anyOf": [
                                 {
-                                  "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
+                                  "$ref": "#/$defs/subscribeThreadOutput__Objects_9"
                                 },
                                 {
                                   "type": "null"
@@ -3304,7 +3525,7 @@
                             {
                               "type": "array",
                               "items": {
-                                "$ref": "#/$defs/subscribeThreadOutput__Objects_9"
+                                "$ref": "#/$defs/subscribeThreadOutput__Objects_10"
                               }
                             },
                             {
@@ -3403,7 +3624,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -3508,7 +3729,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -3575,6 +3796,44 @@
                           "anyOf": [
                             {
                               "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "role": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "architect",
+                                    "builder"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "parentThreadId": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
                             {
                               "type": "null"
@@ -3681,7 +3940,239 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "codev.gate-set"
+                      ]
+                    },
+                    "payload": {
+                      "type": "object",
+                      "properties": {
+                        "threadId": {
+                          "type": "string"
+                        },
+                        "gate": {
+                          "$ref": "#/$defs/subscribeThreadOutput__Objects_3"
+                        },
+                        "gateRevision": {
+                          "type": "integer",
+                          "allOf": [
+                            {
+                              "minimum": 0
+                            }
+                          ]
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "threadId",
+                        "gate",
+                        "gateRevision",
+                        "updatedAt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "sequence",
+                    "eventId",
+                    "aggregateKind",
+                    "aggregateId",
+                    "occurredAt",
+                    "commandId",
+                    "causationEventId",
+                    "correlationId",
+                    "metadata",
+                    "type",
+                    "payload"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "sequence": {
+                      "type": "integer",
+                      "allOf": [
+                        {
+                          "minimum": 0
+                        }
+                      ]
+                    },
+                    "eventId": {
+                      "type": "string"
+                    },
+                    "aggregateKind": {
+                      "type": "string",
+                      "enum": [
+                        "project",
+                        "thread"
+                      ]
+                    },
+                    "aggregateId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "occurredAt": {
+                      "type": "string"
+                    },
+                    "commandId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "causationEventId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "correlationId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "metadata": {
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "codev.gate-cleared"
+                      ]
+                    },
+                    "payload": {
+                      "type": "object",
+                      "properties": {
+                        "threadId": {
+                          "type": "string"
+                        },
+                        "gateRevision": {
+                          "type": "integer",
+                          "allOf": [
+                            {
+                              "minimum": 0
+                            }
+                          ]
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "threadId",
+                        "gateRevision",
+                        "updatedAt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "sequence",
+                    "eventId",
+                    "aggregateKind",
+                    "aggregateId",
+                    "occurredAt",
+                    "commandId",
+                    "causationEventId",
+                    "correlationId",
+                    "metadata",
+                    "type",
+                    "payload"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "sequence": {
+                      "type": "integer",
+                      "allOf": [
+                        {
+                          "minimum": 0
+                        }
+                      ]
+                    },
+                    "eventId": {
+                      "type": "string"
+                    },
+                    "aggregateKind": {
+                      "type": "string",
+                      "enum": [
+                        "project",
+                        "thread"
+                      ]
+                    },
+                    "aggregateId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "occurredAt": {
+                      "type": "string"
+                    },
+                    "commandId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "causationEventId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "correlationId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "metadata": {
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -3786,7 +4277,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -3895,7 +4386,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -4000,7 +4491,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -4109,7 +4600,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -4222,7 +4713,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -4335,7 +4826,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -4448,7 +4939,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -4567,7 +5058,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -4672,7 +5163,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -4781,7 +5272,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -4833,7 +5324,7 @@
                             {
                               "anyOf": [
                                 {
-                                  "$ref": "#/$defs/subscribeThreadOutput__Objects_3"
+                                  "$ref": "#/$defs/subscribeThreadOutput__Objects_4"
                                 },
                                 {
                                   "type": "null"
@@ -4997,7 +5488,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -5112,7 +5603,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -5231,7 +5722,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -5385,7 +5876,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -5554,7 +6045,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -5669,7 +6160,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -5789,7 +6280,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -5902,7 +6393,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -6016,7 +6507,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -6126,7 +6617,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -6231,7 +6722,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -6246,7 +6737,7 @@
                           "type": "string"
                         },
                         "session": {
-                          "$ref": "#/$defs/subscribeThreadOutput__Objects_6"
+                          "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
                         }
                       },
                       "required": [
@@ -6336,7 +6827,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -6507,7 +6998,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -6546,7 +7037,7 @@
                         "files": {
                           "type": "array",
                           "items": {
-                            "$ref": "#/$defs/subscribeThreadOutput__Objects_5"
+                            "$ref": "#/$defs/subscribeThreadOutput__Objects_6"
                           }
                         },
                         "assistantMessageId": {
@@ -6656,7 +7147,7 @@
                       ]
                     },
                     "metadata": {
-                      "$ref": "#/$defs/subscribeThreadOutput__Objects_7"
+                      "$ref": "#/$defs/subscribeThreadOutput__Objects_8"
                     },
                     "type": {
                       "type": "string",
@@ -6671,7 +7162,7 @@
                           "type": "string"
                         },
                         "activity": {
-                          "$ref": "#/$defs/subscribeThreadOutput__Objects_4"
+                          "$ref": "#/$defs/subscribeThreadOutput__Objects_5"
                         }
                       },
                       "required": [
@@ -6787,6 +7278,226 @@
       },
       "required": [
         "matches"
+      ],
+      "additionalProperties": false
+    },
+    "CodevGateWriteInput": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "codev.gate.set"
+              ]
+            },
+            "commandId": {
+              "type": "string"
+            },
+            "threadId": {
+              "type": "string"
+            },
+            "gate": {
+              "type": "object",
+              "properties": {
+                "gateName": {
+                  "type": "string"
+                },
+                "requestedAt": {
+                  "type": "string"
+                },
+                "question": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "choices": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string"
+                              },
+                              "consequence": {
+                                "type": "string"
+                              },
+                              "recommended": {
+                                "anyOf": [
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "label",
+                              "consequence"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "allOf": [
+                            {
+                              "minItems": 1
+                            },
+                            {
+                              "maxItems": 5
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "terminalExcerpt": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "maxLength": 8000
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "gateName",
+                "requestedAt"
+              ],
+              "additionalProperties": false
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "allOf": [
+                    {
+                      "minimum": 0
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "createdAt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "commandId",
+            "threadId",
+            "gate",
+            "createdAt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "codev.gate.clear"
+              ]
+            },
+            "commandId": {
+              "type": "string"
+            },
+            "threadId": {
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "allOf": [
+                    {
+                      "minimum": 0
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "createdAt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "commandId",
+            "threadId",
+            "createdAt"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "CodevGateWriteResult": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "gateRevision": {
+          "type": "integer",
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ]
+        },
+        "cleared": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "threadId",
+        "gateRevision",
+        "cleared"
       ],
       "additionalProperties": false
     },
@@ -7796,6 +8507,44 @@
                     }
                   ]
                 },
+                "role": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "architect",
+                            "builder"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentThreadId": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "createdAt": {
                   "type": "string"
                 },
@@ -7811,6 +8560,341 @@
                 "branch",
                 "worktreePath",
                 "createdAt",
+                "updatedAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "sequence",
+            "eventId",
+            "aggregateKind",
+            "aggregateId",
+            "occurredAt",
+            "commandId",
+            "causationEventId",
+            "correlationId",
+            "metadata",
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "sequence": {
+              "type": "integer",
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ]
+            },
+            "eventId": {
+              "type": "string"
+            },
+            "aggregateKind": {
+              "type": "string",
+              "enum": [
+                "project",
+                "thread"
+              ]
+            },
+            "aggregateId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "occurredAt": {
+              "type": "string"
+            },
+            "commandId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "causationEventId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "correlationId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "metadata": {
+              "$ref": "#/$defs/OrchestrationEvent__Objects_"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "codev.gate-set"
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "threadId": {
+                  "type": "string"
+                },
+                "gate": {
+                  "type": "object",
+                  "properties": {
+                    "gateName": {
+                      "type": "string"
+                    },
+                    "requestedAt": {
+                      "type": "string"
+                    },
+                    "question": {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "choices": {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "label": {
+                                    "type": "string"
+                                  },
+                                  "consequence": {
+                                    "type": "string"
+                                  },
+                                  "recommended": {
+                                    "anyOf": [
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "label",
+                                  "consequence"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "allOf": [
+                                {
+                                  "minItems": 1
+                                },
+                                {
+                                  "maxItems": 5
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "terminalExcerpt": {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "maxLength": 8000
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "gateName",
+                    "requestedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                "gateRevision": {
+                  "type": "integer",
+                  "allOf": [
+                    {
+                      "minimum": 0
+                    }
+                  ]
+                },
+                "updatedAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "threadId",
+                "gate",
+                "gateRevision",
+                "updatedAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "sequence",
+            "eventId",
+            "aggregateKind",
+            "aggregateId",
+            "occurredAt",
+            "commandId",
+            "causationEventId",
+            "correlationId",
+            "metadata",
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "sequence": {
+              "type": "integer",
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ]
+            },
+            "eventId": {
+              "type": "string"
+            },
+            "aggregateKind": {
+              "type": "string",
+              "enum": [
+                "project",
+                "thread"
+              ]
+            },
+            "aggregateId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "occurredAt": {
+              "type": "string"
+            },
+            "commandId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "causationEventId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "correlationId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "metadata": {
+              "$ref": "#/$defs/OrchestrationEvent__Objects_"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "codev.gate-cleared"
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "threadId": {
+                  "type": "string"
+                },
+                "gateRevision": {
+                  "type": "integer",
+                  "allOf": [
+                    {
+                      "minimum": 0
+                    }
+                  ]
+                },
+                "updatedAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "threadId",
+                "gateRevision",
                 "updatedAt"
               ],
               "additionalProperties": false
@@ -11508,6 +12592,44 @@
                 }
               ]
             },
+            "role": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "architect",
+                        "builder"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "parentThreadId": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "createdAt": {
               "type": "string"
             }
@@ -12541,6 +13663,34 @@
           "additionalProperties": false
         }
       ]
+    },
+    "OrchestrationDispatchRefusal": {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "parent-not-found",
+            "parent-in-other-project",
+            "parent-is-self",
+            "parent-not-architect",
+            "builder-without-parent",
+            "parent-on-non-builder",
+            "CODEV_GATE_REVISION_STALE",
+            "CODEV_GATE_THREAD_NOT_FOUND",
+            "CODEV_GATE_WRITE_UNCONFIRMED",
+            "CODEV_GATE_WRITE_FAILED"
+          ]
+        }
+      },
+      "required": [
+        "tag",
+        "reason"
+      ],
+      "additionalProperties": false
     }
   }
 }

@@ -1,0 +1,452 @@
+From 551bc708d15483b821989fa05e32bc455ab2e923 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Mon, 31 Aug 2026 02:51:54 -0600
+Subject: [PATCH 27/34] =?UTF-8?q?[Spec=20250][Phase:=20phase=5F9]=20fix:?=
+ =?UTF-8?q?=20act=20on=20the=203-way=20review=20=E2=80=94=20the=20grid=20h?=
+ =?UTF-8?q?ad=20no=20way=20in,=20and=20measured=20its=20width=20two=20ways?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+opencode returned COMMENT and Claude APPROVE, so the stricter one is binding.
+Every point from both is acted on.
+
+**The grid had no in-app entry point.** The route existed and nothing linked to
+it: a user in t3code could not find the watch view, and the tests reached it by
+typing a URL. The sidebar has a "Builders" link now, gated on
+`hasCodevHierarchy` so a workspace with no Codev agents sees nothing new — the
+same rule the tree follows.
+
+**The width was measured two ways.** Mount read `getBoundingClientRect().width`,
+the BORDER box; `ResizeObserver` reported `contentRect.width`, which already has
+padding removed; `contentWidth` then subtracted the padding again from one of
+them. Near a column boundary the layout would flip after the first observe. The
+padding moved to an inner wrapper, so the observed box has none and both paths
+report the same number.
+
+**Orphans were dropped.** A builder whose architect was archived is still a
+running agent — the phase 7 reasoning exactly — and a watch view that omitted it
+would hide the agent a human is most likely to be looking for. They tile.
+
+**Two things the DOM was saying that were not true.**
+`data-codev-architect-placement` read `"strip"` on a page with no architect at
+all; it reads `"none"` there now. And the header said "N builders" while N+2
+tiles rendered in the multi-architect case.
+
+`--codev-pane-body` was set on the grid and consumed nowhere, with the panes
+carrying a literal `text-[13px]` — a second copy of a number `layout.ts` owns.
+The pane inherits the property now.
+
+The route ran `buildCodevSidebarOrder` twice on the same input; once.
+
+**And the sidebar is 256px, not the 232 the comments claimed.** Every conclusion
+survives — 1440 open is 1184 of grid and still three columns, 1920 open is 1664
+and still four — but the unit tests were written against invented numbers. They
+use the real ones, and 1440 with the sidebar COLLAPSED turns out to fit four
+columns, so the architect gets a tile there. That is the rule working, not an
+exception to it: the user made room for a fourth column and 4 + 3 is not ragged.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/codev/BuilderGrid.tsx           | 38 ++++++++--
+ apps/web/src/codev/BuilderPane.tsx           | 23 ++++--
+ apps/web/src/codev/layout.test.ts            | 42 ++++++-----
+ apps/web/src/codev/layout.ts                 |  4 +-
+ apps/web/src/components/Sidebar.tsx          | 22 +++++-
+ apps/web/src/routes/_chat.codev-builders.tsx | 74 ++++++++++++--------
+ 6 files changed, 143 insertions(+), 60 deletions(-)
+
+diff --git a/apps/web/src/codev/BuilderGrid.tsx b/apps/web/src/codev/BuilderGrid.tsx
+index c9e20a2a9..0a5d44610 100644
+--- a/apps/web/src/codev/BuilderGrid.tsx
++++ b/apps/web/src/codev/BuilderGrid.tsx
+@@ -5,7 +5,7 @@
+  *
+  * `apps/client` computed columns from the viewport because its grid was the
+  * whole page. This one is a route inside t3code's chat shell, behind a sidebar
+- * that is 232px at rest, narrower when resized, and gone at 390. A viewport
++ * that is 256px at rest (`THREAD_SIDEBAR_DEFAULT_WIDTH`), resizable, and gone at 390. A viewport
+  * number would be describing a page nobody is looking at, so the grid measures
+  * its own container and hands that to `columnsFor`.
+  *
+@@ -57,6 +57,20 @@ function useMeasuredWidth(): {
+     observer.observe(node);
+     observerRef.current = observer;
+   }, []);
++/*
++ * The observed element carries NO padding, and that is load-bearing.
++ *
++ * Review finding. The mount path reads `getBoundingClientRect().width`, which is
++ * the BORDER box; `ResizeObserver` reports `contentRect.width`, which already has
++ * padding taken out. With the padding on the observed element those two are
++ * different numbers for the same box, `contentWidth` then subtracts the padding a
++ * second time from one of them, and near a column boundary the layout flips after
++ * the first observe — two derivations of one fact, which is the defect this
++ * project keeps finding.
++ *
++ * The padding lives on an inner wrapper now. The observed box has none, so both
++ * paths report the same width and `contentWidth` subtracts once.
++ */
+ 
+   useEffect(() => () => observerRef.current?.disconnect(), []);
+   return { ref, width };
+@@ -80,6 +94,15 @@ export function BuilderGrid(props: {
+   const [architectExpanded, setArchitectExpanded] = useState(false);
+ 
+   const placement = width === null || architect === null ? "strip" : architectPlacement(width);
++  /*
++   * Reported separately from the placement the layout uses.
++   *
++   * Review finding: `placement` is "strip" when there is no architect at all,
++   * because that is the branch that renders nothing — but publishing that as
++   * `data-codev-architect-placement="strip"` tells a reader there IS a strip on a
++   * page that has none. "No architect" is its own answer and gets its own word.
++   */
++  const reportedPlacement = architect === null ? "none" : placement;
+   const tiled = useMemo(
+     () => (architect !== null && placement === "tile" ? [architect, ...threads] : threads),
+     [architect, placement, threads],
+@@ -102,12 +125,15 @@ export function BuilderGrid(props: {
+       data-testid="codev-builder-grid"
+       data-codev-grid-columns={width === null ? undefined : columns}
+       data-codev-grid-mode={width === null ? undefined : mode}
+-      data-codev-architect-placement={width === null ? undefined : placement}
+-      style={{ padding: PAGE_PADDING, ["--codev-pane-body" as string]: `${MIN_BODY_PX}px` }}
+-      className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-x-hidden"
++      data-codev-architect-placement={width === null ? undefined : reportedPlacement}
++      style={{ ["--codev-pane-body" as string]: `${MIN_BODY_PX}px` }}
++      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden"
+     >
+       {width === null ? null : (
+-        <>
++        <div
++          style={{ padding: PAGE_PADDING }}
++          className="flex min-h-0 min-w-0 flex-1 flex-col gap-3"
++        >
+           <div
+             data-testid="codev-builder-grid-panes"
+             style={{
+@@ -201,7 +227,7 @@ export function BuilderGrid(props: {
+               </button>
+             </nav>
+           )}
+-        </>
++        </div>
+       )}
+     </div>
+   );
+diff --git a/apps/web/src/codev/BuilderPane.tsx b/apps/web/src/codev/BuilderPane.tsx
+index 239343ce8..0faa6fe5b 100644
+--- a/apps/web/src/codev/BuilderPane.tsx
++++ b/apps/web/src/codev/BuilderPane.tsx
+@@ -32,7 +32,7 @@ import { GavelIcon } from "lucide-react";
+ 
+ import { cn } from "~/lib/utils";
+ import { resolveCodevGateState, type CodevGateFields } from "./gateState";
+-import { MIN_PANE_H, MIN_PANE_W } from "./layout";
++import { MIN_BODY_PX, MIN_PANE_H, MIN_PANE_W } from "./layout";
+ 
+ export interface BuilderPaneThread extends CodevGateFields {
+   readonly id: string;
+@@ -63,7 +63,18 @@ export function BuilderPane(props: {
+     <article
+       data-testid="codev-builder-pane"
+       data-codev-pane-thread-id={thread.id}
+-      style={{ minWidth: MIN_PANE_W, minHeight: MIN_PANE_H }}
++      /*
++        One source for the 13px floor. The grid publishes `--codev-pane-body`
++        from `MIN_BODY_PX`; the pane inherits it here and its lines inherit from
++        the pane. A literal `text-[13px]` on each line was a second copy of a
++        number the layout module already owns, and the review found the property
++        set and consumed nowhere.
++      */
++      style={{
++        minWidth: MIN_PANE_W,
++        minHeight: MIN_PANE_H,
++        fontSize: `var(--codev-pane-body, ${MIN_BODY_PX}px)`,
++      }}
+       className="flex min-w-0 flex-col gap-2 overflow-hidden rounded-xl border border-sidebar-border/60 bg-card p-3"
+     >
+       <header className="flex min-w-0 items-baseline gap-2">
+@@ -88,7 +99,7 @@ export function BuilderPane(props: {
+         </span>
+         <span
+           data-testid="codev-pane-status"
+-          className={cn("ml-auto shrink-0 font-medium text-[13px]", status.colorClass)}
++          className={cn("ml-auto shrink-0 font-medium", status.colorClass)}
+         >
+           {status.label}
+         </span>
+@@ -104,7 +115,7 @@ export function BuilderPane(props: {
+         way to meet it; narrowing the assertion to "body text only" would have
+         been the other way.
+       */}
+-      <p data-testid="codev-pane-phase" className="flex min-w-0 items-center gap-1 text-[13px]">
++      <p data-testid="codev-pane-phase" className="flex min-w-0 items-center gap-1">
+         {gate.kind === "none" ? (
+           /*
+             NOT "phase not published" — it is published, and this page cannot
+@@ -126,7 +137,7 @@ export function BuilderPane(props: {
+ 
+       <div
+         data-testid="codev-pane-messages"
+-        className="min-h-0 flex-1 overflow-auto rounded-md bg-muted/30 p-2 text-muted-foreground text-[13px]"
++        className="min-h-0 flex-1 overflow-auto rounded-md bg-muted/30 p-2 text-muted-foreground"
+       >
+         {/*
+           The fourth thing the plan asks for. `codev-agent` publishes it in the
+@@ -138,7 +149,7 @@ export function BuilderPane(props: {
+         Messages not read here yet — published by codev-agent.
+       </div>
+ 
+-      <footer className="flex min-w-0 items-baseline gap-2 text-[13px] text-muted-foreground">
++      <footer className="flex min-w-0 items-baseline gap-2 text-muted-foreground">
+         {thread.branch === null ? (
+           <span className="min-w-0 truncate text-muted-foreground/70">no branch</span>
+         ) : (
+diff --git a/apps/web/src/codev/layout.test.ts b/apps/web/src/codev/layout.test.ts
+index c1ce1150a..b911d9f68 100644
+--- a/apps/web/src/codev/layout.test.ts
++++ b/apps/web/src/codev/layout.test.ts
+@@ -29,14 +29,16 @@ import {
+  *
+  * NOT viewport widths. The grid lives behind t3code's sidebar, so the number
+  * that decides the layout is the container's, and `apps/client`'s viewport-based
+- * version would have been right about a page nobody is looking at. 1176 is 1440
+- * with the sidebar open; 1688 is 1920 with it open; 1404 is 1440 with it
+- * collapsed, kept here because a user can collapse it and the arithmetic must
+- * not care which of the two it was handed.
++ * version would have been right about a page nobody is looking at.
++ *
++ * The sidebar is `THREAD_SIDEBAR_DEFAULT_WIDTH`, 256px. So 1440 with it open is
++ * 1184 of grid and 1920 with it open is 1664; 1440 with it collapsed is the
++ * whole 1440, and that is a DIFFERENT layout rather than the same one — which is
++ * the point these constants exist to make.
+  */
+-const AT_1440_WITH_SIDEBAR = 1176;
+-const AT_1920_WITH_SIDEBAR = 1688;
+-const AT_1440_NO_SIDEBAR = 1404;
++const AT_1440_WITH_SIDEBAR = 1184;
++const AT_1920_WITH_SIDEBAR = 1664;
++const AT_1440_NO_SIDEBAR = 1440;
+ const AT_390 = 390;
+ 
+ describe("columnsThatFit", () => {
+@@ -108,14 +110,13 @@ describe("columnsFor: the fewest rows that fit", () => {
+   });
+ 
+   it("reads the width it is given, not a viewport it cannot see", () => {
+-    // 1440 with the sidebar open and 1440 with it collapsed are 1176 and 1404,
+-    // and both fit exactly three columns — so they answer the same. The point is
+-    // that the answer comes from the ARGUMENT: 1688 fits four, and the function
+-    // has no idea any of the three came from a 1440 or a 1920 window.
+-    expect(columnsFor(7, AT_1440_NO_SIDEBAR)).toBe(columnsFor(7, AT_1440_WITH_SIDEBAR));
+-    expect(columnsFor(7, AT_1920_WITH_SIDEBAR)).toBeGreaterThan(
+-      columnsFor(7, AT_1440_NO_SIDEBAR),
+-    );
++    // The same 1440 window, twice: 1184 of grid with the sidebar open and the
++    // whole 1440 with it collapsed. Three columns and four. A viewport-based
++    // rule would have to answer the same for both, and it would be wrong for one
++    // of them — the user really did make room for a fourth column.
++    expect(columnsFor(7, AT_1440_WITH_SIDEBAR)).toBe(3);
++    expect(columnsFor(7, AT_1440_NO_SIDEBAR)).toBe(4);
++    expect(columnsFor(7, AT_1920_WITH_SIDEBAR)).toBe(4);
+   });
+ 
+   it("returns one column for no panes rather than dividing by zero", () => {
+@@ -185,9 +186,16 @@ describe("contentWidth", () => {
+  * is a layout that moves under a reader who did nothing.
+  */
+ describe("architectPlacement", () => {
+-  it("gives the architect a strip at 1440, where three columns make 3 + 3 + 1", () => {
++  it("gives the architect a strip at 1440 with the sidebar open, where three columns make 3 + 3 + 1", () => {
+     expect(architectPlacement(AT_1440_WITH_SIDEBAR)).toBe("strip");
+-    expect(architectPlacement(AT_1440_NO_SIDEBAR)).toBe("strip");
++  });
++
++  it("gives the architect a tile at 1440 with the sidebar COLLAPSED, where four columns fit", () => {
++    // Not a contradiction with the test above, and not a departure from 4b: the
++    // user made room for a fourth column, 4 + 3 is not ragged, and the rule is
++    // about room rather than about a window size. A literal "1920 or wider"
++    // would withhold the tile here and be wrong.
++    expect(architectPlacement(AT_1440_NO_SIDEBAR)).toBe("tile");
+   });
+ 
+   it("gives the architect a tile at 1920, where four columns make 4 + 3", () => {
+diff --git a/apps/web/src/codev/layout.ts b/apps/web/src/codev/layout.ts
+index af6b396ac..72e065e7c 100644
+--- a/apps/web/src/codev/layout.ts
++++ b/apps/web/src/codev/layout.ts
+@@ -23,12 +23,12 @@
+  *
+  * `apps/client` computed everything from `viewportWidth` because its grid was
+  * the page. Here the grid is a route inside the chat shell, so the sidebar —
+- * 232px at rest, zero when collapsed or off-canvas at 390 — is not a constant
++ * 256px at rest (`THREAD_SIDEBAR_DEFAULT_WIDTH`), resizable, and gone at 390 — is not a
+  * this file can know. Every function therefore takes the **available width**:
+  * the grid container's own inner width, measured from the DOM.
+  *
+  * That is not a cosmetic change. Six panes at 1440 with the sidebar open have
+- * 1440 - 232 - 2*PAGE_PADDING = 1176px to work with, not 1404. Three columns fit
++ * 1440 - 256 = 1184px of container to work with, not 1440. Three columns fit
+  * either way, so criterion 5 would have passed on the viewport-based version by
+  * luck; the seven-at-1920 case in criterion 5b is the one that keeps it honest.
+  */
+diff --git a/apps/web/src/components/Sidebar.tsx b/apps/web/src/components/Sidebar.tsx
+index 77fe9ac73..2b8d3e99e 100644
+--- a/apps/web/src/components/Sidebar.tsx
++++ b/apps/web/src/components/Sidebar.tsx
+@@ -44,6 +44,7 @@ import {
+   FolderIcon,
+   FolderPlusIcon,
+   GavelIcon,
++  LayoutGridIcon,
+   GitBranchIcon,
+   MessageSquareIcon,
+   PinIcon,
+@@ -67,7 +68,7 @@ import {
+   type MouseEvent as ReactMouseEvent,
+   type ReactNode,
+ } from "react";
+-import { useParams, useRouter } from "@tanstack/react-router";
++import { Link, useParams, useRouter } from "@tanstack/react-router";
+ 
+ import {
+   isAtomCommandInterrupted,
+@@ -171,6 +172,7 @@ import {
+ } from "./Sidebar.snooze";
+ import { ProjectFavicon } from "./ProjectFavicon";
+ import { resolveCodevGatePill, resolveCodevGateState } from "../codev/gateState";
++import { hasCodevHierarchy } from "../codev/hierarchy";
+ import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
+ import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
+ import {
+@@ -3667,6 +3669,24 @@ export default function Sidebar() {
+                 </Tooltip>
+               </div>
+             ) : null}
++            {/*
++              Codev customization (spec 250), phase 9 — the way in to the grid.
++              
++              Review finding: the route existed and nothing linked to it, so the
++              watch view could only be reached by typing a URL. Gated on
++              `hasCodevHierarchy`, so a workspace with no Codev agents sees
++              nothing new — same rule the tree follows.
++            */}
++            {hasCodevHierarchy(threads) ? (
++              <Link
++                to="/codev-builders"
++                data-testid="sidebar-codev-builders-link"
++                className="flex h-8 min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 text-sm text-sidebar-foreground hover:bg-sidebar-row-hover"
++              >
++                <LayoutGridIcon aria-hidden className="size-4 shrink-0" />
++                <span className="min-w-0 truncate">Builders</span>
++              </Link>
++            ) : null}
+           </SidebarGroup>
+         }
+       >
+diff --git a/apps/web/src/routes/_chat.codev-builders.tsx b/apps/web/src/routes/_chat.codev-builders.tsx
+index ed07c306e..4196870c7 100644
+--- a/apps/web/src/routes/_chat.codev-builders.tsx
++++ b/apps/web/src/routes/_chat.codev-builders.tsx
+@@ -44,43 +44,48 @@ function CodevBuilderGridRoute() {
+    * running, and an upstream thread in the grid would be a pane about something
+    * the grid cannot say anything useful about.
+    */
+-  const { builders, architect } = useMemo<{
+-    readonly builders: readonly BuilderPaneThread[];
++  /**
++   * One pass over the threads, and one answer.
++   *
++   * Review finding: this ran `buildCodevSidebarOrder` twice on the same input,
++   * once for the builders and once for the grid — same result, two places to
++   * change, and the two could drift into different ideas of who is a builder.
++   */
++  const { gridThreads, architect, builderCount } = useMemo<{
++    readonly gridThreads: readonly BuilderPaneThread[];
+     readonly architect: BuilderPaneThread | null;
++    readonly builderCount: number;
+   }>(() => {
+     const visible = threads.filter((thread) => thread.archivedAt === null);
+     const order = buildCodevSidebarOrder(visible, {
+       projectKeyOf: (thread) => `${thread.environmentId}:${thread.projectId}`,
+     });
+     const architects = order.entries.filter((entry) => entry.kind === "architect");
++    /*
++     * ORPHANS TILE TOO.
++     *
++     * Review finding, and it is the phase 7 reasoning again: a builder whose
++     * architect was archived is still a running agent. The sidebar keeps it in a
++     * named group; a watch view that dropped it would hide exactly the agent a
++     * human is most likely to be looking for.
++     */
++    const builders = order.entries
++      .filter((entry) => entry.kind === "builder" || entry.kind === "orphan")
++      .map((entry) => entry.thread);
++    /*
++     * Criterion 4b is about THE architect, singular — the one running this grid.
++     * With more than one there is no "the", so they all take tiles and no strip
++     * appears: a strip showing one of two would be choosing for the reader.
++     */
++    const soleArchitect = architects.length === 1 ? (architects[0]?.thread ?? null) : null;
+     return {
+-      builders: order.entries
+-        .filter((entry) => entry.kind === "builder")
+-        .map((entry) => entry.thread),
+-      /*
+-        Criterion 4b is about THE architect, singular — the one running this
+-        grid. With more than one in the workspace there is no "the", so they all
+-        take tiles and the strip does not appear: a strip that showed one of two
+-        architects would be choosing for the reader.
+-      */
+-      architect: architects.length === 1 ? (architects[0]?.thread ?? null) : null,
++      architect: soleArchitect,
++      builderCount: builders.length,
++      gridThreads:
++        soleArchitect === null ? [...architects.map((entry) => entry.thread), ...builders] : builders,
+     };
+   }, [threads]);
+ 
+-  // More than one architect: they are builders' peers in the grid rather than a
+-  // strip, for the reason above.
+-  const gridThreads = useMemo<readonly BuilderPaneThread[]>(() => {
+-    const visible = threads.filter((thread) => thread.archivedAt === null);
+-    const order = buildCodevSidebarOrder(visible, {
+-      projectKeyOf: (thread) => `${thread.environmentId}:${thread.projectId}`,
+-    });
+-    const architects = order.entries.filter((entry) => entry.kind === "architect");
+-    if (architects.length === 1) return builders;
+-    return order.entries
+-      .filter((entry) => entry.kind === "architect" || entry.kind === "builder")
+-      .map((entry) => entry.thread);
+-  }, [threads, builders]);
+-
+   const statusFor = useMemo(
+     () => (thread: BuilderPaneThread) => {
+       const shell = threads.find((candidate) => candidate.id === thread.id);
+@@ -107,9 +112,22 @@ function CodevBuilderGridRoute() {
+           count of tiles rather than of agents, and the two are not the same
+           thing — which is the whole reason the architect is not a seventh tile.
+         */}
++        {/*
++          Counted as what they are. "7" over six builders and an architect is a
++          count of tiles rather than of agents, and the two are not the same
++          thing — which is the whole reason the architect is not a seventh tile.
++
++          Review finding: with two or more architects this said "N builders"
++          while N+2 tiles rendered. The architects are still there; they are just
++          all in the grid.
++        */}
+         <span data-testid="codev-builder-grid-count" className="text-[13px] text-muted-foreground">
+-          {builders.length === 1 ? "1 builder" : `${builders.length} builders`}
+-          {architect === null ? "" : " and an architect"}
++          {builderCount === 1 ? "1 builder" : `${builderCount} builders`}
++          {architect !== null
++            ? " and an architect"
++            : gridThreads.length > builderCount
++              ? ` and ${gridThreads.length - builderCount} architects`
++              : ""}
+         </span>
+       </header>
+       {gridThreads.length === 0 && architect === null ? (

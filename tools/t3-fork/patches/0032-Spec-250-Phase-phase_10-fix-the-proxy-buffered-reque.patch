@@ -1,0 +1,107 @@
+From 24aeeebb3ded44d0fd40f41f6af73597d770ebb7 Mon Sep 17 00:00:00 2001
+From: pseudo <aws@pseudoseed.com>
+Date: Mon, 31 Aug 2026 04:16:29 -0600
+Subject: [PATCH 32/34] [Spec 250][Phase: phase_10] fix: the proxy buffered
+ request bodies with no bound
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Effect's MaxBodySize defaults to UNBOUNDED and this route reads the whole
+body before forwarding it, so one authenticated caller could make the server
+hold an arbitrary amount in memory — on the route whose whole purpose is to
+be reachable from a phone.
+
+64 KiB, which is orders of magnitude above the largest body this proxy
+carries. A declared content-length over the cap is refused BEFORE the read,
+because refusing after reading would already have done the thing the cap
+exists to prevent; a chunked body declares no length, so the cap on the read
+answers that one. Too large and malformed get different signals.
+---
+ apps/server/src/codev/agentProxy.ts | 51 ++++++++++++++++++++++++++++-
+ 1 file changed, 50 insertions(+), 1 deletion(-)
+
+diff --git a/apps/server/src/codev/agentProxy.ts b/apps/server/src/codev/agentProxy.ts
+index 1219e44cb..bdbd9a7cd 100644
+--- a/apps/server/src/codev/agentProxy.ts
++++ b/apps/server/src/codev/agentProxy.ts
+@@ -49,6 +49,7 @@
+ 
+ // @effect-diagnostics nodeBuiltinImport:off
+ import * as Effect from "effect/Effect";
++import * as FileSystem from "effect/FileSystem";
+ import * as Option from "effect/Option";
+ import { HttpRouter, HttpServerRequest, HttpServerResponse, HttpServerRespondable } from "effect/unstable/http";
+ import { AuthOrchestrationOperateScope, AuthOrchestrationReadScope } from "@t3tools/contracts";
+@@ -362,6 +363,23 @@ export function forwardableHeaders(
+  */
+ export const UPSTREAM_TIMEOUT_MS = 15_000;
+ 
++/**
++ * The largest request body this proxy will buffer, and why there is a number here at all.
++ *
++ * `HttpServerRequest.MaxBodySize` defaults to `undefined` — UNBOUNDED — and this
++ * route buffers the whole body before forwarding it. Without a cap, one
++ * authenticated caller can make this server hold an arbitrary amount in memory,
++ * which is an availability hole on a route whose whole purpose is to be reachable
++ * from a phone.
++ *
++ * 64 KiB is generous by orders of magnitude. Every body this proxy carries is a
++ * small JSON object; the largest is a gate approval — a capability, a nonce and
++ * two ids — which is a few hundred bytes. The cap is not tuned to the real sizes
++ * on purpose: it is a bound, not a validator, and `codev-agent` is what decides
++ * whether a body is well formed.
++ */
++export const MAX_PROXIED_BODY_BYTES = 64 * 1024;
++
+ export type ProxyOutcome =
+   | {
+       readonly kind: "answered";
+@@ -600,15 +618,46 @@ const proxyHandler = (method: "GET" | "POST") =>
+       );
+     }
+ 
++    /*
++     * TOO LARGE IS NOT MALFORMED, and the two get different answers.
++     *
++     * `content-length` is checked BEFORE the read so an oversize body is refused
++     * without being buffered — refusing after reading it would have already done
++     * the thing the cap exists to prevent. A chunked request declares no length,
++     * so the cap on the read is what catches that one, and both say 413.
++     */
++    const declaredLength = Number(request.headers["content-length"] ?? "");
++    if (Number.isFinite(declaredLength) && declaredLength > MAX_PROXIED_BODY_BYTES) {
++      return refusal(
++        413,
++        "CODEV_AGENT_BODY_TOO_LARGE",
++        `this proxy carries request bodies up to ${MAX_PROXIED_BODY_BYTES} bytes; this one declares `
++          + `${declaredLength}`,
++      );
++    }
+     const body =
+       method === "POST"
+         ? yield* request.arrayBuffer.pipe(
++            Effect.provideService(
++              HttpServerRequest.MaxBodySize,
++              FileSystem.Size(MAX_PROXIED_BODY_BYTES),
++            ),
+             Effect.map((buffer) => new Uint8Array(buffer)),
+             Effect.orElseSucceed(() => null),
+           )
+         : undefined;
+     if (body === null) {
+-      return refusal(400, "CODEV_AGENT_REQUEST_MALFORMED", "the request body could not be read");
++      /*
++       * The read failed. It is over the cap, or the connection broke mid-body,
++       * and this route cannot tell those apart — so it says what it knows and
++       * names the bound rather than claiming the body was malformed.
++       */
++      return refusal(
++        413,
++        "CODEV_AGENT_BODY_UNREAD",
++        `the request body could not be read within the ${MAX_PROXIED_BODY_BYTES}-byte bound this `
++          + "proxy carries",
++      );
+     }
+ 
+     const outcome = yield* Effect.promise(() =>

@@ -1,0 +1,39 @@
+{
+  "criterion": "Spec 250 criterion 8b: the server is killed partway through applying the Codev columns and the resulting database still opens against the pre-fork server binary.",
+  "preForkCliVersion": "0.0.36",
+  "upstreamBase": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
+  "forkRoot": "/Users/chris/dev/t3code-codev",
+  "forkCommit": "2f64a1b0ee2b35cd858a8b601b4d425216e73ae5",
+  "dbPath": "/Users/chris/dev/codev-1455/.builders/spir-250/tools/t3-server/.runtime/data/userdata/state.sqlite",
+  "steps": {
+    "preForkServerCreatedDatabase": true,
+    "columnsBeforeGuard": [],
+    "childKilledBySignal": "SIGKILL",
+    "columnsAfterKill": [
+      "codev_role"
+    ],
+    "halfApplied": true,
+    "preForkServerOpensHalfApplied": true,
+    "guardResume": {
+      "added": [
+        "codev_parent_thread_id",
+        "codev_gate_json",
+        "codev_gate_revision"
+      ],
+      "present": [
+        "codev_role"
+      ]
+    },
+    "guardSawWhatTheCrashLeft": true,
+    "guardFinishedTheJob": true,
+    "columnsAfterResume": [
+      "codev_role",
+      "codev_parent_thread_id",
+      "codev_gate_json",
+      "codev_gate_revision"
+    ],
+    "schemaComplete": true,
+    "preForkServerOpensFullyApplied": true
+  },
+  "passed": true
+}

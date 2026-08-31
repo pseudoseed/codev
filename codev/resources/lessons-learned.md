@@ -315,6 +315,27 @@ just its inputs.
 
 ## Testing
 
+- [From #250] **Naming a hazard in a spec does not prevent it. Only a test that can fail does.**
+  The spec named this exact failure — "pointed at our own fork head it compares our tree to itself
+  and reports no churn forever" — the plan carried the warning forward, and phase 1 shipped a
+  variant of it anyway: `classify-churn --fork-drift` measured `upstreamBase..pin.commit` instead
+  of `upstreamBase..HEAD`. Every review lane read the code with the warning in front of them and
+  none flagged it, because at the time the two commits were **equal** and every test had the right
+  answer for the wrong reason.
+  It only became reachable when a later ruling froze `pin.commit` while the checkout moved on, and
+  then a fork carrying real customization commits reported **zero drift** — "I could not tell"
+  spelled exactly like "nothing changed", by the one tool whose entire job is answering "what have
+  we changed?". Nothing errored; the answer was simply wrong and confident.
+  Two things generalize. First, a hazard written in prose is inert: it survives review because
+  reviewers check the code against the prose and the code matched. Second, **a test written while
+  two values are equal cannot tell you which one the code reads.** When a design says two things
+  are "the same for now and will diverge later", the assertion has to name which one is correct
+  *before* they diverge — or force them apart in a fixture — because after they diverge the bug is
+  already in production. The same shape appeared twice more in one phase: a range whose first
+  commit was never classified because `git log from..to` excludes `from`, and a fixture pair whose
+  git shas collided because identical content, message and author in the same second produce the
+  identical commit.
+
 - [From #236] **To find every caller relying on an absent value, change the type and read the
   compiler errors.** A permissive `machine?: string` parameter on an identity check hid three call
   sites passing `undefined` — the very values that cannot be bound. Making it required enumerated
@@ -522,6 +543,11 @@ so it survives review. Pin the constant to the highest migration block in a test
 - [From #13] **A CI tolerance guard that greps the whole log for a word can never fire.** `test.yml` tolerates a known vitest worker-teardown crash only when the output contains no "failed" — but the runner echoes the guard's own script into the log, and ordinary test names (`clear-failed`, "reports a failed Tower send") match too. The escape hatch had never once been reachable, so every worker crash was a hard failure. Scope such a check to the summary line it means, not to the whole transcript.
 - [From #241] **A test that builds its own collaborator cannot see that production never builds one.** Spec 146 shipped a correct thread driver, a correct `TurnTracker` and a correct `ResumingSubscription` across several phases, all well tested — and no production code ever opened a subscription, so no turn could settle. Every test constructed the subscription itself and would have stayed green forever. The fix is a second, uglier kind of test that asserts the *wiring* by reading the production source (`spec-241-subscriber-is-wired.test.ts`). Brittle by nature, and worth it: name the property each assertion protects so a rename tells the next person what to re-establish rather than what to delete.
 - [From #241] **When a component is only reachable through a factory, test the factory's call site, not just the factory.** "Is `X` constructed with the argument that makes it work?" is a different question from "does `X` work when given that argument," and only the first one fails when someone quietly drops the argument.
+- [From #250] **A test whose work grows with the repository will look flaky before it looks under-budgeted, and the two have opposite remedies.** `classify-churn --fork-drift` re-emits the whole pinned closure once per closure-touching commit in its range. The range was near-empty when the test was written and 6 commits later; the test timed out at the 5s default under full-suite load and passed standalone in 2s — exactly the signature of flakiness. It was not: the work is real, bounded by history, and rising. Skipping it would have removed coverage of the tool's named-zero contract to hide arithmetic that was working. Before calling a timeout flaky, ask whether the *amount of work* changed since the budget was set; if it did, raise the budget and record the reason at the call site so the next person does not re-derive it.
+- [From #250] **A careful vocabulary for reporting failure is not the same as reaching the code that reports it.** `approval.ts` documented four outcomes, kept "unconfirmed" distinct from "refused" in five places, and refused to invent an approval record from the browser's clock — and none of it ran when `fetch` itself rejected, because `send` awaited bare and four of its five call sites had no `catch`. Eleven review rounds read the taxonomy approvingly and nobody asked the cruder question. Two habits follow. **Grep for the transport call, not the error type**: every `await fetch(...)`, `await client.x()`, every await on something that crosses a process boundary, and ask what the caller does when it *rejects* rather than when it returns an error. And **make it a value, not a throw** — a function returning `{reached:false}` in a union forces every call site to answer at compile time, where a `try` is something a sixth call site can simply forget.
+- [From #250] **A reviewer with no history of the work sees what the incumbents stopped seeing.** Two lanes reviewed all eleven implementation phases and approved the PR; a third, which had seen only the plan and then the finished diff, produced both remaining blocking defects in code the other two had just cleared. Familiarity with how a file came to be is what makes its assumptions invisible. Rotate a fresh lane in at the END of a long project, not only at the start.
+- [From #250] **A rebuttal is scoped to the tests the argument actually covers, and it is worth re-checking which those are.** "The test's value is that it drives the tool against its REAL committed inputs, so a fixture copy would test a copy" was true — of one test in a file of six. The other five worked by *damaging* an input, and a damaged input has no reason to be the committed one. Applied to the whole file, the argument also concealed a race nobody had looked for: a second test file read one of the mutated paths **in its module body**, so a parallel vitest worker collecting it mid-mutation would fail on corrupted data with nothing in its own output to explain why. When rebutting a finding about a file, check whether the reasoning covers every case in it.
+- [From #250] **Screenshot and harness runs can poison the suite that follows them.** A run that starts a real server and writes artifacts left the next in-process suite failing for reasons unrelated to its own code (issue #263). Re-run a suspect suite alone before trusting a failure, and make artifact-writing opt-in behind an env var so the ordinary run never pays for it.
 
 ## UI/UX
 
@@ -725,6 +751,18 @@ so it survives review. Pin the constant to the highest migration block in a test
 - [From #1494] A relay meant to *trigger* an action must read as an imperative instruction, not a past-tense fact. A VS Code gate approval phrased "Human approved X in VS Code" was read by the receiving architect as *already done*, so it never relayed and the builder stalled at the gate; "Approve X, please run `porch approve` from the workspace root" is a call to act. (The relay's own wording has since changed with the convention: the **architect** runs `porch approve`, because it refuses any call whose cwd is inside a `.builders/` worktree. The lesson is about imperative-versus-past-tense phrasing, which is unchanged.) Corollary: message provenance (who sent it, from where) belongs in **structured attribution** (the `from` field and the rendered header `[USER via VS Code]`), not in body text, or it leaks to downstream recipients and can be misread. Both failure modes surfaced only in a live end-to-end run, never in unit tests.
 
 ## Debugging and Root Cause Analysis
+
+- [Demoted from the hot tier, #250] **When stuck (2 failed hypotheses or ~30 min), get an outside
+  model's perspective and build a minimal repro — captured raw data beats guessing.** Still true;
+  demoted rather than deleted when the hot tier's slot was needed for "a test that cannot fail is
+  not a test". **The trigger itself stayed hot**, folded into the consultation lesson at the top of
+  `lessons-critical.md` — a threshold only works if it is always-on, because a stuck agent does not
+  go and read the cold file, which is the whole reason it was hot. What lives here is the fuller
+  guidance: the minimal repro, and captured raw data beating guessing. The displacement rationale was that this overlaps the neighbouring "get an outside
+  perspective" territory, while nothing in the tier covered whether a check is capable of failing
+  at all — which spec 250 violated five times in one day (two tests asserting nothing, an in-memory
+  simulation standing in for a kill test, a raw `ALTER TABLE` standing in for a migrator run, and
+  decider-only coverage of a discriminant the engine was deleting).
 
 - [From #47] **The repair and the evidence are often the same action, so count occurrences or every recurrence looks like the first.** Forwarding a misrouted message fixes it and erases it; reconciling porch state by hand fixes it and erases it; a builder noticing it was handed the wrong spec and working the issue anyway saves the hour and erases the collision — two of three builders did exactly that and it read as zero occurrences until the third did not notice. Nothing is left behind that a later reader could find. Write the occurrence down at the moment you repair it, and note that a bug you keep quietly working around has a recurrence count of zero by construction.
 

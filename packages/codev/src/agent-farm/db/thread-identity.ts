@@ -57,6 +57,20 @@ export type SpawnThreadFactory = (input: {
   launchScript?: string;
   role?: 'builder' | 'architect';
   /**
+   * Spec 250. The architect thread this builder hangs off.
+   *
+   * Separate from `role` because the two travel together and can each be absent
+   * for a different reason: `role` says what this thread IS, `parentThreadId`
+   * says who owns it. A builder with a role and no parent is refused before
+   * dispatch (`HierarchyRefusedError`), which is why the caller must resolve the
+   * architect's thread id rather than letting the server discover the gap.
+   *
+   * Absent when the spawning architect is not itself thread-backed. That is a
+   * real configuration, not an error, and it is reported rather than inferred —
+   * see `resolveThreadHierarchy` in `commands/spawn.ts`.
+   */
+  parentThreadId?: string | null;
+  /**
    * The role prompt, and where the PTY path writes it.
    *
    * On the PTY path a role is injected by harness-specific script fragments and env

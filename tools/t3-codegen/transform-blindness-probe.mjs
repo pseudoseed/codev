@@ -23,10 +23,18 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { resolveIdentities } from '../t3-fork/identities.mjs';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
 const pin = JSON.parse(readFileSync(join(repoRoot, 'packages', 'types', 'src', 't3', 'pin.json'), 'utf8'));
-const t3Root = process.env.T3CODE_ROOT ?? '/Users/chris/dev/t3code';
+
+// Spec 250: the FORK identity. This probe asks whether the drift layers would
+// catch a relaxed check in the source WE GENERATE FROM, and from phase 5 that
+// source is the fork. Probing upstream would measure a tree the artifacts no
+// longer come from, and report the answer as if it were about ours.
+const { fork } = resolveIdentities(pin);
+const t3Root = fork.root;
 const basePath = join(t3Root, pin.contractsRoot, 'baseSchemas.ts');
 
 const SR = await import('effect/SchemaRepresentation');

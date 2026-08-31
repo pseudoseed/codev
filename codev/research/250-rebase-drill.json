@@ -1,0 +1,153 @@
+{
+  "outcome": "conflicts",
+  "detail": "the rebase stopped on conflicts. That is a measurement, not a failure — it is what the drill is for.",
+  "conflictedFiles": [
+    "apps/server/src/server.test.ts"
+  ],
+  "stoppedAt": "3a1780bbf",
+  "gitSaid": [
+    "Auto-merging apps/server/src/orchestration/Layers/ProjectionPipeline.ts",
+    "Auto-merging apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts",
+    "Auto-merging apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts",
+    "Auto-merging apps/server/src/orchestration/projector.test.ts",
+    "Auto-merging apps/server/src/orchestration/projector.ts",
+    "Auto-merging apps/server/src/persistence/Layers/ProjectionThreads.ts",
+    "Auto-merging apps/server/src/persistence/Services/ProjectionThreads.ts",
+    "Auto-merging apps/server/src/server.test.ts",
+    "CONFLICT (content): Merge conflict in apps/server/src/server.test.ts",
+    "Auto-merging apps/server/src/ws.ts",
+    "Auto-merging packages/contracts/src/auth.ts",
+    "Auto-merging packages/contracts/src/orchestration.ts",
+    "Auto-merging packages/contracts/src/rpc.ts",
+    "Rebasing (1/43)\rRebasing (2/43)\rRebasing (3/43)\rRebasing (4/43)\rRebasing (5/43)\rRebasing (6/43)\rerror: could not apply 3a1780bbf... [Spec 250][Phase: phase_4] feat: gate block with a server-allocated revision",
+    "hint: Resolve all conflicts manually, mark them as resolved with",
+    "hint: \"git add/rm <conflicted_files>\", then run \"git rebase --continue\".",
+    "hint: You can instead skip this commit: run \"git rebase --skip\".",
+    "hint: To abort and get back to the state before \"git rebase\", run \"git rebase --abort\".",
+    "hint: Disable this message with \"git config set advice.mergeConflict false\"",
+    "Could not apply 3a1780bbf... [Spec 250][Phase: phase_4] feat: gate block with a server-allocated revision"
+  ],
+  "wholeSurface": {
+    "method": "three-way merge of the same two trees, aborted immediately",
+    "clean": false,
+    "conflictedFiles": [
+      "apps/server/src/server.test.ts",
+      "apps/web/src/components/Sidebar.logic.ts",
+      "apps/web/src/components/Sidebar.tsx"
+    ]
+  },
+  "contractClosure": {
+    "files": [
+      "packages/contracts/src/auth.ts",
+      "packages/contracts/src/baseSchemas.ts",
+      "packages/contracts/src/environment.ts",
+      "packages/contracts/src/git.ts",
+      "packages/contracts/src/model.ts",
+      "packages/contracts/src/orchestration.ts",
+      "packages/contracts/src/providerInstance.ts",
+      "packages/contracts/src/sourceControl.ts",
+      "packages/contracts/src/vcs.ts"
+    ],
+    "conflicted": [],
+    "regenerationReachable": true,
+    "sourceHash": {
+      "checked": true,
+      "algorithm": "sha256",
+      "comparedTo": "2f64a1b0ee2b35cd858a8b601b4d425216e73ae5",
+      "files": {
+        "auth.ts": "89374198ca06cfc7d21e7080f291de79df34cdc3f9bd9453a1e68895388e16d4",
+        "baseSchemas.ts": "0fea5d24348912260361716e01cf1c9ce1cd4d456a434471069a9215c4e8f1d7",
+        "environment.ts": "766021fc016d0a8a45f9523b47f1f3ee4ff1e8564950b58a314bd5bce5082da2",
+        "git.ts": "0d95b17b6aba4e808951a94c734c398c877e1a334572db659a815d093b3bdabb",
+        "model.ts": "0749c9085481e3500f156646d4216fb78436764272d97480e059a193fc6982fc",
+        "orchestration.ts": "fdf0811aac5573ec4b557993fe9392b577a0a1c41a50815f661821027ad8a29b",
+        "providerInstance.ts": "0a1fea758707473021ff0e340015a464ff1af785a4bb842b8976a574acb0afaf",
+        "sourceControl.ts": "e58dc3e8612be6e16bf25d9ee13a9c5d8a02807995f086abe544558544cd7f85",
+        "vcs.ts": "41470d7316088e6fd85710df794076bc6311ca851816856c028a24a8cd4e63db"
+      },
+      "moved": [
+        "auth.ts",
+        "baseSchemas.ts",
+        "environment.ts",
+        "orchestration.ts"
+      ],
+      "detail": "4 of 9 closure files differ after the merge: auth.ts, baseSchemas.ts, environment.ts, orchestration.ts. The generator therefore reads different bytes; WHAT it emits from them is contractRegeneration, which runs it rather than predicting."
+    },
+    "detail": "every file the generator reads merged without conflict, so regenerating the contract from the rebased tree is not blocked by the rebase. What the regenerated contract would CHANGE is bounded by sourceHash.moved and settled by classify-churn --upstream-movement."
+  },
+  "contractRegeneration": {
+    "attempted": true,
+    "source": {
+      "commit": "704c037d98934892213590fe41801e62cc88cce6",
+      "kind": "the three-way merge of the same two trees, written by git merge-tree. Conflicted paths carry markers; none of them is in the contract closure."
+    },
+    "method": "a scratch pin naming the merged commit, in a scratch copy of the codegen tool. The real pin.json was neither read nor written for this, and both real checkouts are untouched.",
+    "interpreter": "v22.22.2",
+    "generated": true,
+    "shapeCheckHolds": false,
+    "artifactsDiffering": [
+      "ATTRIBUTION.md",
+      "schema.json",
+      "schema.ts",
+      "source-hash.json",
+      "types.d.ts"
+    ],
+    "shapesDiffering": [
+      "schema.json",
+      "schema.ts",
+      "types.d.ts"
+    ],
+    "embedsCommitId": [
+      "ATTRIBUTION.md",
+      "source-hash.json"
+    ],
+    "hashMovedShapesDidNot": false,
+    "detail": "the contract regenerates, and 3 shape artifacts would change: schema.json, schema.ts, types.d.ts. That is what adopting this base costs, measured rather than predicted."
+  },
+  "startedAt": "2026-08-31T12:47:23.529Z",
+  "finishedAt": "2026-08-31T12:47:29.073Z",
+  "upstreamChurn": {
+    "range": "082e6ea52186..9b2d04317c68",
+    "commits": 104,
+    "closureTouching": 5,
+    "closureFiles": [
+      "packages/contracts/src/auth.ts",
+      "packages/contracts/src/baseSchemas.ts",
+      "packages/contracts/src/environment.ts",
+      "packages/contracts/src/git.ts",
+      "packages/contracts/src/model.ts",
+      "packages/contracts/src/orchestration.ts",
+      "packages/contracts/src/providerInstance.ts",
+      "packages/contracts/src/sourceControl.ts",
+      "packages/contracts/src/vcs.ts"
+    ]
+  },
+  "upstreamRoot": "/Users/chris/dev/t3code",
+  "forkRoot": "/Users/chris/dev/t3code-codev",
+  "base": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
+  "target": "9b2d04317c68233782e0630464ac86d77d0686f3",
+  "targetRef": "origin/main",
+  "forkHead": "2f64a1b0ee2b35cd858a8b601b4d425216e73ae5",
+  "commitsCarried": 43,
+  "scratch": null,
+  "watermark": {
+    "checked": true,
+    "migrationsDir": "apps/server/src/persistence/Migrations",
+    "watermarkAtBase": 42,
+    "addedByUpstream": [
+      43
+    ],
+    "shadowed": [],
+    "holds": true,
+    "detail": "upstream added 43, all above the watermark 42 our base leaves — so they run. Codev writes nothing to effect_sql_migrations, which is what keeps that true."
+  },
+  "preserved": {
+    "upstreamHead": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
+    "upstreamStillAtBase": true,
+    "upstreamClean": true,
+    "forkHead": "2f64a1b0ee2b35cd858a8b601b4d425216e73ae5",
+    "forkUnmoved": true,
+    "forkClean": true,
+    "pinCommitUnchanged": true
+  }
+}

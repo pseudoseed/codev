@@ -148,6 +148,101 @@ export interface CreateThreadOptions {
   readonly guardFiles?: ReadonlyArray<WorktreeFile>;
   /** Cap on retained events. Default 5,000. */
   readonly retainEvents?: number;
+  /**
+   * Spec 250. Where this thread sits in Workspace > Architect > Builders.
+   *
+   * Optional on the wire, so a caller that does not know — and any upstream
+   * client — dispatches `thread.create` exactly as before. Omitted rather than
+   * sent as null when absent: the fork reads an absent key and an explicit null
+   * the same way, and sending a field we were not given is a claim we cannot
+   * make.
+   */
+  readonly role?: ThreadRole;
+  /**
+   * The architect thread this builder belongs to.
+   *
+   * Required whenever `role` is `builder` — see {@link HierarchyRefusedError}.
+   * Must be absent or null for an architect: the fork refuses
+   * `parent-on-non-builder`, and refusing it here means the caller learns which
+   * of its two fields was wrong without a round trip.
+   */
+  readonly parentThreadId?: string | null;
+}
+
+/** Spec 250. The two roles the fork's thread record can carry. */
+export type ThreadRole = 'architect' | 'builder';
+
+/**
+ * The six reasons the fork refuses a hierarchy edge.
+ *
+ * Copied deliberately from `CodevHierarchyInvalidReason` in the fork's
+ * `apps/server/src/orchestration/Errors.ts` rather than derived: this package
+ * does not import the fork, and the vendored contract does not carry the error
+ * union (`generate.mjs` emits RPC payloads, not error schemas). A drift test
+ * asserts the two lists agree against the fork checkout when it is present, so
+ * the copy is checked rather than trusted.
+ *
+ * Two of the six are decidable without the server, and are refused here:
+ *
+ *   builder-without-parent   `role: "builder"` and no parent. A builder is owned
+ *                            by definition.
+ *   parent-on-non-builder    a parent on an architect, or on no role at all.
+ *
+ * The other four need the projection — does the parent exist, is it in this
+ * project, is it an architect, is it this very thread — and only the server can
+ * answer those. They are named here so a caller reading a refusal off the wire
+ * branches on the same vocabulary it would get locally.
+ */
+export const HIERARCHY_REFUSAL_REASONS = [
+  'parent-not-found',
+  'parent-in-other-project',
+  'parent-is-self',
+  'parent-not-architect',
+  'builder-without-parent',
+  'parent-on-non-builder',
+] as const;
+export type HierarchyRefusalReason = (typeof HIERARCHY_REFUSAL_REASONS)[number];
+
+/**
+ * A hierarchy edge this client refused to send.
+ *
+ * Carries the SAME `reason` vocabulary the server would have answered with, so a
+ * caller branches on one set of strings whichever side refused. It is a distinct
+ * error class rather than a generic one because "you did not give me a parent"
+ * and "the server rejected the parent you gave me" lead to different fixes, and
+ * the first should never require a round trip to discover.
+ */
+export class HierarchyRefusedError extends Error {
+  constructor(
+    readonly reason: HierarchyRefusalReason,
+    readonly threadId: string,
+    readonly parentThreadId: string | null,
+    detail: string,
+  ) {
+    super(`Codev hierarchy invalid (thread.create, ${reason}): ${detail}`);
+    this.name = 'HierarchyRefusedError';
+  }
+}
+
+/**
+ * The two hierarchy rules that do not need the server, applied before dispatch.
+ *
+ * Exported because `attach` cannot check them (an attached thread's role lives on
+ * the server, not in the options) and a caller assembling a create may want to
+ * validate before it has a worktree. Returns the reason rather than throwing, so
+ * the caller decides whether it is an error or a prompt.
+ */
+export function localHierarchyRefusal(options: {
+  readonly role?: ThreadRole;
+  readonly parentThreadId?: string | null;
+}): HierarchyRefusalReason | null {
+  const parent = options.parentThreadId ?? null;
+  if (options.role === 'builder') {
+    return parent === null ? 'builder-without-parent' : null;
+  }
+  // No role at all counts. The fork's `parent-on-non-builder` covers `role:
+  // "architect"` AND an absent role, because a parent means nothing without one.
+  return parent === null ? null : 'parent-on-non-builder';
 }
 
 /**
@@ -273,6 +368,29 @@ export class DriverThread {
     }
 
     const threadId = options.threadId ?? newCommandId();
+
+    /**
+     * BEFORE the worktree is laid down, not after.
+     *
+     * A refused hierarchy leaves nothing behind: no thread on the server, and no
+     * guard files, role file or settings written into a directory on the strength
+     * of a create that was never going to happen. The model check above is
+     * ordered the same way and for the same reason.
+     */
+    const refusal = localHierarchyRefusal(options);
+    if (refusal !== null) {
+      throw new HierarchyRefusedError(
+        refusal,
+        threadId,
+        options.parentThreadId ?? null,
+        refusal === 'builder-without-parent'
+          ? `a builder thread must name the architect thread that owns it; role was "builder" and `
+            + `parentThreadId was ${options.parentThreadId === undefined ? 'omitted' : 'null'}`
+          : `parentThreadId was given as ${JSON.stringify(options.parentThreadId)} with role `
+            + `${options.role === undefined ? 'omitted' : JSON.stringify(options.role)}; only a builder has a parent`,
+      );
+    }
+
     const setup = planWorktreeSetup(mapping.driverKind, {
       worktreePath: options.worktreePath,
       guardFiles: options.guardFiles,
@@ -304,6 +422,16 @@ export class DriverThread {
       // whose worktree is the workspace root" could not be true in production.
       branch: options.branch === '' ? null : options.branch,
       worktreePath: options.worktreePath,
+      // Spec 250. OMITTED when not given, rather than sent as null.
+      //
+      // The fork reads an absent key and an explicit null identically, so the two
+      // are equivalent to the server — but they are not equivalent to a reader of
+      // the journal, and this payload is journalled before it is sent. `role:
+      // null` in a recorded intent reads as "the caller decided this thread has
+      // no role"; an absent key reads as "the caller was not told", which is what
+      // actually happened.
+      ...(options.role === undefined ? {} : { role: options.role }),
+      ...(options.parentThreadId === undefined ? {} : { parentThreadId: options.parentThreadId }),
       createdAt: new Date().toISOString(),
     });
 

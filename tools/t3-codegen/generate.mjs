@@ -31,6 +31,21 @@
  * for three reasons: the pinned clone has no `node_modules` so `effect` would
  * not resolve from it; the staged copy is what gets hashed, so the hash covers
  * exactly what was read; and it keeps the tool from ever writing to the clone.
+ *
+ * WHICH CHECKOUT THIS GENERATES FROM (spec 250)
+ * ---------------------------------------------
+ * The FORK. `pin.commit` keeps its meaning — the commit the artifacts came from —
+ * and from phase 5 that commit lives only in the private customization checkout.
+ * Generating from the upstream clone while asserting `HEAD === pin.commit` would
+ * be unsatisfiable the moment the fork diverges, so the root moves with the
+ * commit rather than the assertion being loosened.
+ *
+ * `source-hash.json` therefore records TWO sections. `files` is the fork closure,
+ * as before, and `upstream` is the same closure hashed at `upstreamBase` from the
+ * upstream clone. Without the second section, "the generated artifacts match the
+ * source they were generated from" is a tautology: it compares the fork to
+ * itself. With it, the fork's divergence from upstream is a fact on disk that a
+ * test can read.
  */
 
 import { createHash } from 'node:crypto';
@@ -38,6 +53,8 @@ import { mkdirSync, readFileSync, writeFileSync, rmSync, cpSync, existsSync } fr
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
+
+import { resolveIdentities } from '../t3-fork/identities.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
@@ -47,22 +64,26 @@ const stagingDir = join(here, '.staging');
 
 const checkOnly = process.argv.includes('--check');
 
-/** Where the pinned t3code checkout lives. Overridable so CI can place it elsewhere. */
-const t3Root = process.env.T3CODE_ROOT ?? '/Users/chris/dev/t3code';
-
 function fail(message) {
   console.error(`[t3-codegen] ${message}`);
   process.exit(1);
 }
 
-// ---------------------------------------------------------------- pin + checkout
+// ---------------------------------------------------------------- pin + checkouts
 
 const pin = JSON.parse(readFileSync(pinPath, 'utf8'));
+const { upstream, fork } = resolveIdentities(pin);
+
+/**
+ * The checkout generation reads. It is the FORK, because `pin.commit` is the fork
+ * head; `T3CODE_FORK_ROOT` overrides it so CI can place it elsewhere.
+ */
+const t3Root = fork.root;
 
 if (!existsSync(t3Root)) {
   fail(
-    `No t3code checkout at ${t3Root}.\n` +
-      `Set T3CODE_ROOT, or clone ${pin.repo} and check out ${pin.commit}.\n` +
+    `No fork checkout at ${t3Root}.\n` +
+      `Set ${fork.rootVar}, or clone ${fork.repo ?? 'the private fork'} and check out ${pin.commit}.\n` +
       `This is a HARD FAILURE, not a skip: generating from a checkout that is not there\n` +
       `would silently emit nothing and read as success.`,
   );
@@ -77,11 +98,30 @@ try {
 
 if (headSha !== pin.commit) {
   fail(
-    `Checkout is at ${headSha} but pin.json says ${pin.commit}.\n` +
+    `Fork checkout is at ${headSha} but pin.json says ${pin.commit}.\n` +
       `Generating against an unpinned tree would produce artifacts nobody can reproduce.\n` +
       `Either check out the pinned commit, or run the refresh procedure in REFRESH.md\n` +
       `to move the pin deliberately.`,
   );
+}
+
+/**
+ * The upstream clone, read only to hash the same closure at `upstreamBase`.
+ *
+ * Its absence does not fail generation: the fork is what the artifacts come from,
+ * and refusing to generate because a second, purely comparative checkout is
+ * missing would make a reference measurement a build dependency. It is recorded
+ * as `available: false` instead, which is spelled differently from "the hashes
+ * matched".
+ */
+const upstreamRoot = upstream.root;
+let upstreamHead = null;
+if (existsSync(upstreamRoot)) {
+  try {
+    upstreamHead = execFileSync('git', ['-C', upstreamRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  } catch {
+    upstreamHead = null;
+  }
 }
 
 // ---------------------------------------------------------------- stage the closure
@@ -124,6 +164,48 @@ for (const file of pin.closure.slice().sort()) {
   const bytes = readFileSync(join(stagingDir, file));
   sourceHash.files[file] = createHash('sha256').update(bytes).digest('hex');
 }
+
+/**
+ * The upstream closure at `upstreamBase`, hashed from the upstream clone.
+ *
+ * `files` above is the fork, and a hash of the fork checked against artifacts
+ * generated from the fork proves only that the generator is deterministic. This
+ * section is the other end of the comparison: it says what upstream's bytes were
+ * at the base we branched from, so fork drift is a subtraction rather than a
+ * claim. `available: false` when the upstream clone is absent or its HEAD has
+ * moved off the base — an unmeasured section must not read as a measured match.
+ */
+sourceHash.upstream = { commit: upstream.commit, available: false, files: {} };
+if (upstreamHead === null) {
+  sourceHash.upstream.reason = `no readable upstream checkout at ${upstreamRoot}`;
+} else if (upstreamHead !== upstream.commit) {
+  sourceHash.upstream.reason =
+    `${upstreamRoot} is at ${upstreamHead}, not upstreamBase ${upstream.commit}; ` +
+    'hashing it would record the wrong tree under the right name';
+} else {
+  const upstreamContracts = join(upstreamRoot, pin.contractsRoot);
+  const missing = pin.closure.filter((file) => !existsSync(join(upstreamContracts, file)));
+  if (missing.length > 0) {
+    sourceHash.upstream.reason = `closure files absent from the upstream checkout: ${missing.join(', ')}`;
+  } else {
+    for (const file of pin.closure.slice().sort()) {
+      const bytes = readFileSync(join(upstreamContracts, file));
+      sourceHash.upstream.files[file] = createHash('sha256').update(bytes).digest('hex');
+    }
+    sourceHash.upstream.available = true;
+  }
+}
+
+/** How many closure files the fork has actually changed. Zero until phase 5. */
+sourceHash.forkDrift = sourceHash.upstream.available
+  ? {
+    measured: true,
+    changedFiles: pin.closure
+      .slice()
+      .sort()
+      .filter((file) => sourceHash.files[file] !== sourceHash.upstream.files[file]),
+  }
+  : { measured: false, reason: sourceHash.upstream.reason };
 
 // ---------------------------------------------------------------- emit schemas
 
@@ -332,6 +414,8 @@ await scanForLoss();
 // Orchestration methods come from the contract's own machine-readable map, so a
 // method added or renamed upstream shows up here rather than in a hand-edit.
 const rpcMap = orchestration.OrchestrationRpcSchemas;
+/** Vendored modules a `pin.methods` entry may resolve its schema names from. */
+const MANUAL_METHOD_MODULES = { 'git.ts': git, 'orchestration.ts': orchestration };
 for (const [method, spec] of Object.entries(pin.methods)) {
   if (method.startsWith('_')) continue;
   if (spec.source === 'OrchestrationRpcSchemas') {
@@ -343,18 +427,44 @@ for (const [method, spec] of Object.entries(pin.methods)) {
     record(outName, entry.output);
     methods[method] = { input: inName, output: outName, stream: Boolean(spec.stream) };
   } else {
-    const inSchema = spec.input ? git[spec.input] : null;
-    if (spec.input && !inSchema) fail(`pin.json names ${spec.input} for ${method}, but git.ts does not export it.`);
+    // Methods whose method STRING lives in the unvendored `rpc.ts` while their
+    // schemas live inside the closure. `vcs.*` were the first of these; spec
+    // 250's `codev.gateWrite` is the same situation and is recorded the same
+    // way. The module is NAMED by `source` rather than assumed to be `git.ts` —
+    // assuming it is what made the second case need a code change at all.
+    const mod = MANUAL_METHOD_MODULES[spec.source];
+    if (!mod) {
+      fail(
+        `pin.json gives ${method} source "${spec.source}", which names no vendored module. ` +
+          `Expected "OrchestrationRpcSchemas" or one of: ${Object.keys(MANUAL_METHOD_MODULES).join(', ')}.`,
+      );
+    }
+    const resolve = (name) => {
+      if (!name) return null;
+      const schema = mod[name];
+      if (!schema) fail(`pin.json names ${name} for ${method}, but ${spec.source} does not export it.`);
+      return schema;
+    };
+    const inSchema = resolve(spec.input);
     if (inSchema) record(spec.input, inSchema);
-    const outSchema = spec.output ? git[spec.output] : null;
-    if (spec.output && !outSchema) fail(`pin.json names ${spec.output} for ${method}, but git.ts does not export it.`);
+    const outSchema = resolve(spec.output);
     if (outSchema) record(spec.output, outSchema);
-    methods[method] = { input: spec.input ?? null, output: spec.output ?? null, stream: false };
+    methods[method] = { input: spec.input ?? null, output: spec.output ?? null, stream: Boolean(spec.stream) };
   }
 }
 
-// The event union is not an RPC payload but every consumer decodes it.
-for (const name of ['OrchestrationEvent', 'ClientOrchestrationCommand']) {
+/**
+ * Schemas that are not RPC payloads and are decoded by every consumer anyway.
+ *
+ * `OrchestrationDispatchRefusal` joined the list in spec 250 phase 6. It is an
+ * ERROR shape rather than a payload, and the generator otherwise emits neither —
+ * but this one travels on `OrchestrationDispatchCommandError.refusal` and carries
+ * the reason vocabulary a client switches on. Leaving it out meant `porch-driver`
+ * kept its own copy of six string literals and checked it by hand against a file
+ * in a checkout it does not import, which is the arrangement this whole vendoring
+ * exists to replace.
+ */
+for (const name of ['OrchestrationEvent', 'ClientOrchestrationCommand', 'OrchestrationDispatchRefusal']) {
   if (orchestration[name]) record(name, orchestration[name]);
 }
 
@@ -446,9 +556,24 @@ function tsTypeFor(node, indent = 0, seen = new Set()) {
   }
 }
 
-const dtsLines = [
+/**
+ * The provenance banner, written ONCE.
+ *
+ * `pin.commit` is a fork commit and exists only in `pin.forkRepo`; naming
+ * `pin.repo` beside it points a reader at a repository that has never held it.
+ * There were three emitted headers making this claim and the third was a separate
+ * hand-written string, so correcting two of them left the one that ships wrong —
+ * caught in review. A list that must not drift does not need a better guard on the
+ * copies, it needs to stop having copies.
+ */
+const PROVENANCE = [
   '// GENERATED by tools/t3-codegen — do not edit.',
-  `// Source: ${pin.repo} @ ${pin.commit}`,
+  `// Generated from: ${pin.forkRepo} @ ${pin.commit} (a private modified copy)`,
+  `// Which branched from: ${pin.repo} @ ${pin.upstreamBase}`,
+];
+
+const dtsLines = [
+  ...PROVENANCE,
   '//',
   '// Derived from the emitted JSON Schema, not from the Effect source, so these',
   '// declarations reference no runtime library and `packages/types` keeps zero',
@@ -482,16 +607,23 @@ const attribution = `# Attribution
 
 The files in this directory are **generated from t3code**, which is MIT licensed.
 
-- Source: ${pin.repo}
-- Commit: \`${pin.commit}\` (${pin.commitDate})
+They are generated from a **private modified copy** of t3code, not from the upstream
+repository, so both are named. \`${pin.commit}\` exists only in the fork; looking for it in
+${pin.repo} would not find it, and an attribution that named upstream alone would be
+pointing at a commit that is not the source of these files.
+
+- Generated from: ${pin.forkRepo} — commit \`${pin.commit}\` (${pin.commitDate}), branch \`${pin.forkBranch}\`
+- Which branched from: ${pin.repo} — commit \`${pin.upstreamBase}\` (${pin.upstreamBaseDate})
 - Generated by: \`tools/t3-codegen/generate.mjs\`
+- Modifications: see \`tools/t3-fork/FORK.md\` and the exported patches in \`tools/t3-fork/patches/\`
 
 \`@cluesmith/codev-types\` is published under Apache-2.0 and ships \`files: ["src", "dist"]\`,
 so these derived artifacts leave this repository inside a distributed package. MIT requires
 its notice to travel with the distribution, which is why this file sits beside them rather
 than in a place a packaging step might drop.
 
-The notice below is reproduced verbatim from \`LICENSE\` at the pinned commit.
+The notice below is reproduced verbatim from \`LICENSE\` at the pinned commit. The fork carries
+it unmodified from upstream.
 
 \`\`\`
 ${upstreamLicense}
@@ -568,8 +700,7 @@ ${unrepresented.length === 0 ? `_None of the ${Object.keys(schemas).length} cons
 // JSON into dist" build step, which is the kind of thing that passes in CI and
 // then fails at a consumer's runtime because the file never reached `dist`.
 const schemaModule =
-  '// GENERATED by tools/t3-codegen — do not edit.\n' +
-  `// Source: ${pin.repo} @ ${pin.commit}\n` +
+  PROVENANCE.join('\n') + '\n' +
   '//\n' +
   '// A LOWER BOUND on t3code\'s validation, not an equivalent. See LOSSY.md.\n\n' +
   'export const t3Defs = ' +

@@ -36,6 +36,7 @@ import {
   chooseSpawnPath,
 } from '../db/thread-identity.js';
 import { ensureThreadBackendReady } from '../thread-backend.js';
+import { threadIdForAgent } from '../thread-runtime.js';
 
 import { findStatusPath, getStatusPath, recordThreadId } from '../../commands/porch/state.js';
 import { DEFAULT_ARCHITECT_NAME } from '../utils/architect-name.js';
@@ -133,6 +134,52 @@ function logSpawnSuccess(
   if (identity.terminalId) logger.kv('Terminal', client.getTerminalWsUrl(identity.terminalId));
 }
 
+/**
+ * Where this builder sits in Workspace > Architect > Builders (spec 250).
+ *
+ * TWO ANSWERS, and `unowned` carries its own reason rather than splitting into a
+ * third case. Review caught an earlier version of this comment claiming three and
+ * then listing `unowned` twice, which is the kind of drift a doc acquires when the
+ * union changes under it.
+ *
+ *   owned        the spawning architect is thread-backed; the builder gets
+ *                `role: "builder"` and that architect's thread id.
+ *   unowned      no architect thread to name, with `detail` saying which of the
+ *                three ways that happened: no workspace root was given, the
+ *                architect is not registered, or it is registered and running on
+ *                a terminal rather than a thread. The last is an ordinary
+ *                configuration today. The builder gets NEITHER field, exactly as
+ *                before this spec, and the reason is reported rather than left to
+ *                be inferred from a thread that quietly has no role.
+ *
+ * Sending `role: "builder"` without a parent is not an option in any of them:
+ * `DriverThread.create` refuses it before dispatch, and the server refuses it
+ * after. A builder is owned by definition, so "builder with nobody" is not a
+ * weaker claim than "no role" — it is an invalid one.
+ */
+export type ThreadHierarchy =
+  | { readonly kind: 'owned'; readonly role: 'builder'; readonly parentThreadId: string }
+  | { readonly kind: 'unowned'; readonly detail: string };
+
+export function resolveThreadHierarchy(
+  workspaceRoot: string | undefined,
+  architectName: string,
+): ThreadHierarchy {
+  if (!workspaceRoot) {
+    return { kind: 'unowned', detail: 'no workspace root was named for this spawn' };
+  }
+  const parentThreadId = threadIdForAgent(workspaceRoot, architectName, 'architect');
+  if (!parentThreadId) {
+    return {
+      kind: 'unowned',
+      detail:
+        `architect "${architectName}" has no thread in ${workspaceRoot} — it is either not `
+        + `registered or is running on a terminal rather than a thread`,
+    };
+  }
+  return { kind: 'owned', role: 'builder', parentThreadId };
+}
+
 export async function launchSpawnedBuilder(opts: {
   existing?: { terminalId?: string; threadId?: string } | null;
   builderId: string;
@@ -167,6 +214,21 @@ export async function launchSpawnedBuilder(opts: {
   // — and which never sees a real workspace's factory, deliberately (issue #227 item 1).
   const pathKind = chooseSpawnPath(opts.existing ?? undefined, opts.workspaceRoot);
   if (pathKind === 'thread') {
+    // Resolved HERE, not at the six call sites. Every one of them already passes
+    // `spawnedByArchitect: SPAWNING_ARCHITECT_NAME` to `persistSpawnedBuilder`,
+    // so threading the parent through each would be the same fact computed six
+    // times — and the seventh call site would be the one that forgot.
+    const hierarchy = resolveThreadHierarchy(opts.workspaceRoot, SPAWNING_ARCHITECT_NAME);
+    if (hierarchy.kind === 'unowned') {
+      // Said out loud. A thread with no role renders in the sidebar as a thread
+      // with no place in the tree, and "this builder has no architect above it"
+      // is a fact an operator can act on, while an empty group is one they have
+      // to go and diagnose.
+      logger.info(
+        `Thread-backed spawn of ${opts.builderId} carries no hierarchy: ${hierarchy.detail}. `
+        + `The thread is created without a role or a parent, as it was before spec 250.`,
+      );
+    }
     const threadId = opts.existing?.threadId ?? await allocateSpawnThread({
       builderId: opts.builderId,
       worktreePath: opts.worktreePath,
@@ -175,6 +237,9 @@ export async function launchSpawnedBuilder(opts: {
       model: opts.model,
       prompt: opts.prompt,
       launchScript: opts.launchScript,
+      ...(hierarchy.kind === 'owned'
+        ? { role: hierarchy.role, parentThreadId: hierarchy.parentThreadId }
+        : {}),
       roleContent: opts.roleContent,
       roleFilePath: opts.roleFilePath,
     }, opts.workspaceRoot);

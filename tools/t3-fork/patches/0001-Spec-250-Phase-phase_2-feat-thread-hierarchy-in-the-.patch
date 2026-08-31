@@ -1,0 +1,1510 @@
+From 1a414cee8409a407977ff6c6505fad1ab82f2ec8 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 15:49:16 -0600
+Subject: [PATCH 01/34] [Spec 250][Phase: phase_2] feat: thread hierarchy in
+ the contract and projection
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Codev customization. role ("architect" | "builder" | null) and
+parentThreadId on the thread record, carried from the event through the
+projector and both persistence paths.
+
+The columns are applied OUTSIDE upstream's migration registry, in
+upstream's own idiom: PRAGMA table_info then ALTER TABLE ADD COLUMN for
+what is absent, the same shape as 042_ProjectionThreadLinkedPullRequest.
+The migrator is a watermark migrator, so a Codev id either collides with
+upstream's next one (low) or pushes the watermark above every future
+upstream id and silently skips them forever (high). Migration 900 is
+abandoned; schemaGuard.ts records why. The guard logs
+CODEV_SCHEMA_GUARD_APPLIED / _NOOP because staying out of the registry
+means the columns are otherwise inferrable only by reading the schema.
+
+Wired into persistence/Layers/Sqlite.ts's `setup`, immediately after
+runMigrations(), NOT after MigrationsLive as the plan said. MigrationsLive
+is exported and nothing builds it: a guard hung there would never have run
+in production while a test that constructed the layer passed. `setup` is
+what both makeSqlitePersistenceLive and SqlitePersistenceMemory provide.
+A test asserts the ordering against that production file, not against a
+layer it assembles itself.
+
+Two spellings, deliberately. ThreadCreatedPayload keeps a decoding default
+so the log's pre-fork payloads replay and the projector's payload.role
+read is total. The read models use Schema.optional, matching
+linkedPullRequest — upstream's own newest field, optional so older cached
+snapshots decode. The strict form cost 32 edits across 11 upstream test
+files, which is the divergence this fork is shaped to avoid; the server
+normalizes with ?? null on every read path, so one spelling reaches
+clients in practice.
+
+Fork typecheck green. contracts 291 passed; server 2769 passed, 8 skipped.
+The one server failure, entrypoint.test.ts's symlink case, is byte-identical
+to the base commit, imports only node:fs and node:url, and fails on macOS's
+/var -> /private/var resolution. Pre-existing and unrelated.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/server/src/codev/schemaGuard.test.ts     | 184 ++++++++++++
+ apps/server/src/codev/schemaGuard.ts          | 182 ++++++++++++
+ apps/server/src/codev/threadHierarchy.test.ts | 261 ++++++++++++++++++
+ .../Layers/ProjectionPipeline.ts              |   4 +
+ .../Layers/ProjectionSnapshotQuery.test.ts    |   8 +
+ .../Layers/ProjectionSnapshotQuery.ts         |  24 ++
+ .../src/orchestration/decider.delete.test.ts  |  12 +
+ .../decider.projectScripts.test.ts            |  18 ++
+ .../projector.codevHierarchy.test.ts          | 194 +++++++++++++
+ .../src/orchestration/projector.test.ts       |   4 +
+ apps/server/src/orchestration/projector.ts    |   6 +
+ .../persistence/Layers/ProjectionThreads.ts   |  10 +
+ apps/server/src/persistence/Layers/Sqlite.ts  |   8 +
+ .../persistence/Services/ProjectionThreads.ts |   9 +
+ packages/contracts/src/orchestration.test.ts  | 155 +++++++++++
+ packages/contracts/src/orchestration.ts       |  55 ++++
+ 16 files changed, 1134 insertions(+)
+ create mode 100644 apps/server/src/codev/schemaGuard.test.ts
+ create mode 100644 apps/server/src/codev/schemaGuard.ts
+ create mode 100644 apps/server/src/codev/threadHierarchy.test.ts
+ create mode 100644 apps/server/src/orchestration/projector.codevHierarchy.test.ts
+
+diff --git a/apps/server/src/codev/schemaGuard.test.ts b/apps/server/src/codev/schemaGuard.test.ts
+new file mode 100644
+index 000000000..ad782c66d
+--- /dev/null
++++ b/apps/server/src/codev/schemaGuard.test.ts
+@@ -0,0 +1,184 @@
++/**
++ * Codev customization (spec 250) — the schema guard.
++ *
++ * The interesting assertions here are not "it adds two columns". They are:
++ *
++ *  - it does NOT touch `effect_sql_migrations`, so upstream's watermark stays
++ *    where upstream left it;
++ *  - a new upstream migration landing after the guard still takes effect — the
++ *    shape of test that would have caught the abandoned migration 900;
++ *  - a half-applied schema (one column added, then a crash) is resumable, and the
++ *    next run finishes the job and reports what it did.
++ */
++
++import { assert, describe, it } from "@effect/vitest";
++import * as Effect from "effect/Effect";
++import * as Layer from "effect/Layer";
++import * as SqlClient from "effect/unstable/sql/SqlClient";
++
++import { runMigrations } from "../persistence/Migrations.ts";
++import * as NodeSqliteClient from "../persistence/NodeSqliteClient.ts";
++import {
++  CODEV_GUARDED_TABLE,
++  CODEV_THREAD_COLUMN_NAMES,
++  applyCodevSchemaGuard,
++} from "./schemaGuard.ts";
++
++/**
++ * A FRESH in-memory database per test, not one shared by the block.
++ *
++ * `it.layer` builds its layer once per suite, so every test here ran against the
++ * same database and the second `ALTER TABLE … codev_role` failed with "duplicate
++ * column name". Worse, the ones that passed did so only because of the order they
++ * ran in. Schema tests that share a schema are testing the order.
++ */
++const withDb = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
++  Effect.provide(effect, Layer.mergeAll(NodeSqliteClient.layerMemory()));
++
++const columnNames = Effect.fn("columnNames")(function* () {
++  const sql = yield* SqlClient.SqlClient;
++  const columns = yield* sql<{ readonly name: string }>`
++    PRAGMA table_info(projection_threads)
++  `;
++  return columns.map((column) => column.name);
++});
++
++const migrationWatermark = Effect.fn("migrationWatermark")(function* () {
++  const sql = yield* SqlClient.SqlClient;
++  const rows = yield* sql<{
++    readonly migration_id: number;
++    readonly name: string;
++  }>`SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC`;
++  return rows.map((row) => `${row.migration_id}_${row.name}`);
++});
++
++describe("codev schema guard (spec 250)", () => {
++  it.effect("adds both hierarchy columns to projection_threads", () =>
++    withDb(
++      Effect.gen(function* () {
++        yield* runMigrations();
++
++        const before = yield* columnNames();
++        for (const column of CODEV_THREAD_COLUMN_NAMES) {
++          assert.ok(!before.includes(column), `${column} must not exist before the guard runs`);
++        }
++
++        const result = yield* applyCodevSchemaGuard();
++        assert.deepStrictEqual([...result.added], [...CODEV_THREAD_COLUMN_NAMES]);
++        assert.deepStrictEqual([...result.present], []);
++
++        const after = yield* columnNames();
++        for (const column of CODEV_THREAD_COLUMN_NAMES) {
++          assert.ok(after.includes(column), `${column} must exist after the guard runs`);
++        }
++      }),
++    ),
++  );
++
++  it.effect("is idempotent: a second run adds nothing and changes nothing", () =>
++    withDb(
++      Effect.gen(function* () {
++        yield* runMigrations();
++        yield* applyCodevSchemaGuard();
++        const afterFirst = yield* columnNames();
++
++        const second = yield* applyCodevSchemaGuard();
++        assert.deepStrictEqual([...second.added], [], "the second run must add nothing");
++        assert.deepStrictEqual([...second.present], [...CODEV_THREAD_COLUMN_NAMES]);
++        assert.deepStrictEqual(yield* columnNames(), afterFirst);
++      }),
++    ),
++  );
++
++  it.effect("resumes a half-applied schema instead of skipping it", () =>
++    withDb(
++      Effect.gen(function* () {
++        const sql = yield* SqlClient.SqlClient;
++        yield* runMigrations();
++
++        // Exactly the state a SIGKILL between the two ALTERs leaves behind: one
++        // column added, the other absent. There is no transaction wrapping them,
++        // so the process can really reach this state — unlike inside the migrator,
++        // where `sql.withTransaction` would have rolled both back and the
++        // criterion would have passed by construction.
++        yield* sql`ALTER TABLE projection_threads ADD COLUMN codev_role TEXT`;
++
++        const result = yield* applyCodevSchemaGuard();
++        assert.deepStrictEqual([...result.present], ["codev_role"]);
++        assert.deepStrictEqual([...result.added], ["codev_parent_thread_id"]);
++
++        const after = yield* columnNames();
++        for (const column of CODEV_THREAD_COLUMN_NAMES) {
++          assert.ok(after.includes(column));
++        }
++      }),
++    ),
++  );
++
++  it.effect("never touches upstream's migration watermark", () =>
++    withDb(
++      Effect.gen(function* () {
++        yield* runMigrations();
++        const before = yield* migrationWatermark();
++        assert.ok(before.length > 0, "the migrator must have recorded upstream's own migrations");
++
++        yield* applyCodevSchemaGuard();
++        yield* applyCodevSchemaGuard();
++
++        assert.deepStrictEqual(
++          yield* migrationWatermark(),
++          before,
++          "effect_sql_migrations must be identical before and after the guard",
++        );
++      }),
++    ),
++  );
++
++  /**
++   * The shape of test that would have caught migration 900.
++   *
++   * Under a watermark migrator, a Codev migration at a high id pushes the
++   * watermark above every future upstream id, and upstream's next migration is
++   * skipped forever with no error. Applying the columns outside the registry
++   * means the watermark never moves, so later schema work still lands.
++   */
++  it.effect("schema work landing after the guard still takes effect", () =>
++    withDb(
++      Effect.gen(function* () {
++        const sql = yield* SqlClient.SqlClient;
++        yield* runMigrations();
++        yield* applyCodevSchemaGuard();
++
++        const watermarkAfterGuard = yield* migrationWatermark();
++
++        // Stand-in for upstream's next migration.
++        yield* sql`ALTER TABLE projection_threads ADD COLUMN pretend_upstream_column TEXT`;
++
++        const columns = yield* columnNames();
++        assert.ok(
++          columns.includes("pretend_upstream_column"),
++          "an upstream migration landing after the guard must still take effect",
++        );
++        for (const column of CODEV_THREAD_COLUMN_NAMES) {
++          assert.ok(columns.includes(column), "and it must not have displaced Codev's columns");
++        }
++        assert.deepStrictEqual(
++          yield* migrationWatermark(),
++          watermarkAfterGuard,
++          "the guard left the watermark free for upstream to keep using",
++        );
++      }),
++    ),
++  );
++
++  it.effect("guards the table the rest of the phase reads and writes", () =>
++    withDb(
++      Effect.gen(function* () {
++        // A constant nobody reads is a constant that drifts. This pins the guard
++        // to the table ProjectionThreads and ProjectionSnapshotQuery query.
++        assert.strictEqual(CODEV_GUARDED_TABLE, "projection_threads");
++        yield* Effect.void;
++      }),
++    ),
++  );
++});
+diff --git a/apps/server/src/codev/schemaGuard.ts b/apps/server/src/codev/schemaGuard.ts
+new file mode 100644
+index 000000000..29f9a2beb
+--- /dev/null
++++ b/apps/server/src/codev/schemaGuard.ts
+@@ -0,0 +1,182 @@
++/**
++ * Codev customization (spec 250) — the schema guard.
++ *
++ * WHY THIS IS NOT A MIGRATION
++ * ---------------------------
++ * Upstream's migrator is a WATERMARK migrator: `effect_sql_migrations` records the
++ * highest id that has run, and the runner skips everything at or below it. So a
++ * Codev migration inserted into `migrationEntries` has exactly two options, and
++ * both are bad.
++ *
++ * A LOW id collides — upstream's next migration takes the number we took, and a
++ * database that ran ours then meets upstream's is told it already ran a migration
++ * it has never seen.
++ *
++ * A HIGH id (the first draft reached for 900, reasoning that a big gap is safe) is
++ * the opposite of safe under a watermark: once 900 has run, the watermark is 900,
++ * and upstream's 043 is below it. Every future upstream migration is silently
++ * skipped, forever, on every Codev database. Nothing errors. The schema simply
++ * stops keeping up, and the first symptom is a query failing months later against
++ * a column upstream added and we never got.
++ *
++ * So the columns are applied OUTSIDE the registry, in upstream's own idiom:
++ * `PRAGMA table_info` then `ALTER TABLE … ADD COLUMN` for what is absent. That is
++ * exactly what `042_ProjectionThreadLinkedPullRequest.ts` and seven other upstream
++ * migrations do. This file never reads or writes `effect_sql_migrations`, so
++ * upstream's watermark stays where upstream put it and every future upstream
++ * migration still runs.
++ *
++ * THE COST, AND THE MITIGATION
++ * ----------------------------
++ * Staying out of the registry has one real price: our columns are absent from the
++ * migration history, so their existence is inferrable only by reading the schema.
++ * The mitigation is that this logs, under a named signal, on every start:
++ * `CODEV_SCHEMA_GUARD_APPLIED` with the columns it added, or
++ * `CODEV_SCHEMA_GUARD_NOOP` when there was nothing to do.
++ *
++ * Two signals rather than one, because "added two columns" and "had nothing to do"
++ * are different facts. A single line covering both is the thing that makes a log
++ * useless — you could not tell a first start from the thousandth.
++ *
++ * CRASH SAFETY
++ * ------------
++ * There is no transaction around these statements and there does not need to be.
++ * Each `ALTER TABLE … ADD COLUMN` is atomic on its own, so a kill between the two
++ * leaves exactly one column added — and the `PRAGMA table_info` check means the
++ * next start adds the other and reports it. A partially applied schema is a
++ * resumable state, not a corrupt one, and it still opens against a pre-fork server:
++ * the added columns are nullable, and every read upstream performs names its
++ * columns explicitly.
++ *
++ * Note this is the reason the kill test discriminates at all. Inside the migrator
++ * the whole run is wrapped in `sql.withTransaction` and SQLite DDL is
++ * transactional, so a kill would roll everything back and the criterion would pass
++ * by construction rather than by the code being careful.
++ */
++
++import * as Effect from "effect/Effect";
++import * as SqlClient from "effect/unstable/sql/SqlClient";
++
++/** The table Codev's hierarchy columns live on. */
++export const CODEV_GUARDED_TABLE = "projection_threads";
++
++/**
++ * The columns this guard maintains.
++ *
++ * Both are nullable with no default, deliberately. A pre-fork database gets `NULL`
++ * for every existing row, and `NULL` means "Codev did not create this thread" —
++ * which is true of every row predating the fork. A default would have turned that
++ * fact into a guess.
++ *
++ * `add` is a thunk holding a fully literal statement rather than an interpolated
++ * one. Identifiers and types cannot be bound as SQL parameters, and building them
++ * by string concatenation is how an identifier becomes an injection point. Writing
++ * each statement out is the same shape upstream's own column migrations use.
++ */
++export const CODEV_THREAD_COLUMNS = [
++  {
++    name: "codev_role",
++    add: Effect.fnUntraced(function* () {
++      const sql = yield* SqlClient.SqlClient;
++      yield* sql`
++        ALTER TABLE projection_threads
++        ADD COLUMN codev_role TEXT
++      `;
++    }),
++  },
++  {
++    name: "codev_parent_thread_id",
++    add: Effect.fnUntraced(function* () {
++      const sql = yield* SqlClient.SqlClient;
++      yield* sql`
++        ALTER TABLE projection_threads
++        ADD COLUMN codev_parent_thread_id TEXT
++      `;
++    }),
++  },
++] as const;
++
++/** The column names, for tests and for anything that needs the set without the DDL. */
++export const CODEV_THREAD_COLUMN_NAMES = CODEV_THREAD_COLUMNS.map((column) => column.name);
++
++export type CodevSchemaGuardResult = {
++  /** Columns this run actually added. Empty on every start after the first. */
++  readonly added: ReadonlyArray<string>;
++  /** Columns that were already present. */
++  readonly present: ReadonlyArray<string>;
++};
++
++/**
++ * Apply the Codev columns to `projection_threads`, idempotently.
++ *
++ * Returns what it did rather than logging and swallowing it, so a test can assert
++ * that the second run added nothing without parsing log output.
++ */
++export const applyCodevSchemaGuard = Effect.fn("applyCodevSchemaGuard")(function* () {
++  const sql = yield* SqlClient.SqlClient;
++
++  const existing = yield* sql<{ readonly name: string }>`
++    PRAGMA table_info(projection_threads)
++  `;
++  const existingNames = new Set(existing.map((column) => column.name));
++
++  const added: Array<string> = [];
++  const present: Array<string> = [];
++
++  for (const column of CODEV_THREAD_COLUMNS) {
++    if (existingNames.has(column.name)) {
++      present.push(column.name);
++      continue;
++    }
++    yield* column.add();
++    added.push(column.name);
++  }
++
++  return { added, present } satisfies CodevSchemaGuardResult;
++});
++
++/**
++ * The start-up step: apply, then log under a named signal.
++ *
++ * WHERE THIS IS CALLED, AND WHY NOT WHERE THE PLAN SAID
++ * ----------------------------------------------------
++ * The plan called for a layer sequenced after `MigrationsLive`. `MigrationsLive`
++ * (`persistence/Migrations.ts:173`) is exported and **nothing builds it** — grep
++ * the tree; every reference is its own definition or its own docstring. The real
++ * boot path is `persistence/Layers/Sqlite.ts`'s `setup`, which calls
++ * `runMigrations()` directly and is what both `makeSqlitePersistenceLive` and
++ * `SqlitePersistenceMemory` provide.
++ *
++ * So a guard hung off `MigrationsLive` would never run in production, and a test
++ * that built `MigrationsLive` itself would have passed anyway — proving the layer
++ * works while production never constructs it. This is called from `setup` instead,
++ * immediately after `runMigrations()`, which is the one place that actually
++ * sequences schema work before the projection layers open.
++ *
++ * Ordering matters and is not left to construction order: a repository query that
++ * ran before the guard would read a table without our columns, and the failure
++ * would surface as missing data rather than as a boot-order bug.
++ */
++export const codevSchemaGuardStep = Effect.fn("codevSchemaGuardStep")(function* () {
++  const result = yield* applyCodevSchemaGuard();
++
++  yield* result.added.length > 0
++    ? Effect.log("CODEV_SCHEMA_GUARD_APPLIED").pipe(
++        Effect.annotateLogs({
++          table: CODEV_GUARDED_TABLE,
++          added: result.added,
++          alreadyPresent: result.present,
++          spec: 250,
++          note: "Codev columns are applied outside effect_sql_migrations by design; see apps/server/src/codev/schemaGuard.ts",
++        }),
++      )
++    : Effect.log("CODEV_SCHEMA_GUARD_NOOP").pipe(
++        Effect.annotateLogs({
++          table: CODEV_GUARDED_TABLE,
++          alreadyPresent: result.present,
++          spec: 250,
++        }),
++      );
++
++  return result;
++});
+diff --git a/apps/server/src/codev/threadHierarchy.test.ts b/apps/server/src/codev/threadHierarchy.test.ts
+new file mode 100644
+index 000000000..9b34eb02a
+--- /dev/null
++++ b/apps/server/src/codev/threadHierarchy.test.ts
+@@ -0,0 +1,261 @@
++/**
++ * Codev customization (spec 250) — the hierarchy columns through real persistence.
++ *
++ * The projector test proves the rebuild in memory. This one proves the columns
++ * survive the round trip through SQLite via the repository production uses, and
++ * that a database written before the fork opens and reads as "not recorded"
++ * rather than as a guessed role.
++ *
++ * It also asserts the START-UP ORDERING against the production source. The plan
++ * asked for the guard to sit after `MigrationsLive`; `MigrationsLive` is exported
++ * and nothing builds it, so a guard hung there would never have run in production
++ * while a test that constructed the layer itself passed happily. The assertion
++ * below reads `persistence/Layers/Sqlite.ts` — the file that actually sequences
++ * boot — rather than any layer this test assembles.
++ */
++
++import { readFileSync } from "node:fs";
++import { fileURLToPath } from "node:url";
++
++import { ProjectId, ThreadId } from "@t3tools/contracts";
++import { assert, describe, it } from "@effect/vitest";
++import * as Effect from "effect/Effect";
++import * as Layer from "effect/Layer";
++import * as Option from "effect/Option";
++import * as SqlClient from "effect/unstable/sql/SqlClient";
++
++import { runMigrations } from "../persistence/Migrations.ts";
++import * as NodeSqliteClient from "../persistence/NodeSqliteClient.ts";
++import {
++  ProjectionThreadRepository,
++  type ProjectionThread,
++} from "../persistence/Services/ProjectionThreads.ts";
++import { ProjectionThreadRepositoryLive } from "../persistence/Layers/ProjectionThreads.ts";
++import { applyCodevSchemaGuard } from "./schemaGuard.ts";
++
++const NOW = "2026-01-01T00:00:00.000Z";
++
++/** A fresh database per test. Schema tests that share a schema test the order. */
++const withDb = <A, E>(
++  effect: Effect.Effect<A, E, SqlClient.SqlClient | ProjectionThreadRepository>,
++) => {
++  const sqlite = NodeSqliteClient.layerMemory();
++  return Effect.provide(
++    effect,
++    Layer.mergeAll(sqlite, Layer.provide(ProjectionThreadRepositoryLive, sqlite)),
++  );
++};
++
++/** The state of a database the pinned pre-fork server produced: migrated, no guard. */
++const preForkDatabase = Effect.fn("preForkDatabase")(function* () {
++  yield* runMigrations();
++});
++
++function row(
++  threadId: string,
++  overrides: Partial<ProjectionThread> = {},
++): ProjectionThread {
++  return {
++    threadId: ThreadId.make(threadId),
++    projectId: ProjectId.make("project-1"),
++    title: `Thread ${threadId}`,
++    modelSelection: { instanceId: "codex", model: "gpt-5.4" },
++    runtimeMode: "full-access",
++    interactionMode: "default",
++    branch: null,
++    worktreePath: null,
++    latestTurnId: null,
++    createdAt: NOW,
++    updatedAt: NOW,
++    archivedAt: null,
++    settledOverride: null,
++    settledAt: null,
++    snoozedUntil: null,
++    snoozedAt: null,
++    pinnedAt: null,
++    latestUserMessageAt: null,
++    pendingApprovalCount: 0,
++    pendingUserInputCount: 0,
++    hasActionableProposedPlan: 0,
++    deletedAt: null,
++    ...overrides,
++  } as ProjectionThread;
++}
++
++describe("codev thread hierarchy in persistence (spec 250)", () => {
++  it.effect("round-trips role and parentThreadId through the repository", () =>
++    withDb(
++      Effect.gen(function* () {
++        yield* preForkDatabase();
++        yield* applyCodevSchemaGuard();
++        const repository = yield* ProjectionThreadRepository;
++
++        yield* repository.upsert(
++          row("thread-architect", { role: "architect", parentThreadId: null }),
++        );
++        yield* repository.upsert(
++          row("thread-builder", {
++            role: "builder",
++            parentThreadId: ThreadId.make("thread-architect"),
++          }),
++        );
++
++        const architect = yield* repository.getById({ threadId: ThreadId.make("thread-architect") });
++        const builder = yield* repository.getById({ threadId: ThreadId.make("thread-builder") });
++
++        assert.ok(Option.isSome(architect));
++        assert.ok(Option.isSome(builder));
++        assert.strictEqual(architect.value.role, "architect");
++        assert.strictEqual(architect.value.parentThreadId, null);
++        assert.strictEqual(builder.value.role, "builder");
++        assert.strictEqual(builder.value.parentThreadId, "thread-architect");
++      }),
++    ),
++  );
++
++  /**
++   * Criterion 8, the database half. A row written by the pre-fork server has no
++   * values in the new columns, and the read must report that as "not recorded"
++   * rather than inventing a role.
++   */
++  it.effect("reads pre-fork rows as not recorded, never as a guessed role", () =>
++    withDb(
++      Effect.gen(function* () {
++        const sql = yield* SqlClient.SqlClient;
++        yield* preForkDatabase();
++
++        // Written the way the pinned server writes it: no Codev columns exist yet.
++        yield* sql`
++          INSERT INTO projection_threads (
++            thread_id, project_id, title, model_selection_json, runtime_mode,
++            interaction_mode, branch, worktree_path, latest_turn_id,
++            created_at, updated_at, archived_at, settled_override, settled_at,
++            snoozed_until, snoozed_at, pinned_at, latest_user_message_at,
++            pending_approval_count, pending_user_input_count,
++            has_actionable_proposed_plan, deleted_at
++          ) VALUES (
++            'thread-legacy', 'project-1', 'Written before the fork',
++            ${JSON.stringify({ instanceId: "codex", model: "gpt-5.4" })},
++            'full-access', 'default', NULL, NULL, NULL,
++            ${NOW}, ${NOW}, NULL, NULL, NULL,
++            NULL, NULL, NULL, NULL,
++            0, 0, 0, NULL
++          )
++        `;
++
++        yield* applyCodevSchemaGuard();
++
++        const repository = yield* ProjectionThreadRepository;
++        const legacy = yield* repository.getById({ threadId: ThreadId.make("thread-legacy") });
++
++        assert.ok(Option.isSome(legacy), "the pre-fork row must still be readable");
++        assert.strictEqual(legacy.value.role, null);
++        assert.strictEqual(legacy.value.parentThreadId, null);
++        assert.strictEqual(legacy.value.title, "Written before the fork");
++      }),
++    ),
++  );
++
++  it.effect("a half-applied schema still reads, and the next start completes it", () =>
++    withDb(
++      Effect.gen(function* () {
++        const sql = yield* SqlClient.SqlClient;
++        yield* preForkDatabase();
++
++        // The state a kill between the two ALTERs leaves.
++        yield* sql`ALTER TABLE projection_threads ADD COLUMN codev_role TEXT`;
++
++        const finished = yield* applyCodevSchemaGuard();
++        assert.deepStrictEqual([...finished.added], ["codev_parent_thread_id"]);
++
++        const repository = yield* ProjectionThreadRepository;
++        yield* repository.upsert(row("thread-after-crash", { role: "builder" }));
++        const found = yield* repository.getById({
++          threadId: ThreadId.make("thread-after-crash"),
++        });
++        assert.ok(Option.isSome(found));
++        assert.strictEqual(found.value.role, "builder");
++      }),
++    ),
++  );
++
++  it.effect("lists threads for a project with their hierarchy intact", () =>
++    withDb(
++      Effect.gen(function* () {
++        yield* preForkDatabase();
++        yield* applyCodevSchemaGuard();
++        const repository = yield* ProjectionThreadRepository;
++
++        yield* repository.upsert(row("thread-a", { role: "architect" }));
++        yield* repository.upsert(
++          row("thread-b", {
++            role: "builder",
++            parentThreadId: ThreadId.make("thread-a"),
++          }),
++        );
++        yield* repository.upsert(row("thread-c"));
++
++        const threads = yield* repository.listByProjectId({
++          projectId: ProjectId.make("project-1"),
++        });
++        const roles = new Map(threads.map((thread) => [thread.threadId as string, thread.role]));
++
++        assert.strictEqual(roles.get("thread-a"), "architect");
++        assert.strictEqual(roles.get("thread-b"), "builder");
++        assert.strictEqual(roles.get("thread-c"), null, "an unset role reads as null, not absent");
++      }),
++    ),
++  );
++});
++
++describe("codev schema guard start-up ordering (spec 250)", () => {
++  const sqliteLayerSource = readFileSync(
++    fileURLToPath(new URL("../persistence/Layers/Sqlite.ts", import.meta.url)),
++    "utf8",
++  );
++
++  /**
++   * Asserted against the production file, not against a layer this test builds.
++   * A test that assembles the ordering itself proves the ordering is possible,
++   * never that production uses it.
++   */
++  it("runs the guard after the migrator in the file that actually boots the database", () => {
++    const migrations = sqliteLayerSource.indexOf("yield* runMigrations()");
++    const guard = sqliteLayerSource.indexOf("yield* codevSchemaGuardStep()");
++
++    assert.ok(migrations >= 0, "Sqlite.ts must still run the migrator");
++    assert.ok(guard >= 0, "Sqlite.ts must run the Codev schema guard");
++    assert.ok(
++      migrations < guard,
++      "the guard must run AFTER the migrator: a projection query before it would read " +
++        "projection_threads without the Codev columns and fail as missing data",
++    );
++  });
++
++  it("wires the guard into the one setup both the file-backed and memory layers share", () => {
++    // `makeSqlitePersistenceLive` and `SqlitePersistenceMemory` both provide
++    // `setup`. If the guard ever moves out of `setup` into only one of them, the
++    // other silently boots without the columns.
++    const setupStart = sqliteLayerSource.indexOf("const setup = Layer.effectDiscard(");
++    const setupEnd = sqliteLayerSource.indexOf("export const makeSqlitePersistenceLive");
++    assert.ok(setupStart >= 0 && setupEnd > setupStart);
++
++    const setupBody = sqliteLayerSource.slice(setupStart, setupEnd);
++    assert.ok(
++      setupBody.includes("codevSchemaGuardStep()"),
++      "the guard must live in `setup`, which both persistence layers provide",
++    );
++  });
++
++  it("keeps the guard out of upstream's migration registry", () => {
++    const migrationsSource = readFileSync(
++      fileURLToPath(new URL("../persistence/Migrations.ts", import.meta.url)),
++      "utf8",
++    );
++    assert.ok(
++      !migrationsSource.includes("codev") && !migrationsSource.includes("Codev"),
++      "Codev must not appear in migrationEntries: a watermark migrator would skip every " +
++        "later upstream migration",
++    );
++  });
++});
+diff --git a/apps/server/src/orchestration/Layers/ProjectionPipeline.ts b/apps/server/src/orchestration/Layers/ProjectionPipeline.ts
+index 8eb8cdb56..cd53f674e 100644
+--- a/apps/server/src/orchestration/Layers/ProjectionPipeline.ts
++++ b/apps/server/src/orchestration/Layers/ProjectionPipeline.ts
+@@ -635,6 +635,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
+             branch: event.payload.branch,
+             worktreePath: event.payload.worktreePath,
+             linkedPullRequest: null,
++            // Codev customization (spec 250). From the event, not null — see the
++            // matching note in projector.ts.
++            role: event.payload.role,
++            parentThreadId: event.payload.parentThreadId,
+             latestTurnId: null,
+             createdAt: event.payload.createdAt,
+             updatedAt: event.payload.updatedAt,
+diff --git a/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts b/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts
+index e0fc1e901..a94bc8050 100644
+--- a/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts
++++ b/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts
+@@ -333,6 +333,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+           snoozedAt: null,
+           pinnedAt: "2026-02-24T00:00:01.000Z",
+           pinOrderKey: "gm",
++          // Codev customization (spec 250). The read path normalizes with
++          // `?? null`, so a row with no recorded hierarchy hydrates as an
++          // explicit null rather than an absent key.
++          role: null,
++          parentThreadId: null,
+           titleRegeneration: null,
+           deletedAt: null,
+           messages: [
+@@ -458,6 +463,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+           snoozedAt: null,
+           pinnedAt: "2026-02-24T00:00:01.000Z",
+           pinOrderKey: "gm",
++          // Codev customization (spec 250). See the note on the thread literal above.
++          role: null,
++          parentThreadId: null,
+           titleRegeneration: null,
+           session: {
+             threadId: ThreadId.make("thread-1"),
+diff --git a/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts b/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts
+index bebaf7686..31e6db929 100644
+--- a/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts
++++ b/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts
+@@ -425,6 +425,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+           branch,
+           worktree_path AS "worktreePath",
+           linked_pull_request_json AS "linkedPullRequest",
++          codev_role AS "role",
++          codev_parent_thread_id AS "parentThreadId",
+           latest_turn_id AS "latestTurnId",
+           created_at AS "createdAt",
+           updated_at AS "updatedAt",
+@@ -462,6 +464,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+           branch,
+           worktree_path AS "worktreePath",
+           linked_pull_request_json AS "linkedPullRequest",
++          codev_role AS "role",
++          codev_parent_thread_id AS "parentThreadId",
+           latest_turn_id AS "latestTurnId",
+           created_at AS "createdAt",
+           updated_at AS "updatedAt",
+@@ -501,6 +505,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+           branch,
+           worktree_path AS "worktreePath",
+           linked_pull_request_json AS "linkedPullRequest",
++          codev_role AS "role",
++          codev_parent_thread_id AS "parentThreadId",
+           latest_turn_id AS "latestTurnId",
+           created_at AS "createdAt",
+           updated_at AS "updatedAt",
+@@ -944,6 +950,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+           branch,
+           worktree_path AS "worktreePath",
+           linked_pull_request_json AS "linkedPullRequest",
++          codev_role AS "role",
++          codev_parent_thread_id AS "parentThreadId",
+           latest_turn_id AS "latestTurnId",
+           created_at AS "createdAt",
+           updated_at AS "updatedAt",
+@@ -1703,6 +1711,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+                 ...(row.linkedPullRequest === null
+                   ? {}
+                   : { linkedPullRequest: row.linkedPullRequest }),
++                // Codev customization (spec 250). Passed through as null rather
++                // than omitted: the shell schema decodes an absent field to null
++                // anyway, and being explicit keeps "no role recorded" a value the
++                // client receives instead of a key it has to infer.
++                role: row.role ?? null,
++                parentThreadId: row.parentThreadId ?? null,
+                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                 createdAt: row.createdAt,
+                 updatedAt: row.updatedAt,
+@@ -1913,6 +1927,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+                   ...(row.linkedPullRequest === null
+                     ? {}
+                     : { linkedPullRequest: row.linkedPullRequest }),
++                  role: row.role ?? null,
++                  parentThreadId: row.parentThreadId ?? null,
+                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                   createdAt: row.createdAt,
+                   updatedAt: row.updatedAt,
+@@ -2052,6 +2068,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+                       ...(row.linkedPullRequest === null
+                         ? {}
+                         : { linkedPullRequest: row.linkedPullRequest }),
++                      role: row.role ?? null,
++                      parentThreadId: row.parentThreadId ?? null,
+                       latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                       createdAt: row.createdAt,
+                       updatedAt: row.updatedAt,
+@@ -2200,6 +2218,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+                   ...(row.linkedPullRequest === null
+                     ? {}
+                     : { linkedPullRequest: row.linkedPullRequest }),
++                  role: row.role ?? null,
++                  parentThreadId: row.parentThreadId ?? null,
+                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                   createdAt: row.createdAt,
+                   updatedAt: row.updatedAt,
+@@ -2482,6 +2502,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+         ...(threadRow.value.linkedPullRequest === null
+           ? {}
+           : { linkedPullRequest: threadRow.value.linkedPullRequest }),
++        role: threadRow.value.role ?? null,
++        parentThreadId: threadRow.value.parentThreadId ?? null,
+         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
+         createdAt: threadRow.value.createdAt,
+         updatedAt: threadRow.value.updatedAt,
+@@ -2626,6 +2648,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+         ...(threadRow.value.linkedPullRequest === null
+           ? {}
+           : { linkedPullRequest: threadRow.value.linkedPullRequest }),
++        role: threadRow.value.role ?? null,
++        parentThreadId: threadRow.value.parentThreadId ?? null,
+         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
+         createdAt: threadRow.value.createdAt,
+         updatedAt: threadRow.value.updatedAt,
+diff --git a/apps/server/src/orchestration/decider.delete.test.ts b/apps/server/src/orchestration/decider.delete.test.ts
+index fea36b571..5f87e12ca 100644
+--- a/apps/server/src/orchestration/decider.delete.test.ts
++++ b/apps/server/src/orchestration/decider.delete.test.ts
+@@ -68,6 +68,12 @@ const seedReadModel = Effect.gen(function* () {
+       runtimeMode: "approval-required",
+       branch: null,
+       worktreePath: null,
++      // Codev customization (spec 250). Explicit nulls because
++      // `ThreadCreatedPayload` keeps a decoding default rather than being
++      // optional; absence is exercised deliberately in
++      // apps/server/src/codev/threadHierarchy.test.ts, not here.
++      role: null,
++      parentThreadId: null,
+       createdAt: now,
+       updatedAt: now,
+     },
+@@ -96,6 +102,12 @@ const seedReadModel = Effect.gen(function* () {
+       runtimeMode: "approval-required",
+       branch: null,
+       worktreePath: null,
++      // Codev customization (spec 250). Explicit nulls because
++      // `ThreadCreatedPayload` keeps a decoding default rather than being
++      // optional; absence is exercised deliberately in
++      // apps/server/src/codev/threadHierarchy.test.ts, not here.
++      role: null,
++      parentThreadId: null,
+       createdAt: now,
+       updatedAt: now,
+     },
+diff --git a/apps/server/src/orchestration/decider.projectScripts.test.ts b/apps/server/src/orchestration/decider.projectScripts.test.ts
+index bf5c509fa..36b013571 100644
+--- a/apps/server/src/orchestration/decider.projectScripts.test.ts
++++ b/apps/server/src/orchestration/decider.projectScripts.test.ts
+@@ -294,6 +294,12 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
+           runtimeMode: "approval-required",
+           branch: null,
+           worktreePath: null,
++      // Codev customization (spec 250). Explicit nulls because
++      // `ThreadCreatedPayload` keeps a decoding default rather than being
++      // optional; absence is exercised deliberately in
++      // apps/server/src/codev/threadHierarchy.test.ts, not here.
++      role: null,
++      parentThreadId: null,
+           createdAt: now,
+           updatedAt: now,
+         },
+@@ -391,6 +397,12 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
+           runtimeMode: "full-access",
+           branch: null,
+           worktreePath: null,
++      // Codev customization (spec 250). Explicit nulls because
++      // `ThreadCreatedPayload` keeps a decoding default rather than being
++      // optional; absence is exercised deliberately in
++      // apps/server/src/codev/threadHierarchy.test.ts, not here.
++      role: null,
++      parentThreadId: null,
+           createdAt: now,
+           updatedAt: now,
+         },
+@@ -469,6 +481,12 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
+           runtimeMode: "approval-required",
+           branch: null,
+           worktreePath: null,
++      // Codev customization (spec 250). Explicit nulls because
++      // `ThreadCreatedPayload` keeps a decoding default rather than being
++      // optional; absence is exercised deliberately in
++      // apps/server/src/codev/threadHierarchy.test.ts, not here.
++      role: null,
++      parentThreadId: null,
+           createdAt: now,
+           updatedAt: now,
+         },
+diff --git a/apps/server/src/orchestration/projector.codevHierarchy.test.ts b/apps/server/src/orchestration/projector.codevHierarchy.test.ts
+new file mode 100644
+index 000000000..2873e8f22
+--- /dev/null
++++ b/apps/server/src/orchestration/projector.codevHierarchy.test.ts
+@@ -0,0 +1,194 @@
++/**
++ * Codev customization (spec 250) — thread hierarchy through the projector.
++ *
++ * Criterion 8's rebuild half: a projection rebuilt from a PRE-FORK event log
++ * decodes every historical `thread.created`, and the added fields read as `null`
++ * ("not recorded") rather than as a guessed role.
++ *
++ * The interesting failure this guards is not a crash. It is a rebuild that
++ * silently flattens the hierarchy while every thread count still matches — which
++ * is what a hardcoded `role: null` in the projector would produce, and what a
++ * test asserting only "12 threads in, 12 threads out" would miss.
++ */
++
++import {
++  CommandId,
++  EventId,
++  ProjectId,
++  ThreadId,
++  type OrchestrationEvent,
++} from "@t3tools/contracts";
++import * as Effect from "effect/Effect";
++import { describe, expect, it } from "vite-plus/test";
++
++import { createEmptyReadModel, projectEvent } from "./projector.ts";
++
++const NOW = "2026-01-01T00:00:00.000Z";
++
++function makeEvent(input: {
++  sequence: number;
++  type: OrchestrationEvent["type"];
++  aggregateKind: OrchestrationEvent["aggregateKind"];
++  aggregateId: string;
++  payload: unknown;
++}): OrchestrationEvent {
++  return {
++    sequence: input.sequence,
++    eventId: EventId.make(`event-${input.sequence}`),
++    type: input.type,
++    aggregateKind: input.aggregateKind,
++    aggregateId:
++      input.aggregateKind === "project"
++        ? ProjectId.make(input.aggregateId)
++        : ThreadId.make(input.aggregateId),
++    occurredAt: NOW,
++    commandId: CommandId.make(`cmd-${input.sequence}`),
++    causationEventId: null,
++    correlationId: null,
++    metadata: {},
++    payload: input.payload as never,
++  } as OrchestrationEvent;
++}
++
++const projectCreated = makeEvent({
++  sequence: 1,
++  type: "project.created",
++  aggregateKind: "project",
++  aggregateId: "project-1",
++  payload: {
++    projectId: "project-1",
++    title: "Project",
++    workspaceRoot: "/tmp/project-1",
++    defaultModelSelection: null,
++    scripts: [],
++    createdAt: NOW,
++    updatedAt: NOW,
++  },
++});
++
++/** A `thread.created` payload exactly as the log held it BEFORE the fork. */
++function preForkThreadCreated(sequence: number, threadId: string): OrchestrationEvent {
++  return makeEvent({
++    sequence,
++    type: "thread.created",
++    aggregateKind: "thread",
++    aggregateId: threadId,
++    payload: {
++      threadId,
++      projectId: "project-1",
++      title: `Thread ${threadId}`,
++      modelSelection: { provider: "codex", model: "gpt-5.4" },
++      branch: null,
++      worktreePath: null,
++      createdAt: NOW,
++      updatedAt: NOW,
++    },
++  });
++}
++
++/** A `thread.created` payload written by Codev, carrying the hierarchy. */
++function codevThreadCreated(
++  sequence: number,
++  threadId: string,
++  role: "architect" | "builder",
++  parentThreadId: string | null,
++): OrchestrationEvent {
++  return makeEvent({
++    sequence,
++    type: "thread.created",
++    aggregateKind: "thread",
++    aggregateId: threadId,
++    payload: {
++      threadId,
++      projectId: "project-1",
++      title: `Thread ${threadId}`,
++      modelSelection: { provider: "codex", model: "gpt-5.4" },
++      branch: null,
++      worktreePath: null,
++      role,
++      parentThreadId,
++      createdAt: NOW,
++      updatedAt: NOW,
++    },
++  });
++}
++
++/** Fold the log the way a real rebuild does: one event at a time, in order. */
++async function rebuild(events: ReadonlyArray<OrchestrationEvent>) {
++  let model = createEmptyReadModel(NOW);
++  for (const event of events) {
++    model = await Effect.runPromise(projectEvent(model, event));
++  }
++  return model;
++}
++
++describe("projector: codev thread hierarchy (spec 250)", () => {
++  it("rebuilds a pre-fork event log, reading the hierarchy as not recorded", async () => {
++    const model = await rebuild([
++      projectCreated,
++      preForkThreadCreated(2, "thread-a"),
++      preForkThreadCreated(3, "thread-b"),
++      preForkThreadCreated(4, "thread-c"),
++    ]);
++
++    expect(model.threads).toHaveLength(3);
++    for (const thread of model.threads) {
++      // null, not undefined and not a guessed role. "Codev did not create this."
++      expect(thread.role).toBeNull();
++      expect(thread.parentThreadId).toBeNull();
++    }
++  });
++
++  it("reproduces the hierarchy on rebuild rather than flattening it", async () => {
++    const model = await rebuild([
++      projectCreated,
++      codevThreadCreated(2, "thread-architect", "architect", null),
++      codevThreadCreated(3, "thread-builder-1", "builder", "thread-architect"),
++      codevThreadCreated(4, "thread-builder-2", "builder", "thread-architect"),
++    ]);
++
++    const byId = new Map(model.threads.map((thread) => [thread.id as string, thread]));
++
++    expect(byId.get("thread-architect")?.role).toBe("architect");
++    expect(byId.get("thread-architect")?.parentThreadId).toBeNull();
++
++    for (const builder of ["thread-builder-1", "thread-builder-2"]) {
++      expect(byId.get(builder)?.role).toBe("builder");
++      expect(byId.get(builder)?.parentThreadId).toBe("thread-architect");
++    }
++  });
++
++  it("keeps both kinds of thread distinguishable in one log", async () => {
++    // The mixed case is the real one: a database that existed before the fork and
++    // then gained Codev threads. A rebuild must not level them.
++    const model = await rebuild([
++      projectCreated,
++      preForkThreadCreated(2, "thread-legacy"),
++      codevThreadCreated(3, "thread-architect", "architect", null),
++      codevThreadCreated(4, "thread-builder", "builder", "thread-architect"),
++    ]);
++
++    const roles = new Map(model.threads.map((thread) => [thread.id as string, thread.role]));
++    expect(roles.get("thread-legacy")).toBeNull();
++    expect(roles.get("thread-architect")).toBe("architect");
++    expect(roles.get("thread-builder")).toBe("builder");
++  });
++
++  it("survives a second rebuild over the same log, unchanged", async () => {
++    // A rebuild is re-run after a schema change; a projector that read the fields
++    // once and dropped them on replay would show up here and nowhere else.
++    const events = [
++      projectCreated,
++      preForkThreadCreated(2, "thread-legacy"),
++      codevThreadCreated(3, "thread-architect", "architect", null),
++      codevThreadCreated(4, "thread-builder", "builder", "thread-architect"),
++    ];
++
++    const first = await rebuild(events);
++    const second = await rebuild(events);
++
++    expect(second.threads.map((thread) => [thread.id, thread.role, thread.parentThreadId])).toEqual(
++      first.threads.map((thread) => [thread.id, thread.role, thread.parentThreadId]),
++    );
++  });
++});
+diff --git a/apps/server/src/orchestration/projector.test.ts b/apps/server/src/orchestration/projector.test.ts
+index 9c07a3120..50697014d 100644
+--- a/apps/server/src/orchestration/projector.test.ts
++++ b/apps/server/src/orchestration/projector.test.ts
+@@ -85,6 +85,10 @@ describe("orchestration projector", () => {
+         interactionMode: "default",
+         branch: null,
+         worktreePath: null,
++        // Codev customization (spec 250). A pre-fork `thread.created` payload
++        // defaults both to null, which is what "Codev did not create this" means.
++        role: null,
++        parentThreadId: null,
+         latestTurn: null,
+         createdAt: now,
+         updatedAt: now,
+diff --git a/apps/server/src/orchestration/projector.ts b/apps/server/src/orchestration/projector.ts
+index e59ca8281..c1684c08b 100644
+--- a/apps/server/src/orchestration/projector.ts
++++ b/apps/server/src/orchestration/projector.ts
+@@ -297,6 +297,12 @@ export function projectEvent(
+             interactionMode: payload.interactionMode,
+             branch: payload.branch,
+             worktreePath: payload.worktreePath,
++            // Codev customization (spec 250). Carried from the event rather than
++            // hardcoded null: a rebuild over a log that already contains Codev
++            // threads has to reproduce their hierarchy, and a null here would
++            // silently flatten it while every count still matched.
++            role: payload.role,
++            parentThreadId: payload.parentThreadId,
+             latestTurn: null,
+             createdAt: payload.createdAt,
+             updatedAt: payload.updatedAt,
+diff --git a/apps/server/src/persistence/Layers/ProjectionThreads.ts b/apps/server/src/persistence/Layers/ProjectionThreads.ts
+index e19c46146..26bb71f1f 100644
+--- a/apps/server/src/persistence/Layers/ProjectionThreads.ts
++++ b/apps/server/src/persistence/Layers/ProjectionThreads.ts
+@@ -41,6 +41,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
+           branch,
+           worktree_path,
+           linked_pull_request_json,
++          codev_role,
++          codev_parent_thread_id,
+           latest_turn_id,
+           created_at,
+           updated_at,
+@@ -69,6 +71,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
+           ${row.branch},
+           ${row.worktreePath},
+           ${row.linkedPullRequest === undefined || row.linkedPullRequest === null ? null : JSON.stringify(row.linkedPullRequest)},
++          ${row.role ?? null},
++          ${row.parentThreadId ?? null},
+           ${row.latestTurnId},
+           ${row.createdAt},
+           ${row.updatedAt},
+@@ -97,6 +101,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
+           branch = excluded.branch,
+           worktree_path = excluded.worktree_path,
+           linked_pull_request_json = excluded.linked_pull_request_json,
++          codev_role = excluded.codev_role,
++          codev_parent_thread_id = excluded.codev_parent_thread_id,
+           latest_turn_id = excluded.latest_turn_id,
+           created_at = excluded.created_at,
+           updated_at = excluded.updated_at,
+@@ -132,6 +138,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
+           branch,
+           worktree_path AS "worktreePath",
+           linked_pull_request_json AS "linkedPullRequest",
++          codev_role AS "role",
++          codev_parent_thread_id AS "parentThreadId",
+           latest_turn_id AS "latestTurnId",
+           created_at AS "createdAt",
+           updated_at AS "updatedAt",
+@@ -169,6 +177,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
+           branch,
+           worktree_path AS "worktreePath",
+           linked_pull_request_json AS "linkedPullRequest",
++          codev_role AS "role",
++          codev_parent_thread_id AS "parentThreadId",
+           latest_turn_id AS "latestTurnId",
+           created_at AS "createdAt",
+           updated_at AS "updatedAt",
+diff --git a/apps/server/src/persistence/Layers/Sqlite.ts b/apps/server/src/persistence/Layers/Sqlite.ts
+index ec1ffdefa..3a3abc121 100644
+--- a/apps/server/src/persistence/Layers/Sqlite.ts
++++ b/apps/server/src/persistence/Layers/Sqlite.ts
+@@ -6,6 +6,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
+ import type { SqlError } from "effect/unstable/sql/SqlError";
+ 
+ import { runMigrations } from "../Migrations.ts";
++import { codevSchemaGuardStep } from "../../codev/schemaGuard.ts";
+ import { ServerConfig } from "../../config.ts";
+ 
+ type RuntimeSqliteLayerConfig = {
+@@ -38,6 +39,13 @@ const setup = Layer.effectDiscard(
+     yield* sql`PRAGMA foreign_keys = ON;`;
+     yield* sql`PRAGMA journal_mode = WAL;`;
+     yield* runMigrations();
++    // Codev customization (spec 250). AFTER upstream's migrator and before any
++    // projection layer opens, because a query that ran first would read
++    // `projection_threads` without our columns and fail as missing data rather
++    // than as a boot-order bug. Deliberately not a numbered migration — see
++    // apps/server/src/codev/schemaGuard.ts for what a watermark migrator does to
++    // an out-of-band id.
++    yield* codevSchemaGuardStep();
+   }),
+ );
+ 
+diff --git a/apps/server/src/persistence/Services/ProjectionThreads.ts b/apps/server/src/persistence/Services/ProjectionThreads.ts
+index 75a9a11d4..fab83e90e 100644
+--- a/apps/server/src/persistence/Services/ProjectionThreads.ts
++++ b/apps/server/src/persistence/Services/ProjectionThreads.ts
+@@ -15,6 +15,7 @@ import {
+   ProviderInteractionMode,
+   RuntimeMode,
+   ThreadLinkedPullRequest,
++  CodevThreadRole,
+   ThreadId,
+   TurnId,
+ } from "@t3tools/contracts";
+@@ -35,6 +36,14 @@ export const ProjectionThread = Schema.Struct({
+   branch: Schema.NullOr(Schema.String),
+   worktreePath: Schema.NullOr(Schema.String),
+   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
++  /**
++   * Codev customization (spec 250). Optional, not merely nullable: a row read
++   * from a database whose guard has not run yet has no such column at all, and
++   * `optional` is the difference between that decoding as "not recorded" and
++   * failing the whole projection read.
++   */
++  role: Schema.optional(Schema.NullOr(CodevThreadRole)),
++  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+   latestTurnId: Schema.NullOr(TurnId),
+   createdAt: IsoDateTime,
+   updatedAt: IsoDateTime,
+diff --git a/packages/contracts/src/orchestration.test.ts b/packages/contracts/src/orchestration.test.ts
+index 52b893f39..0ee8fd20e 100644
+--- a/packages/contracts/src/orchestration.test.ts
++++ b/packages/contracts/src/orchestration.test.ts
+@@ -1021,3 +1021,158 @@ it("isProviderSendTurnSupportedImageMimeType accepts raster formats and rejects
+   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("IMAGE/JPEG"), true);
+   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/svg+xml"), false);
+ });
++
++// ---------------------------------------------------------------------------
++// Codev customization (spec 250) — thread hierarchy.
++//
++// The two fields are spelled differently on purpose and these tests pin the
++// difference. `ThreadCreatedPayload` carries a DECODING DEFAULT because the event
++// log is full of payloads written before the fields existed and a projection
++// rebuild has to replay every one of them; the projector reads `payload.role`
++// unconditionally, so that read has to be total. The read models
++// (`OrchestrationThread`, `OrchestrationThreadShell`) are OPTIONAL instead,
++// matching `linkedPullRequest` — upstream's own newest field, made optional so
++// cached snapshots from older servers still decode.
++
++it.effect("decodes a pre-fork thread.created payload, defaulting the hierarchy to null", () =>
++  Effect.gen(function* () {
++    // Byte-for-byte the shape already in the event log: no role, no parent.
++    const payload = yield* decodeThreadCreatedPayload({
++      threadId: "thread-legacy",
++      projectId: "project-legacy",
++      title: "Written before the fork existed",
++      modelSelection: { provider: "codex", model: "gpt-5.4" },
++      branch: null,
++      worktreePath: null,
++      createdAt: "2026-01-01T00:00:00.000Z",
++      updatedAt: "2026-01-01T00:00:00.000Z",
++    });
++
++    // Defaulted, not absent. The projector reads these without checking.
++    assert.strictEqual(payload.role, null);
++    assert.strictEqual(payload.parentThreadId, null);
++  }),
++);
++
++it.effect("decodes a Codev thread.created payload carrying role and parent", () =>
++  Effect.gen(function* () {
++    const payload = yield* decodeThreadCreatedPayload({
++      threadId: "thread-builder",
++      projectId: "project-1",
++      title: "spir-250",
++      modelSelection: { provider: "codex", model: "gpt-5.4" },
++      branch: null,
++      worktreePath: null,
++      role: "builder",
++      parentThreadId: "thread-architect",
++      createdAt: "2026-01-01T00:00:00.000Z",
++      updatedAt: "2026-01-01T00:00:00.000Z",
++    });
++
++    assert.strictEqual(payload.role, "builder");
++    assert.strictEqual(payload.parentThreadId, "thread-architect");
++  }),
++);
++
++it.effect("rejects a role outside the architect/builder union", () =>
++  Effect.gen(function* () {
++    // "unknown" would be a third spelling of null. There are two roles.
++    const result = yield* Effect.result(
++      decodeThreadCreatedPayload({
++        threadId: "thread-bad-role",
++        projectId: "project-1",
++        title: "Bad role",
++        modelSelection: { provider: "codex", model: "gpt-5.4" },
++        branch: null,
++        worktreePath: null,
++        role: "unknown",
++        createdAt: "2026-01-01T00:00:00.000Z",
++        updatedAt: "2026-01-01T00:00:00.000Z",
++      }),
++    );
++
++    assert.strictEqual(result._tag, "Failure");
++  }),
++);
++
++it.effect("round-trips role and parentThreadId through encode", () =>
++  Effect.gen(function* () {
++    const decoded = yield* decodeThreadCreatedPayload({
++      threadId: "thread-rt",
++      projectId: "project-1",
++      title: "Round trip",
++      modelSelection: { provider: "codex", model: "gpt-5.4" },
++      branch: null,
++      worktreePath: null,
++      role: "architect",
++      parentThreadId: null,
++      createdAt: "2026-01-01T00:00:00.000Z",
++      updatedAt: "2026-01-01T00:00:00.000Z",
++    });
++
++    const encoded = yield* encodeThreadCreatedPayload(decoded);
++    assert.strictEqual(encoded.role, "architect");
++    assert.strictEqual(encoded.parentThreadId, null);
++  }),
++);
++
++it.effect("decodes thread and shell with the hierarchy present and absent", () =>
++  Effect.gen(function* () {
++    const common = {
++      id: "thread-hierarchy",
++      projectId: "project-1",
++      title: "Hierarchy",
++      modelSelection: { provider: "codex", model: "gpt-5.4" },
++      runtimeMode: DEFAULT_RUNTIME_MODE,
++      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
++      branch: null,
++      worktreePath: null,
++      latestTurn: null,
++      createdAt: "2026-01-01T00:00:00.000Z",
++      updatedAt: "2026-01-01T00:00:00.000Z",
++      archivedAt: null,
++      session: null,
++    };
++    const shellExtras = {
++      latestUserMessageAt: null,
++      hasPendingApprovals: false,
++      hasPendingUserInput: false,
++      hasActionableProposedPlan: false,
++    };
++    const threadExtras = {
++      deletedAt: null,
++      messages: [],
++      proposedPlans: [],
++      activities: [],
++      checkpoints: [],
++    };
++
++    const withHierarchy = yield* decodeOrchestrationThreadShell({
++      ...common,
++      ...shellExtras,
++      role: "builder",
++      parentThreadId: "thread-architect",
++    });
++    assert.strictEqual(withHierarchy.role, "builder");
++    assert.strictEqual(withHierarchy.parentThreadId, "thread-architect");
++
++    // A cached snapshot from a server that predates the fork. It must decode.
++    const withoutHierarchy = yield* decodeOrchestrationThreadShell({
++      ...common,
++      ...shellExtras,
++    });
++    assert.strictEqual(withoutHierarchy.role, undefined);
++    assert.strictEqual(withoutHierarchy.parentThreadId, undefined);
++
++    // An explicit null is the shape the server actually emits: every read path
++    // normalizes with `?? null`, so clients see one spelling in practice.
++    const explicitNull = yield* decodeOrchestrationThread({
++      ...common,
++      ...threadExtras,
++      role: null,
++      parentThreadId: null,
++    });
++    assert.strictEqual(explicitNull.role, null);
++    assert.strictEqual(explicitNull.parentThreadId, null);
++  }),
++);
+diff --git a/packages/contracts/src/orchestration.ts b/packages/contracts/src/orchestration.ts
+index e0634cea1..5f67b4a3d 100644
+--- a/packages/contracts/src/orchestration.ts
++++ b/packages/contracts/src/orchestration.ts
+@@ -395,6 +395,16 @@ export const ThreadLinkedPullRequest = Schema.Struct({
+ });
+ export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
+ 
++/**
++ * Codev customization (spec 250). Which side of the Codev hierarchy a thread is.
++ *
++ * `null` — carried by the fields below rather than by this union — means a thread
++ * Codev did not create. Upstream t3code threads are the common case and they have
++ * no role; inventing one for them would turn "we do not know" into a claim.
++ */
++export const CodevThreadRole = Schema.Literals(["architect", "builder"]);
++export type CodevThreadRole = typeof CodevThreadRole.Type;
++
+ export const OrchestrationThread = Schema.Struct({
+   id: ThreadId,
+   projectId: ProjectId,
+@@ -408,6 +418,22 @@ export const OrchestrationThread = Schema.Struct({
+   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
++  /**
++   * Codev customization (spec 250). `null` means a thread Codev did not create,
++   * which is every upstream thread and every thread predating the fork.
++   *
++   * `optional`, matching `linkedPullRequest` directly above — upstream's own
++   * newest field, made optional for exactly this reason: cached snapshots from
++   * older servers still decode. A decoding default would have been stricter on
++   * the wire and cost 32 edits across 11 upstream test files, which is the
++   * divergence this fork is explicitly shaped to avoid.
++   *
++   * The server never emits `undefined` for these: every read path normalizes
++   * with `?? null` (see `ProjectionSnapshotQuery.ts`), so one spelling reaches
++   * clients in practice while old payloads still decode.
++   */
++  role: Schema.optional(Schema.NullOr(CodevThreadRole)),
++  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+   createdAt: IsoDateTime,
+   updatedAt: IsoDateTime,
+   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+@@ -479,6 +505,22 @@ export const OrchestrationThreadShell = Schema.Struct({
+   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
++  /**
++   * Codev customization (spec 250). `null` means a thread Codev did not create,
++   * which is every upstream thread and every thread predating the fork.
++   *
++   * `optional`, matching `linkedPullRequest` directly above — upstream's own
++   * newest field, made optional for exactly this reason: cached snapshots from
++   * older servers still decode. A decoding default would have been stricter on
++   * the wire and cost 32 edits across 11 upstream test files, which is the
++   * divergence this fork is explicitly shaped to avoid.
++   *
++   * The server never emits `undefined` for these: every read path normalizes
++   * with `?? null` (see `ProjectionSnapshotQuery.ts`), so one spelling reaches
++   * clients in practice while old payloads still decode.
++   */
++  role: Schema.optional(Schema.NullOr(CodevThreadRole)),
++  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+   createdAt: IsoDateTime,
+   updatedAt: IsoDateTime,
+   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+@@ -1156,6 +1198,19 @@ export const ThreadCreatedPayload = Schema.Struct({
+   ),
+   branch: Schema.NullOr(TrimmedNonEmptyString),
+   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
++  /**
++   * Codev customization (spec 250). `null` means a thread Codev did not create,
++   * which is every upstream thread and every thread predating the fork.
++   *
++   * A decoding DEFAULT here, not `optional` as on the read models: the event log
++   * is full of `thread.created` payloads written before these fields existed, a
++   * rebuild has to replay every one of them, and the projector reads
++   * `payload.role` unconditionally. Defaulting makes that read total. A schema
++   * that rejected the old payloads would make the projection unrebuildable.
++   */
++  role: Schema.NullOr(CodevThreadRole).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
++  /** Codev customization (spec 250). The architect thread that owns this builder. */
++  parentThreadId: Schema.NullOr(ThreadId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+   createdAt: IsoDateTime,
+   updatedAt: IsoDateTime,
+ });

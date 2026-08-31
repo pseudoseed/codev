@@ -1,0 +1,1455 @@
+From 3a1780bbf66f212f55cb3378e5e5a5ad891e4f7e Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Sun, 30 Aug 2026 18:00:02 -0600
+Subject: [PATCH 06/34] [Spec 250][Phase: phase_4] feat: gate block with a
+ server-allocated revision
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Contract, transport, persistence and decider. Tests for the revision rules
+and scope enforcement land in the next commit.
+
+ONE RULE covers allocation and stale-rejection, which review round 1 said
+could not both hold as the plan originally wrote them. `revision` on the
+command is optional:
+
+  absent   the normal path. The decider allocates gateRevision + 1 from the
+           read model it is deciding against. Commands are decided serially
+           against the authoritative read model, so two concurrent writers
+           get two different numbers with no locking.
+  present  a replay, or a write from an older connection. Applied only if it
+           EXCEEDS the mark. Equal is refused, not treated as idempotent:
+           two writers that computed the same number are colliding.
+
+The mark lives on the thread, not inside the gate block, and is raised by
+the clear as well as the set. That is what stops a stale write resurrecting
+a gate a human already answered — the mark outlives the block.
+
+Gate writes travel their OWN RPC method. RpcAuthorization authorizes the
+METHOD, so a gate command routed through dispatchCommand would be reachable
+by every holder of orchestration:operate and no row in the scope map could
+say otherwise. Four places, as the plan required: rpc.ts, the method
+constant, the ws.ts handler key, and the authorization row. The commands
+are deliberately absent from ClientOrchestrationCommand and
+DispatchableClientOrchestrationCommand, which ARE the dispatchCommand
+payload.
+
+codev:gate-write is in AuthEnvironmentScope but NOT in
+AuthStandardClientScopes, not in AuthAdministrativeScopes, and not in the
+token allowlist — all three would grant it to the callers it exists to
+exclude.
+
+The engine now returns the events its dispatch committed. The gate's
+response needs the revision the server allocated for THAT write, and
+re-reading the thread row would race a concurrent writer: both would see
+the later value and one would be told a number never allocated to it. The
+idempotent replay path returns an empty events array, honestly — it
+committed nothing this time, so there is nothing to read a revision from,
+and the caller reports the write as unconfirmed rather than inventing one.
+
+codev_gate_revision is INTEGER NOT NULL DEFAULT 0, so historical rows are
+correct at ALTER time with no backfill pass — and a backfill is a second
+write that can be interrupted.
+
+gateRevision is optional on input with a decoding default, required after
+decoding. The strict form cost 159 errors across upstream test fixtures,
+which is the rebase debt phase 2 established we do not sign up for; the
+DB column stays NOT NULL and every read normalizes, so there is still one
+spelling of "no gate yet".
+
+Fork typecheck green; codev + orchestration suites 332 passed.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/server/src/auth/RpcAuthorization.ts      |   7 +
+ apps/server/src/codev/schemaGuard.test.ts     |   8 +-
+ apps/server/src/codev/schemaGuard.ts          |  27 +++
+ apps/server/src/codev/threadHierarchy.test.ts |   6 +-
+ .../Layers/OrchestrationEngine.ts             |  26 +-
+ .../Layers/ProjectionPipeline.ts              |  38 +++
+ .../Layers/ProjectionSnapshotQuery.test.ts    |   4 +
+ .../Layers/ProjectionSnapshotQuery.ts         |  22 ++
+ .../Services/OrchestrationEngine.ts           |  16 +-
+ apps/server/src/orchestration/decider.ts      |  89 ++++++-
+ .../src/orchestration/projector.test.ts       |   5 +
+ apps/server/src/orchestration/projector.ts    |  38 +++
+ .../persistence/Layers/ProjectionThreads.ts   |  17 +-
+ .../persistence/Services/ProjectionThreads.ts |   9 +-
+ .../src/relay/AgentAwarenessRelay.test.ts     |   4 +-
+ apps/server/src/server.test.ts                |  34 +--
+ .../serverRuntimeStartup.reconcile.test.ts    |   6 +-
+ apps/server/src/serverRuntimeStartup.test.ts  |   6 +-
+ apps/server/src/ws.ts                         |  64 +++++
+ packages/contracts/src/auth.ts                |  11 +
+ packages/contracts/src/orchestration.ts       | 228 ++++++++++++++++++
+ packages/contracts/src/rpc.ts                 |  19 ++
+ 22 files changed, 649 insertions(+), 35 deletions(-)
+
+diff --git a/apps/server/src/auth/RpcAuthorization.ts b/apps/server/src/auth/RpcAuthorization.ts
+index 28ceac4ce..4fa26debb 100644
+--- a/apps/server/src/auth/RpcAuthorization.ts
++++ b/apps/server/src/auth/RpcAuthorization.ts
+@@ -1,5 +1,7 @@
+ import {
+   AuthAccessReadScope,
++  AuthCodevGateWriteScope,
++  CODEV_WS_METHODS,
+   AuthOrchestrationOperateScope,
+   AuthOrchestrationReadScope,
+   AuthRelayReadScope,
+@@ -22,6 +24,11 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
+  */
+ export const RPC_REQUIRED_SCOPES = {
+   [ORCHESTRATION_WS_METHODS.dispatchCommand]: AuthOrchestrationOperateScope,
++  // Codev customization (spec 250). Its own method, so it can have its own
++  // scope: this map authorizes the METHOD, so a gate command routed through
++  // `dispatchCommand` would be reachable by every holder of
++  // `orchestration:operate` and no row here could say otherwise.
++  [CODEV_WS_METHODS.gateWrite]: AuthCodevGateWriteScope,
+   [ORCHESTRATION_WS_METHODS.getWorkflowScript]: AuthOrchestrationReadScope,
+   [ORCHESTRATION_WS_METHODS.getTurnDiff]: AuthOrchestrationReadScope,
+   [ORCHESTRATION_WS_METHODS.getFullThreadDiff]: AuthOrchestrationReadScope,
+diff --git a/apps/server/src/codev/schemaGuard.test.ts b/apps/server/src/codev/schemaGuard.test.ts
+index 481f4363f..ffbbf2f72 100644
+--- a/apps/server/src/codev/schemaGuard.test.ts
++++ b/apps/server/src/codev/schemaGuard.test.ts
+@@ -107,8 +107,14 @@ describe("codev schema guard (spec 250)", () => {
+         yield* sql`ALTER TABLE projection_threads ADD COLUMN codev_role TEXT`;
+ 
+         const result = yield* applyCodevSchemaGuard();
++        // Expressed against the column list rather than a hardcoded name, so a
++        // later phase adding a column does not make this test wrong — it made
++        // this test wrong once already, when phase 4 added the gate columns.
+         assert.deepStrictEqual([...result.present], ["codev_role"]);
+-        assert.deepStrictEqual([...result.added], ["codev_parent_thread_id"]);
++        assert.deepStrictEqual(
++          [...result.added],
++          CODEV_THREAD_COLUMN_NAMES.filter((name) => name !== "codev_role"),
++        );
+ 
+         const after = yield* columnNames();
+         for (const column of CODEV_THREAD_COLUMN_NAMES) {
+diff --git a/apps/server/src/codev/schemaGuard.ts b/apps/server/src/codev/schemaGuard.ts
+index 29f9a2beb..5dca9ff32 100644
+--- a/apps/server/src/codev/schemaGuard.ts
++++ b/apps/server/src/codev/schemaGuard.ts
+@@ -94,6 +94,33 @@ export const CODEV_THREAD_COLUMNS = [
+       `;
+     }),
+   },
++  {
++    name: "codev_gate_json",
++    add: Effect.fnUntraced(function* () {
++      const sql = yield* SqlClient.SqlClient;
++      yield* sql`
++        ALTER TABLE projection_threads
++        ADD COLUMN codev_gate_json TEXT
++      `;
++    }),
++  },
++  {
++    /**
++     * `NOT NULL DEFAULT 0` (spec 250, phase 4). The default is what makes the
++     * historical rows correct with no backfill pass: SQLite fills every existing
++     * row at ALTER time, and a thread that has never had a gate genuinely is at
++     * revision 0. A nullable column would have needed a backfill, and a backfill
++     * is a second write that can be interrupted.
++     */
++    name: "codev_gate_revision",
++    add: Effect.fnUntraced(function* () {
++      const sql = yield* SqlClient.SqlClient;
++      yield* sql`
++        ALTER TABLE projection_threads
++        ADD COLUMN codev_gate_revision INTEGER NOT NULL DEFAULT 0
++      `;
++    }),
++  },
+ ] as const;
+ 
+ /** The column names, for tests and for anything that needs the set without the DDL. */
+diff --git a/apps/server/src/codev/threadHierarchy.test.ts b/apps/server/src/codev/threadHierarchy.test.ts
+index 4fe964b3c..31facaa12 100644
+--- a/apps/server/src/codev/threadHierarchy.test.ts
++++ b/apps/server/src/codev/threadHierarchy.test.ts
+@@ -166,7 +166,11 @@ describe("codev thread hierarchy in persistence (spec 250)", () => {
+         yield* sql`ALTER TABLE projection_threads ADD COLUMN codev_role TEXT`;
+ 
+         const finished = yield* applyCodevSchemaGuard();
+-        assert.deepStrictEqual([...finished.added], ["codev_parent_thread_id"]);
++        assert.ok(
++          finished.added.includes("codev_parent_thread_id"),
++          "the guard must complete the column the crash left out",
++        );
++        assert.deepStrictEqual([...finished.present], ["codev_role"]);
+ 
+         const repository = yield* ProjectionThreadRepository;
+         yield* repository.upsert(row("thread-after-crash", { role: "builder" }));
+diff --git a/apps/server/src/orchestration/Layers/OrchestrationEngine.ts b/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
+index 5234f426c..068c7fbb9 100644
+--- a/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
++++ b/apps/server/src/orchestration/Layers/OrchestrationEngine.ts
+@@ -76,7 +76,10 @@ const isRefusal = (cause: unknown): cause is
+ interface CommandEnvelope {
+   command: OrchestrationCommand;
+   origin: OrchestrationClientOrigin | undefined;
+-  result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
++  result: Deferred.Deferred<
++    { readonly sequence: number; readonly events: ReadonlyArray<OrchestrationEvent> },
++    OrchestrationDispatchError
++  >;
+   startedAtMs: number;
+ }
+ 
+@@ -181,6 +184,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
+           if (existingReceipt.value.status === "accepted") {
+             return {
+               sequence: existingReceipt.value.resultSequence,
++              // Empty, and honestly so: this is the idempotent replay path. The
++              // command committed nothing THIS time, so there is nothing for the
++              // caller to read a server-allocated value out of. A caller that
++              // needs one (spec 250's gate revision) reports the write as
++              // unconfirmed rather than inventing a number for it.
++              events: [] as ReadonlyArray<OrchestrationEvent>,
+             };
+           }
+           return yield* new OrchestrationCommandPreviouslyRejectedError({
+@@ -276,7 +285,15 @@ const makeOrchestrationEngine = Effect.gen(function* () {
+             );
+           }
+         }
+-        return { sequence: committedCommand.lastSequence };
++        // Codev customization (spec 250): the committed events travel back with
++        // the sequence. A caller that needs a server-allocated value from its own
++        // write — the gate's revision — cannot re-read it from the projection
++        // without racing a concurrent writer, because the row only ever holds the
++        // latest. Existing callers destructure `sequence` and are unaffected.
++        return {
++          sequence: committedCommand.lastSequence,
++          events: committedCommand.committedEvents as ReadonlyArray<OrchestrationEvent>,
++        };
+       }).pipe(Effect.withSpan(`orchestration.command.${envelope.command.type}`)),
+     ).pipe(
+       Effect.flatMap((exit) =>
+@@ -366,7 +383,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
+ 
+   const dispatch: OrchestrationEngineShape["dispatch"] = (command, options) =>
+     Effect.gen(function* () {
+-      const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
++      const result = yield* Deferred.make<
++        { readonly sequence: number; readonly events: ReadonlyArray<OrchestrationEvent> },
++        OrchestrationDispatchError
++      >();
+       yield* Queue.offer(commandQueue, {
+         command,
+         origin: options?.origin,
+diff --git a/apps/server/src/orchestration/Layers/ProjectionPipeline.ts b/apps/server/src/orchestration/Layers/ProjectionPipeline.ts
+index cd53f674e..11b8c26db 100644
+--- a/apps/server/src/orchestration/Layers/ProjectionPipeline.ts
++++ b/apps/server/src/orchestration/Layers/ProjectionPipeline.ts
+@@ -639,6 +639,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
+             // matching note in projector.ts.
+             role: event.payload.role,
+             parentThreadId: event.payload.parentThreadId,
++            // No gate, and revision 0. See the note in projector.ts.
++            codevGate: null,
++            gateRevision: 0,
+             latestTurnId: null,
+             createdAt: event.payload.createdAt,
+             updatedAt: event.payload.updatedAt,
+@@ -835,6 +838,41 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
+           return;
+         }
+ 
++        // Codev customization (spec 250). The gate block and its high-water mark.
++        case "codev.gate-set": {
++          const existingRow = yield* projectionThreadRepository.getById({
++            threadId: event.payload.threadId,
++          });
++          if (Option.isNone(existingRow)) {
++            return;
++          }
++          yield* projectionThreadRepository.upsert({
++            ...existingRow.value,
++            codevGate: event.payload.gate,
++            gateRevision: event.payload.gateRevision,
++            updatedAt: event.payload.updatedAt,
++          });
++          return;
++        }
++
++        case "codev.gate-cleared": {
++          const existingRow = yield* projectionThreadRepository.getById({
++            threadId: event.payload.threadId,
++          });
++          if (Option.isNone(existingRow)) {
++            return;
++          }
++          yield* projectionThreadRepository.upsert({
++            ...existingRow.value,
++            codevGate: null,
++            // The mark is raised by the clear, not reset by it. That is what
++            // stops a stale write resurrecting an answered gate.
++            gateRevision: event.payload.gateRevision,
++            updatedAt: event.payload.updatedAt,
++          });
++          return;
++        }
++
+         case "thread.runtime-mode-set": {
+           const existingRow = yield* projectionThreadRepository.getById({
+             threadId: event.payload.threadId,
+diff --git a/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts b/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts
+index a94bc8050..932d06379 100644
+--- a/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts
++++ b/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts
+@@ -338,6 +338,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+           // explicit null rather than an absent key.
+           role: null,
+           parentThreadId: null,
++          codevGate: null,
++          gateRevision: 0,
+           titleRegeneration: null,
+           deletedAt: null,
+           messages: [
+@@ -466,6 +468,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+           // Codev customization (spec 250). See the note on the thread literal above.
+           role: null,
+           parentThreadId: null,
++          codevGate: null,
++          gateRevision: 0,
+           titleRegeneration: null,
+           session: {
+             threadId: ThreadId.make("thread-1"),
+diff --git a/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts b/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts
+index 31e6db929..24aafb574 100644
+--- a/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts
++++ b/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts
+@@ -1,4 +1,5 @@
+ import {
++  CodevGate,
+   ChatAttachment,
+   CheckpointRef,
+   IsoDateTime,
+@@ -91,6 +92,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
+   Struct.assign({
+     modelSelection: Schema.fromJsonString(ModelSelection),
+     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
++    codevGate: Schema.NullOr(Schema.fromJsonString(CodevGate)),
+   }),
+ );
+ const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
+@@ -427,6 +429,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+           linked_pull_request_json AS "linkedPullRequest",
+           codev_role AS "role",
+           codev_parent_thread_id AS "parentThreadId",
++          codev_gate_json AS "codevGate",
++          codev_gate_revision AS "gateRevision",
+           latest_turn_id AS "latestTurnId",
+           created_at AS "createdAt",
+           updated_at AS "updatedAt",
+@@ -466,6 +470,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+           linked_pull_request_json AS "linkedPullRequest",
+           codev_role AS "role",
+           codev_parent_thread_id AS "parentThreadId",
++          codev_gate_json AS "codevGate",
++          codev_gate_revision AS "gateRevision",
+           latest_turn_id AS "latestTurnId",
+           created_at AS "createdAt",
+           updated_at AS "updatedAt",
+@@ -507,6 +513,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+           linked_pull_request_json AS "linkedPullRequest",
+           codev_role AS "role",
+           codev_parent_thread_id AS "parentThreadId",
++          codev_gate_json AS "codevGate",
++          codev_gate_revision AS "gateRevision",
+           latest_turn_id AS "latestTurnId",
+           created_at AS "createdAt",
+           updated_at AS "updatedAt",
+@@ -952,6 +960,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+           linked_pull_request_json AS "linkedPullRequest",
+           codev_role AS "role",
+           codev_parent_thread_id AS "parentThreadId",
++          codev_gate_json AS "codevGate",
++          codev_gate_revision AS "gateRevision",
+           latest_turn_id AS "latestTurnId",
+           created_at AS "createdAt",
+           updated_at AS "updatedAt",
+@@ -1717,6 +1727,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+                 // client receives instead of a key it has to infer.
+                 role: row.role ?? null,
+                 parentThreadId: row.parentThreadId ?? null,
++                codevGate: row.codevGate ?? null,
++                gateRevision: row.gateRevision ?? 0,
+                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                 createdAt: row.createdAt,
+                 updatedAt: row.updatedAt,
+@@ -1929,6 +1941,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+                     : { linkedPullRequest: row.linkedPullRequest }),
+                   role: row.role ?? null,
+                   parentThreadId: row.parentThreadId ?? null,
++                  codevGate: row.codevGate ?? null,
++                  gateRevision: row.gateRevision ?? 0,
+                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                   createdAt: row.createdAt,
+                   updatedAt: row.updatedAt,
+@@ -2070,6 +2084,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+                         : { linkedPullRequest: row.linkedPullRequest }),
+                       role: row.role ?? null,
+                       parentThreadId: row.parentThreadId ?? null,
++                      codevGate: row.codevGate ?? null,
++                      gateRevision: row.gateRevision ?? 0,
+                       latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                       createdAt: row.createdAt,
+                       updatedAt: row.updatedAt,
+@@ -2220,6 +2236,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+                     : { linkedPullRequest: row.linkedPullRequest }),
+                   role: row.role ?? null,
+                   parentThreadId: row.parentThreadId ?? null,
++                  codevGate: row.codevGate ?? null,
++                  gateRevision: row.gateRevision ?? 0,
+                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                   createdAt: row.createdAt,
+                   updatedAt: row.updatedAt,
+@@ -2504,6 +2522,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+           : { linkedPullRequest: threadRow.value.linkedPullRequest }),
+         role: threadRow.value.role ?? null,
+         parentThreadId: threadRow.value.parentThreadId ?? null,
++        codevGate: threadRow.value.codevGate ?? null,
++        gateRevision: threadRow.value.gateRevision ?? 0,
+         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
+         createdAt: threadRow.value.createdAt,
+         updatedAt: threadRow.value.updatedAt,
+@@ -2650,6 +2670,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
+           : { linkedPullRequest: threadRow.value.linkedPullRequest }),
+         role: threadRow.value.role ?? null,
+         parentThreadId: threadRow.value.parentThreadId ?? null,
++        codevGate: threadRow.value.codevGate ?? null,
++        gateRevision: threadRow.value.gateRevision ?? 0,
+         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
+         createdAt: threadRow.value.createdAt,
+         updatedAt: threadRow.value.updatedAt,
+diff --git a/apps/server/src/orchestration/Services/OrchestrationEngine.ts b/apps/server/src/orchestration/Services/OrchestrationEngine.ts
+index a32a45684..64ebd4495 100644
+--- a/apps/server/src/orchestration/Services/OrchestrationEngine.ts
++++ b/apps/server/src/orchestration/Services/OrchestrationEngine.ts
+@@ -55,7 +55,21 @@ export interface OrchestrationEngineShape {
+   readonly dispatch: (
+     command: OrchestrationCommand,
+     options?: { readonly origin?: OrchestrationClientOrigin },
+-  ) => Effect.Effect<{ sequence: number }, OrchestrationDispatchError, never>;
++  ) => Effect.Effect<
++    {
++      readonly sequence: number;
++      /**
++       * Codev customization (spec 250). The events this dispatch committed.
++       *
++       * A caller that needs a value the SERVER allocated for its own write —
++       * the gate's revision — cannot re-read it from the projection without
++       * racing a concurrent writer, because the row only holds the latest.
++       */
++      readonly events: ReadonlyArray<OrchestrationEvent>;
++    },
++    OrchestrationDispatchError,
++    never
++  >;
+ 
+   /**
+    * Stream persisted domain events in dispatch order.
+diff --git a/apps/server/src/orchestration/decider.ts b/apps/server/src/orchestration/decider.ts
+index 9103b862b..cd312775e 100644
+--- a/apps/server/src/orchestration/decider.ts
++++ b/apps/server/src/orchestration/decider.ts
+@@ -1,4 +1,5 @@
+ import {
++  CodevGateWriteError,
+   EventId,
+   type OrchestrationCommand,
+   type OrchestrationEvent,
+@@ -187,7 +188,10 @@ const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
+   readonly readModel: OrchestrationReadModel;
+ }): Effect.fn.Return<
+   ReadonlyArray<PlannedOrchestrationEvent>,
+-  OrchestrationCommandInvariantError | CodevHierarchyInvalidError | PlatformError.PlatformError,
++  | OrchestrationCommandInvariantError
++  | CodevHierarchyInvalidError
++  | CodevGateWriteError
++  | PlatformError.PlatformError,
+   Crypto.Crypto
+ > {
+   let nextReadModel = readModel;
+@@ -221,7 +225,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
+   readonly readModel: OrchestrationReadModel;
+ }): Effect.fn.Return<
+   DecideOrchestrationCommandResult,
+-  OrchestrationCommandInvariantError | CodevHierarchyInvalidError | PlatformError.PlatformError,
++  | OrchestrationCommandInvariantError
++  | CodevHierarchyInvalidError
++  | CodevGateWriteError
++  | PlatformError.PlatformError,
+   Crypto.Crypto
+ > {
+   switch (command.type) {
+@@ -398,6 +405,84 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
+       };
+     }
+ 
++    /**
++     * Codev customization (spec 250). Gate writes, with a SERVER-ALLOCATED
++     * monotonic revision.
++     *
++     * One rule covers both allocation and stale-rejection, which review round 1
++     * correctly said could not both be true as originally written:
++     *
++     *   revision absent   the normal path. Allocate `gateRevision + 1` from the
++     *                     read model this command is being decided against.
++     *                     Commands are decided serially against the authoritative
++     *                     read model, so two concurrent writers get two different
++     *                     numbers without any locking here.
++     *   revision present  a replay, or a write from an older connection. Applied
++     *                     only if it EXCEEDS the current mark. Equal is refused:
++     *                     two writers that computed the same number are colliding,
++     *                     not agreeing.
++     *
++     * The mark is a high-water mark on the thread, not a field inside the gate
++     * block, so it survives a clear. That is what stops a stale write resurrecting
++     * a gate a human already answered.
++     */
++    case "codev.gate.set":
++    case "codev.gate.clear": {
++      const thread = yield* requireThread({
++        readModel,
++        command,
++        threadId: command.threadId,
++      });
++      const currentRevision = thread.gateRevision ?? 0;
++
++      if (command.revision !== undefined && command.revision <= currentRevision) {
++        return yield* new CodevGateWriteError({
++          reason: "CODEV_GATE_REVISION_STALE",
++          message:
++            `Gate write for thread '${command.threadId}' carries revision ${command.revision}, ` +
++            `at or below the current mark ${currentRevision}. Equal is refused as well as lower: ` +
++            `two writers that computed the same number are colliding, not agreeing.`,
++          currentRevision,
++        });
++      }
++
++      const gateRevision = command.revision ?? currentRevision + 1;
++      const occurredAt = command.createdAt;
++
++      if (command.type === "codev.gate.clear") {
++        return {
++          ...(yield* withEventBase({
++            aggregateKind: "thread",
++            aggregateId: command.threadId,
++            occurredAt,
++            commandId: command.commandId,
++          })),
++          type: "codev.gate-cleared",
++          payload: {
++            threadId: command.threadId,
++            gateRevision,
++            updatedAt: occurredAt,
++          },
++        };
++      }
++
++      return {
++        ...(yield* withEventBase({
++          aggregateKind: "thread",
++          aggregateId: command.threadId,
++          occurredAt,
++          commandId: command.commandId,
++        })),
++        type: "codev.gate-set",
++        payload: {
++          threadId: command.threadId,
++          gate: command.gate,
++          gateRevision,
++          updatedAt: occurredAt,
++        },
++      };
++    }
++
+     case "thread.delete": {
+       yield* requireThread({
+         readModel,
+diff --git a/apps/server/src/orchestration/projector.test.ts b/apps/server/src/orchestration/projector.test.ts
+index 50697014d..38c090e64 100644
+--- a/apps/server/src/orchestration/projector.test.ts
++++ b/apps/server/src/orchestration/projector.test.ts
+@@ -89,6 +89,11 @@ describe("orchestration projector", () => {
+         // defaults both to null, which is what "Codev did not create this" means.
+         role: null,
+         parentThreadId: null,
++        // Codev customization (spec 250). A new thread has no gate and sits at
++        // revision 0: the mark is a high-water mark, so starting anywhere else
++        // would make the first real write look stale.
++        codevGate: null,
++        gateRevision: 0,
+         latestTurn: null,
+         createdAt: now,
+         updatedAt: now,
+diff --git a/apps/server/src/orchestration/projector.ts b/apps/server/src/orchestration/projector.ts
+index c1684c08b..662efc96f 100644
+--- a/apps/server/src/orchestration/projector.ts
++++ b/apps/server/src/orchestration/projector.ts
+@@ -1,5 +1,7 @@
+ import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+ import {
++  CodevGateClearedPayload,
++  CodevGateSetPayload,
+   OrchestrationCheckpointSummary,
+   OrchestrationMessage,
+   OrchestrationSession,
+@@ -303,6 +305,11 @@ export function projectEvent(
+             // silently flatten it while every count still matched.
+             role: payload.role,
+             parentThreadId: payload.parentThreadId,
++            // A thread is created with no gate and at revision 0. The mark is a
++            // high-water mark, so starting anywhere else would let the first real
++            // write look stale.
++            codevGate: null,
++            gateRevision: 0,
+             latestTurn: null,
+             createdAt: payload.createdAt,
+             updatedAt: payload.updatedAt,
+@@ -329,6 +336,37 @@ export function projectEvent(
+         };
+       });
+ 
++    /**
++     * Codev customization (spec 250). The gate block and its high-water mark.
++     *
++     * The mark is written on BOTH events, including the clear. That is the whole
++     * mechanism: it outlives the block it described, so a stale write arriving
++     * after a human answered cannot resurrect the gate.
++     */
++    case "codev.gate-set":
++      return decodeForEvent(CodevGateSetPayload, event.payload, event.type, "payload").pipe(
++        Effect.map((payload) => ({
++          ...nextBase,
++          threads: updateThread(nextBase.threads, payload.threadId, {
++            codevGate: payload.gate,
++            gateRevision: payload.gateRevision,
++            updatedAt: payload.updatedAt,
++          }),
++        })),
++      );
++
++    case "codev.gate-cleared":
++      return decodeForEvent(CodevGateClearedPayload, event.payload, event.type, "payload").pipe(
++        Effect.map((payload) => ({
++          ...nextBase,
++          threads: updateThread(nextBase.threads, payload.threadId, {
++            codevGate: null,
++            gateRevision: payload.gateRevision,
++            updatedAt: payload.updatedAt,
++          }),
++        })),
++      );
++
+     case "thread.deleted":
+       return decodeForEvent(ThreadDeletedPayload, event.payload, event.type, "payload").pipe(
+         Effect.map((payload) => ({
+diff --git a/apps/server/src/persistence/Layers/ProjectionThreads.ts b/apps/server/src/persistence/Layers/ProjectionThreads.ts
+index 26bb71f1f..234b81d26 100644
+--- a/apps/server/src/persistence/Layers/ProjectionThreads.ts
++++ b/apps/server/src/persistence/Layers/ProjectionThreads.ts
+@@ -14,12 +14,14 @@ import {
+   ProjectionThreadRepository,
+   type ProjectionThreadRepositoryShape,
+ } from "../Services/ProjectionThreads.ts";
+-import { ModelSelection, ThreadLinkedPullRequest } from "@t3tools/contracts";
++import { CodevGate, ModelSelection, ThreadLinkedPullRequest } from "@t3tools/contracts";
+ 
+ const ProjectionThreadDbRow = ProjectionThread.mapFields(
+   Struct.assign({
+     modelSelection: Schema.fromJsonString(ModelSelection),
+     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
++    // Codev customization (spec 250). Stored as JSON like linkedPullRequest.
++    codevGate: Schema.NullOr(Schema.fromJsonString(CodevGate)),
+   }),
+ );
+ type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
+@@ -43,6 +45,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
+           linked_pull_request_json,
+           codev_role,
+           codev_parent_thread_id,
++          codev_gate_json,
++          codev_gate_revision,
+           latest_turn_id,
+           created_at,
+           updated_at,
+@@ -73,6 +77,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
+           ${row.linkedPullRequest === undefined || row.linkedPullRequest === null ? null : JSON.stringify(row.linkedPullRequest)},
+           ${row.role ?? null},
+           ${row.parentThreadId ?? null},
++          ${row.codevGate === undefined || row.codevGate === null ? null : JSON.stringify(row.codevGate)},
++          ${row.gateRevision ?? 0},
+           ${row.latestTurnId},
+           ${row.createdAt},
+           ${row.updatedAt},
+@@ -103,6 +109,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
+           linked_pull_request_json = excluded.linked_pull_request_json,
+           codev_role = excluded.codev_role,
+           codev_parent_thread_id = excluded.codev_parent_thread_id,
++          codev_gate_json = excluded.codev_gate_json,
++          -- The mark only ever increases. An upsert that carried a lower one
++          -- would undo the very thing the mark exists to guarantee, and upserts
++          -- happen on every projection write, not only on gate writes.
++          codev_gate_revision = MAX(projection_threads.codev_gate_revision, excluded.codev_gate_revision),
+           latest_turn_id = excluded.latest_turn_id,
+           created_at = excluded.created_at,
+           updated_at = excluded.updated_at,
+@@ -140,6 +151,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
+           linked_pull_request_json AS "linkedPullRequest",
+           codev_role AS "role",
+           codev_parent_thread_id AS "parentThreadId",
++          codev_gate_json AS "codevGate",
++          codev_gate_revision AS "gateRevision",
+           latest_turn_id AS "latestTurnId",
+           created_at AS "createdAt",
+           updated_at AS "updatedAt",
+@@ -179,6 +192,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
+           linked_pull_request_json AS "linkedPullRequest",
+           codev_role AS "role",
+           codev_parent_thread_id AS "parentThreadId",
++          codev_gate_json AS "codevGate",
++          codev_gate_revision AS "gateRevision",
+           latest_turn_id AS "latestTurnId",
+           created_at AS "createdAt",
+           updated_at AS "updatedAt",
+diff --git a/apps/server/src/persistence/Services/ProjectionThreads.ts b/apps/server/src/persistence/Services/ProjectionThreads.ts
+index fab83e90e..adfafcfb1 100644
+--- a/apps/server/src/persistence/Services/ProjectionThreads.ts
++++ b/apps/server/src/persistence/Services/ProjectionThreads.ts
+@@ -15,14 +15,15 @@ import {
+   ProviderInteractionMode,
+   RuntimeMode,
+   ThreadLinkedPullRequest,
++  CodevGate,
+   CodevThreadRole,
+   ThreadId,
+   TurnId,
+ } from "@t3tools/contracts";
+ import * as Option from "effect/Option";
++import * as Effect from "effect/Effect";
+ import * as Schema from "effect/Schema";
+ import * as Context from "effect/Context";
+-import type * as Effect from "effect/Effect";
+ 
+ import type { ProjectionRepositoryError } from "../Errors.ts";
+ 
+@@ -44,6 +45,12 @@ export const ProjectionThread = Schema.Struct({
+    */
+   role: Schema.optional(Schema.NullOr(CodevThreadRole)),
+   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
++  /**
++   * Codev customization (spec 250). The gate block, and the high-water mark
++   * stored beside it rather than inside it — the mark must outlive a clear.
++   */
++  codevGate: Schema.optional(Schema.NullOr(CodevGate)),
++  gateRevision: Schema.optional(NonNegativeInt).pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+   latestTurnId: Schema.NullOr(TurnId),
+   createdAt: IsoDateTime,
+   updatedAt: IsoDateTime,
+diff --git a/apps/server/src/relay/AgentAwarenessRelay.test.ts b/apps/server/src/relay/AgentAwarenessRelay.test.ts
+index 74a4de594..99450917b 100644
+--- a/apps/server/src/relay/AgentAwarenessRelay.test.ts
++++ b/apps/server/src/relay/AgentAwarenessRelay.test.ts
+@@ -472,7 +472,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
+ 
+         const orchestrationEngine = {
+           readEvents: () => Stream.empty,
+-          dispatch: () => Effect.succeed({ sequence: 1 }),
++          dispatch: () => Effect.succeed({ sequence: 1, events: [] }),
+           streamDomainEvents: Stream.fromQueue(events),
+           latestSequence: Effect.succeed(0),
+         } satisfies OrchestrationEngineShape;
+@@ -664,7 +664,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
+           }),
+           Layer.succeed(OrchestrationEngineService, {
+             readEvents: () => Stream.empty,
+-            dispatch: () => Effect.succeed({ sequence: 1 }),
++            dispatch: () => Effect.succeed({ sequence: 1, events: [] }),
+             streamDomainEvents: Stream.fromQueue(events),
+             latestSequence: Effect.succeed(0),
+           } satisfies OrchestrationEngineShape),
+diff --git a/apps/server/src/server.test.ts b/apps/server/src/server.test.ts
+index a9a2c3fa1..70ccf876b 100644
+--- a/apps/server/src/server.test.ts
++++ b/apps/server/src/server.test.ts
+@@ -788,7 +788,7 @@ const buildAppUnderTest = (options?: {
+       Layer.provide(
+         Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
+           readEvents: () => Stream.empty,
+-          dispatch: () => Effect.succeed({ sequence: 0 }),
++          dispatch: () => Effect.succeed({ sequence: 0, events: [] }),
+           streamDomainEvents: Stream.empty,
+           latestSequence: Effect.succeed(0),
+           ...options?.layers?.orchestrationEngine,
+@@ -5238,7 +5238,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+                           detail: "thread creation failed",
+                         }),
+                       )
+-                    : Effect.succeed({ sequence: 1 }),
++                    : Effect.succeed({ sequence: 1, events: [] }),
+                 ),
+               ),
+           },
+@@ -6154,7 +6154,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+               }),
+           },
+           orchestrationEngine: {
+-            dispatch: () => Effect.succeed({ sequence: 7 }),
++            dispatch: () => Effect.succeed({ sequence: 7, events: [] }),
+             readEvents: () => Stream.empty,
+           },
+           checkpointDiffQuery: {
+@@ -7051,7 +7051,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+               Effect.sync(() => {
+                 dispatchedCommands.push(command);
+                 effects.push(`dispatch:${command.type}`);
+-                return { sequence: dispatchedCommands.length };
++                return { sequence: dispatchedCommands.length, events: [] };
+               }),
+           },
+           projectionSnapshotQuery: {
+@@ -7126,7 +7126,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+                 if (command.type === "thread.archive") {
+                   archived = true;
+                 }
+-                return { sequence: dispatchedCommands.length };
++                return { sequence: dispatchedCommands.length, events: [] };
+               }),
+           },
+           projectionSnapshotQuery: {
+@@ -7199,7 +7199,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+               Effect.sync(() => {
+                 dispatchedCommands.push(command);
+                 effects.push(`dispatch:${command.type}`);
+-                return { sequence: dispatchedCommands.length };
++                return { sequence: dispatchedCommands.length, events: [] };
+               }),
+           },
+           projectionSnapshotQuery: {
+@@ -7253,7 +7253,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+                 Effect.sync(() => {
+                   dispatchedCommands.push(command);
+                   effects.push(`dispatch:${command.type}`);
+-                  return { sequence: dispatchedCommands.length };
++                  return { sequence: dispatchedCommands.length, events: [] };
+                 }),
+             },
+             projectionSnapshotQuery: {
+@@ -7319,7 +7319,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+               Effect.sync(() => {
+                 dispatchedCommands.push(command);
+                 effects.push(`dispatch:${command.type}`);
+-                return { sequence: dispatchedCommands.length };
++                return { sequence: dispatchedCommands.length, events: [] };
+               }),
+           },
+           projectionSnapshotQuery: {
+@@ -7387,7 +7387,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+               Effect.sync(() => {
+                 dispatchedCommands.push(command);
+                 effects.push(`dispatch:${command.type}`);
+-                return { sequence: dispatchedCommands.length };
++                return { sequence: dispatchedCommands.length, events: [] };
+               }),
+           },
+           projectionSnapshotQuery: {
+@@ -7446,7 +7446,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+                   }),
+                 );
+               }
+-              return Effect.succeed({ sequence: dispatchedCommands.length });
++              return Effect.succeed({ sequence: dispatchedCommands.length, events: [] });
+             },
+           },
+           projectionSnapshotQuery: {
+@@ -7518,7 +7518,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+               if (command.type === "thread.session.stop") {
+                 return Effect.die(new Error("simulated archive stop defect"));
+               }
+-              return Effect.succeed({ sequence: dispatchedCommands.length });
++              return Effect.succeed({ sequence: dispatchedCommands.length, events: [] });
+             },
+           },
+           projectionSnapshotQuery: {
+@@ -7658,7 +7658,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+               dispatch: (command) =>
+                 Effect.sync(() => {
+                   dispatchedCommands.push(command);
+-                  return { sequence: dispatchedCommands.length };
++                  return { sequence: dispatchedCommands.length, events: [] };
+                 }),
+               readEvents: () => Stream.empty,
+             },
+@@ -7807,7 +7807,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+               dispatch: (command) =>
+                 Effect.sync(() => {
+                   dispatchedCommands.push(command);
+-                  return { sequence: dispatchedCommands.length };
++                  return { sequence: dispatchedCommands.length, events: [] };
+                 }),
+               readEvents: () => Stream.empty,
+             },
+@@ -7907,7 +7907,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+             dispatch: (command) =>
+               Effect.sync(() => {
+                 dispatchedCommands.push(command);
+-                return { sequence: dispatchedCommands.length };
++                return { sequence: dispatchedCommands.length, events: [] };
+               }),
+             readEvents: () => Stream.empty,
+           },
+@@ -8027,7 +8027,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+ 
+               return Effect.sync(() => {
+                 dispatchedCommands.push(command);
+-                return { sequence: dispatchedCommands.length };
++                return { sequence: dispatchedCommands.length, events: [] };
+               });
+             },
+             readEvents: () => Stream.empty,
+@@ -8117,7 +8117,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+             dispatch: (command) =>
+               Effect.sync(() => {
+                 dispatchedCommands.push(command);
+-                return { sequence: dispatchedCommands.length };
++                return { sequence: dispatchedCommands.length, events: [] };
+               }),
+             readEvents: () => Stream.empty,
+           },
+@@ -8228,7 +8228,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
+                   }),
+                 );
+               }
+-              return Effect.succeed({ sequence: dispatchedCommands.length });
++              return Effect.succeed({ sequence: dispatchedCommands.length, events: [] });
+             },
+             readEvents: () => Stream.empty,
+           },
+diff --git a/apps/server/src/serverRuntimeStartup.reconcile.test.ts b/apps/server/src/serverRuntimeStartup.reconcile.test.ts
+index 485cd5bb0..3ab9d7940 100644
+--- a/apps/server/src/serverRuntimeStartup.reconcile.test.ts
++++ b/apps/server/src/serverRuntimeStartup.reconcile.test.ts
+@@ -132,7 +132,7 @@ it.effect("reconciles multiple active and archived orphans but skips live sessio
+       listBindings: () => Effect.die("unused"),
+     },
+     dispatch: (command) =>
+-      Effect.sync(() => dispatched.push(command)).pipe(Effect.as({ sequence: dispatched.length })),
++      Effect.sync(() => dispatched.push(command)).pipe(Effect.as({ sequence: dispatched.length, events: [] })),
+   }).pipe(
+     Effect.tap(() =>
+       Effect.sync(() => {
+@@ -202,7 +202,7 @@ it.effect(
+       },
+       dispatch: (command) =>
+         Effect.sync(() => dispatched.push(command)).pipe(
+-          Effect.as({ sequence: dispatched.length }),
++          Effect.as({ sequence: dispatched.length, events: [] }),
+         ),
+     }).pipe(
+       Effect.tap(() =>
+@@ -247,7 +247,7 @@ it.effect("retries failed projections and continues after a persistent failure",
+       }
+       return command.threadId === persistent.id
+         ? Effect.fail(failure)
+-        : Effect.succeed({ sequence: attempted.length });
++        : Effect.succeed({ sequence: attempted.length, events: [] });
+     },
+   }).pipe(
+     Effect.tap(() =>
+diff --git a/apps/server/src/serverRuntimeStartup.test.ts b/apps/server/src/serverRuntimeStartup.test.ts
+index e3f7e482b..e120f3125 100644
+--- a/apps/server/src/serverRuntimeStartup.test.ts
++++ b/apps/server/src/serverRuntimeStartup.test.ts
+@@ -167,7 +167,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
+         readEvents: () => Stream.empty,
+         dispatch: (command) =>
+           Ref.update(dispatchCalls, (calls) => [...calls, command.type]).pipe(
+-            Effect.as({ sequence: 1 }),
++            Effect.as({ sequence: 1, events: [] }),
+           ),
+         streamDomainEvents: Stream.empty,
+         latestSequence: Effect.succeed(0),
+@@ -212,7 +212,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets creates a project and thread when
+         readEvents: () => Stream.empty,
+         dispatch: (command) =>
+           Ref.update(dispatchCalls, (calls) => [...calls, command.type]).pipe(
+-            Effect.as({ sequence: 1 }),
++            Effect.as({ sequence: 1, events: [] }),
+           ),
+         streamDomainEvents: Stream.empty,
+         latestSequence: Effect.succeed(0),
+@@ -263,7 +263,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
+         readEvents: () => Stream.empty,
+         dispatch: (command) =>
+           Ref.update(dispatchCalls, (calls) => [...calls, command.type]).pipe(
+-            Effect.as({ sequence: 1 }),
++            Effect.as({ sequence: 1, events: [] }),
+           ),
+         streamDomainEvents: Stream.empty,
+         latestSequence: Effect.succeed(0),
+diff --git a/apps/server/src/ws.ts b/apps/server/src/ws.ts
+index 226c82cdb..ae895c634 100644
+--- a/apps/server/src/ws.ts
++++ b/apps/server/src/ws.ts
+@@ -34,6 +34,8 @@ import {
+   OrchestrationGetSnapshotError,
+   OrchestrationSearchThreadsError,
+   OrchestrationGetTurnDiffError,
++  CODEV_WS_METHODS,
++  CodevGateWriteError,
+   ORCHESTRATION_WS_METHODS,
+   type ProjectId,
+   type ProjectEntriesFailure,
+@@ -1172,6 +1174,68 @@ const makeWsRpcLayer = (
+           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
+ 
+       return WsRpcGroup.of({
++        /**
++         * Codev customization (spec 250). Gate writes.
++         *
++         * Authorization happens in `observeRpcEffect` via the scope map, which
++         * requires `codev:gate-write` for this method — a scope deliberately
++         * absent from `AuthStandardClientScopes` and from the token allowlist, so
++         * an ordinary operator's refusal names it rather than reading as a
++         * generic 403.
++         *
++         * The response carries the allocated revision, read from the event this
++         * dispatch produced. `dispatchCommand` has no revision to return, which
++         * is one of the reasons the gate does not travel on it.
++         */
++        [CODEV_WS_METHODS.gateWrite]: (command) =>
++          observeRpcEffect(
++            CODEV_WS_METHODS.gateWrite,
++            Effect.gen(function* () {
++              const { events } = yield* dispatchFromClient(command).pipe(
++                Effect.mapError((cause) =>
++                  // The decider's own refusal — a stale revision, or no such
++                  // thread — arrives here already named. Anything else is
++                  // reported as the thread lookup failing rather than being
++                  // given a reason it did not have.
++                  cause instanceof CodevGateWriteError
++                    ? cause
++                    : new CodevGateWriteError({
++                        reason: "CODEV_GATE_THREAD_NOT_FOUND",
++                        message: `Gate write refused: ${String(cause)}`,
++                        cause,
++                      }),
++                ),
++              );
++
++              // The event THIS dispatch committed, handed back by the engine.
++              // Re-reading the thread row instead would race a concurrent writer:
++              // both would see the later revision and one would be told a number
++              // that was never allocated to it.
++              const committed = events.find(
++                (event) => event.type === "codev.gate-set" || event.type === "codev.gate-cleared",
++              );
++              if (
++                committed === undefined ||
++                (committed.type !== "codev.gate-set" && committed.type !== "codev.gate-cleared")
++              ) {
++                // Reported as unconfirmed, never as applied. The write may well
++                // have landed; what we cannot do is tell the caller which
++                // revision it got, and a guessed revision is worse than none.
++                return yield* new CodevGateWriteError({
++                  reason: "CODEV_GATE_THREAD_NOT_FOUND",
++                  message:
++                    "Gate write committed but its event could not be read back; the revision is " +
++                    "unconfirmed. Re-read the thread rather than assuming this write applied.",
++                });
++              }
++
++              return {
++                threadId: committed.payload.threadId,
++                gateRevision: committed.payload.gateRevision,
++                cleared: committed.type === "codev.gate-cleared",
++              };
++            }),
++          ),
+         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
+           observeRpcEffect(
+             ORCHESTRATION_WS_METHODS.dispatchCommand,
+diff --git a/packages/contracts/src/auth.ts b/packages/contracts/src/auth.ts
+index a0d3d89b7..ed642b909 100644
+--- a/packages/contracts/src/auth.ts
++++ b/packages/contracts/src/auth.ts
+@@ -81,6 +81,16 @@ export const AuthAccessReadScope = "access:read" as const;
+ export const AuthAccessWriteScope = "access:write" as const;
+ export const AuthRelayReadScope = "relay:read" as const;
+ export const AuthRelayWriteScope = "relay:write" as const;
++/**
++ * Codev customization (spec 250). Writing a porch gate block.
++ *
++ * Deliberately NOT in `AuthStandardClientScopes` or `AuthAdministrativeScopes`, and not in
++ * the token allowlist in `apps/server/src/auth/http.ts`. It is issued out of band to exactly
++ * one credential — `codev-agent` — and never to a thread. Adding it to either set would grant
++ * gate-writing to precisely the callers it exists to exclude, which is the whole point of
++ * giving gate writes their own RPC method rather than routing them through `dispatchCommand`.
++ */
++export const AuthCodevGateWriteScope = "codev:gate-write" as const;
+ export const AuthEnvironmentScope = Schema.Literals([
+   AuthOrchestrationReadScope,
+   AuthOrchestrationOperateScope,
+@@ -90,6 +100,7 @@ export const AuthEnvironmentScope = Schema.Literals([
+   AuthAccessWriteScope,
+   AuthRelayReadScope,
+   AuthRelayWriteScope,
++  AuthCodevGateWriteScope,
+ ]);
+ export type AuthEnvironmentScope = typeof AuthEnvironmentScope.Type;
+ export const AuthEnvironmentScopes = Schema.Array(AuthEnvironmentScope);
+diff --git a/packages/contracts/src/orchestration.ts b/packages/contracts/src/orchestration.ts
+index 34faa73f5..be111a3dd 100644
+--- a/packages/contracts/src/orchestration.ts
++++ b/packages/contracts/src/orchestration.ts
+@@ -35,6 +35,19 @@ export const ORCHESTRATION_WS_METHODS = {
+   subscribeThread: "orchestration.subscribeThread",
+ } as const;
+ 
++/**
++ * Codev customization (spec 250). Gate writes travel their OWN RPC method.
++ *
++ * `RpcAuthorization.ts` authorizes the *method*, not the command type — it maps
++ * `orchestration.dispatchCommand` as a whole to `orchestration:operate`. So
++ * routing `codev.gate.set` through `dispatchCommand` and hoping to scope it
++ * separately is not expressible: every operator would reach it. A separate
++ * method is the only place a separate scope can attach.
++ */
++export const CODEV_WS_METHODS = {
++  gateWrite: "codev.gateWrite",
++} as const;
++
+ export const ProviderApprovalPolicy = Schema.Literals([
+   "untrusted",
+   "on-failure",
+@@ -395,6 +408,65 @@ export const ThreadLinkedPullRequest = Schema.Struct({
+ });
+ export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
+ 
++/**
++ * Codev customization (spec 250). One choice in a gate's structured question (#128).
++ *
++ * `consequence` is required: a choice whose outcome is unstated asks a human to
++ * pick blind, which is the failure the structured request exists to remove.
++ */
++export const CodevGateChoice = Schema.Struct({
++  label: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
++  consequence: TrimmedNonEmptyString.check(Schema.isMaxLength(2000)),
++  recommended: Schema.optional(Schema.Boolean),
++});
++export type CodevGateChoice = typeof CodevGateChoice.Type;
++
++/**
++ * Codev customization (spec 250). A porch gate awaiting a human, as first-class
++ * thread state.
++ *
++ * Spec 146 wrote the gate name into the thread TITLE, because there was nowhere
++ * else to put it. This is that nowhere-else. It is deliberately separate from
++ * `hasPendingApprovals`, which is provider tool approvals: a builder blocked on
++ * `plan-approval` and one waiting on a tool call need different things from a
++ * human, and one flag covering both is one flag nobody can act on.
++ *
++ * Bounded at the schema boundary rather than by convention. An oversize or
++ * malformed payload is refused whole; a gate that partially applied would leave
++ * a human looking at half a question.
++ */
++export const CodevGate = Schema.Struct({
++  /** The porch gate name, e.g. `plan-approval`. Never the thread title again. */
++  gateName: TrimmedNonEmptyString.check(Schema.isMaxLength(120)),
++  requestedAt: IsoDateTime,
++  /** #128's structured question. Single-line: it is rendered as a heading. */
++  question: Schema.optional(
++    Schema.NullOr(
++      TrimmedNonEmptyString.check(
++        Schema.isMaxLength(500),
++        Schema.makeFilter((value) =>
++          /[\r\n]/.test(value)
++            ? "the gate question must be a single line: it is rendered as a heading"
++            : undefined,
++        ),
++      ),
++    ),
++  ),
++  /** One to five. Zero choices is not a question; more than five is not a gate. */
++  choices: Schema.optional(
++    Schema.NullOr(Schema.Array(CodevGateChoice).check(Schema.isMinLength(1), Schema.isMaxLength(5))),
++  ),
++  /** Last relevant output. Multi-line is fine here; this one is rendered as a block. */
++  terminalExcerpt: Schema.optional(Schema.NullOr(Schema.String.check(Schema.isMaxLength(8000)))),
++}).check(
++  Schema.makeFilter((gate) =>
++    (gate.choices ?? []).filter((choice) => choice.recommended === true).length <= 1
++      ? undefined
++      : "at most one choice may be marked recommended: two recommendations is no recommendation",
++  ),
++);
++export type CodevGate = typeof CodevGate.Type;
++
+ /**
+  * Codev customization (spec 250). Which side of the Codev hierarchy a thread is.
+  *
+@@ -434,6 +506,17 @@ export const OrchestrationThread = Schema.Struct({
+    */
+   role: Schema.optional(Schema.NullOr(CodevThreadRole)),
+   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
++  /**
++   * Codev customization (spec 250). The gate awaiting a human, or none.
++   *
++   * `gateRevision` is stored SEPARATELY and is a non-nullable high-water mark
++   * that only ever increases — including across a clear, because clearing is a
++   * write like any other. Keeping it outside the block is what lets a stale write
++   * be rejected after the gate is gone: if the mark lived inside `codevGate` it
++   * would vanish with it, and the next stale write would resurrect the gate.
++   */
++  codevGate: Schema.optional(Schema.NullOr(CodevGate)),
++  gateRevision: Schema.optional(NonNegativeInt).pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+   createdAt: IsoDateTime,
+   updatedAt: IsoDateTime,
+   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+@@ -521,6 +604,17 @@ export const OrchestrationThreadShell = Schema.Struct({
+    */
+   role: Schema.optional(Schema.NullOr(CodevThreadRole)),
+   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
++  /**
++   * Codev customization (spec 250). The gate awaiting a human, or none.
++   *
++   * `gateRevision` is stored SEPARATELY and is a non-nullable high-water mark
++   * that only ever increases — including across a clear, because clearing is a
++   * write like any other. Keeping it outside the block is what lets a stale write
++   * be rejected after the gate is gone: if the mark lived inside `codevGate` it
++   * would vanish with it, and the next stale write would resurrect the gate.
++   */
++  codevGate: Schema.optional(Schema.NullOr(CodevGate)),
++  gateRevision: Schema.optional(NonNegativeInt).pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+   createdAt: IsoDateTime,
+   updatedAt: IsoDateTime,
+   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+@@ -989,6 +1083,65 @@ const ThreadSessionStopCommand = Schema.Struct({
+   onlyIfSettled: Schema.optional(Schema.Boolean),
+ });
+ 
++/**
++ * Codev customization (spec 250). Gate writes, INTERNAL ONLY.
++ *
++ * Deliberately absent from `DispatchableClientOrchestrationCommand` and
++ * `ClientOrchestrationCommand`: those unions ARE the `dispatchCommand` payload,
++ * so adding these there would hand gate-writing to every holder of
++ * `orchestration:operate` and silently bypass `codev:gate-write` — undoing this
++ * phase's entire point. `ThreadSessionSetCommand` is the existing precedent for
++ * an internal-only command.
++ *
++ * `revision` is OPTIONAL, and that is what lets allocation and stale-rejection
++ * coexist:
++ *
++ *   absent   the normal path. The server allocates `gateRevision + 1` and
++ *            returns it. The writer never invents one, because a counter held in
++ *            a writer's memory resets on restart, and a reset counter renders
++ *            every later gate as "no gate pending" — a false negative exactly
++ *            where a human is waiting.
++ *   present  a replay, or a write from an older connection. Applied only if it
++ *            EXCEEDS the current mark. Equal is refused rather than treated as
++ *            idempotent: two writers that computed the same number are not
++ *            agreeing, they are colliding.
++ */
++const CodevGateSetCommand = Schema.Struct({
++  type: Schema.Literal("codev.gate.set"),
++  commandId: CommandId,
++  threadId: ThreadId,
++  gate: CodevGate,
++  revision: Schema.optional(NonNegativeInt),
++  createdAt: IsoDateTime,
++});
++
++const CodevGateClearCommand = Schema.Struct({
++  type: Schema.Literal("codev.gate.clear"),
++  commandId: CommandId,
++  threadId: ThreadId,
++  revision: Schema.optional(NonNegativeInt),
++  createdAt: IsoDateTime,
++});
++
++/** The `codev.gateWrite` RPC payload: one command, either shape. */
++export const CodevGateWriteInput = Schema.Union([CodevGateSetCommand, CodevGateClearCommand]);
++export type CodevGateWriteInput = typeof CodevGateWriteInput.Type;
++
++/**
++ * The RPC's own response, carrying the allocated revision.
++ *
++ * Returned here and not through `dispatchCommand`, which carries no revision. A
++ * gate write whose response cannot be read is reported by the caller as
++ * unconfirmed, never as applied.
++ */
++export const CodevGateWriteResult = Schema.Struct({
++  threadId: ThreadId,
++  gateRevision: NonNegativeInt,
++  /** True when the write cleared the gate rather than setting one. */
++  cleared: Schema.Boolean,
++});
++export type CodevGateWriteResult = typeof CodevGateWriteResult.Type;
++
+ const DispatchableClientOrchestrationCommand = Schema.Union([
+   ProjectCreateCommand,
+   ProjectMetaUpdateCommand,
+@@ -1126,6 +1279,8 @@ const InternalOrchestrationCommand = Schema.Union([
+   ThreadActivityAppendCommand,
+   ThreadRevertCompleteCommand,
+   ThreadTitleRegenerationCompleteCommand,
++  CodevGateSetCommand,
++  CodevGateClearCommand,
+ ]);
+ export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
+ 
+@@ -1140,6 +1295,8 @@ export const OrchestrationEventType = Schema.Literals([
+   "project.meta-updated",
+   "project.deleted",
+   "thread.created",
++  "codev.gate-set",
++  "codev.gate-cleared",
+   "thread.deleted",
+   "thread.archived",
+   "thread.unarchived",
+@@ -1230,6 +1387,34 @@ export const ThreadCreatedPayload = Schema.Struct({
+   updatedAt: IsoDateTime,
+ });
+ 
++/**
++ * Codev customization (spec 250). The gate set, carrying the revision the SERVER
++ * allocated.
++ *
++ * The revision travels on the event rather than being re-read from the row,
++ * because two concurrent writers must each learn their own number and the row
++ * only ever holds the latest.
++ */
++export const CodevGateSetPayload = Schema.Struct({
++  threadId: ThreadId,
++  gate: CodevGate,
++  gateRevision: NonNegativeInt,
++  updatedAt: IsoDateTime,
++});
++
++/**
++ * Codev customization (spec 250). The gate cleared.
++ *
++ * Clearing carries a revision too, and raises the high-water mark. That is what
++ * stops a stale write resurrecting a gate a human has already answered: the mark
++ * outlives the block it described.
++ */
++export const CodevGateClearedPayload = Schema.Struct({
++  threadId: ThreadId,
++  gateRevision: NonNegativeInt,
++  updatedAt: IsoDateTime,
++});
++
+ export const ThreadDeletedPayload = Schema.Struct({
+   threadId: ThreadId,
+   deletedAt: IsoDateTime,
+@@ -1468,6 +1653,17 @@ export const OrchestrationEvent = Schema.Union([
+     type: Schema.Literal("thread.created"),
+     payload: ThreadCreatedPayload,
+   }),
++  // Codev customization (spec 250).
++  Schema.Struct({
++    ...EventBaseFields,
++    type: Schema.Literal("codev.gate-set"),
++    payload: CodevGateSetPayload,
++  }),
++  Schema.Struct({
++    ...EventBaseFields,
++    type: Schema.Literal("codev.gate-cleared"),
++    payload: CodevGateClearedPayload,
++  }),
+   Schema.Struct({
+     ...EventBaseFields,
+     type: Schema.Literal("thread.deleted"),
+@@ -1822,6 +2018,38 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<O
+   },
+ ) {}
+ 
++/**
++ * Codev customization (spec 250). A refused gate write, with a named reason.
++ *
++ * Three causes that a caller must act on differently:
++ *   CODEV_GATE_SCOPE_REQUIRED   the credential lacks `codev:gate-write`. Not a
++ *                               generic 403, and distinguishable from an
++ *                               unauthenticated 401 — one is "log in", the other
++ *                               is "you will never be allowed to do this".
++ *   CODEV_GATE_REVISION_STALE   the write carried a revision at or below the
++ *                               current high-water mark. Equal counts: two
++ *                               writers that computed the same number are
++ *                               colliding, not agreeing.
++ *   CODEV_GATE_THREAD_NOT_FOUND no such thread.
++ */
++export const CodevGateWriteErrorReason = Schema.Literals([
++  "CODEV_GATE_SCOPE_REQUIRED",
++  "CODEV_GATE_REVISION_STALE",
++  "CODEV_GATE_THREAD_NOT_FOUND",
++]);
++export type CodevGateWriteErrorReason = typeof CodevGateWriteErrorReason.Type;
++
++export class CodevGateWriteError extends Schema.TaggedErrorClass<CodevGateWriteError>()(
++  "CodevGateWriteError",
++  {
++    reason: CodevGateWriteErrorReason,
++    message: TrimmedNonEmptyString,
++    /** The mark the server holds, so a stale writer can resynchronise rather than retry blind. */
++    currentRevision: Schema.optional(NonNegativeInt),
++    cause: Schema.optional(Schema.Defect()),
++  },
++) {}
++
+ export class OrchestrationGetTurnDiffError extends Schema.TaggedErrorClass<OrchestrationGetTurnDiffError>()(
+   "OrchestrationGetTurnDiffError",
+   {
+diff --git a/packages/contracts/src/rpc.ts b/packages/contracts/src/rpc.ts
+index 14363cfed..40308ad19 100644
+--- a/packages/contracts/src/rpc.ts
++++ b/packages/contracts/src/rpc.ts
+@@ -62,6 +62,10 @@ import {
+ import { KeybindingsConfigError } from "./keybindings.ts";
+ import {
+   ClientOrchestrationCommand,
++  CODEV_WS_METHODS,
++  CodevGateWriteError,
++  CodevGateWriteInput,
++  CodevGateWriteResult,
+   ORCHESTRATION_WS_METHODS,
+   OrchestrationDispatchCommandError,
+   OrchestrationGetFullThreadDiffError,
+@@ -912,6 +916,20 @@ export const WsOrchestrationDispatchCommandRpc = Rpc.make(
+   },
+ );
+ 
++/**
++ * Codev customization (spec 250). Gate writes, on their own method.
++ *
++ * Separate from `dispatchCommand` because `RpcAuthorization` authorizes the
++ * METHOD, not the command type. A gate command routed through `dispatchCommand`
++ * would be reachable by every holder of `orchestration:operate`, and no row in
++ * the scope map could say otherwise.
++ */
++export const WsCodevGateWriteRpc = Rpc.make(CODEV_WS_METHODS.gateWrite, {
++  payload: CodevGateWriteInput,
++  success: CodevGateWriteResult,
++  error: Schema.Union([CodevGateWriteError, EnvironmentAuthorizationError]),
++});
++
+ export const WsOrchestrationGetWorkflowScriptRpc = Rpc.make(
+   ORCHESTRATION_WS_METHODS.getWorkflowScript,
+   {
+@@ -1113,6 +1131,7 @@ export const WsRpcGroup = RpcGroup.make(
+   WsSubscribeBackgroundPolicyRpc,
+   WsSubscribeResourceTelemetryRpc,
+   WsOrchestrationDispatchCommandRpc,
++  WsCodevGateWriteRpc,
+   WsOrchestrationGetWorkflowScriptRpc,
+   WsOrchestrationGetTurnDiffRpc,
+   WsOrchestrationGetFullThreadDiffRpc,

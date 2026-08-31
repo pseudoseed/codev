@@ -2218,6 +2218,51 @@ The command vocabulary lives in `@cluesmith/codev-types` (`canvas-command.ts`) a
 Tower, the sdk and the canvas package each keep a local `satisfies`-bound copy of any runtime list
 because codev-types is type-only for all three.
 
+### The t3code Fork (Spec 250)
+
+**t3code is the front end; Codev integrates with it.** Every change we make to t3code is a
+private customization that does not go upstream to `pingdotgg/t3code`. Spec 250 replaced spec
+146's "do not touch t3code" premise, so **`apps/client` in this repo is now the FROZEN
+fallback** — it is kept, its own suite stays green, and nothing from spec 250's phases 7-10 is
+backported into it. Extending `apps/client` for new front-end work is the mistake this entry
+exists to prevent.
+
+**Two checkouts, two identities, never one.** `packages/types/src/t3/pin.json` carries both:
+
+| | Upstream | Fork |
+|---|---|---|
+| Repository | `pingdotgg/t3code` (public) | `pseudoseed/t3code` (**private**, `codev` branch) |
+| Pin field | `pin.upstreamBase` | `pin.commit` |
+| Env override | `T3CODE_ROOT` | `T3CODE_FORK_ROOT` |
+| Written to by us | **never** — a `git fetch` is allowed, a checkout is not | yes, one commit per phase |
+
+The upstream clone must stay on `upstreamBase` because every spec 146 and 236 result reproduces
+against it; moving it breaks no test and silently makes recorded evidence unreproducible. That
+is why `tools/t3-server/t3-server.mjs`'s `acquire`, `start` and `status` are pinned to
+`upstreamBase` — `acquire()` runs `git checkout --detach`, so a fork-pinned `acquire` would
+write a fork sha into the read-only clone from an ordinary test run.
+
+**The private repository is a created repository, not a GitHub fork.** `gh repo fork` inherits
+the source's visibility, so it cannot produce a private copy of a public repository; the repo
+was created with `gh repo create --private` and the history pushed into it. Never `gh repo
+fork` this.
+
+**`pin.contractSource` says which identity the vendored contract came from.** `"fork"` since
+phase 5, which makes a fork HEAD ahead of `pin.commit` an *error* rather than the expected
+state it was under `"upstream"`. Every fork commit therefore obliges the full refresh cycle in
+`tools/t3-codegen/REFRESH.md`; `generate.mjs --check` is the gate.
+
+**Codev's server-side additions stay out of upstream's numbered migration registry.**
+`apps/server/src/codev/schemaGuard.ts` applies the added columns additively and keeps a
+watermark, so an interrupted migration leaves the database openable by the pre-fork server and
+a later upstream migration number is never shadowed.
+
+Where the pieces live: `tools/t3-fork/` (`FORK.md`, `identities.mjs`, `rebase-drill.mjs`,
+`criterion-8b.mjs`, and 33 patches recording the customization), `tools/t3-codegen/`
+(`generate.mjs`, `REFRESH.md`), `packages/types/src/t3/` (`pin.json` and the generated
+contract).
+
+
 ### Internal Dependencies
 - **Git**: Version control, worktrees for builder isolation
 - **Node.js**: Runtime for agent-farm TypeScript CLI
@@ -2298,6 +2343,8 @@ Spec 987 split the two governance docs into a **hot/cold** two-tier model so dur
   - **interactive sessions** — a generated managed block (`packages/codev/src/lib/managed-block.ts`, delimited by `<!-- BEGIN/END CODEV HOT CONTEXT -->`) is written into `CLAUDE.md`/`AGENTS.md` at `codev init`/`update` time (non-clobbering; preserves user content).
 
 Hot files are materialized into projects by `copyHotTierDefaults` (wired into init/adopt/update) and resolve from the skeleton at tier-4 until a project curates its own. The cold files are likewise bootstrapped on init/adopt/update by `copyColdTierDefaults`, which copies minimal placeholder starters from the skeleton's `templates/{arch,lessons-learned}.starter.md` into `codev/resources/{arch,lessons-learned}.md` (issue #1012) — distinct from the rich `templates/{arch,lessons-learned}.md` reference templates, which are a manual-`cp` opt-in and are never auto-copied. Both materializers are skip-existing, so a project's curated copy is never overwritten; the cold files are registered as protected user data in `templates.ts`. Producers **route** new facts/lessons by tier at review time (see the review prompts); MAINTAIN + the `update-arch-docs` skill police the hot caps, displacement (demote to cold when full), and cold-doc map accuracy. The cap is load-bearing: it is what keeps the hot tier cheap enough to inject everywhere.
+
+**Demoted from the hot tier (Spec 250):** the one-line "governance docs are two-tier" fact itself. Its slot was needed for the t3code fork, and it is the one hot entry whose content is fully restated where it is needed anyway — in this section, and in the header comment of each hot file, which every producer editing one is already reading. The routing obligation is unchanged; only its always-injected one-liner is gone.
 
 ## Troubleshooting
 

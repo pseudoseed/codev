@@ -1,0 +1,334 @@
+From 6fecade36146cbf37d40def52e813c90207e3a12 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Mon, 31 Aug 2026 02:16:12 -0600
+Subject: [PATCH 25/34] =?UTF-8?q?[Spec=20250][Phase:=20phase=5F9]=20feat:?=
+ =?UTF-8?q?=20criterion=204b=20=E2=80=94=20the=20architect=20gets=20a=20st?=
+ =?UTF-8?q?rip,=20not=20a=20ragged=20seventh=20tile?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Spec 146 criterion 4b, which spec 250 restated 5 and 5b from and never carried
+across. The screenshot was the argument: six builders and an architect at three
+columns is 3 + 3 + 1, one lonely card beside two empty slots.
+
+**Expressed as 'four columns fit', not as '1920 or wider'.** apps/client said a
+viewport width because it owned the whole viewport, so available and viewport
+were the same number. Here they are not: 1920 with the sidebar open is 1688px of
+grid. A literal viewport threshold would offer the tile at 1920 even with the
+sidebar dragged wide enough that only three columns fit — the exact ragged row 4b
+exists to prevent. Four columns is not a proxy for the reason, it IS the reason:
+seven items at four columns is 4 + 3, the ordinary shape of any grid.
+
+Keyed on WIDTH and never on the builder count, which is asserted as its own test.
+A count-based rule would move the architect between strip and tile as builders
+come and go — a layout that reflows under a reader who did nothing.
+
+The strip expands to a full pane and back, which is the other half of 4b: a strip
+that could not expand would be hiding the architect rather than placing it. The
+builders keep their grid while it is open.
+
+With more than one architect in the workspace there is no 'the' architect, so
+they all take tiles and no strip appears — a strip showing one of two would be
+choosing for the reader.
+
+Header counts agents rather than tiles: '6 builders and an architect', not '7'.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/codev/BuilderGrid.tsx           | 66 ++++++++++++++++++--
+ apps/web/src/codev/layout.test.ts            | 49 +++++++++++++++
+ apps/web/src/codev/layout.ts                 | 31 +++++++++
+ apps/web/src/routes/_chat.codev-builders.tsx | 43 +++++++++++--
+ 4 files changed, 178 insertions(+), 11 deletions(-)
+
+diff --git a/apps/web/src/codev/BuilderGrid.tsx b/apps/web/src/codev/BuilderGrid.tsx
+index c1e7acf85..c9e20a2a9 100644
+--- a/apps/web/src/codev/BuilderGrid.tsx
++++ b/apps/web/src/codev/BuilderGrid.tsx
+@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+ import { cn } from "~/lib/utils";
+ import { BuilderPane, type BuilderPaneStatus, type BuilderPaneThread } from "./BuilderPane";
+ import {
++  architectPlacement,
+   columnsFor,
+   GRID_GAP,
+   layoutModeFor,
+@@ -63,23 +64,37 @@ function useMeasuredWidth(): {
+ 
+ export function BuilderGrid(props: {
+   readonly threads: readonly BuilderPaneThread[];
++  /**
++   * The architect, kept OUT of `threads` on purpose.
++   *
++   * Spec 146 criterion 4b: it does not take a seventh equal tile where that
++   * makes a ragged row. Passing it separately is what lets the grid decide,
++   * rather than the caller deciding by what it put in the array.
++   */
++  readonly architect: BuilderPaneThread | null;
+   readonly statusFor: (thread: BuilderPaneThread) => BuilderPaneStatus;
+ }) {
+-  const { threads, statusFor } = props;
++  const { threads, architect, statusFor } = props;
+   const { ref, width } = useMeasuredWidth();
+   const [page, setPage] = useState(0);
++  const [architectExpanded, setArchitectExpanded] = useState(false);
+ 
+-  const columns = width === null ? 1 : columnsFor(threads.length, width);
++  const placement = width === null || architect === null ? "strip" : architectPlacement(width);
++  const tiled = useMemo(
++    () => (architect !== null && placement === "tile" ? [architect, ...threads] : threads),
++    [architect, placement, threads],
++  );
++  const columns = width === null ? 1 : columnsFor(tiled.length, width);
+   const mode = width === null ? "standard" : layoutModeFor(width);
+-  const pageCount = width === null ? 1 : pageCountFor(threads.length, width);
++  const pageCount = width === null ? 1 : pageCountFor(tiled.length, width);
+   // A page index outliving the list it indexed shows an empty grid on a screen
+   // that has panes in it.
+   const currentPage = Math.min(page, pageCount - 1);
+   const visible = useMemo(() => {
+-    if (mode !== "paged") return threads;
++    if (mode !== "paged") return tiled;
+     const start = currentPage * PAGED_PANES_PER_PAGE;
+-    return threads.slice(start, start + PAGED_PANES_PER_PAGE);
+-  }, [threads, mode, currentPage]);
++    return tiled.slice(start, start + PAGED_PANES_PER_PAGE);
++  }, [tiled, mode, currentPage]);
+ 
+   return (
+     <div
+@@ -87,6 +102,7 @@ export function BuilderGrid(props: {
+       data-testid="codev-builder-grid"
+       data-codev-grid-columns={width === null ? undefined : columns}
+       data-codev-grid-mode={width === null ? undefined : mode}
++      data-codev-architect-placement={width === null ? undefined : placement}
+       style={{ padding: PAGE_PADDING, ["--codev-pane-body" as string]: `${MIN_BODY_PX}px` }}
+       className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-x-hidden"
+     >
+@@ -105,6 +121,44 @@ export function BuilderGrid(props: {
+               <BuilderPane key={thread.id} thread={thread} status={statusFor(thread)} />
+             ))}
+           </div>
++          {architect === null || placement === "tile" ? null : (
++            /*
++              CRITERION 4b's strip.
++
++              A persistent line below the grid rather than a seventh equal tile,
++              because six builders and an architect at three columns is 3 + 3 + 1
++              — one lonely card beside two empty slots. It expands to a full pane
++              on demand, which is the other half of the criterion: the architect
++              is not hidden, it is not given a whole row it does not need.
++            */
++            <section
++              data-testid="codev-architect-strip"
++              data-codev-architect-expanded={architectExpanded ? "true" : "false"}
++              className="shrink-0"
++            >
++              {architectExpanded ? (
++                <BuilderPane thread={architect} status={statusFor(architect)} />
++              ) : (
++                <div className="flex min-w-0 items-baseline gap-2 rounded-xl border border-sidebar-border/60 bg-card px-3 py-2 text-[13px]">
++                  <span className="min-w-0 truncate font-medium text-card-foreground">
++                    <span className="text-muted-foreground">architect/</span>
++                    {architect.title}
++                  </span>
++                  <span className={cn("shrink-0 font-medium", statusFor(architect).colorClass)}>
++                    {statusFor(architect).label}
++                  </span>
++                </div>
++              )}
++              <button
++                type="button"
++                data-testid="codev-architect-strip-toggle"
++                onClick={() => setArchitectExpanded((value) => !value)}
++                className="mt-1 cursor-pointer font-medium text-[13px] text-info hover:underline"
++              >
++                {architectExpanded ? "Collapse architect" : "Expand architect"}
++              </button>
++            </section>
++          )}
+           {pageCount <= 1 ? null : (
+             /*
+               Paging, not shrinking. Below 700px of AVAILABLE width a grid that
+diff --git a/apps/web/src/codev/layout.test.ts b/apps/web/src/codev/layout.test.ts
+index 66e4e43b8..c1ce1150a 100644
+--- a/apps/web/src/codev/layout.test.ts
++++ b/apps/web/src/codev/layout.test.ts
+@@ -10,6 +10,8 @@
+ import { describe, expect, it } from "vite-plus/test";
+ 
+ import {
++  architectPlacement,
++  ARCHITECT_TILE_MIN_COLUMNS,
+   columnsFor,
+   columnsThatFit,
+   contentWidth,
+@@ -172,3 +174,50 @@ describe("contentWidth", () => {
+     expect(contentWidth(10)).toBe(0);
+   });
+ });
++
++
++/**
++ * CRITERION 4b — the architect does not take a seventh equal tile where that
++ * makes a ragged row.
++ *
++ * Keyed on WIDTH, never on how many builders there are. A count-based rule would
++ * make the architect jump between strip and tile as builders come and go, which
++ * is a layout that moves under a reader who did nothing.
++ */
++describe("architectPlacement", () => {
++  it("gives the architect a strip at 1440, where three columns make 3 + 3 + 1", () => {
++    expect(architectPlacement(AT_1440_WITH_SIDEBAR)).toBe("strip");
++    expect(architectPlacement(AT_1440_NO_SIDEBAR)).toBe("strip");
++  });
++
++  it("gives the architect a tile at 1920, where four columns make 4 + 3", () => {
++    expect(architectPlacement(AT_1920_WITH_SIDEBAR)).toBe("tile");
++  });
++
++  it("is a strip on a paged grid", () => {
++    // One column: a "tile" and a "strip" would be the same shape, and the strip
++    // is the one that says what it is.
++    expect(architectPlacement(AT_390)).toBe("strip");
++    expect(architectPlacement(PAGING_MAX_WIDTH)).toBe("strip");
++  });
++
++  it("turns over exactly where the fourth column starts to fit", () => {
++    // The rule IS the reason, so the boundary is the reason's boundary: four
++    // panes at the floor plus three gaps, plus the grid's own padding.
++    const fourColumns = MIN_PANE_W * 4 + GRID_GAP * 3 + 12 * 2;
++    expect(architectPlacement(fourColumns)).toBe("tile");
++    expect(architectPlacement(fourColumns - 1)).toBe("strip");
++    expect(ARCHITECT_TILE_MIN_COLUMNS).toBe(4);
++  });
++
++  it("does not consult the builder count", () => {
++    // Stated as a test because the temptation is real: "seven items is ragged at
++    // three columns" invites a count-based rule, and a layout that reflows when
++    // a builder finishes is a layout that moves under a reader who did nothing.
++    const at1920 = architectPlacement(AT_1920_WITH_SIDEBAR);
++    const at1440 = architectPlacement(AT_1440_WITH_SIDEBAR);
++    expect(at1920).not.toBe(at1440);
++    // `architectPlacement` takes one argument, and this is what that means.
++    expect(architectPlacement.length).toBe(1);
++  });
++});
+diff --git a/apps/web/src/codev/layout.ts b/apps/web/src/codev/layout.ts
+index 5cd417264..af6b396ac 100644
+--- a/apps/web/src/codev/layout.ts
++++ b/apps/web/src/codev/layout.ts
+@@ -87,6 +87,37 @@ export function columnsThatFit(available: number, gap = GRID_GAP): number {
+   return Math.max(1, Math.floor((available + gap) / (MIN_PANE_W + gap)));
+ }
+ 
++/**
++ * Spec 146 criterion 4b: the architect does NOT take a seventh equal tile at
++ * 1440x900. It gets a persistent strip below the grid, and an equal tile only
++ * where there is room for one.
++ *
++ * **Expressed in columns, not in a viewport width, and that is a deliberate
++ * departure from the letter of 4b.** `apps/client` said "1920 or wider" because
++ * it owned the whole viewport, so a viewport number and an available number were
++ * the same number. Here they are not: 1920 with the sidebar open is 1688px of
++ * grid, and 1440 with it collapsed is 1404. A literal viewport threshold would
++ * offer the tile at 1920 even when the sidebar has been dragged wide enough that
++ * only three columns fit — which is precisely the ragged 3 + 3 + 1 row that 4b
++ * exists to prevent.
++ *
++ * Four columns is the rule because four columns is the REASON: with six builders
++ * and an architect, four columns is 4 + 3 and three columns is 3 + 3 + 1, one
++ * lonely card beside two empty slots. It gives exactly what 4b names at both
++ * viewports 4b names — 1440 is three columns, so the strip; 1920 is four, so the
++ * tile.
++ */
++export const ARCHITECT_TILE_MIN_COLUMNS = 4;
++
++export type ArchitectPlacement = "tile" | "strip";
++
++export function architectPlacement(availableWidth: number): ArchitectPlacement {
++  if (layoutModeFor(availableWidth) === "paged") return "strip";
++  return columnsThatFit(contentWidth(availableWidth)) >= ARCHITECT_TILE_MIN_COLUMNS
++    ? "tile"
++    : "strip";
++}
++
+ /**
+  * The column count for `count` panes in `availableWidth`.
+  *
+diff --git a/apps/web/src/routes/_chat.codev-builders.tsx b/apps/web/src/routes/_chat.codev-builders.tsx
+index ddf978fa0..ed07c306e 100644
+--- a/apps/web/src/routes/_chat.codev-builders.tsx
++++ b/apps/web/src/routes/_chat.codev-builders.tsx
+@@ -44,15 +44,42 @@ function CodevBuilderGridRoute() {
+    * running, and an upstream thread in the grid would be a pane about something
+    * the grid cannot say anything useful about.
+    */
+-  const panes = useMemo<readonly BuilderPaneThread[]>(() => {
++  const { builders, architect } = useMemo<{
++    readonly builders: readonly BuilderPaneThread[];
++    readonly architect: BuilderPaneThread | null;
++  }>(() => {
+     const visible = threads.filter((thread) => thread.archivedAt === null);
+     const order = buildCodevSidebarOrder(visible, {
+       projectKeyOf: (thread) => `${thread.environmentId}:${thread.projectId}`,
+     });
++    const architects = order.entries.filter((entry) => entry.kind === "architect");
++    return {
++      builders: order.entries
++        .filter((entry) => entry.kind === "builder")
++        .map((entry) => entry.thread),
++      /*
++        Criterion 4b is about THE architect, singular — the one running this
++        grid. With more than one in the workspace there is no "the", so they all
++        take tiles and the strip does not appear: a strip that showed one of two
++        architects would be choosing for the reader.
++      */
++      architect: architects.length === 1 ? (architects[0]?.thread ?? null) : null,
++    };
++  }, [threads]);
++
++  // More than one architect: they are builders' peers in the grid rather than a
++  // strip, for the reason above.
++  const gridThreads = useMemo<readonly BuilderPaneThread[]>(() => {
++    const visible = threads.filter((thread) => thread.archivedAt === null);
++    const order = buildCodevSidebarOrder(visible, {
++      projectKeyOf: (thread) => `${thread.environmentId}:${thread.projectId}`,
++    });
++    const architects = order.entries.filter((entry) => entry.kind === "architect");
++    if (architects.length === 1) return builders;
+     return order.entries
+       .filter((entry) => entry.kind === "architect" || entry.kind === "builder")
+       .map((entry) => entry.thread);
+-  }, [threads]);
++  }, [threads, builders]);
+ 
+   const statusFor = useMemo(
+     () => (thread: BuilderPaneThread) => {
+@@ -75,16 +102,22 @@ function CodevBuilderGridRoute() {
+       */}
+       <header className="flex shrink-0 items-baseline gap-2 border-b border-sidebar-border/60 px-3 py-2 ps-12 sm:ps-3">
+         <h1 className="font-medium text-card-foreground text-sm">Builders</h1>
++        {/*
++          Counted as what they are. "7" over six builders and an architect is a
++          count of tiles rather than of agents, and the two are not the same
++          thing — which is the whole reason the architect is not a seventh tile.
++        */}
+         <span data-testid="codev-builder-grid-count" className="text-[13px] text-muted-foreground">
+-          {panes.length}
++          {builders.length === 1 ? "1 builder" : `${builders.length} builders`}
++          {architect === null ? "" : " and an architect"}
+         </span>
+       </header>
+-      {panes.length === 0 ? (
++      {gridThreads.length === 0 && architect === null ? (
+         <p className="px-4 py-8 text-center text-muted-foreground text-sm">
+           No Codev agents in this workspace yet.
+         </p>
+       ) : (
+-        <BuilderGrid threads={panes} statusFor={statusFor} />
++        <BuilderGrid threads={gridThreads} architect={architect} statusFor={statusFor} />
+       )}
+     </div>
+   );
