@@ -8,8 +8,10 @@ remainder being porch bookkeeping — across 130 files and ~40.6k insertions.
 The fork gained a thread hierarchy (`parentThreadId` + `role`), a porch gate block with a
 server-allocated revision, nested Workspace > Architect > Builders rendering in t3code's own
 sidebar, a builder tile grid, and gate approval driven from t3code over a same-origin proxy.
-**10 of 11 success criteria are met** (criterion 9 under the plan's amended reading); criterion
-6, the iPad run, closes **UNMET** with a written runbook because no device was reachable.
+**10 of the spec's 11 numbered success criteria are met** (criterion 9 under the plan's amended
+reading). Counting the two sub-criteria the spec adds, 5b and 8b, that is **12 of 13**. The one
+that is not met is criterion 6, the iPad run: it closes **UNMET** with a written runbook, because
+no device was reachable.
 
 Every number in this review is regenerated, not typed: `tools/t3-server/collect-spec-250-evidence.mjs`
 rebuilds the measurement tables in `codev/resources/250-acceptance-evidence.md` and `--check`
@@ -18,7 +20,16 @@ exits 0 against the committed file.
 ## Spec Compliance
 
 Full evidence, per criterion, in `codev/resources/250-acceptance-evidence.md`. Phase attribution
-and the one-line evidence pointer:
+and the one-line evidence pointer below.
+
+**Two repositories, and the paths below cross between them.** Anything under
+`packages/`, `tools/`, `codev/` is in **this** repository and travels with the PR. Anything under
+`apps/server/` or `apps/web/` — `schemaGuard.test.ts`, `threadHierarchy.test.ts`, `agentProxy.ts`,
+the `Sidebar` components — is in the **fork**, `pseudoseed/t3code@codev` at `3786b840e1a4`, and is
+not in this diff. That split was ruled at plan time: the product change is the fork's, and this PR
+is the harness that vendors and drives it. `apps/client` is the exception — it *is* here, and it is
+the frozen fallback. The `.spec.ts` Playwright files are here (`packages/codev/src/__tests__/e2e/`)
+and run **against** the fork's app.
 
 - [x] **1.** Architect + 3 builders render as a tree in t3code's own web app (Phase 7) — `spec-250-hierarchy.spec.ts`, 9 Playwright tests against the live fork app.
 - [x] **2.** Two architects render as two subtrees (Phase 7) — `spec-250-hierarchy.spec.ts:265`.
@@ -211,7 +222,7 @@ consumed nowhere; the route computed the same grouping twice.
 - **Claude**: the regression run excluded `**/e2e/**`, so criteria 1, 2, 3, 5, 5b rested on phase 7-10 runs rather than a run at the final fork head. → **Addressed**: 32 Playwright tests re-run at `3786b840e1a4`.
 - **Round 2, opencode**: my own tests would have failed a *correct* zero-movement drill. → **Addressed**.
 - **Round 2**: a comment outlived the test it described by one commit; the churn classification was hand-typed prose; `contractRegeneration` was not in "every result". → **Addressed**, all three.
-- **Round 2, Claude**: `spec-250-evidence-collector.test.ts` mutates two committed files and restores them in a `finally`. → **Rebutted**: the mutation is the only way to prove `--check` can fail, the restore is unconditional, and the alternative (a fixture copy) tests a copy rather than the committed file the check actually reads. Reasoning in `250-phase_11-iter2-rebuttals.md`.
+- **Round 2, Claude**: `spec-250-evidence-collector.test.ts` mutates two committed files and restores them in a `finally`. → **Rebutted at the time, and overturned in the review round** — see below. The rebuttal argued that the mutation is the only way to prove `--check` can fail and that a fixture copy would test a copy. That holds for **one** of the file's six tests and was applied to all six; it also concealed a cross-file race. Reasoning at the time in `250-phase_11-iter2-rebuttals.md`, and the correction in `250-review-iter1-rebuttals.md`.
 
 ### Review Phase (Round 1 — Claude APPROVE, opencode COMMENT)
 
