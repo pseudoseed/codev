@@ -11,6 +11,7 @@
  * silently, the second throws. A server that was named and could not be reached must
  * never be spelled the same way as a server that was never named.
  */
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { DispatchJournal } from '@cluesmith/porch-driver/commands';
@@ -30,6 +31,8 @@ import {
 } from './thread-runtime.js';
 import { logger } from './utils/logger.js';
 import { configLayerPaths, loadConfig } from '../lib/config.js';
+import { workspaceLeafName } from './workspace-projection.js';
+import type { ProjectRow, WorkspaceProjectGateway } from './workspace-projection.js';
 
 /**
  * How long a socket may sit connected-but-not-upgraded before it is called a failure.
@@ -490,12 +493,27 @@ export type ProjectLookup =
   | { readonly kind: 'none' }
   | { readonly kind: 'unknown'; readonly detail: string };
 
-export async function activeProjectForWorkspace(
+/**
+ * Every project the server holds, or why they could not be read.
+ *
+ * Split out of `activeProjectForWorkspace` because the workspace-projection sweep
+ * needs the whole list rather than one match, and a second copy of this request
+ * would be a second place for the transport rules to drift — the bare `fetch` this
+ * request used to be is exactly how it skipped `assertTransportSafe` once already.
+ *
+ * `unknown` carries the reason and is never spelled like an empty list: a caller
+ * that reconciles against "no projects" would create one for every workspace it
+ * knows.
+ */
+export type ProjectRowsRead =
+  | { readonly kind: 'ok'; readonly projects: readonly ProjectRow[] }
+  | { readonly kind: 'unknown'; readonly detail: string };
+
+export async function readProjectRows(
   serverUrl: string,
   accessToken: string,
-  workspaceRoot: string,
   timeoutMs: number = DEFAULT_SOCKET_UPGRADE_TIMEOUT_MS,
-): Promise<ProjectLookup> {
+): Promise<ProjectRowsRead> {
   let body: unknown;
   try {
     // Through the client, not a second hand-built request (issue #227 item 4).
@@ -522,10 +540,35 @@ export async function activeProjectForWorkspace(
   } catch (err) {
     return { kind: 'unknown', detail: err instanceof Error ? err.message : String(err) };
   }
-  const projects = (body as { projects?: ReadonlyArray<{ id?: unknown; workspaceRoot?: unknown }> }).projects;
+  const projects = (body as {
+    projects?: ReadonlyArray<{ id?: unknown; title?: unknown; workspaceRoot?: unknown }>;
+  }).projects;
   if (!Array.isArray(projects)) {
     return { kind: 'unknown', detail: 'the shell snapshot carried no projects array' };
   }
+  const rows: ProjectRow[] = [];
+  for (const project of projects) {
+    // A row missing either field is dropped rather than defaulted. A project whose
+    // workspace root did not decode cannot be matched against a workspace, and giving
+    // it an empty one would let it match the next row that also failed to decode.
+    if (typeof project.id !== 'string' || typeof project.workspaceRoot !== 'string') continue;
+    rows.push({
+      id: project.id,
+      title: typeof project.title === 'string' ? project.title : '',
+      workspaceRoot: project.workspaceRoot,
+    });
+  }
+  return { kind: 'ok', projects: rows };
+}
+
+export async function activeProjectForWorkspace(
+  serverUrl: string,
+  accessToken: string,
+  workspaceRoot: string,
+  timeoutMs: number = DEFAULT_SOCKET_UPGRADE_TIMEOUT_MS,
+): Promise<ProjectLookup> {
+  const read = await readProjectRows(serverUrl, accessToken, timeoutMs);
+  if (read.kind === 'unknown') return { kind: 'unknown', detail: read.detail };
   // t3code compares normalised paths, and so does this. `/var` and `/private/var`
   // are the same directory on macOS and a string compare calls them different, which
   // would report `none` for a project that exists — the answer that leads straight
@@ -533,12 +576,90 @@ export async function activeProjectForWorkspace(
   // The same canonicalisation the engine map keys on, not a second copy of the rule:
   // two spellings of one workspace here would answer `none` for a project that exists.
   const target = canonicalWorkspaceKey(workspaceRoot);
-  const match = projects.find(
-    (project) =>
-      typeof project.workspaceRoot === 'string' && canonicalWorkspaceKey(project.workspaceRoot) === target,
+  const match = read.projects.find(
+    (project) => canonicalWorkspaceKey(project.workspaceRoot) === target,
   );
-  if (!match || typeof match.id !== 'string') return { kind: 'none' };
+  if (match === undefined) return { kind: 'none' };
   return { kind: 'found', projectId: match.id };
+}
+
+/**
+ * A `WorkspaceProjectGateway` backed by a real t3code server.
+ *
+ * READS OVER HTTP, WRITES OVER A SOCKET, AND THE SOCKET IS LAZY. A sweep that finds
+ * nothing to do — which is every sweep after the first — must not open a WebSocket,
+ * exchange a ticket and tear it all down again every interval. So the dispatcher is
+ * connected on the first write and not before, and `close` is a no-op when there was
+ * no write.
+ *
+ * The bootstrap token is exchanged once per gateway. That exchange is the one
+ * operation here with a documented constraint attached: a pairing-issued one-time
+ * token would be spent by it. The same constraint `ThreadBackendConfig.bootstrapToken`
+ * already states, arrived at from a second direction.
+ */
+export async function openProjectGateway(
+  server: { readonly serverUrl: string; readonly bootstrapToken: string },
+  timeoutMs: number = DEFAULT_SOCKET_UPGRADE_TIMEOUT_MS,
+): Promise<WorkspaceProjectGateway> {
+  const auth = await import('@cluesmith/t3-client/auth');
+  const access = await auth.exchangeBootstrapToken(server.serverUrl, server.bootstrapToken, {
+    clientLabel: 'codev-afx',
+  });
+  const accessToken = access.access_token;
+
+  // The journal is per-server rather than per-workspace, because these commands are
+  // not a workspace's work: `project.create` for ten workspaces is one server's
+  // reconciliation, and splitting it across ten journals would make recovery read
+  // ten files to replay one sweep.
+  const journal = new DispatchJournal(
+    join(homedir(), '.agent-farm', 'workspace-projection.jsonl'),
+  );
+
+  let connection: Awaited<ReturnType<typeof connectDispatcher>> | undefined;
+  const writer = async (): Promise<NonNullable<typeof connection>> => {
+    if (connection !== undefined) return connection;
+    connection = await connectDispatcher(
+      {
+        serverUrl: server.serverUrl,
+        bootstrapToken: server.bootstrapToken,
+        // The gateway writes projects and never threads, so it names no workspace of
+        // its own. Each command carries the workspace root it is about.
+        workspaceRoot: homedir(),
+      },
+      timeoutMs,
+      () => {
+        // A close mid-sweep surfaces as the next dispatch failing, which the sweep
+        // records against this server. Nothing to reconnect here: the gateway lives
+        // for one sweep and the next one opens a fresh connection.
+      },
+      accessToken,
+    );
+    return connection;
+  };
+
+  const { createProject, updateProjectMeta } = await import('@cluesmith/porch-driver/thread');
+
+  return {
+    async readProjects() {
+      const read = await readProjectRows(server.serverUrl, accessToken, timeoutMs);
+      if (read.kind === 'unknown') {
+        throw new Error(`could not read projects from ${server.serverUrl}: ${read.detail}`);
+      }
+      return read.projects;
+    },
+    async createProject(workspaceRoot: string, title: string) {
+      const { dispatcher } = await writer();
+      await createProject(dispatcher, journal, { title, workspaceRoot });
+    },
+    async renameProject(projectId: string, title: string) {
+      const { dispatcher } = await writer();
+      await updateProjectMeta(dispatcher, journal, { projectId, title });
+    },
+    close() {
+      connection?.close();
+      connection = undefined;
+    },
+  };
 }
 
 /**
@@ -910,7 +1031,19 @@ async function initialiseThreadBackend(
   } else {
     try {
       projectId = await createProject(dispatcher, journal, {
-        title: `codev:${config.workspaceRoot}`,
+        // The workspace's own directory name, because this string IS the sidebar
+        // heading: a single-member project group's label is its title, verbatim.
+        // It used to be `codev:<absolute path>`, which does not scan in a column
+        // and truncates to the same leading characters at every narrow width.
+        //
+        // The LEAF, not the set-wide unique name. This path knows one workspace,
+        // so it cannot see a collision with another; the sweep in
+        // `workspace-projection.ts` sees the whole set and deepens this to
+        // `backend/api` when it has to. It is allowed to, because a leaf name is
+        // recognised there as machine-written — which is what makes a project
+        // created by a spawn converge on the unique name instead of sitting on an
+        // ambiguous one forever.
+        title: workspaceLeafName(config.workspaceRoot),
         workspaceRoot: config.workspaceRoot,
       });
     } catch (err) {
