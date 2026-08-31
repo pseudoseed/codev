@@ -1,7 +1,7 @@
 From e1a858434a8096d7a82e05347f8159d94f42c0b1 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 16:36:33 -0600
-Subject: [PATCH 03/25] [Spec 250][Phase: phase_2] test: pin the two guard log
+Subject: [PATCH 03/21] [Spec 250][Phase: phase_2] test: pin the two guard log
  signals
 
 Review finding: the two signals ARE the mitigation for staying out of the

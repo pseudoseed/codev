@@ -1,7 +1,7 @@
 From 98e950e42a26c50f84d2112a0c0050a0e797797e Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Mon, 31 Aug 2026 00:51:07 -0600
-Subject: [PATCH 24/25] [Spec 250][Phase: phase_8] fix: the row marker is the
+Subject: [PATCH 21/21] [Spec 250][Phase: phase_8] fix: the row marker is the
  gate name and a gavel, not 'Gate: <name>'
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

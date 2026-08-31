@@ -151,11 +151,27 @@ They are regenerated whenever `pin.commit` moves:
 ```bash
 rm -f tools/t3-fork/patches/*.patch
 git -C "$T3CODE_FORK_ROOT" format-patch --no-signature \
-  -o tools/t3-fork/patches <upstreamBase>..<pin.commit>
+  -o "$(pwd)/tools/t3-fork/patches" <upstreamBase>..<pin.commit> \
+  -- . ':(exclude)docs/codev'
 ```
 
 `--no-signature` matters: without it every patch footer carries the local git version, so the
 files churn whenever someone regenerates them on a different machine.
+
+**`-o` takes an ABSOLUTE path.** It resolves relative to `-C`, not to your shell, so a relative
+one writes the patches into the fork checkout — where they are untracked litter that makes
+`start-fork` refuse the next run.
+
+**`docs/codev` is excluded, and that is what the artefact is FOR.** That directory holds the UI
+screenshots, and a screenshot in a patch is a base64 blob: unreadable by the human this file
+exists to serve, and rewritten in full every time a phase re-shoots. Four screenshot commits had
+taken the export from 504KB to 14MB, which made the diff noisier the more carefully the UI was
+photographed. The pictures live in the fork and are read there.
+
+**So the patch numbering has gaps, and the phase log above is the complete list.** A commit that
+touches only `docs/codev` produces no patch at all. Every fork commit is listed in the phase log
+with its sha whether or not it exported a patch, and that table — not the file count — is the
+answer to "what is in this fork".
 
 ## Abandoning the fork
 

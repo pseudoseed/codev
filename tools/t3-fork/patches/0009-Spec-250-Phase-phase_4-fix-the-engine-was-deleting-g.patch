@@ -1,7 +1,7 @@
 From 3d0e76776cd9fa76947099c2f2c4635ae8c047ed Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 18:44:30 -0600
-Subject: [PATCH 09/25] [Spec 250][Phase: phase_4] fix: the engine was deleting
+Subject: [PATCH 09/21] [Spec 250][Phase: phase_4] fix: the engine was deleting
  gate refusals too
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

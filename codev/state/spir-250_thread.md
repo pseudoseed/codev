@@ -1208,8 +1208,8 @@ copied in. Phase 7's pictures were re-shot in the same commit because two builde
 Falsified: collapsing `pending-unstructured` into `none`, and rendering the question with
 `dangerouslySetInnerHTML`, each fail 8 tests.
 
-17 Playwright tests green (8 gate + 9 hierarchy). Fork web suite 2916 → will re-run. Pin at
-`39204a7ac368`, 21 patches, both evidence files re-collected.
+17 Playwright tests green (8 gate + 9 hierarchy) at that point; 18 after the gated-architect test.
+Pin at `39204a7ac368` then, `efadf838c414` finally.
 
 **Architect review of the phase 8 screenshots.** Heading "Waiting on you: <gate>" approved and kept
 — it leads with the required ACTION rather than describing a state, which is the difference between
@@ -1221,3 +1221,23 @@ deliberately: a 15-char gate name on a gated architect shows "Archit…", with t
 title intact.
 
 Pin at `efadf838c414`, 25 patches, both evidence files re-collected.
+
+
+**3-way review (2 lanes): both APPROVE, HIGH.** opencode raised nothing. Claude raised one item and
+it was the LOG rather than the code: the fork web suite number was stated against a source, not a
+commit, and three commits landed after it. Re-run at `efadf838c414`: typecheck 0, **2916 passed**.
+Codev suite at the same pin: 7370 + 180, 54 skipped, 0 failed.
+
+**Two operational findings this phase, both worth carrying.**
+
+1. **`git push` hangs in a non-interactive session on this machine.** `porch done` sat 28 minutes
+   with build and tests already green; its child `git push` was blocked in
+   `git credential-osxkeychain get`, which waits on a prompt nothing here can answer. Reads are
+   fine (`git ls-remote` is instant), so it is the write path only. Workaround, no config on disk:
+   `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0='!gh auth git-credential'`
+   in front of any command that pushes. Do NOT `git config --local` in a worktree — that writes the
+   shared config and hits the main checkout and every other builder. A global fix is Chris's call.
+2. **The exported patches were 14MB**, four of them base64 PNG screenshots rewritten on every
+   re-shoot. Architect ruled: exclude `docs/codev` from the export. Now 504KB / 21 patches; the four
+   screenshot-only commits produce none, and `FORK.md`'s phase log is the complete commit list.
+   `format-patch -o` also takes an ABSOLUTE path — a relative one writes into the fork checkout.

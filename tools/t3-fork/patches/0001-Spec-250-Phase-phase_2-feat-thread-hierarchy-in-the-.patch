@@ -1,7 +1,7 @@
 From 1a414cee8409a407977ff6c6505fad1ab82f2ec8 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 15:49:16 -0600
-Subject: [PATCH 01/25] [Spec 250][Phase: phase_2] feat: thread hierarchy in
+Subject: [PATCH 01/21] [Spec 250][Phase: phase_2] feat: thread hierarchy in
  the contract and projection
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

@@ -134,8 +134,16 @@ It is not a false positive and it is not a formatting nit. Read the diff.
    ```bash
    rm -f ../t3-fork/patches/*.patch
    git -C "$T3CODE_FORK_ROOT" format-patch --no-signature \
-     -o ../t3-fork/patches <upstreamBase>..<fork head>
+     -o "$(cd ../t3-fork/patches && pwd)" <upstreamBase>..<fork head> \
+     -- . ':(exclude)docs/codev'
    ```
+
+   Two things that bite. `-o` resolves relative to `-C`, so a relative path writes the patches
+   INTO the fork checkout, where they are untracked litter that makes `start-fork` refuse the next
+   run. And `docs/codev` is excluded because it holds UI screenshots: a screenshot in a patch is a
+   base64 blob, unreadable by the human the patches exist for and rewritten whole on every
+   re-shoot. Commits that touch only that directory therefore produce no patch, so the numbering
+   has gaps — `tools/t3-fork/FORK.md`'s phase log is the complete list of fork commits.
 
    They are a **review aid** — the customization readable by someone without the private
    repository — and not how the fork is built or rebased. `tools/t3-fork/FORK.md` says so
