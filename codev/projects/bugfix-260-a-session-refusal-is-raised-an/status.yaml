@@ -1,21 +1,29 @@
 id: bugfix-260
 title: a-session-refusal-is-raised-an
 protocol: bugfix
-phase: pr
+phase: verified
 plan_phases: []
 current_plan_phase: null
 gates:
   pr:
-    status: pending
+    status: approved
     requested_at: '2026-08-31T18:26:38.098Z'
+    approved_at: '2026-08-31T18:57:07.686Z'
+    approval:
+      authorization: flag-only
+      approved_at: '2026-08-31T18:57:07.686Z'
+      machine: chriss-MacBook-Pro.local
+      caller: CODEV_ARCHITECT_NAME=main (an architect session or a process it spawned)
 iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T16:52:18.422Z'
-updated_at: '2026-08-31T18:26:38.100Z'
+updated_at: '2026-08-31T18:57:16.099Z'
 pr_history:
   - phase: pr
     pr_number: 285
     branch: builder/bugfix-260
     created_at: '2026-08-31T18:26:28.704Z'
-pr_ready_for_human: true
+    merged: true
+    merged_at: '2026-08-31T18:36:18.743Z'
+pr_ready_for_human: false
