@@ -301,6 +301,13 @@ route (`afx pair revoke` is the operator path, and a browser that could revoke c
 human their own gate); and it does not forward `authorization` or `cookie`, because t3code's own
 session is not approval authority and no other server should be handed t3code's identity.
 
+**Phase 11 added no row either, and for a different reason.** It is the acceptance phase: the
+rebase drill, the churn report, the watermark re-check and the evidence all live in the Codev
+repository and read the fork without writing to it. The one change it made outside this repo was to
+`apps/client`'s test suite — which is Codev's, not the fork's. **The drill deliberately leaves no
+trace in the fork**: it works in a throwaway clone and asserts afterwards that the fork head did not
+move.
+
 **Phase 5 added no row, and that is not an omission.** It regenerated the vendored contract in the
 Codev repository from `51b55d4899e4`; it changed nothing in the fork.
 
