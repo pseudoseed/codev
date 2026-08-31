@@ -1232,6 +1232,35 @@ port fails 4 of its 7 tests. That is what proves the ceremony travels the config
 some other path that happens to work — a shape the unit tests cannot express, because the thing
 under test is the wiring.
 
+### The review found a test that reported a pass on a run that never happened
+
+opencode's `REQUEST_CHANGES`, and the most valuable finding in the phase. The vitest e2e's
+availability guard logged a warning and RETURNED, which vitest records as a **pass** — so on a run
+where the fork server never started, criterion 4 and every SSRF refusal reported green with not one
+assertion executed.
+
+This project keeps finding "I could not tell" spelled as "no". This is the same defect spelled as
+**"yes"**, which is strictly worse, and it was on the phase's own acceptance criterion. The file's
+header states the rule — "Skips, never passes" — and the code broke it, which is the durable
+lesson: a header is not a mechanism, and a rule written next to code that does not implement it
+reads as reassurance.
+
+It was also invisible to me. Every run I did had the fork up. It would have surfaced the first time
+anyone ran the suite without `T3_NODE`, as a green tick.
+
+`ctx.skip` marks the test skipped and does not return, so the body is unreachable rather than
+merely unexecuted. Demonstrated rather than asserted — same file, same command, `T3_NODE` unset:
+**8 passed** before, **8 skipped** after.
+
+### Both lanes found the same coarse attribute, independently
+
+`data-codev-approval-state` computed three values over four outcomes, so `sessionEnded` tagged as
+`refused` while the visible text and testid distinguished it. Nothing asserted on it, which is
+exactly why it was worth fixing before anything did: the first test written against the attribute
+would have inherited the conflation the file's own header exists to prevent.
+
+Two lanes reaching it separately is the signal that it was not a stylistic note.
+
 ### What can a human see or do now that they could not before
 
 Approve a porch gate from t3code, on a phone or an iPad, without a terminal: pair the browser once

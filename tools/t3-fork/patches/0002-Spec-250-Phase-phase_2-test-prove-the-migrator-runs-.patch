@@ -1,7 +1,7 @@
 From 992b781f4314ec1df1abb752c7c9c5378ec13c26 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 16:15:14 -0600
-Subject: [PATCH 02/32] [Spec 250][Phase: phase_2] test: prove the migrator
+Subject: [PATCH 02/33] [Spec 250][Phase: phase_2] test: prove the migrator
  runs, not that SQLite accepts a column
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

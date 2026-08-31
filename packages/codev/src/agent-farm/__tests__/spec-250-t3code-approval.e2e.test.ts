@@ -31,7 +31,7 @@
  * available.
  */
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
 import { readFileSync } from 'node:fs';
 import * as yaml from 'js-yaml';
 import {
@@ -117,10 +117,23 @@ async function post(
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
 
-function skipIfUnavailable(): boolean {
-  if (unavailable === null) return false;
-  console.warn(`SKIP spec-250 t3code approval: ${unavailable}`);
-  return true;
+/**
+ * A RUN THAT COULD NOT HAPPEN MUST NOT REPORT GREEN.
+ *
+ * Review finding, and it is this file's own header turned against it. The first
+ * version logged a warning and RETURNED, which vitest records as a **pass** — so
+ * criterion 4 and the SSRF refusals reported success on a run where the fork
+ * server never started and not one assertion executed. That is "I could not tell"
+ * spelled as "yes", on the phase's own acceptance criterion, which is worse than
+ * the failure it was trying to avoid.
+ *
+ * `ctx.skip` marks the test skipped and does not return, so the body below is
+ * unreachable rather than merely unexecuted. The Playwright spec beside it
+ * already did this with `test.skip`; the two now agree.
+ */
+function skipIfUnavailable(ctx: TestContext): void {
+  if (unavailable === null) return;
+  ctx.skip(`spec-250 t3code approval: ${unavailable}`);
 }
 
 function statusYaml(): any {
@@ -134,8 +147,8 @@ describe('spec 250 phase 10: approving a gate from t3code', () => {
    * Every step is a request to t3code's origin. The page never names
    * `codev-agent`; it names a configured id, and the server holds the origin.
    */
-  it('walks the ceremony through the proxy and porch records who approved', async () => {
-    if (skipIfUnavailable()) return;
+  it('walks the ceremony through the proxy and porch records who approved', async (ctx) => {
+    skipIfUnavailable(ctx);
 
     // 1. PAIR. The one agent route reachable with no machine credential — and it
     //    still needs a token, so t3code's session bought entry to the proxy and
@@ -225,8 +238,8 @@ describe('spec 250 phase 10: approving a gate from t3code', () => {
    * session need different next actions — pair, versus open a session — and a
    * single refusal for both leaves a human with nowhere to go.
    */
-  it('refuses a missing machine credential and a missing human session differently', async () => {
-    if (skipIfUnavailable()) return;
+  it('refuses a missing machine credential and a missing human session differently', async (ctx) => {
+    skipIfUnavailable(ctx);
 
     const noCredential = await fetch(proxied('/api/agent/v1/session'), {
       headers: browserHeaders(),
@@ -257,8 +270,8 @@ describe('spec 250 phase 10: approving a gate from t3code', () => {
    * Revoked mid-life, over the proxy, and a second machine paired afterwards
    * still reads — so this is a per-machine withdrawal rather than a lockout.
    */
-  it('stops a revoked machine and leaves every other one working', async () => {
-    if (skipIfUnavailable()) return;
+  it('stops a revoked machine and leaves every other one working', async (ctx) => {
+    skipIfUnavailable(ctx);
 
     const statePath = proxied(`/api/agent/v1/workspaces/${agent!.encodedWorkspace}/state`);
 
@@ -308,8 +321,8 @@ describe('spec 250 phase 10: approving a gate from t3code', () => {
    * issue. A route-path allowlist does not constrain the host, which is why the
    * allowlist is over ORIGINS and the browser selects among them.
    */
-  it('refuses a URL, an unconfigured target and an uncarried path, server-side', async () => {
-    if (skipIfUnavailable()) return;
+  it('refuses a URL, an unconfigured target and an uncarried path, server-side', async (ctx) => {
+    skipIfUnavailable(ctx);
 
     // A URL where a path belongs. Refused as a URL, not normalised into one.
     const asUrl = await fetch(
@@ -370,8 +383,8 @@ describe('spec 250 phase 10: approving a gate from t3code', () => {
    * rather than in a unit test because the bound lives in the route handler, and
    * a unit test of the pure functions cannot see whether anything applies it.
    */
-  it('refuses an oversize body, declared or chunked, rather than buffering it', async () => {
-    if (skipIfUnavailable()) return;
+  it('refuses an oversize body, declared or chunked, rather than buffering it', async (ctx) => {
+    skipIfUnavailable(ctx);
 
     const oversize = 'x'.repeat(200_000);
 
@@ -423,8 +436,8 @@ describe('spec 250 phase 10: approving a gate from t3code', () => {
    * `codev-agent` could act on, and the header-level assertion lives in the
    * fork's own unit test.
    */
-  it('does not hand t3code\'s session to codev-agent', async () => {
-    if (skipIfUnavailable()) return;
+  it('does not hand t3code\'s session to codev-agent', async (ctx) => {
+    skipIfUnavailable(ctx);
     const response = await fetch(proxied('/api/agent/v1/session'), { headers: browserHeaders() });
     expect(response.status).toBe(401);
     expect(((await response.json()) as { signal: string }).signal).toBe(
@@ -437,8 +450,8 @@ describe('spec 250 phase 10: approving a gate from t3code', () => {
    * anything is dialled — otherwise this server would forward to a loopback
    * service for anyone who can reach it.
    */
-  it('refuses an unauthenticated caller before dialling anything', async () => {
-    if (skipIfUnavailable()) return;
+  it('refuses an unauthenticated caller before dialling anything', async (ctx) => {
+    skipIfUnavailable(ctx);
     const response = await fetch(proxied('/api/agent/v1/session'), {
       headers: { accept: 'application/json' },
       redirect: 'manual',
@@ -448,8 +461,8 @@ describe('spec 250 phase 10: approving a gate from t3code', () => {
   }, 60_000);
 
   /** The targets route names ids and never origins. */
-  it('publishes target ids without their origins', async () => {
-    if (skipIfUnavailable()) return;
+  it('publishes target ids without their origins', async (ctx) => {
+    skipIfUnavailable(ctx);
     const response = await fetch(`${forkBase}/api/codev/agent-targets`, {
       headers: browserHeaders(),
     });

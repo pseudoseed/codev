@@ -1,7 +1,7 @@
 From 0065abc29ed71e42766c0152ec830394088b177d Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Mon, 31 Aug 2026 02:23:40 -0600
-Subject: [PATCH 26/32] [Spec 250][Phase: phase_9] fix: the pane's role prefix
+Subject: [PATCH 26/33] [Spec 250][Phase: phase_9] fix: the pane's role prefix
  could be clipped, and it is the only thing saying what a tile is
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
