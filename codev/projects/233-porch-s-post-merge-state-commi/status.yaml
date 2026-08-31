@@ -1,0 +1,14 @@
+id: '233'
+title: porch-s-post-merge-state-commi
+protocol: air
+phase: implement
+plan_phases: []
+current_plan_phase: null
+gates:
+  pr:
+    status: pending
+iteration: 1
+build_complete: false
+history: []
+started_at: '2026-08-31T21:39:42.029Z'
+updated_at: '2026-08-31T21:39:42.030Z'
