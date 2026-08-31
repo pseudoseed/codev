@@ -1,7 +1,7 @@
 From 24aeeebb3ded44d0fd40f41f6af73597d770ebb7 Mon Sep 17 00:00:00 2001
 From: pseudo <aws@pseudoseed.com>
 Date: Mon, 31 Aug 2026 04:16:29 -0600
-Subject: [PATCH 32/34] [Spec 250][Phase: phase_10] fix: the proxy buffered
+Subject: [PATCH 32/35] [Spec 250][Phase: phase_10] fix: the proxy buffered
  request bodies with no bound
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
