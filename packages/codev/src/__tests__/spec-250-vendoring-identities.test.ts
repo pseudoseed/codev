@@ -39,6 +39,13 @@ import {
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore — a dependency-free .mjs helper shared with the build tools, not a package
 } from '../../../../tools/t3-fork/identities.mjs';
+import {
+  CLEAN,
+  firstUnobservable,
+  inspectCheckoutTree,
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore — same shape: a dependency-free .mjs helper, not a package
+} from '../../../../tools/t3-fork/checkout-state.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..', '..');
@@ -58,6 +65,28 @@ const pin = readJson(pinPath);
 const UPSTREAM_ROOT: string = process.env.T3CODE_ROOT ?? DEFAULT_UPSTREAM_ROOT;
 const FORK_ROOT: string = process.env.T3CODE_FORK_ROOT ?? DEFAULT_FORK_ROOT;
 const FORK_ROOT_PRESENT = existsSync(FORK_ROOT) && existsSync(UPSTREAM_ROOT);
+
+/**
+ * Presence was never the whole question (bugfix #278).
+ *
+ * `verify` exits 1 on ANY uncommitted change in either checkout, so an assertion
+ * that only `contractSource` may move the exit code was in fact decided by
+ * whatever the developer had left in the tree. The fork checkout is a single
+ * worktree on `codev` that builders edit while fork work is in flight, so "dirty"
+ * is its ordinary state, not an accident someone should clean up before running
+ * the suite.
+ *
+ * A dirty checkout is the same class as an absent one — "I could not observe what
+ * I assert" — and gets the same treatment: skip, with a reason naming the path and
+ * what is in the way, so the next reader does not re-derive it.
+ */
+const realCheckoutsBlocker = FORK_ROOT_PRESENT
+  ? firstUnobservable([UPSTREAM_ROOT, FORK_ROOT])
+  : null;
+const REAL_CHECKOUTS_OBSERVABLE = FORK_ROOT_PRESENT && realCheckoutsBlocker === null;
+const realCheckoutSkipReason = FORK_ROOT_PRESENT
+  ? realCheckoutsBlocker?.reason ?? ''
+  : `no checkout at ${FORK_ROOT} or ${UPSTREAM_ROOT}`;
 
 // ---------------------------------------------------------------- throwaway repos
 
@@ -732,9 +761,24 @@ describe('spec 250: ahead of the contract is not the same as on the wrong commit
    * standing in for the thing under test.
    *
    * Skips rather than passes when the fork checkout is absent — "I had nothing to
-   * run against" is not "it exited 1".
+   * run against" is not "it exited 1" — and equally when either real checkout is
+   * dirty, because `verify` exits 1 on uncommitted changes alone and would decide
+   * the `contractSource` claim below for a reason that has nothing to do with it
+   * (#278). The skip names the path and what is in the way.
    */
-  it.skipIf(!FORK_ROOT_PRESENT)('exits 1 against the real fork checkout when it is ahead of a fork-sourced pin', () => {
+  it.skipIf(!REAL_CHECKOUTS_OBSERVABLE)(
+    'exits 1 against the real fork checkout when it is ahead of a fork-sourced pin' +
+      (REAL_CHECKOUTS_OBSERVABLE ? '' : ` [skipped: ${realCheckoutSkipReason}]`),
+    (ctx) => {
+    // Re-checked here, not just at module load: these are live working trees, and
+    // a builder committing or editing mid-run would otherwise land as a failure.
+    for (const root of [UPSTREAM_ROOT, FORK_ROOT]) {
+      const now = inspectCheckoutTree(root);
+      if (now.state !== CLEAN) {
+        ctx.skip(`${root} stopped being observable while the suite ran: ${now.reason}`);
+      }
+    }
+
     const parent = execFileSync('git', ['-C', FORK_ROOT, 'rev-parse', 'HEAD~1'], { encoding: 'utf8' }).trim();
     const scratch = mkdtempSync(join(tmpdir(), 't3-real-ahead-'));
     try {
