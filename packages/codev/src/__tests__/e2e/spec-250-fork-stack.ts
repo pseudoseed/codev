@@ -30,7 +30,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 /** Scopes Codev asks for, plus the one that mints a browser's pairing credential. */
@@ -42,6 +42,22 @@ const SEED_SCOPES = [
   "relay:read",
   "access:write",
 ] as const;
+
+/**
+ * Where the fork's server writes the gate-writer credential at start.
+ *
+ * Phase 8's fixture needs to write a gate, and it cannot ask for the scope: a
+ * bootstrap exchange requesting `codev:gate-write` is refused with
+ * `invalid_scope`, which is the phase 4 design working. Gate writes are meant to
+ * come from ONE credential — `codev-agent`, scoped to `orchestration:read` and
+ * `codev:gate-write` and nothing else — provisioned by the server rather than
+ * derived from whatever token a client happens to hold.
+ *
+ * So the fixture reads that credential from where the server put it, which is
+ * also exactly what `thread-backend.ts` does in production. A fixture that
+ * obtained the ability some other way would be testing a path no writer uses.
+ */
+const GATE_WRITER_TOKEN_RELATIVE_PATH = "codev/gate-writer.token";
 
 export interface ForkStackUnavailable {
   readonly available: false;
@@ -60,6 +76,15 @@ export interface ForkStackReady {
   readonly webUrl: string;
   readonly serverBase: string;
   readonly accessToken: string;
+  /**
+   * The server-provisioned gate-writer credential, or `null` when the server
+   * did not write one.
+   *
+   * `null` is not "no gates": it means this run cannot write one, and the caller
+   * reports that as a skip. An unwritable credential and a gate that failed to
+   * render are different facts.
+   */
+  readonly gateWriterToken: string | null;
 }
 
 export type ForkStack = ForkStackReady | ForkStackUnavailable;
@@ -67,6 +92,33 @@ export type ForkStack = ForkStackReady | ForkStackUnavailable;
 export interface SeededHierarchy {
   readonly projectId: string;
   readonly projectTitle: string;
+  /**
+   * Phase 8. Two gated builders, because the panel has THREE states and only
+   * one of them is "no gate": a builder carrying #128's structured request, and
+   * one carrying a gate with nothing attached — which is what
+   * `porch gate <id>` without `--request-file` produces, and the state most
+   * likely to be rendered as "no gate" by mistake.
+   */
+  readonly gatedBuilderId: string;
+  readonly unstructuredGateBuilderId: string;
+  /**
+   * An ARCHITECT at a gate, which is the case a human most needs to find.
+   *
+   * It is also the one place two markers compete for the same row: the role
+   * caption and the gate marker. Seeded so the answer is measured rather than
+   * assumed.
+   */
+  readonly gatedArchitectId: string;
+  readonly gate: {
+    readonly name: string;
+    readonly unstructuredName: string;
+    readonly architectName: string;
+    readonly question: string;
+    readonly recommendedLabel: string;
+    readonly recommendedConsequence: string;
+    readonly otherLabel: string;
+    readonly otherConsequence: string;
+  };
   readonly architectAlpha: string;
   readonly architectBeta: string;
   /** Archived after its builder was created, which is what orphans the builder. */
@@ -206,38 +258,62 @@ export async function startForkStack(): Promise<ForkStack> {
     webUrl: webAppUrl(),
     serverBase,
     accessToken: access.access_token,
+    gateWriterToken: readGateWriterToken(),
   };
 }
 
 /**
  * Where a viewport's screenshot goes.
  *
- * The committed copies live in the FORK, under `docs/codev/` — they are pictures
- * of the fork's UI, and `docs/codev/` is Codev's own rather than mixed into
- * upstream's `architecture` / `internals` / `operations`, which belong to
- * pingdotgg.
+ * The committed copies live in the FORK, under `docs/codev/spec-250/<phase>/` —
+ * they are pictures of the fork's UI, and `docs/codev/` is Codev's own rather
+ * than mixed into upstream's `architecture` / `internals` / `operations`, which
+ * belong to pingdotgg.
  *
- * **Writing there is opt-in, and that is not tidiness.** `start-fork` refuses a
- * dirty fork checkout, so a suite that wrote new PNG bytes into the fork on every
- * run would pass once and then SKIP forever — each run leaving behind the
- * modification that stops the next one. So an ordinary run writes into
- * Playwright's own output directory and leaves the fork clean; refreshing the
- * committed pictures is a deliberate act:
+ * **Nothing writes into the fork directly, and that is not tidiness.**
+ * `t3-server.mjs start-fork` refuses a dirty fork checkout, so a suite whose
+ * screenshots landed in the fork would poison itself: the first spec file writes
+ * new PNG bytes, and every spec file after it SKIPS because the tree it needs is
+ * now dirty. It passes, it skips the rest, and the skip is correct behaviour —
+ * which is exactly what makes it easy to miss.
  *
- *   SPEC_250_WRITE_SCREENSHOTS=1 npx playwright test --config playwright.spec250.config.ts
+ * So a run always writes somewhere outside the fork. Refreshing the committed
+ * pictures is a copy afterwards:
+ *
+ *   SPEC_250_SCREENSHOT_DIR=/tmp/spec-250-shots \
+ *     npx playwright test --config playwright.spec250.config.ts
+ *   cp -R /tmp/spec-250-shots/. "$T3CODE_FORK_ROOT/docs/codev/spec-250/"
  *
  * then commit them in the fork.
  */
-export function forkScreenshotPath(name: string): string {
-  if (process.env.SPEC_250_WRITE_SCREENSHOTS === "1") {
-    const forkRoot = harnessEnv().T3CODE_FORK_ROOT ?? "";
-    return resolve(forkRoot, "docs/codev/spec-250/phase-7", `${name}.png`);
+export function forkScreenshotPath(phase: string, name: string): string {
+  const root =
+    process.env.SPEC_250_SCREENSHOT_DIR ??
+    resolve(import.meta.dirname, "../../../test-results/spec-250-screenshots");
+  return resolve(root, phase, `${name}.png`);
+}
+
+/**
+ * Read the gate-writer credential the fork's server wrote at start.
+ *
+ * Returns `null` rather than throwing: a server without gate support writes no
+ * such file, and that is a reason to skip, not a crash.
+ */
+function readGateWriterToken(): string | null {
+  const runtimeDataDir =
+    process.env.T3_HARNESS_DIR !== undefined
+      ? resolve(process.env.T3_HARNESS_DIR, "data")
+      : resolve(repoRoot, "tools/t3-server/.runtime/data");
+  const tokenPath = resolve(runtimeDataDir, GATE_WRITER_TOKEN_RELATIVE_PATH);
+  try {
+    const token = readFileSync(tokenPath, "utf8").trim();
+    // An empty file is a half-written credential, not an empty one. The server
+    // writes `.partial` and renames precisely so a reader never sees that, but a
+    // truncated token authenticates like a revoked one.
+    return token === "" ? null : token;
+  } catch {
+    return null;
   }
-  return resolve(
-    import.meta.dirname,
-    "../../../test-results/spec-250-screenshots",
-    `${name}.png`,
-  );
 }
 
 export function stopForkStack(): void {
@@ -286,10 +362,13 @@ const uniqueId = (): string =>
  * at write time, so a fixture that produced one would be testing a state this
  * server cannot reach.
  */
-export async function seedHierarchy(stack: ForkStackReady): Promise<SeededHierarchy> {
+async function connect(
+  stack: ForkStackReady,
+  accessToken: string,
+): Promise<{ client: RpcClient; close: () => void }> {
   const clientModule = await import("@cluesmith/t3-client/client");
   const authModule = await import("@cluesmith/t3-client/auth");
-  const ticket = await authModule.issueWebSocketTicket(stack.serverBase, stack.accessToken);
+  const ticket = await authModule.issueWebSocketTicket(stack.serverBase, accessToken);
   const socket = new WebSocket(authModule.webSocketUrl(stack.serverBase, ticket.ticket));
   await new Promise<void>((resolveOpen, rejectOpen) => {
     socket.addEventListener("open", () => resolveOpen(), { once: true });
@@ -307,6 +386,11 @@ export async function seedHierarchy(stack: ForkStackReady): Promise<SeededHierar
     },
     { requestTimeoutMs: 45_000 },
   ) as unknown as RpcClient;
+  return { client, close: () => socket.close() };
+}
+
+export async function seedHierarchy(stack: ForkStackReady): Promise<SeededHierarchy> {
+  const { client, close } = await connect(stack, stack.accessToken);
 
   const projectId = uniqueId();
   const projectTitle = "spec 250 sidebar";
@@ -338,6 +422,9 @@ export async function seedHierarchy(stack: ForkStackReady): Promise<SeededHierar
 
   const titles = {
     architectAlpha: "Architect alpha",
+    // None of these names the gate. Spec 146 wrote the gate into the TITLE
+    // because there was nowhere else; the assertion that it no longer does
+    // needs titles that would make a leak visible.
     buildersAlpha: ["Builder alpha one", "Builder alpha two", "Builder alpha three"],
     architectBeta: "Architect beta",
     builderBeta: "Builder beta one",
@@ -350,9 +437,12 @@ export async function seedHierarchy(stack: ForkStackReady): Promise<SeededHierar
   const architectGhost = uniqueId();
 
   await createThread({ threadId: architectAlpha, title: titles.architectAlpha, role: "architect" });
+  const alphaBuilderIds: string[] = [];
   for (const title of titles.buildersAlpha) {
+    const threadId = uniqueId();
+    alphaBuilderIds.push(threadId);
     await createThread({
-      threadId: uniqueId(),
+      threadId,
       title,
       role: "builder",
       parentThreadId: architectAlpha,
@@ -379,6 +469,90 @@ export async function seedHierarchy(stack: ForkStackReady): Promise<SeededHierar
     threadId: architectGhost,
   });
 
-  socket.close();
-  return { projectId, projectTitle, architectAlpha, architectBeta, architectGhost, titles };
+  // ------------------------------------------------------------- the gates
+  //
+  // Written through `codev.gateWrite`, the same RPC and the same scope
+  // `codev-agent` uses. Not by writing the column, and not by dispatching a
+  // thread command: the revision is server-allocated, and a fixture that
+  // invented one would be seeding a state the real writer cannot produce.
+  const gatedBuilderId = alphaBuilderIds[0];
+  const unstructuredGateBuilderId = alphaBuilderIds[1];
+  if (gatedBuilderId === undefined || unstructuredGateBuilderId === undefined) {
+    throw new Error("unreachable: three alpha builders are created above");
+  }
+  const gate = {
+    name: "plan-approval",
+    unstructuredName: "spec-approval",
+    architectName: "verify-approval",
+    question: "Delete the legacy table, or keep it for audit purposes?",
+    recommendedLabel: "Delete it",
+    recommendedConsequence: "Migrate references, drop the table, and open the PR.",
+    otherLabel: "Keep it",
+    otherConsequence: "Retain the table and document the audit dependency.",
+  } as const;
+
+  //
+  // On its OWN connection, with the server's own credential. Not on the socket
+  // above: that one carries `orchestration:operate`, and putting gate writes on
+  // it is precisely what phase 4 gave the method a separate scope to prevent.
+  if (stack.gateWriterToken === null) {
+    throw new Error(
+      "the fork server wrote no gate-writer credential, so this fixture cannot write a gate",
+    );
+  }
+  const gateWriter = await connect(stack, stack.gateWriterToken);
+  await gateWriter.client.call("codev.gateWrite", {
+    type: "codev.gate.set",
+    commandId: uniqueId(),
+    threadId: gatedBuilderId,
+    createdAt: new Date().toISOString(),
+    gate: {
+      gateName: gate.name,
+      requestedAt: new Date().toISOString(),
+      question: gate.question,
+      choices: [
+        {
+          label: gate.recommendedLabel,
+          consequence: gate.recommendedConsequence,
+          recommended: true,
+        },
+        { label: gate.otherLabel, consequence: gate.otherConsequence },
+      ],
+      terminalExcerpt: "warning: legacy references remain\ncheckout tests failed",
+    },
+  });
+  await gateWriter.client.call("codev.gateWrite", {
+    type: "codev.gate.set",
+    commandId: uniqueId(),
+    threadId: unstructuredGateBuilderId,
+    createdAt: new Date().toISOString(),
+    gate: { gateName: gate.unstructuredName, requestedAt: new Date().toISOString() },
+  });
+  await gateWriter.client.call("codev.gateWrite", {
+    type: "codev.gate.set",
+    commandId: uniqueId(),
+    threadId: architectBeta,
+    createdAt: new Date().toISOString(),
+    gate: {
+      gateName: gate.architectName,
+      requestedAt: new Date().toISOString(),
+      question: "Merge the branch, or hold for the second review?",
+      choices: [{ label: "Merge", consequence: "Merge and close the issue." }],
+    },
+  });
+
+  gateWriter.close();
+  close();
+  return {
+    projectId,
+    projectTitle,
+    architectAlpha,
+    architectBeta,
+    architectGhost,
+    titles,
+    gatedBuilderId,
+    unstructuredGateBuilderId,
+    gatedArchitectId: architectBeta,
+    gate,
+  };
 }

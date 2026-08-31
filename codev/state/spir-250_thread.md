@@ -1187,3 +1187,37 @@ not used by any shelf header. The count already carries `text-secondary-label` a
 `text-muted-foreground/50`, which is the only emphasis t3code's own tokens offer at that level
 without inventing a badge. The architect's rule was "use t3code's treatment if one exists, leave it
 if not, do not invent" — so it stays.
+
+## Phase 8 — the gate panel
+
+`apps/web/src/codev/gateState.ts` (pure, three states) and `GatePanel.tsx` (t3code's `Alert` in the
+`info` variant, above the composer, NOT in `ComposerBannerStack` — that stack shows one banner at a
+time behind a cap and a gate is neither dismissible nor small). Sidebar marker is its own element in
+rose, outside the status slot so it survives a hover.
+
+**The finding: a gate must be written by the credential that writes gates.** A bootstrap exchange
+asking for `codev:gate-write` is refused `invalid_scope` — phase 4 holding. The fixture reads
+`<serverBaseDir>/codev/gate-writer.token` and opens its own connection, which is what
+`thread-backend.ts` does in production.
+
+**Second finding: the screenshot trap has a two-file version.** Phase 7's opt-in flag was not
+enough — with two spec files the first writes PNGs into the fork and the second SKIPS in the same
+run, correctly. Screenshots now write to `SPEC_250_SCREENSHOT_DIR` (outside the fork) and are
+copied in. Phase 7's pictures were re-shot in the same commit because two builders now carry gates.
+
+Falsified: collapsing `pending-unstructured` into `none`, and rendering the question with
+`dangerouslySetInnerHTML`, each fail 8 tests.
+
+17 Playwright tests green (8 gate + 9 hierarchy). Fork web suite 2916 → will re-run. Pin at
+`39204a7ac368`, 21 patches, both evidence files re-collected.
+
+**Architect review of the phase 8 screenshots.** Heading "Waiting on you: <gate>" approved and kept
+— it leads with the required ACTION rather than describing a state, which is the difference between
+a gate and a status. Sidebar and panel wording deliberately differ (scan vs summon); do not
+reconcile them. Two changes: the terminal excerpt gained a caption, and the row marker became a
+gavel plus the gate name after both `Gate: <name>` placements clipped something at ~230px (line
+above the title clipped the role caption to "A…"; the title line clipped the title). One clip left
+deliberately: a 15-char gate name on a gated architect shows "Archit…", with the gate name and the
+title intact.
+
+Pin at `efadf838c414`, 25 patches, both evidence files re-collected.

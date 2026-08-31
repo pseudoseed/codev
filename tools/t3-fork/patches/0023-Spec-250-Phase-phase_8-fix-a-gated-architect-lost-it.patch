@@ -1,0 +1,75 @@
+From 81c2463d7ec156a8d38475d2b88753e1753021f9 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Mon, 31 Aug 2026 00:48:06 -0600
+Subject: [PATCH 23/25] [Spec 250][Phase: phase_8] fix: a gated architect lost
+ its role caption to the gate marker
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Review check, and the answer was worse than 'both render'. Both DID render, on
+the same line, competing for the same 230px — so a gated architect showed
+'A… ● Gate: verify-approval'. That answers 'is it blocking on me' by destroying
+'what agent is this', and an architect at a gate is the case a human most needs
+to find.
+
+The marker moves to the TITLE line, which has the whole row and one occupant. The
+line above keeps the project label or the role caption intact. The marker does
+not shrink and the title does: a row that is blocking on a person should spend
+its width saying so, and titles truncate in this sidebar already.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/components/Sidebar.tsx | 21 +++++++++++++++++----
+ 1 file changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/apps/web/src/components/Sidebar.tsx b/apps/web/src/components/Sidebar.tsx
+index 773d2ddba..7e1a62461 100644
+--- a/apps/web/src/components/Sidebar.tsx
++++ b/apps/web/src/components/Sidebar.tsx
+@@ -926,12 +926,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+     <span
+       data-testid="sidebar-codev-gate-pill"
+       className={cn(
+-        "inline-flex min-w-0 shrink items-center gap-1 truncate text-xs font-medium",
++        "inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-medium",
+         codevGatePill.colorClass,
+       )}
+     >
+       <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", codevGatePill.dotClass)} />
+-      <span className="min-w-0 truncate">{codevGatePill.label}</span>
++      <span>{codevGatePill.label}</span>
+     </span>
+   ) : null;
+ 
+@@ -1470,7 +1470,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+               ) : (
+                 <span className="flex-1" />
+               )}
+-              {codevGateMarker}
+               {pinIndicator}
+               {/* The visible state owns this slot's width: status at rest,
+                   actions on hover/keyboard focus or while the popover is open. Keeping
+@@ -1579,7 +1578,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+                 ) : null}
+               </span>
+             </div>
+-            <div className="mt-1 flex min-w-0">
++            <div className="mt-1 flex min-w-0 items-baseline gap-1.5">
++              {/*
++                On the TITLE line, not the line above it.
++                
++                The line above carries the project label or the role caption, and
++                on a gated ARCHITECT both it and the gate want the same 230px —
++                the first version truncated "Architect" to "A…", which answers
++                "is it blocking on me" by destroying "what agent is this". The
++                title line has the whole row and one occupant, so both survive.
++                
++                It does not shrink, and the title does. A row that is blocking on
++                a person should spend its width saying so; titles truncate in
++                this sidebar already.
++              */}
++              {codevGateMarker}
+               {title}
+               {isRegeneratingTitle ? (
+                 <span role="status" className="sr-only">

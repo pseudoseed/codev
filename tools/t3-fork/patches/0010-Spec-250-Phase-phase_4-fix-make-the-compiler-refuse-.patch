@@ -1,7 +1,7 @@
 From 570cc29dc63ca1e64401e9ddd3823a64fa32dd49 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 19:08:27 -0600
-Subject: [PATCH 10/19] [Spec 250][Phase: phase_4] fix: make the compiler
+Subject: [PATCH 10/25] [Spec 250][Phase: phase_4] fix: make the compiler
  refuse an unclassified refusal
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

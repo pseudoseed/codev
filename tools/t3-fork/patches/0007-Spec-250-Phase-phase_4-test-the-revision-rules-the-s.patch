@@ -1,7 +1,7 @@
 From 57d24ddcb3be0fe1b893948274dadc466c67b81e Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 18:05:59 -0600
-Subject: [PATCH 07/19] [Spec 250][Phase: phase_4] test: the revision rules,
+Subject: [PATCH 07/25] [Spec 250][Phase: phase_4] test: the revision rules,
  the scope exclusions, the payload bounds
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

@@ -1,7 +1,7 @@
 From 48a9aa399e5da0c9b1292df1513d191ddce2f8c1 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 23:53:33 -0600
-Subject: [PATCH 18/19] [Spec 250][Phase: phase_7] docs: re-shoot the tree with
+Subject: [PATCH 18/25] [Spec 250][Phase: phase_7] docs: re-shoot the tree with
  the project level, the role marker and a muted orphan group
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

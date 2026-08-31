@@ -1,0 +1,79 @@
+From 90d2b118b7864eb44a2c88748e9da1654856315f Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Mon, 31 Aug 2026 00:45:19 -0600
+Subject: [PATCH 22/25] [Spec 250][Phase: phase_8] fix: the terminal excerpt
+ had no label
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Review finding. Unlabelled, the mono block under the choices is just trailing
+monospace: a reader cannot tell the builder's reasoning from the failure that
+caused the gate from unrelated log noise, and those need three different
+responses.
+
+Labelled "Terminal excerpt", which is the name the gate request itself uses
+(`terminalExcerpt`) — so the caption a reader sees and the field a builder fills
+in are the same word. `figure`/`figcaption` rather than a floating heading,
+because the label belongs to that block and to nothing else.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/codev/GatePanel.test.tsx |  4 ++++
+ apps/web/src/codev/GatePanel.tsx      | 28 +++++++++++++++++++++------
+ 2 files changed, 26 insertions(+), 6 deletions(-)
+
+diff --git a/apps/web/src/codev/GatePanel.test.tsx b/apps/web/src/codev/GatePanel.test.tsx
+index 62933c0fb..bccd995ab 100644
+--- a/apps/web/src/codev/GatePanel.test.tsx
++++ b/apps/web/src/codev/GatePanel.test.tsx
+@@ -134,6 +134,10 @@ describe("GatePanel", () => {
+     });
+     expect(markup).toContain("[…earlier output truncated…]");
+     expect(markup).toContain("warning: 2 tests skipped");
++    // And it says what it IS. Unlabelled monospace under a question could be
++    // the builder's reasoning, the failure that caused the gate, or unrelated
++    // log noise, and those need different responses from the reader.
++    expect(markup).toContain("Terminal excerpt");
+     // Phase 6 truncates an oversize excerpt TAIL-FIRST behind that inline
+     // marker, so re-truncating here would hide the notice saying it is partial.
+   });
+diff --git a/apps/web/src/codev/GatePanel.tsx b/apps/web/src/codev/GatePanel.tsx
+index 91607ca35..df0eb4f8b 100644
+--- a/apps/web/src/codev/GatePanel.tsx
++++ b/apps/web/src/codev/GatePanel.tsx
+@@ -125,12 +125,28 @@ export function GatePanelBody({ state }: { readonly state: CodevGateState }) {
+                * of the string and re-truncating here would hide the notice that
+                * says the text is partial.
+                */
+-              <pre
+-                data-testid="codev-gate-excerpt"
+-                className="max-h-48 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-xs whitespace-pre-wrap"
+-              >
+-                {state.terminalExcerpt}
+-              </pre>
++              <figure className="flex min-w-0 flex-col gap-1">
++                {/*
++                  Labelled, because unlabelled it is just trailing monospace.
++                  A reader cannot tell the builder's reasoning from the failure
++                  that caused the gate from unrelated log noise, and those need
++                  three different responses. "Terminal excerpt" is the name the
++                  gate request itself uses (`terminalExcerpt`), so the label and
++                  the field a builder fills in are the same word.
++                */}
++                <figcaption
++                  data-testid="codev-gate-excerpt-label"
++                  className="font-medium text-muted-foreground text-xs"
++                >
++                  Terminal excerpt
++                </figcaption>
++                <pre
++                  data-testid="codev-gate-excerpt"
++                  className="max-h-48 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-xs whitespace-pre-wrap"
++                >
++                  {state.terminalExcerpt}
++                </pre>
++              </figure>
+             )}
+           </div>
+         )}

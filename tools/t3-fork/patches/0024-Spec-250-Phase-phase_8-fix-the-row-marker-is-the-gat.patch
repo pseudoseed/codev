@@ -1,0 +1,159 @@
+From 98e950e42a26c50f84d2112a0c0050a0e797797e Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Mon, 31 Aug 2026 00:51:07 -0600
+Subject: [PATCH 24/25] [Spec 250][Phase: phase_8] fix: the row marker is the
+ gate name and a gavel, not 'Gate: <name>'
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two placements were tried and both lost something to the same ~230px. On the
+line above the title, 'Gate: verify-approval' plus the 'Architect' caption plus
+the timestamp overflow, and the caption truncated to 'A…'. Moved to the title
+line, the marker fit and the TITLE truncated instead — the row's primary
+identifier, on every gated row.
+
+The label is the gate name alone now, and the word is carried by the panel's own
+gavel. Six characters bought back the room: the caption, the gate and the title
+all survive, and the row and the panel say 'gate' the same way.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/codev/gateState.test.ts |  6 +++--
+ apps/web/src/codev/gateState.ts      | 19 ++++++++++------
+ apps/web/src/components/Sidebar.tsx  | 33 +++++++++++++---------------
+ 3 files changed, 31 insertions(+), 27 deletions(-)
+
+diff --git a/apps/web/src/codev/gateState.test.ts b/apps/web/src/codev/gateState.test.ts
+index bcfb4fd7b..e725965bb 100644
+--- a/apps/web/src/codev/gateState.test.ts
++++ b/apps/web/src/codev/gateState.test.ts
+@@ -248,7 +248,9 @@ describe("the gate bounds are the schema's, not the renderer's", () => {
+ describe("resolveCodevGatePill", () => {
+   it("names the gate, so the row says WHICH decision is waiting", () => {
+     const pill = resolveCodevGatePill(resolveCodevGateState(gate({ gateName: "spec-approval" })));
+-    expect(pill?.label).toBe("Gate: spec-approval");
++    // The name alone. The word "Gate" is the icon's job — see the doc comment
++    // for the row width that decided it.
++    expect(pill?.label).toBe("spec-approval");
+   });
+ 
+   it("gives both pending states the same pill", () => {
+@@ -265,7 +267,7 @@ describe("resolveCodevGatePill", () => {
+     // Input, sky Working, violet Plan Ready, emerald Completed. Reusing amber
+     // would collapse the exact distinction the gate block exists to make.
+     for (const taken of ["amber", "indigo", "sky", "violet", "emerald"]) {
+-      expect(`${pill?.colorClass} ${pill?.dotClass}`).not.toContain(taken);
++      expect(pill?.colorClass).not.toContain(taken);
+     }
+   });
+ });
+diff --git a/apps/web/src/codev/gateState.ts b/apps/web/src/codev/gateState.ts
+index 9aebba313..14dbd7059 100644
+--- a/apps/web/src/codev/gateState.ts
++++ b/apps/web/src/codev/gateState.ts
+@@ -117,7 +117,6 @@ export function isCodevGatePending(state: CodevGateState): boolean {
+ export interface CodevGatePill {
+   readonly label: string;
+   readonly colorClass: string;
+-  readonly dotClass: string;
+ }
+ 
+ /**
+@@ -128,16 +127,22 @@ export interface CodevGatePill {
+  * violet Plan Ready, emerald Completed. Reusing amber would collapse exactly the
+  * distinction phase 4 built the gate block to make.
+  *
+- * The label carries the gate NAME, because "which gate" is the first thing a
+- * human asks and the panel is a click away. Both pending states get the same
+- * pill: from the sidebar, a gate with no attached question is no less blocking
+- * than one with a question.
++ * **The label is the gate NAME alone, and the word "Gate" is carried by the
++ * icon.** It read `Gate: plan-approval` first, which is better in isolation and
++ * does not survive the row: a sidebar is ~230px, and on a gated ARCHITECT that
++ * label plus the role caption plus the timestamp overflow it — the first version
++ * truncated "Architect" to "A…", and moving the label to the title line
++ * truncated the title instead. The gavel is the same glyph the panel opens with,
++ * so the row and the panel say "gate" the same way and the six characters buy
++ * back the room.
++ *
++ * Both pending states get the same marker: from the sidebar, a gate with no
++ * attached question is no less blocking than one with a question.
+  */
+ export function resolveCodevGatePill(state: CodevGateState): CodevGatePill | null {
+   if (state.kind === "none") return null;
+   return {
+-    label: `Gate: ${state.gateName}`,
++    label: state.gateName,
+     colorClass: "text-rose-600 dark:text-rose-300/90",
+-    dotClass: "bg-rose-500 dark:bg-rose-300/90",
+   };
+ }
+diff --git a/apps/web/src/components/Sidebar.tsx b/apps/web/src/components/Sidebar.tsx
+index 7e1a62461..77fe9ac73 100644
+--- a/apps/web/src/components/Sidebar.tsx
++++ b/apps/web/src/components/Sidebar.tsx
+@@ -43,6 +43,7 @@ import {
+   ClockIcon,
+   FolderIcon,
+   FolderPlusIcon,
++  GavelIcon,
+   GitBranchIcon,
+   MessageSquareIcon,
+   PinIcon,
+@@ -926,12 +927,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+     <span
+       data-testid="sidebar-codev-gate-pill"
+       className={cn(
+-        "inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-medium",
++        "inline-flex min-w-0 shrink items-center gap-1 whitespace-nowrap text-xs font-medium",
+         codevGatePill.colorClass,
+       )}
+     >
+-      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", codevGatePill.dotClass)} />
+-      <span>{codevGatePill.label}</span>
++      {/* The panel's own glyph. The row and the panel say "gate" the same way,
++          which is what lets the label be the gate name alone. */}
++      <GavelIcon aria-hidden className="size-3 shrink-0" />
++      <span className="min-w-0 truncate">{codevGatePill.label}</span>
+     </span>
+   ) : null;
+ 
+@@ -1470,6 +1473,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+               ) : (
+                 <span className="flex-1" />
+               )}
++              {/*
++                The gate shares this line with the project label or the role
++                caption, and the three of them plus the timestamp fit ~230px only
++                because the label is the gate NAME rather than "Gate: <name>".
++                It was tried on the title line instead, which truncated the
++                title — the row's primary identifier — on every gated row.
++              */}
++              {codevGateMarker}
+               {pinIndicator}
+               {/* The visible state owns this slot's width: status at rest,
+                   actions on hover/keyboard focus or while the popover is open. Keeping
+@@ -1578,21 +1589,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+                 ) : null}
+               </span>
+             </div>
+-            <div className="mt-1 flex min-w-0 items-baseline gap-1.5">
+-              {/*
+-                On the TITLE line, not the line above it.
+-                
+-                The line above carries the project label or the role caption, and
+-                on a gated ARCHITECT both it and the gate want the same 230px —
+-                the first version truncated "Architect" to "A…", which answers
+-                "is it blocking on me" by destroying "what agent is this". The
+-                title line has the whole row and one occupant, so both survive.
+-                
+-                It does not shrink, and the title does. A row that is blocking on
+-                a person should spend its width saying so; titles truncate in
+-                this sidebar already.
+-              */}
+-              {codevGateMarker}
++            <div className="mt-1 flex min-w-0">
+               {title}
+               {isRegeneratingTitle ? (
+                 <span role="status" className="sr-only">

@@ -415,7 +415,7 @@ for (const viewport of VIEWPORTS) {
     }
 
     await settleForScreenshot(page);
-    await page.screenshot({ path: forkScreenshotPath(viewport.name), fullPage: true });
+    await page.screenshot({ path: forkScreenshotPath("phase-7", viewport.name), fullPage: true });
     // The sidebar is its own scroll container under a sticky footer, so a
     // full-page shot of a 900px window clips the tail of a longer list — and the
     // tail is the orphan group with its reason line, which is the part a
@@ -428,7 +428,7 @@ for (const viewport of VIEWPORTS) {
     await page
       .getByTestId("sidebar-codev-orphan-heading")
       .locator("xpath=ancestor::ul[1]")
-      .screenshot({ path: forkScreenshotPath(`${viewport.name}-tree`) });
+      .screenshot({ path: forkScreenshotPath("phase-7", `${viewport.name}-tree`) });
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
 
     // Listed, not counted: a bare "expected 0, got 3" sends the reader back to

@@ -875,6 +875,117 @@ list they have always had, and a builder whose architect is gone named as orphan
 it could not be placed — instead of one flat list in which none of those things is distinguishable
 from the others.
 
+## Phase 8 — A porch gate, rendered from the gate block
+
+### The gate has to be written by the credential that writes gates
+
+The e2e fixture could not seed a gate the way it seeds everything else. A bootstrap exchange asking
+for `codev:gate-write` is refused with `invalid_scope` — phase 4's design holding, not a bug to work
+around. Gate writes come from ONE credential, `codev-agent`, scoped to `orchestration:read` and
+`codev:gate-write` and nothing else, provisioned by the server rather than derived from whatever
+token a client happens to hold.
+
+So the fixture reads that credential from `<serverBaseDir>/codev/gate-writer.token`, where the
+fork's server writes it at start, and opens its own connection with it — exactly what
+`thread-backend.ts` does in production, and for the reason that file already records: the seeding
+socket carries `orchestration:operate`, and putting gate writes on it is precisely what phase 4
+gave the method its own scope to prevent.
+
+A fixture that had obtained the ability another way — widening the scope, writing the column — would
+have been testing a path no writer uses.
+
+### The third state, and why it is a union rather than a nullable object
+
+`porch gate <id>` without `--request-file` is legitimate and common, so a gate can be pending with
+no question and no choices. Rendering that as "no gate" hides a human who is waiting. Rendering it
+as `pending` with an empty question shows a heading with nothing under it, which reads as a broken
+gate rather than an absent request. It is `pending-unstructured`, it says
+"Gate pending, no structured request", and both the derivation and the panel have tests that fail
+when it collapses into either neighbour.
+
+"Structured" means there is something to READ, not that a field was sent: a gate carrying only
+choices, or only a question, is structured. A gate carrying neither is not.
+
+### It is not folded into session status, and the hue matters
+
+`starting` / `running` / `ready` / `settled` describe what the AGENT is doing, and none of them can
+say "a human has to decide". `hasPendingApprovals` cannot stand in either — that is provider TOOL
+approvals, and the contract already records why the two must stay apart.
+
+The row marker therefore has its own derivation and its own colour. Amber is Pending Approval,
+indigo Awaiting Input, sky Working, violet Plan Ready, emerald Completed; reusing amber would
+collapse exactly the distinction the gate block exists to make, so the gate is rose. A test asserts
+the pill uses none of the five taken hues, which is the only way that claim survives a later
+refactor.
+
+It also sits OUTSIDE the status slot, which fades to make room for the row's hover actions. A gate
+that vanished when someone reached for the row would be missing precisely when it was being acted
+on, and no screenshot taken at rest would show it.
+
+### The XSS test that gets quieter as the defect gets worse
+
+Gate text — the question, every label, every consequence, the terminal excerpt — is written by a
+builder agent into `status.yaml` and carried over a socket. A panel that rendered any of it as
+markup would let a repository under review script the page reviewing it.
+
+The obvious test renders a payload and asserts the markup contains no `<img`. It passes on the
+current code and it would keep passing on a version that escaped the question and handed only the
+terminal excerpt to `dangerouslySetInnerHTML` — that one field would simply stop matching the
+escaped-count assertion, and a check that reports LESS as the defect grows is worse than no check.
+So there is a second test that reads `GatePanel.tsx` and fails on any use of the escape hatch. It
+matches a use (`dangerouslySetInnerHTML=` or `:`) and not a mention, because the file's own doc
+comment names the thing it does not do, and a bare substring check would train the next reader to
+delete the sentence rather than the risk.
+
+### A case the plan asked for that cannot exist
+
+The test plan asks for "a choice with no consequence". `consequence` is a required non-empty string,
+so a choice without one is refused whole at the schema boundary and cannot reach a renderer. Left in
+as a test that asserts the refusal, rather than dropped, so the next reader can see the case was
+checked and found unrepresentable instead of assuming it was forgotten. Same shape as phase 4's
+`CODEV_GATE_SCOPE_REQUIRED`.
+
+Every fixture in both suites is DECODED through `CodevGate` rather than written as an object
+literal, which is what makes that finding possible: six choices, two recommendations and a
+multi-line question all fail in the fixture instead of being asserted about as though they could
+arrive.
+
+### Screenshots poisoning the suite, the second time
+
+Phase 7 found that writing screenshots into the fork makes `start-fork` refuse the next run, and
+answered it with an opt-in flag. Phase 8 added a second spec file and found the flag did not cover
+it: with two files, the first writes PNG bytes and the second SKIPS, in the same run, and the skip
+is correct behaviour. Screenshots now always write outside the fork and are copied in afterwards.
+
+### Two review findings, and one of them had no good answer at first
+
+The terminal excerpt had no caption. Unlabelled, a mono block under the choices is just trailing
+output: a reader cannot tell the builder's reasoning from the failure that caused the gate from
+unrelated log noise, and those need three different responses. It says "Terminal excerpt" now, which
+is the name the gate request itself uses, so the caption and the field a builder fills in are the
+same word.
+
+The second was a question — does a gated ARCHITECT render the role caption AND the gate? — and the
+answer was worse than yes. Both rendered, on the same line, competing for the same ~230px, so the
+caption truncated to `A…`. Moving the marker to the title line fixed that and truncated the title
+instead, on every gated row. Neither placement was acceptable, and the fix was not a placement: the
+label dropped `Gate: ` and took the panel's gavel instead, which bought back six characters and let
+the caption, the gate name and the title all survive.
+
+A clip remains and is deliberate. A 15-character gate name on a gated architect still shows
+`Archit…`; the gate name and the title are intact. That is the right order — an architect at a gate
+is the row a human most needs to find — and it is recorded here rather than left for a reviewer to
+notice in a screenshot.
+
+### What can a human see or do now that they could not before
+
+Open a builder that porch has stopped at a gate and t3code says which gate, when it was requested,
+what it is asking, what each choice would do, and which one the builder recommends — instead of a
+thread that looks settled. From the sidebar, that builder is marked as blocked on a person rather
+than as finished. And a gate with nothing attached says so, instead of looking like no gate at all.
+
+Nothing here approves anything: that is phase 10. This is the reading half.
+
 ## Flaky Tests
 
 `apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint` fails in the fork.

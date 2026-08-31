@@ -1,0 +1,910 @@
+From 5e8ace3b186f3452a82da0272ceb3ec157f02a62 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Mon, 31 Aug 2026 00:32:32 -0600
+Subject: [PATCH 20/25] [Spec 250][Phase: phase_8] feat: a porch gate says
+ which gate, and what it is asking
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Spec 146 wrote the gate name into the thread TITLE because t3code had nowhere
+else to put it. Phase 4 gave it somewhere. This reads it.
+
+**Three states, and the third is the one that gets lost.** `porch gate <id>`
+without `--request-file` is legitimate and common, so a gate can be pending with
+no question and no choices. Rendering that as "no gate" hides a human who is
+waiting; rendering it as a question with nothing under it reads as a broken gate
+rather than an absent request. It is its own state and says so in words:
+"Gate pending, no structured request."
+
+**It is not folded into session status.** `starting` / `running` / `ready` /
+`settled` describe what the AGENT is doing and none of them can say "a human has
+to decide". `hasPendingApprovals` cannot stand in either — that is provider TOOL
+approvals, and the contract already says why the two must stay apart. So the
+sidebar marker is its own element, from its own derivation, in a hue none of the
+existing pills own: amber is Pending Approval, indigo Awaiting Input, sky
+Working, violet Plan Ready, emerald Completed, and reusing amber would collapse
+exactly the distinction the gate block was built to make.
+
+The marker sits OUTSIDE the status slot, which fades to make room for the row's
+hover actions. A gate that vanished when someone reached for the row would be
+missing precisely when it was being acted on.
+
+**No `dangerouslySetInnerHTML`, and it is not a style choice.** The question,
+the labels, the consequences and the terminal excerpt are written by a builder
+agent into `status.yaml` and carried over a socket, so a panel that rendered them
+as markup would let a repository under review script the page reviewing it. React
+escapes text children; a test reads this file and fails on any use of the escape
+hatch, because the escaping test alone gets QUIETER as that defect gets worse —
+one field silently stops matching.
+
+The panel is above the composer and not inside `ComposerBannerStack`: that stack
+shows one banner at a time with the rest behind a cap, so a gate in it would hide
+the other banners or be hidden by them — and a gate is not dismissible.
+
+Every fixture in the tests is DECODED through `CodevGate` rather than written as
+a literal, so six choices, two recommendations and a multi-line question fail in
+the fixture instead of being asserted about as if they could arrive. One case the
+plan asked for turns out to be unrepresentable: `consequence` is required, so a
+choice without one is refused whole. Recorded as a test rather than dropped.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/web/src/codev/GatePanel.test.tsx | 175 +++++++++++++++++
+ apps/web/src/codev/GatePanel.tsx      | 140 +++++++++++++
+ apps/web/src/codev/gateState.test.ts  | 271 ++++++++++++++++++++++++++
+ apps/web/src/codev/gateState.ts       | 143 ++++++++++++++
+ apps/web/src/components/ChatView.tsx  |  17 ++
+ apps/web/src/components/Sidebar.tsx   |  26 +++
+ 6 files changed, 772 insertions(+)
+ create mode 100644 apps/web/src/codev/GatePanel.test.tsx
+ create mode 100644 apps/web/src/codev/GatePanel.tsx
+ create mode 100644 apps/web/src/codev/gateState.test.ts
+ create mode 100644 apps/web/src/codev/gateState.ts
+
+diff --git a/apps/web/src/codev/GatePanel.test.tsx b/apps/web/src/codev/GatePanel.test.tsx
+new file mode 100644
+index 000000000..62933c0fb
+--- /dev/null
++++ b/apps/web/src/codev/GatePanel.test.tsx
+@@ -0,0 +1,175 @@
++/**
++ * Codev customization (spec 250), phase 8 — the panel, rendered.
++ *
++ * `gateState.test.ts` settles what the three states ARE. This settles what a
++ * human sees for each, and one claim it makes is a security claim: gate text is
++ * written by a builder agent into `status.yaml` and carried over a socket, so if
++ * any of it reached the page as markup, a repository under review could script
++ * the page reviewing it.
++ */
++
++import { readFileSync } from "node:fs";
++import { join } from "node:path";
++
++import { CodevGate } from "@t3tools/contracts";
++import * as Schema from "effect/Schema";
++import { renderToStaticMarkup } from "react-dom/server";
++import { describe, expect, it } from "vite-plus/test";
++
++import { GatePanel } from "./GatePanel";
++
++const decodeGate = Schema.decodeUnknownSync(CodevGate);
++
++const render = (overrides: Record<string, unknown> | null) =>
++  renderToStaticMarkup(
++    <GatePanel
++      thread={{
++        codevGate:
++          overrides === null
++            ? null
++            : decodeGate({
++                gateName: "plan-approval",
++                requestedAt: "2026-08-31T05:00:00.000Z",
++                ...overrides,
++              }),
++      }}
++    />,
++  );
++
++describe("GatePanel", () => {
++  it("renders nothing when there is no gate", () => {
++    // Every thread that is not blocked has to look exactly as it did before
++    // spec 250; an empty frame above the composer is new furniture.
++    expect(render(null)).toBe("");
++    expect(renderToStaticMarkup(<GatePanel thread={null} />)).toBe("");
++  });
++
++  it("names the gate and when it was requested, from the gate block", () => {
++    const markup = render({ question: "Approve the plan?" });
++    expect(markup).toContain("plan-approval");
++    expect(markup).toContain('data-codev-gate-name="plan-approval"');
++    // The timestamp is machine-readable as well as rendered: a relative label
++    // alone ("2 hours ago") drifts with the clock and cannot be checked against
++    // anything. Asserted as `<time>` plus the ISO string rather than on the
++    // attribute spelling — `renderToStaticMarkup` emits `dateTime`, a browser
++    // emits `datetime`, and the claim here is about neither.
++    expect(markup).toContain("<time");
++    expect(markup).toContain("2026-08-31T05:00:00.000Z");
++  });
++
++  it("shows the question and every choice with its consequence", () => {
++    const markup = render({
++      question: "Delete the legacy table?",
++      choices: [
++        { label: "Delete it", consequence: "Migrate references and drop it.", recommended: true },
++        { label: "Keep it", consequence: "Retain it and document the dependency." },
++      ],
++    });
++    expect(markup).toContain("Delete the legacy table?");
++    expect(markup).toContain("Delete it");
++    expect(markup).toContain("Migrate references and drop it.");
++    expect(markup).toContain("Keep it");
++    expect(markup).toContain("Retain it and document the dependency.");
++  });
++
++  it("marks exactly the recommended choice", () => {
++    const markup = render({
++      question: "Delete the legacy table?",
++      choices: [
++        { label: "Delete it", consequence: "Drop it.", recommended: true },
++        { label: "Keep it", consequence: "Retain it." },
++      ],
++    });
++    const marks = markup.match(/data-codev-gate-recommended="true"/g) ?? [];
++    expect(marks).toHaveLength(1);
++    // Marked in place, not moved to the top: reordering would break the
++    // numbering the builder wrote its consequences against.
++    expect(markup.indexOf("Delete it")).toBeLessThan(markup.indexOf("Keep it"));
++    expect(markup).toContain("Recommended");
++  });
++
++  it("marks nothing when there is no recommendation", () => {
++    const markup = render({
++      question: "Which way?",
++      choices: [
++        { label: "Left", consequence: "Go left." },
++        { label: "Right", consequence: "Go right." },
++      ],
++    });
++    expect(markup).not.toContain('data-codev-gate-recommended="true"');
++    expect(markup).not.toContain("Recommended");
++  });
++
++  /**
++   * THE THIRD STATE, on screen.
++   *
++   * Never "no gate" and never an empty question. `porch gate <id>` without
++   * `--request-file` is the ordinary way to reach this.
++   */
++  it("says a gate is pending with no structured request, rather than showing an empty question", () => {
++    const markup = render({});
++    expect(markup).toContain('data-codev-gate-kind="pending-unstructured"');
++    expect(markup).toContain("Gate pending, no structured request");
++    expect(markup).toContain("plan-approval");
++    expect(markup).not.toContain('data-testid="codev-gate-question"');
++    expect(markup).not.toContain('data-testid="codev-gate-choices"');
++  });
++
++  it("renders a question with no choices, and choices with no question", () => {
++    const questionOnly = render({ question: "Ready to merge?" });
++    expect(questionOnly).toContain("Ready to merge?");
++    expect(questionOnly).not.toContain('data-testid="codev-gate-choices"');
++
++    const choicesOnly = render({ choices: [{ label: "Proceed", consequence: "Open the PR." }] });
++    expect(choicesOnly).toContain("Proceed");
++    expect(choicesOnly).not.toContain('data-testid="codev-gate-question"');
++    // And neither is the third state: both have something to read.
++    expect(choicesOnly).not.toContain("no structured request");
++  });
++
++  it("renders the terminal excerpt verbatim, including its truncation marker", () => {
++    const markup = render({
++      question: "Ship it?",
++      terminalExcerpt: "[…earlier output truncated…]\nwarning: 2 tests skipped",
++    });
++    expect(markup).toContain("[…earlier output truncated…]");
++    expect(markup).toContain("warning: 2 tests skipped");
++    // Phase 6 truncates an oversize excerpt TAIL-FIRST behind that inline
++    // marker, so re-truncating here would hide the notice saying it is partial.
++  });
++
++  /**
++   * NO `dangerouslySetInnerHTML`, asserted rather than promised.
++   *
++   * Every field a builder controls is checked. A test that only covered the
++   * question would pass while a choice label rendered as markup.
++   */
++  it("escapes gate text instead of rendering it as markup", () => {
++    const payload = '<img src=x onerror="alert(1)">';
++    const markup = render({
++      question: `Question ${payload}`,
++      choices: [{ label: `Label ${payload}`, consequence: `Consequence ${payload}` }],
++      terminalExcerpt: `Excerpt ${payload}`,
++    });
++    // No element was created from the payload...
++    expect(markup).not.toContain("<img");
++    // ...and all four builder-controlled fields carry it as inert text.
++    expect(markup.match(/&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/g) ?? []).toHaveLength(4);
++  });
++
++  it("carries no dangerouslySetInnerHTML in its source", () => {
++    /*
++     * The escaping above is a property of how React renders CHILDREN, and it
++     * survives only while nothing in this file opts out of it. The test above
++     * would keep passing on a version that escaped the question and handed the
++     * terminal excerpt to `dangerouslySetInnerHTML`, because that one field
++     * would simply stop matching — a check that gets quieter as the defect gets
++     * worse. This reads the file.
++     */
++    const source = readFileSync(join(import.meta.dirname, "GatePanel.tsx"), "utf8");
++    // A USE, not a mention: the file's own doc comment names the thing it does
++    // not do, and a bare substring check fails on that sentence — which would
++    // train the next reader to delete the sentence rather than the risk.
++    expect(source).not.toMatch(/dangerouslySetInnerHTML\s*[=:]/);
++  });
++});
+diff --git a/apps/web/src/codev/GatePanel.tsx b/apps/web/src/codev/GatePanel.tsx
+new file mode 100644
+index 000000000..91607ca35
+--- /dev/null
++++ b/apps/web/src/codev/GatePanel.tsx
+@@ -0,0 +1,140 @@
++/**
++ * Codev customization (spec 250), phase 8 — the gate a human is blocking on.
++ *
++ * Everything here comes from `codevGate` on the thread record. Spec 146 read the
++ * gate name out of the thread TITLE because there was nowhere else to put it, and
++ * a title is a string a user can rename: a panel sourced from one would report
++ * whatever the last person typed. Nothing in this file touches the title.
++ *
++ * ## No `dangerouslySetInnerHTML`, and it is not a style choice
++ *
++ * Gate text is CONTENT. The question, the labels, the consequences and the
++ * terminal excerpt are all written by a builder agent into `status.yaml` and
++ * carried over a socket, so a panel that rendered them as markup would let a
++ * repository under review script the page that reviews it. React escapes text
++ * children; that is the whole mechanism and it must stay the whole mechanism.
++ *
++ * ## It is drawn in t3code's own frame
++ *
++ * `Alert` with the `info` variant, the same primitive the composer banners use.
++ * A gate is not an error and not a warning — a human being asked to decide is the
++ * system working — so it takes the informational treatment and earns attention
++ * from the sidebar's rose pill instead of from a red panel.
++ */
++
++import { GavelIcon } from "lucide-react";
++
++import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
++import { formatRelativeTimeLabel } from "../timestampFormat";
++import { resolveCodevGateState, type CodevGateFields, type CodevGateState } from "./gateState";
++
++function RequestedAt({ requestedAt }: { readonly requestedAt: string }) {
++  const relative = formatRelativeTimeLabel(requestedAt);
++  return (
++    <time
++      dateTime={requestedAt}
++      title={requestedAt}
++      className="shrink-0 font-normal text-muted-foreground text-xs tabular-nums"
++    >
++      {relative === "" ? requestedAt : relative}
++    </time>
++  );
++}
++
++/**
++ * The gate panel, or nothing.
++ *
++ * Takes the thread rather than a pre-derived state so the call site cannot get
++ * the derivation wrong: there is one `resolveCodevGateState` and both this and
++ * the sidebar row go through it.
++ */
++export function GatePanel({ thread }: { readonly thread: CodevGateFields | null | undefined }) {
++  const state = resolveCodevGateState(thread);
++  if (state.kind === "none") return null;
++  return <GatePanelBody state={state} />;
++}
++
++export function GatePanelBody({ state }: { readonly state: CodevGateState }) {
++  if (state.kind === "none") return null;
++
++  return (
++    <Alert
++      variant="info"
++      controlAlignment="first-line"
++      data-testid="codev-gate-panel"
++      data-codev-gate-name={state.gateName}
++      data-codev-gate-kind={state.kind}
++      className="mx-auto w-full max-w-3xl"
++    >
++      <GavelIcon aria-hidden className="size-4" />
++      <AlertTitle className="flex min-w-0 items-baseline gap-2">
++        <span className="min-w-0 truncate font-medium">Waiting on you: {state.gateName}</span>
++        <RequestedAt requestedAt={state.requestedAt} />
++      </AlertTitle>
++      <AlertDescription>
++        {state.kind === "pending-unstructured" ? (
++          /*
++           * The third state, said out loud.
++           *
++           * `porch gate <id>` without `--request-file` is legitimate and common,
++           * so this is not an error and is not an empty question — it is a gate
++           * that nobody attached content to, and the reader needs to know that
++           * rather than wonder what failed to load.
++           */
++          <p data-testid="codev-gate-no-request">
++            Gate pending, no structured request. The builder recorded that it is waiting here but
++            attached no question or choices.
++          </p>
++        ) : (
++          <div className="flex min-w-0 flex-col gap-2">
++            {state.question === null ? null : (
++              <p data-testid="codev-gate-question" className="text-foreground">
++                {state.question}
++              </p>
++            )}
++            {state.choices.length === 0 ? null : (
++              <ol data-testid="codev-gate-choices" className="flex flex-col gap-1.5">
++                {state.choices.map((choice, index) => (
++                  <li
++                    key={`${index}:${choice.label}`}
++                    data-testid="codev-gate-choice"
++                    data-codev-gate-recommended={index === state.recommendedIndex ? "true" : "false"}
++                    className="flex min-w-0 flex-col gap-0.5"
++                  >
++                    <span className="flex min-w-0 items-baseline gap-1.5">
++                      <span className="min-w-0 font-medium text-foreground">{choice.label}</span>
++                      {index === state.recommendedIndex ? (
++                        /* Marked, not reordered. Moving the recommendation to the
++                           top would change the numbering the builder wrote its
++                           consequences against. */
++                        <span className="shrink-0 font-medium text-info text-xs">Recommended</span>
++                      ) : null}
++                    </span>
++                    <span className="min-w-0">{choice.consequence}</span>
++                  </li>
++                ))}
++              </ol>
++            )}
++            {state.terminalExcerpt === null ? null : (
++              /*
++               * Scrolls inside itself. Terminal output is wide and a panel that
++               * let it widen the page would push the composer off screen at 390.
++               *
++               * Rendered exactly as it arrived: phase 6 truncates an oversize
++               * excerpt TAIL-FIRST behind an inline marker, so the marker is part
++               * of the string and re-truncating here would hide the notice that
++               * says the text is partial.
++               */
++              <pre
++                data-testid="codev-gate-excerpt"
++                className="max-h-48 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-xs whitespace-pre-wrap"
++              >
++                {state.terminalExcerpt}
++              </pre>
++            )}
++          </div>
++        )}
++      </AlertDescription>
++    </Alert>
++  );
++}
+diff --git a/apps/web/src/codev/gateState.test.ts b/apps/web/src/codev/gateState.test.ts
+new file mode 100644
+index 000000000..bcfb4fd7b
+--- /dev/null
++++ b/apps/web/src/codev/gateState.test.ts
+@@ -0,0 +1,271 @@
++/**
++ * Codev customization (spec 250), phase 8 — the gate derivation, tested as a
++ * function.
++ *
++ * Every fixture is DECODED through `CodevGate` rather than written as an object
++ * literal. That is the difference between testing the states a server can
++ * actually produce and testing states this file invented: six choices, two
++ * recommendations and a multi-line question are all refused at the schema
++ * boundary, and a test that hand-built one would be asserting behaviour for input
++ * that cannot arrive.
++ */
++
++import { CodevGate } from "@t3tools/contracts";
++import * as Schema from "effect/Schema";
++import { describe, expect, it } from "vite-plus/test";
++
++import type { SidebarThreadSummary, Thread } from "../types";
++import {
++  isCodevGatePending,
++  resolveCodevGatePill,
++  resolveCodevGateState,
++  type CodevGateFields,
++} from "./gateState";
++
++/**
++ * THE SEAM, checked by the compiler.
++ *
++ * The same check that caught a `threadId`/`id` mismatch and an
++ * `exactOptionalPropertyTypes` rejection in phase 7, before either had a call
++ * site. These compile only if the sidebar's and the chat view's actual thread
++ * types satisfy this module's input, so a rename on either side is a build error
++ * here rather than a panel that silently never renders.
++ */
++const _shellFits: (thread: SidebarThreadSummary) => unknown = resolveCodevGateState;
++const _threadFits: (thread: Thread) => unknown = resolveCodevGateState;
++void _shellFits;
++void _threadFits;
++
++const decodeGate = Schema.decodeUnknownSync(CodevGate);
++
++const gate = (overrides: Record<string, unknown> = {}): CodevGateFields => ({
++  codevGate: decodeGate({
++    gateName: "plan-approval",
++    requestedAt: "2026-08-31T05:00:00.000Z",
++    ...overrides,
++  }),
++});
++
++describe("resolveCodevGateState: no gate", () => {
++  it("reads an absent field and a null field as the same answer", () => {
++    // The wire spells an unset optional either way, and distinguishing them in
++    // the UI would be distinguishing two spellings of one fact.
++    expect(resolveCodevGateState({}).kind).toBe("none");
++    expect(resolveCodevGateState({ codevGate: null }).kind).toBe("none");
++    expect(resolveCodevGateState({ codevGate: undefined }).kind).toBe("none");
++  });
++
++  it("reads a missing thread as no gate rather than throwing", () => {
++    // The chat view has no thread while one is loading, and a panel that threw
++    // there would take the whole view down for the absence of a gate.
++    expect(resolveCodevGateState(null).kind).toBe("none");
++    expect(resolveCodevGateState(undefined).kind).toBe("none");
++  });
++
++  it("is not pending", () => {
++    expect(isCodevGatePending(resolveCodevGateState({}))).toBe(false);
++    expect(resolveCodevGatePill(resolveCodevGateState({}))).toBeNull();
++  });
++});
++
++/**
++ * THE THIRD STATE.
++ *
++ * `porch gate <id>` without `--request-file` is legitimate and common. Reporting
++ * it as `none` hides a human who is waiting; reporting it as `pending` with an
++ * empty question shows a heading with nothing under it, which reads as a broken
++ * gate rather than an absent request.
++ */
++describe("resolveCodevGateState: a gate with no structured request", () => {
++  it("is its own state, not 'none'", () => {
++    const state = resolveCodevGateState(gate());
++    expect(state.kind).toBe("pending-unstructured");
++    expect(isCodevGatePending(state)).toBe(true);
++  });
++
++  it("still carries the two fields that always travel", () => {
++    const state = resolveCodevGateState(gate());
++    if (state.kind === "none") throw new Error("expected a pending gate");
++    expect(state.gateName).toBe("plan-approval");
++    expect(state.requestedAt).toBe("2026-08-31T05:00:00.000Z");
++  });
++
++  it("treats an explicitly null question and null choices the same as absent", () => {
++    expect(resolveCodevGateState(gate({ question: null, choices: null })).kind).toBe(
++      "pending-unstructured",
++    );
++  });
++});
++
++describe("resolveCodevGateState: a gate with a structured request", () => {
++  const twoChoices = [
++    { label: "Delete it", consequence: "Migrate references and drop the table.", recommended: true },
++    { label: "Keep it", consequence: "Retain the table and document the dependency." },
++  ];
++
++  it("carries the question, the choices, and which one is recommended", () => {
++    const state = resolveCodevGateState(
++      gate({ question: "Delete the legacy table?", choices: twoChoices }),
++    );
++    if (state.kind !== "pending") throw new Error(`expected pending, saw ${state.kind}`);
++    expect(state.question).toBe("Delete the legacy table?");
++    expect(state.choices.map((choice) => choice.label)).toEqual(["Delete it", "Keep it"]);
++    expect(state.choices.map((choice) => choice.consequence)).toEqual([
++      "Migrate references and drop the table.",
++      "Retain the table and document the dependency.",
++    ]);
++    expect(state.recommendedIndex).toBe(0);
++  });
++
++  it("reports no recommendation as null rather than as the first choice", () => {
++    const state = resolveCodevGateState(
++      gate({
++        question: "Which way?",
++        choices: [
++          { label: "Left", consequence: "Go left." },
++          { label: "Right", consequence: "Go right." },
++        ],
++      }),
++    );
++    if (state.kind !== "pending") throw new Error("expected pending");
++    // Defaulting to 0 would mark a choice the builder did not recommend, which
++    // is a stronger claim than the absence of a recommendation.
++    expect(state.recommendedIndex).toBeNull();
++  });
++
++  it("is structured on a question alone", () => {
++    const state = resolveCodevGateState(gate({ question: "Ready to merge?" }));
++    if (state.kind !== "pending") throw new Error("expected pending");
++    expect(state.choices).toEqual([]);
++  });
++
++  it("is structured on choices alone", () => {
++    const state = resolveCodevGateState(
++      gate({ choices: [{ label: "Proceed", consequence: "Open the PR." }] }),
++    );
++    if (state.kind !== "pending") throw new Error("expected pending");
++    // A list of choices with no question still has something to read, so
++    // reporting it as "no structured request" would be reporting content as
++    // absent while showing it.
++    expect(state.question).toBeNull();
++    expect(state.choices).toHaveLength(1);
++  });
++
++  it("carries one choice and five, which are the bounds the schema allows", () => {
++    const one = resolveCodevGateState(
++      gate({ question: "Go?", choices: [{ label: "Yes", consequence: "Proceed." }] }),
++    );
++    const five = resolveCodevGateState(
++      gate({
++        question: "Which?",
++        choices: Array.from({ length: 5 }, (_, index) => ({
++          label: `Choice ${index + 1}`,
++          consequence: `Consequence ${index + 1}`,
++        })),
++      }),
++    );
++    if (one.kind !== "pending" || five.kind !== "pending") throw new Error("expected pending");
++    expect(one.choices).toHaveLength(1);
++    expect(five.choices).toHaveLength(5);
++  });
++
++  it("carries the terminal excerpt verbatim, and null when there is none", () => {
++    const withExcerpt = resolveCodevGateState(
++      gate({ question: "Ship it?", terminalExcerpt: "warning: 2 tests skipped\n…" }),
++    );
++    if (withExcerpt.kind !== "pending") throw new Error("expected pending");
++    expect(withExcerpt.terminalExcerpt).toBe("warning: 2 tests skipped\n…");
++    const withoutExcerpt = resolveCodevGateState(gate({ question: "Ship it?" }));
++    if (withoutExcerpt.kind !== "pending") throw new Error("expected pending");
++    expect(withoutExcerpt.terminalExcerpt).toBeNull();
++  });
++});
++
++/**
++ * The schema refuses these, which is why the derivation does not handle them.
++ *
++ * Asserted here rather than assumed: if a later contract change relaxed one of
++ * these bounds, the derivation and the panel would both start receiving input
++ * they were written on the promise of never seeing, and this is where that shows
++ * up.
++ */
++describe("the gate bounds are the schema's, not the renderer's", () => {
++  it("refuses six choices", () => {
++    expect(() =>
++      decodeGate({
++        gateName: "plan-approval",
++        requestedAt: "2026-08-31T05:00:00.000Z",
++        choices: Array.from({ length: 6 }, (_, index) => ({
++          label: `Choice ${index + 1}`,
++          consequence: "…",
++        })),
++      }),
++    ).toThrow();
++  });
++
++  it("refuses two recommendations", () => {
++    expect(() =>
++      decodeGate({
++        gateName: "plan-approval",
++        requestedAt: "2026-08-31T05:00:00.000Z",
++        choices: [
++          { label: "A", consequence: "…", recommended: true },
++          { label: "B", consequence: "…", recommended: true },
++        ],
++      }),
++    ).toThrow();
++  });
++
++  it("refuses a multi-line question, because it is rendered as a heading", () => {
++    expect(() =>
++      decodeGate({
++        gateName: "plan-approval",
++        requestedAt: "2026-08-31T05:00:00.000Z",
++        question: "Line one\nLine two",
++      }),
++    ).toThrow();
++  });
++
++  /**
++   * The plan's "a choice with no consequence" case does not exist.
++   *
++   * `consequence` is a required non-empty string, so a choice without one is
++   * refused whole at the boundary. Recorded as a test rather than left out, so
++   * the next reader can see the case was checked and found unrepresentable
++   * instead of assuming it was forgotten.
++   */
++  it("refuses a choice with no consequence", () => {
++    expect(() =>
++      decodeGate({
++        gateName: "plan-approval",
++        requestedAt: "2026-08-31T05:00:00.000Z",
++        choices: [{ label: "Proceed" }],
++      }),
++    ).toThrow();
++  });
++});
++
++describe("resolveCodevGatePill", () => {
++  it("names the gate, so the row says WHICH decision is waiting", () => {
++    const pill = resolveCodevGatePill(resolveCodevGateState(gate({ gateName: "spec-approval" })));
++    expect(pill?.label).toBe("Gate: spec-approval");
++  });
++
++  it("gives both pending states the same pill", () => {
++    // From the sidebar, a gate with no attached question is no less blocking
++    // than one with a question. The difference belongs in the panel.
++    const unstructured = resolveCodevGatePill(resolveCodevGateState(gate()));
++    const structured = resolveCodevGatePill(resolveCodevGateState(gate({ question: "Go?" })));
++    expect(unstructured).toEqual(structured);
++  });
++
++  it("uses a hue none of t3code's status pills already own", () => {
++    const pill = resolveCodevGatePill(resolveCodevGateState(gate()));
++    // amber is Pending Approval (provider TOOL approvals), indigo Awaiting
++    // Input, sky Working, violet Plan Ready, emerald Completed. Reusing amber
++    // would collapse the exact distinction the gate block exists to make.
++    for (const taken of ["amber", "indigo", "sky", "violet", "emerald"]) {
++      expect(`${pill?.colorClass} ${pill?.dotClass}`).not.toContain(taken);
++    }
++  });
++});
+diff --git a/apps/web/src/codev/gateState.ts b/apps/web/src/codev/gateState.ts
+new file mode 100644
+index 000000000..9aebba313
+--- /dev/null
++++ b/apps/web/src/codev/gateState.ts
+@@ -0,0 +1,143 @@
++/**
++ * Codev customization (spec 250), phase 8 — a porch gate, derived from the thread.
++ *
++ * Spec 146 wrote the gate name into the thread TITLE, because t3code had nowhere
++ * else to put it. Phase 4 gave it somewhere: `codevGate` on the thread record,
++ * with a server-allocated revision. This turns that block into the three states a
++ * renderer has to tell apart, and it is a pure function so both the sidebar row
++ * and the panel answer from one derivation rather than two.
++ *
++ * ## Three states, and the third is the one that gets lost
++ *
++ *   none                    no gate. Nothing to draw.
++ *   pending-unstructured    a gate is pending and carries NO question and NO
++ *                           choices. `porch gate 250` without `--request-file` is
++ *                           legitimate and common, so this is the ordinary case
++ *                           for a gate nobody attached content to.
++ *   pending                 a gate with #128's structured request.
++ *
++ * The middle one is why this is a union and not a nullable object. Rendering it
++ * as `none` hides a human who is waiting; rendering it as `pending` with an empty
++ * question shows a heading with nothing under it, which reads as a bug in the
++ * gate rather than as an absence of content. "I have a gate and no question" is
++ * its own answer and has to be spelled as one.
++ *
++ * ## It is not folded into session status
++ *
++ * `starting` / `running` / `ready` / `settled` describe what the AGENT is doing.
++ * None of them can say "a human has to decide". `hasPendingApprovals` cannot
++ * stand in either — that is provider TOOL approvals, and the contract says why
++ * keeping them apart matters: a builder blocked on `plan-approval` and one
++ * waiting on a tool call need different things from a person, and one flag
++ * covering both is one flag nobody can act on.
++ */
++
++import type { CodevGate, CodevGateChoice } from "@t3tools/contracts";
++
++/**
++ * The one field this reads, and the seam it has to fit.
++ *
++ * `| undefined` is written out and load-bearing, for the same reason it is on
++ * `CodevHierarchyFields`: the web app compiles with `exactOptionalPropertyTypes`,
++ * under which `codevGate?: X` means "may be absent" and NOT "may be undefined",
++ * so a real thread — whose type is `CodevGate | null | undefined` — would not
++ * satisfy it. The compile-time check in the test file is what holds this honest.
++ */
++export interface CodevGateFields {
++  readonly codevGate?: CodevGate | null | undefined;
++}
++
++export interface CodevGatePendingBase {
++  /** The porch gate name, e.g. `plan-approval`. Never read from the title. */
++  readonly gateName: string;
++  readonly requestedAt: string;
++}
++
++export type CodevGateState =
++  | { readonly kind: "none" }
++  | ({ readonly kind: "pending-unstructured" } & CodevGatePendingBase)
++  | ({
++      readonly kind: "pending";
++      readonly question: string | null;
++      readonly choices: readonly CodevGateChoice[];
++      /**
++       * Which choice is recommended, or `null`.
++       *
++       * An index rather than a boolean on each choice, because the schema
++       * already refuses two recommendations ("two recommendations is no
++       * recommendation") and a renderer that trusted a per-choice flag would
++       * have to re-derive that rule to know whether to believe it.
++       */
++      readonly recommendedIndex: number | null;
++      readonly terminalExcerpt: string | null;
++    } & CodevGatePendingBase);
++
++/**
++ * Read the gate off a thread.
++ *
++ * Absent and null are one answer here — "no gate" — and they arrive as both
++ * because the wire spells an unset optional either way.
++ */
++export function resolveCodevGateState<T extends CodevGateFields>(
++  thread: T | null | undefined,
++): CodevGateState {
++  const gate = thread?.codevGate;
++  if (gate === null || gate === undefined) return { kind: "none" };
++
++  const question = gate.question ?? null;
++  const choices = gate.choices ?? [];
++  // Structured means there is something to READ, not that the field was sent.
++  // A gate carrying a question, or choices, or both, has content; one carrying
++  // neither is the third state and must say so.
++  if (question === null && choices.length === 0) {
++    return {
++      kind: "pending-unstructured",
++      gateName: gate.gateName,
++      requestedAt: gate.requestedAt,
++    };
++  }
++
++  const recommendedIndex = choices.findIndex((choice) => choice.recommended === true);
++  return {
++    kind: "pending",
++    gateName: gate.gateName,
++    requestedAt: gate.requestedAt,
++    question,
++    choices,
++    recommendedIndex: recommendedIndex === -1 ? null : recommendedIndex,
++    terminalExcerpt: gate.terminalExcerpt ?? null,
++  };
++}
++
++/** Is a human being waited on? True for BOTH pending states. */
++export function isCodevGatePending(state: CodevGateState): boolean {
++  return state.kind !== "none";
++}
++
++export interface CodevGatePill {
++  readonly label: string;
++  readonly colorClass: string;
++  readonly dotClass: string;
++}
++
++/**
++ * The sidebar row's gate marker.
++ *
++ * Rose, and deliberately none of the hues already spoken for: amber is Pending
++ * Approval (provider tool approvals), indigo Awaiting Input, sky Working,
++ * violet Plan Ready, emerald Completed. Reusing amber would collapse exactly the
++ * distinction phase 4 built the gate block to make.
++ *
++ * The label carries the gate NAME, because "which gate" is the first thing a
++ * human asks and the panel is a click away. Both pending states get the same
++ * pill: from the sidebar, a gate with no attached question is no less blocking
++ * than one with a question.
++ */
++export function resolveCodevGatePill(state: CodevGateState): CodevGatePill | null {
++  if (state.kind === "none") return null;
++  return {
++    label: `Gate: ${state.gateName}`,
++    colorClass: "text-rose-600 dark:text-rose-300/90",
++    dotClass: "bg-rose-500 dark:bg-rose-300/90",
++  };
++}
+diff --git a/apps/web/src/components/ChatView.tsx b/apps/web/src/components/ChatView.tsx
+index f0188af47..cb00a51c8 100644
+--- a/apps/web/src/components/ChatView.tsx
++++ b/apps/web/src/components/ChatView.tsx
+@@ -120,6 +120,7 @@ import {
+   buildPlanImplementationPrompt,
+   resolvePlanFollowUpSubmission,
+ } from "../proposedPlan";
++import { GatePanel } from "../codev/GatePanel";
+ import {
+   DEFAULT_INTERACTION_MODE,
+   DEFAULT_RUNTIME_MODE,
+@@ -7005,6 +7006,22 @@ function ChatViewContent(props: ChatViewProps) {
+                   {threadSyncPhase && !activeEnvironmentUnavailable ? (
+                     <ThreadSyncStatusPill phase={threadSyncPhase} />
+                   ) : null}
++                  {/*
++                    Codev customization (spec 250), phase 8 — the gate a human is
++                    blocking on.
++
++                    Above the composer, and NOT inside `ComposerBannerStack`: that
++                    stack shows one banner at a time with the rest collapsed
++                    behind a cap, so a gate placed in it would either hide the
++                    other banners or be hidden by them. A gate is also taller than
++                    a banner — a question plus up to five choices with their
++                    consequences — and it stays on screen until a human acts,
++                    which is not what a dismissible banner is for.
++
++                    It renders `null` when there is no gate, so every thread that
++                    is not blocked looks exactly as it did before spec 250.
++                  */}
++                  <GatePanel thread={activeThread} />
+                   <div
+                     className="relative"
+                     style={
+diff --git a/apps/web/src/components/Sidebar.tsx b/apps/web/src/components/Sidebar.tsx
+index fa1224068..773d2ddba 100644
+--- a/apps/web/src/components/Sidebar.tsx
++++ b/apps/web/src/components/Sidebar.tsx
+@@ -169,6 +169,7 @@ import {
+   type SnoozePreset,
+ } from "./Sidebar.snooze";
+ import { ProjectFavicon } from "./ProjectFavicon";
++import { resolveCodevGatePill, resolveCodevGateState } from "../codev/gateState";
+ import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
+ import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
+ import {
+@@ -910,6 +911,29 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+                     }
+                   : null;
+   const isWokeStatus = topStatus?.icon === "woke";
++  /**
++   * Codev customization (spec 250), phase 8 — the gate marker.
++   *
++   * Its own element, from its own derivation, and NOT folded into `topStatus`:
++   * that chain is what the AGENT is doing, and none of `working` / `approval` /
++   * `input` / `failed` can say "a human has to decide". It also sits OUTSIDE the
++   * status slot, which fades to make room for the hover actions — a marker that
++   * vanished when you reached for the row would be missing exactly when someone
++   * is acting on it.
++   */
++  const codevGatePill = resolveCodevGatePill(resolveCodevGateState(thread));
++  const codevGateMarker = codevGatePill ? (
++    <span
++      data-testid="sidebar-codev-gate-pill"
++      className={cn(
++        "inline-flex min-w-0 shrink items-center gap-1 truncate text-xs font-medium",
++        codevGatePill.colorClass,
++      )}
++    >
++      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", codevGatePill.dotClass)} />
++      <span className="min-w-0 truncate">{codevGatePill.label}</span>
++    </span>
++  ) : null;
+ 
+   const branchMismatch = resolveLocalCheckoutBranchMismatch({
+     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
+@@ -1282,6 +1306,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+               />
+             </span>
+             {title}
++            {codevGateMarker}
+             {pinIndicator}
+             {terminalStatusIcon}
+             {isRegeneratingTitle ? (
+@@ -1445,6 +1470,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+               ) : (
+                 <span className="flex-1" />
+               )}
++              {codevGateMarker}
+               {pinIndicator}
+               {/* The visible state owns this slot's width: status at rest,
+                   actions on hover/keyboard focus or while the popover is open. Keeping

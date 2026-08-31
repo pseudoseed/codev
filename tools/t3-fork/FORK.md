@@ -195,6 +195,12 @@ vendored contract is what decides whether Codev depends on the customization.
 | 7 | `e19e2560dd7a` | The tree screenshotted at 390, 1440x900 and 1920, committed under `docs/codev/`. |
 | 7 | `a183f56ecec2` | The project level, the architect's role marker, and Settled's treatment for the orphan group in place of amber — the architect's review of the first screenshots. |
 | 7 | `48a9aa399e5d` | The three widths re-shot against those changes. |
+| 7 | `7c7096d49de9` | Review fix: the builder count came from the render scan the test counts, so it could only agree with itself. Sourced from the grouping. |
+| 8 | `5e8ace3b186f` | `apps/web/src/codev/gateState.ts` and `GatePanel.tsx` — the porch gate read from `codevGate`, in three states, with a sidebar marker in a hue no existing status pill owns. |
+| 8 | `39204a7ac368` | The gate panel screenshotted at the three widths; phase 7's re-shot in the same commit, because two builders now carry gates. |
+| 8 | `90d2b118b786` | The terminal excerpt gains a caption — unlabelled it is just trailing monospace. |
+| 8 | `81c2463d7…` → `98e950e42` | The row marker: two placements tried, both clipped something at ~230px. It is a gavel plus the gate name now, on the line above the title. |
+| 8 | `efadf838c414` | Both phases re-shot against those changes. |
 
 **Phase 5 added no row, and that is not an omission.** It regenerated the vendored contract in the
 Codev repository from `51b55d4899e4`; it changed nothing in the fork.
@@ -265,6 +271,51 @@ Verified in a browser against the fork's own web app, not only in unit tests:
 `packages/codev/src/__tests__/e2e/spec-250-hierarchy.spec.ts` in the Codev repository, run with
 `npx playwright test --config playwright.spec250.config.ts`. The fork's Vite dev server must be
 running; an absent one is reported as a skip carrying the command to start it, never as a pass.
+
+### Phase 8: the gate has to be written by the credential that writes gates
+
+The e2e fixture could not seed a gate the way it seeds everything else. A bootstrap exchange
+requesting `codev:gate-write` is refused with `invalid_scope`, which is phase 4's design holding:
+gate writes come from ONE credential — `codev-agent`, scoped to `orchestration:read` and
+`codev:gate-write` and nothing else — provisioned by the server rather than derived from whatever
+token a client happens to hold.
+
+So the fixture reads that credential from `<serverBaseDir>/codev/gate-writer.token`, where the
+fork's server writes it at start, and opens its own connection with it — which is exactly what
+`thread-backend.ts` does in production. A fixture that obtained the ability any other way would
+have been testing a path no writer uses.
+
+### The gate marker had to fit a 230px row, and neither first answer did
+
+The label read `Gate: plan-approval`, on the line above the title, which is correct in isolation and
+does not survive a gated ARCHITECT: that row carries the role caption too, and the caption plus the
+label plus the timestamp overflow — the caption truncated to `A…`, which answers "is it blocking on
+me" by destroying "what agent is this". Moving the label to the title line fixed the caption and
+truncated the TITLE instead, on every gated row, which is worse: the title is the row's primary
+identifier.
+
+The label is the gate NAME alone now, and the word "Gate" is carried by the panel's own gavel.
+Six characters bought back the room; the row and the panel say "gate" the same way. One clip is
+left deliberately: a 15-character gate name on a gated architect still shows `Archit…`. The gate
+name and the title are both intact, which is the right order — an architect at a gate is the row a
+human most needs to find.
+
+### Screenshots never write into the fork, and that is not tidiness
+
+`start-fork` refuses a dirty fork checkout. A suite whose screenshots landed in the fork therefore
+poisons itself the moment there is more than one spec file: the first writes new PNG bytes and
+every file after it SKIPS, because the tree it needs is now dirty. It passes, it skips the rest,
+and the skip is correct behaviour — which is what makes it easy to miss. Phase 7 met the one-file
+version of this and answered it with an opt-in flag; phase 8 met the two-file version, which the
+flag did not cover.
+
+A run now always writes outside the fork, and refreshing the committed pictures is a copy:
+
+```bash
+SPEC_250_SCREENSHOT_DIR=/tmp/spec-250-shots \
+  npx playwright test --config playwright.spec250.config.ts
+cp -R /tmp/spec-250-shots/. "$T3CODE_FORK_ROOT/docs/codev/spec-250/"
+```
 
 ### What the churn classifier could not decide, decided
 
