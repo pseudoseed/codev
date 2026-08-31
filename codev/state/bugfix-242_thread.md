@@ -124,3 +124,34 @@ fork checkout at `/Users/chris/dev/t3code-codev` is dirty with an untracked `too
 so `assertClean` (`tools/t3-server/t3-server.mjs:188`) exits after printing `FORK_AHEAD_OF_CONTRACT`
 and the second assertion cannot run. Filed as #278 by the architect. Documented in the PR body; the
 assertion is not skipped and the fork checkout is not touched.
+
+### Suite result
+
+`pnpm test`: 380 files passed, 1 failed; 7417 tests passed, 2 failed, 58 skipped (1054s).
+
+Both failures are `src/__tests__/spec-250-vendoring-identities.test.ts` and both are #278, the
+dirty fork checkout — "exits 1 against the real fork checkout when it is ahead of a fork-sourced
+pin" and "describes the fork commit that is actually checked out" (fork HEAD `2f64a1b0…` against
+the recorded `26b4c2dc…`). Neither touches anything in this change. `pnpm build` exits 0.
+
+### Fail-without-the-fix, formally
+
+The vitest revert run was terminated three times while queued on the contended suite lock, so the
+test file's assertions were run against the original launcher bytes directly
+(`assert-fails-without-fix.mjs`, no vitest, no lock). All six fail without the fix:
+
+```
+FAILS without fix  ✓  refuses a traversal label (status 2 + BAD_LABEL)
+FAILS without fix  ✓  refuses a label with a space
+FAILS without fix  ✓  refuses port 99999 (status 2 + BAD_PORT)
+FAILS without fix  ✓  refuses gate "abc" (status 2 + BAD_GATE)
+FAILS without fix  ✓  stops the server when signalled mid-run (1 stop after RUNNER)
+FAILS without fix  ✓  says it was interrupted
+```
+
+The original records 0 stops after the runner starts. With the fix, the same six assertions pass
+under vitest (6 tests, one file).
+
+A seventh assertion — the runner still receives all ten `RUN_*` variables now that it is a
+background job, and the `/`-bearing model `xai/grok-4.6` passes through — was checked by having the
+stub runner print its environment: all ten arrive intact and status 7 propagates.
