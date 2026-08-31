@@ -529,7 +529,13 @@ describe('spec 146: tooling distinguishes "nothing to do" from "it failed"', () 
     const src = readFileSync(harness, 'utf8');
     // `start` still wipes by default: the phase-1 cold-start evidence is only
     // evidence if each run begins with an empty database.
-    expect(src).toContain('function start({ keepData = false } = {})');
+    //
+    // Matched on the DEFAULT rather than on the whole parameter list. Spec 250
+    // phase 6 added an `identity` parameter for `start-fork`, and this assertion
+    // — which is about `keepData` defaulting to false — failed on a signature
+    // change that left its subject untouched. A source assertion should break
+    // when its claim stops holding, not when a neighbouring word appears.
+    expect(src).toMatch(/function start\(\{ keepData = false[,}]/);
     expect(src).toContain('start({ keepData: true })');
 
     // And a restart exits "could not determine" rather than quietly cold-starting,

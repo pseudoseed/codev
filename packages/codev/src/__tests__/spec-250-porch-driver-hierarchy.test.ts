@@ -17,7 +17,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -201,28 +201,67 @@ describe('spec 250: the two refusals that need no server', () => {
 // ------------------------------------------------------------ the copied list
 
 /**
- * The reason vocabulary is COPIED into this package, and a copy that nothing
- * checks is a copy that drifts.
+ * The reason vocabulary is COPIED into `porch-driver`, and the copy is checked.
  *
- * It cannot be imported: `porch-driver` does not depend on the fork, and the
- * vendored contract carries RPC payload schemas rather than error schemas, so
- * `CodevHierarchyInvalidReason` is not in `generated/`. So it is checked against
- * the fork's source when the checkout is present, and SKIPS — loudly, naming the
- * checkout — when it is not. A missing checkout is "I could not compare", which
- * is not "they agree".
+ * It cannot be imported there: `porch-driver` has no dependency on
+ * `@cluesmith/codev-types` and acquiring one to read six string literals would be
+ * the wrong trade. So the check lives here, where the generated contract already
+ * is.
+ *
+ * Phase 6 made this checkable IN THIS REPOSITORY. The reasons used to be declared
+ * only in the fork's `apps/server/src/orchestration/Errors.ts`, so the check
+ * needed a fork checkout and skipped without one — a copy verified only on the
+ * machine that wrote it. They now travel on
+ * `OrchestrationDispatchCommandError.refusal`, so they are in the contract and in
+ * `generated/schema.json`, and this runs everywhere.
  */
-describe('spec 250: the copied reason list agrees with the fork', () => {
-  const forkRoot = process.env.T3CODE_FORK_ROOT ?? '/Users/chris/dev/t3code-codev';
-  const errorsPath = join(forkRoot, 'apps', 'server', 'src', 'orchestration', 'Errors.ts');
+describe('spec 250: the copied reason list agrees with the vendored contract', () => {
+  const document = JSON.parse(
+    readFileSync(join(repoRoot, 'packages/types/src/t3/generated/schema.json'), 'utf8'),
+  );
 
-  it.skipIf(!existsSync(errorsPath))('names the same six reasons, in the fork', () => {
+  it('names the same six hierarchy reasons the contract declares', () => {
+    const vendored: string[] = document.schemas.OrchestrationDispatchRefusal.properties.reason.enum;
+    expect(vendored.length, 'the refusal schema was not vendored').toBeGreaterThan(6);
+
+    // The gate reasons share the union and are SCREAMING_CASE; the hierarchy ones
+    // are kebab-case. Partitioning on shape rather than on a second hand-written
+    // list is what keeps this from being the copy it is checking.
+    const hierarchy = vendored.filter((reason) => reason === reason.toLowerCase());
+    expect([...hierarchy].sort()).toEqual([...HIERARCHY_REFUSAL_REASONS].sort());
+  });
+
+  /**
+   * The gate half is checked too, because they share one union on the wire.
+   *
+   * A gate reason arriving where a hierarchy reason was expected is a real
+   * possibility now — `refusal.reason` is one field — and a client that switches
+   * only on the six would fall through on four it never heard of.
+   */
+  it('carries the gate reasons in the same union, so a client must handle both', () => {
+    const vendored: string[] = document.schemas.OrchestrationDispatchRefusal.properties.reason.enum;
+    const gate = vendored.filter((reason) => reason === reason.toUpperCase());
+    expect(gate.length).toBeGreaterThan(0);
+    expect(gate.every((reason) => reason.startsWith('CODEV_GATE_'))).toBe(true);
+  });
+
+  /**
+   * And still against the fork's own source when the checkout is present — the
+   * vendored artifacts are generated from it, so agreeing with them is agreeing
+   * with a derivative. Skips loudly rather than passing when there is nothing to
+   * compare against.
+   */
+  const forkRoot = process.env.T3CODE_FORK_ROOT ?? '/Users/chris/dev/t3code-codev';
+  const contractPath = join(forkRoot, 'packages', 'contracts', 'src', 'orchestration.ts');
+
+  it.skipIf(!existsSync(contractPath))('agrees with the fork contract at pin.commit', () => {
     const source = execFileSync(
       'git',
-      ['-C', forkRoot, 'show', `${pin.commit}:apps/server/src/orchestration/Errors.ts`],
-      { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
+      ['-C', forkRoot, 'show', `${pin.commit}:packages/contracts/src/orchestration.ts`],
+      { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
     );
     const start = source.indexOf('export const CodevHierarchyInvalidReason = Schema.Literals([');
-    expect(start, 'could not find CodevHierarchyInvalidReason in the fork').toBeGreaterThan(-1);
+    expect(start, 'could not find CodevHierarchyInvalidReason in the fork contract').toBeGreaterThan(-1);
     const end = source.indexOf(']);', start);
     // Whole lines that are only a quoted literal. A bare `/"([a-z-]+)"/` also
     // matches the doc comments above each entry — they quote `role: "builder"`
@@ -233,5 +272,97 @@ describe('spec 250: the copied reason list agrees with the fork', () => {
     expect(forkReasons.length, 'extracted no reasons, so this would pass against anything')
       .toBeGreaterThan(3);
     expect([...forkReasons].sort()).toEqual([...HIERARCHY_REFUSAL_REASONS].sort());
+  });
+});
+
+// ------------------------------------------------------------ the wire
+
+/**
+ * The last hop, recorded.
+ *
+ * Phase 6's acceptance criterion is a LIVE round trip: dispatch an illegal edge
+ * over a socket and assert the client can still tell "no such parent" from "wrong
+ * parent role". A unit suite cannot do that — it needs a server built from the
+ * fork's source, two auth exchanges and a WebSocket. So the run happens in
+ * `packages/t3-client/live/spec-250-hierarchy.mjs` and this asserts what it
+ * recorded.
+ *
+ * The first run of that script FAILED, and that failure is the reason the fork
+ * carries a `refusal` field at all: every discriminant arrived inside `message`,
+ * as English. Phase 3 fixed the engine deleting them; the ws layer was flattening
+ * them one hop further out, with every test beneath it green.
+ *
+ * Reproduce:
+ *   export T3_NODE=/absolute/path/to/node T3CODE_FORK_ROOT=/path/to/fork
+ *   export T3_HARNESS_PORT=<free port> T3_HARNESS_DIR=<scratch dir>
+ *   node packages/t3-client/live/spec-250-hierarchy.mjs \
+ *     --out codev/research/250-hierarchy-wire-evidence.json
+ */
+describe('spec 250: the refusal discriminant survives the ws boundary', () => {
+  const evidencePath = join(repoRoot, 'codev', 'research', '250-hierarchy-wire-evidence.json');
+  const evidence = JSON.parse(readFileSync(evidencePath, 'utf8'));
+
+  it('was recorded against the fork commit this repo pins', () => {
+    expect(
+      evidence.forkCommit,
+      'the wire evidence describes a different fork commit than the contract was generated from',
+    ).toBe(pin.commit);
+  });
+
+  it('every claim held', () => {
+    const failed = evidence.claims.filter((claim: { passed: boolean }) => !claim.passed);
+    expect(failed.map((c: { name: string }) => c.name)).toEqual([]);
+    expect(evidence.passed).toBe(true);
+  });
+
+  /**
+   * FOUR DISTINCT reasons, asserted here and not only in the script.
+   *
+   * "It refused" is satisfied by a single opaque failure. The criterion is that a
+   * client can distinguish them, which needs the reasons to arrive intact AND to
+   * differ — so the evidence is read for the reasons themselves rather than for
+   * the script's own verdict on them.
+   */
+  it('carries four different reasons, each a member of the contract union', () => {
+    const document = JSON.parse(
+      readFileSync(join(repoRoot, 'packages/types/src/t3/generated/schema.json'), 'utf8'),
+    );
+    const declared: string[] = document.schemas.OrchestrationDispatchRefusal.properties.reason.enum;
+
+    const observed = Object.entries<{ kind: string; reason?: string; tag?: string }>(evidence.observed);
+    expect(observed.length).toBe(4);
+    for (const [name, outcome] of observed) {
+      expect(outcome.kind, `${name} did not come back as a refusal`).toBe('refused');
+      expect(outcome.reason, `${name} came back under a different reason`).toBe(name);
+      expect(declared, `${outcome.reason} is not in the vendored reason union`).toContain(outcome.reason);
+      expect(outcome.tag).toBe('CodevHierarchyInvalidError');
+    }
+    expect(new Set(observed.map(([, o]) => o.reason)).size).toBe(4);
+  });
+
+  /**
+   * Recorded evidence can outlive the code it describes.
+   *
+   * The same guard `spec-146-t3-contract.test.ts` puts on the cold-start run, for
+   * the same reason: nothing else stops the ws layer changing while a green JSON
+   * file says the discriminant still travels.
+   */
+  it('is not older than the code it is evidence for', () => {
+    const evidenceAge = statSync(evidencePath).mtimeMs;
+    const sources = [
+      join(repoRoot, 'packages', 't3-client', 'live', 'spec-250-hierarchy.mjs'),
+      join(repoRoot, 'tools', 't3-server', 't3-server.mjs'),
+    ];
+    for (const source of sources) {
+      expect(
+        evidenceAge,
+        `${source} changed after the wire evidence was recorded — re-run it with\n`
+          + `  export T3_NODE=/absolute/path/to/node T3CODE_FORK_ROOT=/path/to/fork\n`
+          + `  export T3_HARNESS_PORT=<free port> T3_HARNESS_DIR=<scratch dir>\n`
+          + `  node packages/t3-client/live/spec-250-hierarchy.mjs --out `
+          + `codev/research/250-hierarchy-wire-evidence.json\n`
+          + `rather than trusting a stale result.`,
+      ).toBeGreaterThanOrEqual(statSync(source).mtimeMs - 1000);
+    }
   });
 });

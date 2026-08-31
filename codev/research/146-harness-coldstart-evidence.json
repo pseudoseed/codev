@@ -5,7 +5,7 @@
   "runs": [
     {
       "run": 1,
-      "startedAt": "2026-08-31T03:07:31.123Z",
+      "startedAt": "2026-08-31T04:17:59.952Z",
       "serverRuntime": {
         "node": "/opt/homebrew/Cellar/node/26.4.0/bin/node",
         "version": "26.4.0",
@@ -20,11 +20,11 @@
       "dispatchSucceeded": true,
       "portFreeAfterStop": true,
       "ok": true,
-      "durationMs": 6333
+      "durationMs": 6276
     },
     {
       "run": 2,
-      "startedAt": "2026-08-31T03:07:37.456Z",
+      "startedAt": "2026-08-31T04:18:06.228Z",
       "serverRuntime": {
         "node": "/opt/homebrew/Cellar/node/26.4.0/bin/node",
         "version": "26.4.0",
@@ -39,7 +39,7 @@
       "dispatchSucceeded": true,
       "portFreeAfterStop": true,
       "ok": true,
-      "durationMs": 6102
+      "durationMs": 6019
     }
   ],
   "allRunsPassed": true,

@@ -600,11 +600,63 @@ function assertChildSurvived(pid, runtime) {
  * against a wiped data dir measures the wipe, and reports it as the thread's
  * fate.
  */
-function start({ keepData = false } = {}) {
-  // Upstream only. The server this harness starts IS the upstream one, and
-  // requiring a fork checkout to exist before a spec 146 evidence run could start
-  // would couple the older evidence to the newer customization for no reason.
-  verifyUpstream();
+/**
+ * Spec 250 phase 6. Which server this start is bringing up.
+ *
+ * `upstream` runs the PUBLISHED CLI — `npx t3@<pin.cliVersion> serve` — against
+ * the upstream checkout. That is what every spec 146 cold-start and live run has
+ * always measured, and it must not change: the pinned CLI is the artifact those
+ * results are about.
+ *
+ * `fork` runs the fork's `apps/server/src/bin.ts` DIRECTLY, under the same
+ * interpreter, using Node's type stripping. There is no build step because there
+ * does not need to be one, and adding a bundle would put a build artifact between
+ * the source we changed and the server under test.
+ *
+ * They are different servers and the difference is the whole point: `codev.*`
+ * exists only in the fork, so a refusal from `codev.gateWrite` cannot be observed
+ * against the upstream CLI at all. A test that "exercises the wire" against a
+ * server with no such method is exercising a 404.
+ *
+ * THEY DO NOT SHARE STATE. `T3_HARNESS_DIR` and `T3_HARNESS_PORT` already scope
+ * the pid file, the port file and the data directory, so a fork server runs in its
+ * own runtime dir on its own port and `stop` cannot reach across. Sharing them
+ * would let a fork start silently adopt an upstream server's pid — which `stop`
+ * would then kill, in another session's run.
+ */
+const SERVER_IDENTITIES = {
+  upstream: {
+    verify: () => verifyUpstream(),
+    root: () => upstream.root,
+    describe: (runtime) => `pinned CLI: t3@${pin.cliVersion}`,
+    argv: (runtime, dataDir, root) => [
+      runtime.npxCli, '--yes', `t3@${pin.cliVersion}`, 'serve',
+      '--host', '127.0.0.1', '--port', String(port), '--base-dir', dataDir, root,
+    ],
+  },
+  fork: {
+    verify: () => verifyFork(),
+    root: () => fork.root,
+    describe: () => `fork source at ${fork.commit.slice(0, 12)}`,
+    argv: (runtime, dataDir, root) => [
+      join(root, 'apps', 'server', 'src', 'bin.ts'), 'serve',
+      '--host', '127.0.0.1', '--port', String(port), '--base-dir', dataDir, root,
+    ],
+  },
+};
+
+function start({ keepData = false, identity = 'upstream' } = {}) {
+  const server = SERVER_IDENTITIES[identity];
+  if (!server) die(MISMATCH, `unknown server identity "${identity}"`);
+  // Per identity. `start` verifies UPSTREAM only, deliberately: requiring a fork
+  // checkout before a spec 146 evidence run could start would couple the older
+  // evidence to the newer customization for no reason. `start-fork` verifies the
+  // fork for the same reason in reverse.
+  server.verify();
+  // NOT the module-level `t3Root`, which is always upstream's. Naming it
+  // differently so a later edit inside `start` cannot reach the wrong one by
+  // habit — shadowing here would compile and start the other server.
+  const serverRoot = server.root();
   const runtime = serverRuntime();
 
   const existing = readPid();
@@ -643,9 +695,9 @@ function start({ keepData = false } = {}) {
   // exposing an interface an explicit action; a test harness never exposes one.
   const child = spawn(
     runtime.node,
-    [runtime.npxCli, '--yes', `t3@${pin.cliVersion}`, 'serve', '--host', '127.0.0.1', '--port', String(port), '--base-dir', dataDir, t3Root],
+    server.argv(runtime, dataDir, serverRoot),
     {
-      cwd: t3Root,
+      cwd: serverRoot,
       detached: true,
       stdio: ['ignore', logFd, logFd],
       // npm launches package bins through `#!/usr/bin/env node`. Put the chosen
@@ -663,7 +715,7 @@ function start({ keepData = false } = {}) {
   assertChildSurvived(child.pid, runtime);
 
   say(`started pid ${child.pid}; log at ${log}`);
-  say(`runtime: Node ${runtime.version}; pinned CLI: t3@${pin.cliVersion}`);
+  say(`runtime: Node ${runtime.version}; ${server.describe(runtime)}`);
 }
 
 /**
@@ -960,12 +1012,17 @@ switch (command) {
   // wipes the data dir, and a criterion about opening an existing file cannot be
   // tested by a verb that deletes it first.
   case 'start': start({ keepData: process.argv.includes('--keep-data') }); break;
+  // Spec 250 phase 6. A SEPARATE verb rather than a flag on `start`, because the
+  // two bring up different servers from different checkouts and a caller that
+  // means one must not get the other by dropping a flag. Point it at its own
+  // T3_HARNESS_DIR and T3_HARNESS_PORT; it does not share state with `start`.
+  case 'start-fork': start({ keepData: process.argv.includes('--keep-data'), identity: 'fork' }); break;
   case 'restart': restart(); break;
   case 'ready': await ready(); break;
   case 'stop': stop(); break;
   case 'status': status(); break;
   case 'runtime': console.log(JSON.stringify(serverRuntime(), null, 2)); break;
   default:
-    console.error('usage: t3-server.mjs <acquire|verify|verify-upstream|verify-fork|start [--keep-data]|restart|ready|stop|status|runtime>');
+    console.error('usage: t3-server.mjs <acquire|verify|verify-upstream|verify-fork|start [--keep-data]|start-fork [--keep-data]|restart|ready|stop|status|runtime>');
     process.exit(UNDETERMINED);
 }
