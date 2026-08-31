@@ -1,7 +1,7 @@
 id: bugfix-278
 title: spec-250-vendoring-identities-
 protocol: bugfix
-phase: fix
+phase: pr
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T17:51:25.508Z'
-updated_at: '2026-08-31T17:53:40.389Z'
+updated_at: '2026-08-31T18:30:44.240Z'
