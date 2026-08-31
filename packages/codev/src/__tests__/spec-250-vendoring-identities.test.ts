@@ -341,7 +341,22 @@ describe('spec 250: classify-churn refuses to guess which question it was asked'
    * `upstreamBase` it is the only correct one. It is spelled `NO_FORK_DRIFT` so
    * it cannot be confused with the tool having failed to look.
    */
-  it('reports zero fork drift as a named zero, exit 0', () => {
+  /*
+   * 30s, NOT the 5s default, and the number is about what this test does rather
+   * than about how slow the machine is.
+   *
+   * It spawns `classify-churn`, which re-emits the whole pinned closure once per
+   * closure-touching commit in the range. That range GROWS as the fork gains
+   * customization: it was near-empty when this test was written and is 6 commits
+   * now, so the cost rises every phase while the budget stayed where it was.
+   * It crossed 5s under a loaded full-suite run in phase 11 — 2s standalone.
+   *
+   * Raising it is the honest fix rather than calling it flaky: nothing here is
+   * timing-sensitive, the work is real and it is bounded by the fork's history,
+   * and a budget that silently becomes too small turns a passing test into an
+   * intermittent one without anyone changing the test.
+   */
+  it('reports zero fork drift as a named zero, exit 0', { timeout: 30_000 }, () => {
     const forkRoot = process.env.T3CODE_FORK_ROOT ?? DEFAULT_FORK_ROOT;
     if (!existsSync(forkRoot)) return; // covered by the absent-checkout case above
     const result = spawnSync(process.execPath, [churn, '--fork-drift'], { encoding: 'utf8' });

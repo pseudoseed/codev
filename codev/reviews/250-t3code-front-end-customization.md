@@ -1296,14 +1296,142 @@ rather than invented in the page. And on the Builders screen, see what each buil
 doing — its porch phase, its plan phase and the last three messages its architect sent it — where
 three phases of panes had said only that the data existed somewhere else.
 
+## Phase 11 — Acceptance run and the rebase drill
+
+### The drill measures; it does not perform a rebase we keep
+
+Criterion 9's wording — "the fork rebases onto a later upstream commit named in `pin.json`" — reads
+as an instruction to advance `upstreamBase`, and following it literally would have spent the
+evidence base. The moment `pin.json` names a new base, `verify-upstream` expects the preserved
+clone to BE there, and every spec 146 and spec 236 result tied to `082e6ea52186` stops being
+re-runnable.
+
+So the drill runs on a **throwaway clone** and the real pin does not move. Both the plan and the
+spec's criterion 9 carry that amendment with the reason, because the next person to read the
+original sentence would otherwise do the literal thing.
+
+**The read-only order held, and the drill checks rather than promises it.** It re-reads both
+checkouts after each run and **discards its own result** if the preserved upstream left its base,
+if the fork head moved, or if `pin.commit` changed — a drill that disturbed the thing it was meant
+to leave alone cannot be trusted about anything else. A `git fetch` was the one write, and it is
+the permitted one: remote-tracking refs move, HEAD does not, verified before and after.
+
+### A rebase stops at the first conflict, so the first conflict understates the job
+
+This is the design decision worth keeping. `git rebase` is sequential: it reported "stopped at
+commit 6 of 42 on one file" and that answers *where does it stop*, not *how much conflicts*. A drill
+that reported only that would understate every rebase it ever measured, and would do so in the
+reassuring direction.
+
+So the drill also three-way-merges the same two trees and aborts immediately — one pass, every
+conflicting file. **3 of the 35 files we modify**, against upstream 104 commits ahead.
+
+Two questions, two numbers, and neither is a substitute for the other.
+
+### The prediction was wrong in the interesting direction
+
+`FORK.md` rated `packages/contracts/src/orchestration.ts` **High** — it is the file upstream changes
+most, and `classify-churn` found upstream had touched it twice in exactly the two unions our
+customization extends (`subscribeThread`, `dispatchCommand`). It **auto-merged clean**.
+
+What conflicted was `apps/server/src/server.test.ts`, an upstream **test** — the half `FORK.md`
+already warned is easiest to forget when estimating the drill, now demonstrated rather than
+asserted. The risk table carries measured beside predicted; where they disagree the measurement
+wins.
+
+### The watermark invariant finally had a real migration to bite on
+
+Phase 2 tested "a new upstream migration landing after the guard still runs" with a synthetic
+migration. In the 104 commits since, upstream shipped a real one — `043_ProjectionThreadsUnsettledAt`
+— above the `042` our base leaves. Codev writes nothing to `effect_sql_migrations`, so the watermark
+is whatever upstream last ran, and 043 runs.
+
+The check is stated as the invariant rather than as the number: every migration upstream adds must
+have an id above the watermark our base leaves. `checked: false` is its own state and is **not** a
+pass, asserted in the evidence test so an unreadable migration directory cannot masquerade as a
+holding invariant.
+
+### `apps/client` was red, and had been since phase 5
+
+The phase's deliverable is "confirmed frozen and still green". Frozen was true — zero files changed.
+Green was not: 278 of 279.
+
+Phase 5 regenerated the vendored contract **from the fork**, our `codevGate` object landed ahead of
+the session object in the generator's numbering, and the session-status enum moved from
+`$defs.subscribeThreadOutput__Objects_6` to `_7`. `derive.test.ts` still read `_6`.
+
+**The assertion message is why this cost a minute rather than an hour.** It said: *"the generated
+contract no longer declares the session status enum where this test reads it. That is this test
+needing a new path, not a mapping change."* A stale read path and a broken status mapping look
+identical at the failure site, and `expected undefined to be defined` alone would have sent a
+reader into `deriveRowStatus`. That is what a failure message is for, and most in this repository
+would not have done it.
+
+**The freeze authorised the fix rather than forbidding it** — "frozen means it keeps passing its
+tests and receives fixes, not that new front-end features land in both places". A fallback whose
+suite is red is not a fallback: the whole reason `apps/client` is kept is that if this path fails
+there is still something that works, and *works* is a claim its suite is the only evidence for.
+
+**The real gap is that nothing local runs it.** The root `npm test` filters to `@cluesmith/codev`,
+so `apps/client`'s suite had not run since phase 5. CI would have caught it at PR time, which makes
+this a near miss rather than a hole — but "the frozen fallback's suite runs only in CI, and only
+once a PR exists" is too long a loop for the one package whose job is to still work. Filed as
+**#265**; deliberately not fixed here, because changing the root test command touches every
+contributor's inner loop.
+
+### Criterion 6 closes UNMET, and that is a result
+
+No iPad was available. It closes unmet with a stated reason and an executable runbook — not passed
+on a simulation, and not left open.
+
+The runbook was worth more than the hour it took, because **verifying it against the fork rather
+than writing it from memory caught three wrong instructions**, and one of them would have sent the
+human to the wrong server entirely: `t3-server.mjs start-fork` starts on a throwaway data directory
+with empty data, which is right for the tests and exactly wrong for a criterion that says a builder
+is driven to completion. The other two were a variable that does nothing where I put it
+(`T3CODE_CODEV_AGENT_ORIGINS` on the Vite command; the backend reads it) and a tailnet mode I
+hand-rolled that t3code already ships (`pnpm dev:share`).
+
+The Playwright suite is **not** recorded as a substitute. It drives the same proxy and the same
+ceremony, so it covers the approval path; what the iPad closes is tailnet reach and touch targets,
+and nothing on the Mac tests either.
+
+### What can a human see or do now that they could not before
+
+Know what carrying this customization onto a newer t3code actually costs — three files, named —
+instead of guessing from a risk table; and re-run that measurement any time with one command,
+against a fork and an upstream clone that the measurement provably did not disturb.
+
 ## Flaky Tests
 
-`packages/codev/src/terminal/__tests__/session-manager.test.ts > stderr tail logging (integration) >
-no stderr tail logged for file-based stderr (Bugfix #324)` timed out at 30s once during phase 9,
-in a full-suite run. It spawns a real process, nothing in spec 250 goes near `src/terminal/`, and it
+`packages/codev/src/terminal/__tests__/session-manager.test.ts > stderr tail logging (integration)`
+has timed out under full-suite load twice: `no stderr tail logged for file-based stderr` in phase 9,
+and its sibling `logs session exit without stderr tail (stderr goes to file)` in phase 11. Both are
+in the same block, both spawn a real process, and both pass alone. Recorded rather than skipped —
+see the reasoning below, which applies to both. It spawns a real process, nothing in spec 250 goes near `src/terminal/`, and it
 passed alone immediately afterwards and in the next full run (7370 passed, 0 failed). Recorded
 rather than skipped: a test that passes on its own and once timed out under load is a timing
 sensitivity, and annotating it as skipped would remove coverage to hide a slow machine.
+
+
+### One timeout in phase 11 was NOT flaky, and calling it that would have been wrong
+
+`spec-250-vendoring-identities.test.ts > reports zero fork drift as a named zero` timed out at the
+5s default in phase 11's full run, and passed standalone in 2s. The tempting conclusion is "flaky
+under load". It is not.
+
+The test spawns `classify-churn --fork-drift`, which re-emits the whole pinned closure **once per
+closure-touching commit in the range** — and that range grows every time the fork gains
+customization. It was near-empty when the test was written and is 6 commits now. The work is real,
+bounded by the fork's history, and rising; nothing about it is timing-sensitive.
+
+So the budget was wrong, not the test: a 5s default that silently became too small turns a passing
+test into an intermittent one without anyone touching it. Raised to 30s with the reason recorded at
+the call site, because the next person to see it fail should not have to re-derive this.
+
+The distinction matters because the two have opposite remedies. A flaky test is skipped or
+stabilised; this one needed its budget corrected, and skipping it would have removed coverage of
+`classify-churn`'s named-zero contract to hide arithmetic that is working correctly.
 
 
 `apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint` fails in the fork.
