@@ -153,6 +153,60 @@ It is not a false positive and it is not a formatting nit. Read the diff.
    artifacts without their pin, is worse than either alone — the drift test then compares against
    something nobody chose.
 
+## The rebase drill (spec 250, phase 11)
+
+**Before you carry the customization onto a later upstream, measure the job.** The drill is a
+script rather than a hand procedure, because criterion 9 is about the procedure being repeatable
+and a rebase performed once by hand proves an event:
+
+```bash
+export PATH=$HOME/.nvm/versions/node/v22.22.2/bin:$PATH
+git -C "$T3CODE_ROOT" fetch origin                       # allowed: refs move, HEAD does not
+node tools/t3-codegen/classify-churn.mjs --upstream-movement
+node tools/t3-fork/rebase-drill.mjs --out codev/research/250-rebase-drill.json
+```
+
+**Nothing real moves, and the drill checks that rather than promising it.** It works in a scratch
+clone and re-reads both checkouts afterwards; if `T3CODE_ROOT` left `upstreamBase`, if the fork
+head moved, or if `pin.commit` changed, it **discards its own result** — a drill that disturbed
+the thing it was meant to leave alone cannot be trusted about anything else.
+
+**`pin.json` is NOT advanced by the drill.** The moment it names a new base, `verify-upstream`
+expects the preserved clone to be there and every spec 146 and 236 result tied to the old base
+stops being re-runnable. Advancing the base is a decision taken when there is a reason — a
+security fix, a feature we need — never to satisfy a phase.
+
+It reports four things, and they answer four different questions:
+
+| Field | Question |
+|---|---|
+| `stoppedAt` + `conflictedFiles` | where does a sequential `git rebase` stop |
+| `wholeSurface.conflictedFiles` | how much conflicts IN TOTAL — a rebase stops at the first, so the first understates the job every time |
+| `contractClosure.regenerationReachable` | can the vendored contract be regenerated afterwards, or is it stranded behind the conflicts |
+| `watermark` | does every migration upstream added land ABOVE the watermark our base leaves |
+
+Outcomes: `ok` (including `NO_UPSTREAM_MOVEMENT`, which is a pass), `conflicts` — **a result, not a
+failure; it is the number the drill exists to produce** — and `could-not-run`, which must never be
+read as "no conflicts". Exit 0 for the first two, 3 for the last.
+
+### Result, 2026-08-31
+
+Against upstream `9b2d04317c68`, 104 commits past `082e6ea52186`, carrying 42 customization
+commits:
+
+- `classify-churn --upstream-movement`: 5 commits touch the pinned closure — 3 `source-only`, 2
+  `consumed-change-undecidable` (`orchestration.subscribeThread` and `orchestration.dispatchCommand`
+  union shapes, which are the two unions our customization adds members to).
+- The sequential rebase stops at **commit 6 of 42** on `apps/server/src/server.test.ts`.
+- The whole surface is **3 files of the 35 we modify**: that test, plus
+  `apps/web/src/components/Sidebar.tsx` and `Sidebar.logic.ts`.
+- **`packages/contracts/src/orchestration.ts` auto-merged clean** — the file `FORK.md` rated High,
+  and the one upstream changed twice in the unions we extend.
+- **The contract closure has zero conflicts**, so regeneration is reachable rather than stranded.
+- **Watermark holds against a real new migration**: upstream added `043`, above the `042` our base
+  leaves. Phase 2 tested that invariant with a synthetic migration; this is the first time a real
+  one has arrived to test it with.
+
 ## Verifying without regenerating
 
 ```bash

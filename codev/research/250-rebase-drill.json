@@ -1,0 +1,85 @@
+{
+  "outcome": "conflicts",
+  "detail": "the rebase stopped on conflicts. That is a measurement, not a failure — it is what the drill is for.",
+  "conflictedFiles": [
+    "apps/server/src/server.test.ts"
+  ],
+  "stoppedAt": "3a1780bbf",
+  "gitSaid": [
+    "Auto-merging apps/server/src/orchestration/Layers/ProjectionPipeline.ts",
+    "Auto-merging apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts",
+    "Auto-merging apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts",
+    "Auto-merging apps/server/src/orchestration/projector.test.ts",
+    "Auto-merging apps/server/src/orchestration/projector.ts",
+    "Auto-merging apps/server/src/persistence/Layers/ProjectionThreads.ts",
+    "Auto-merging apps/server/src/persistence/Services/ProjectionThreads.ts",
+    "Auto-merging apps/server/src/server.test.ts",
+    "CONFLICT (content): Merge conflict in apps/server/src/server.test.ts",
+    "Auto-merging apps/server/src/ws.ts",
+    "Auto-merging packages/contracts/src/auth.ts",
+    "Auto-merging packages/contracts/src/orchestration.ts",
+    "Auto-merging packages/contracts/src/rpc.ts",
+    "Rebasing (1/42)\rRebasing (2/42)\rRebasing (3/42)\rRebasing (4/42)\rRebasing (5/42)\rRebasing (6/42)\rerror: could not apply 3a1780bbf... [Spec 250][Phase: phase_4] feat: gate block with a server-allocated revision",
+    "hint: Resolve all conflicts manually, mark them as resolved with",
+    "hint: \"git add/rm <conflicted_files>\", then run \"git rebase --continue\".",
+    "hint: You can instead skip this commit: run \"git rebase --skip\".",
+    "hint: To abort and get back to the state before \"git rebase\", run \"git rebase --abort\".",
+    "hint: Disable this message with \"git config set advice.mergeConflict false\"",
+    "Could not apply 3a1780bbf... [Spec 250][Phase: phase_4] feat: gate block with a server-allocated revision"
+  ],
+  "wholeSurface": {
+    "method": "three-way merge of the same two trees, aborted immediately",
+    "clean": false,
+    "conflictedFiles": [
+      "apps/server/src/server.test.ts",
+      "apps/web/src/components/Sidebar.logic.ts",
+      "apps/web/src/components/Sidebar.tsx"
+    ]
+  },
+  "contractClosure": {
+    "files": [
+      "packages/contracts/src/auth.ts",
+      "packages/contracts/src/baseSchemas.ts",
+      "packages/contracts/src/environment.ts",
+      "packages/contracts/src/git.ts",
+      "packages/contracts/src/model.ts",
+      "packages/contracts/src/orchestration.ts",
+      "packages/contracts/src/providerInstance.ts",
+      "packages/contracts/src/sourceControl.ts",
+      "packages/contracts/src/vcs.ts"
+    ],
+    "conflicted": [],
+    "regenerationReachable": true,
+    "detail": "every file the generator reads merged without conflict, so regenerating the contract from the rebased tree is not blocked by the rebase. What the regenerated contract would CHANGE is a separate question, answered by classify-churn --upstream-movement."
+  },
+  "startedAt": "2026-08-31T10:46:19.212Z",
+  "finishedAt": "2026-08-31T10:46:24.792Z",
+  "upstreamRoot": "/Users/chris/dev/t3code",
+  "forkRoot": "/Users/chris/dev/t3code-codev",
+  "base": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
+  "target": "9b2d04317c68233782e0630464ac86d77d0686f3",
+  "targetRef": "origin/main",
+  "forkHead": "3786b840e1a4a26c062138889cd72bcaed2fbdc1",
+  "commitsCarried": 42,
+  "scratch": null,
+  "watermark": {
+    "checked": true,
+    "migrationsDir": "apps/server/src/persistence/Migrations",
+    "watermarkAtBase": 42,
+    "addedByUpstream": [
+      43
+    ],
+    "shadowed": [],
+    "holds": true,
+    "detail": "upstream added 43, all above the watermark 42 our base leaves — so they run. Codev writes nothing to effect_sql_migrations, which is what keeps that true."
+  },
+  "preserved": {
+    "upstreamHead": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
+    "upstreamStillAtBase": true,
+    "upstreamClean": true,
+    "forkHead": "3786b840e1a4a26c062138889cd72bcaed2fbdc1",
+    "forkUnmoved": true,
+    "forkClean": true,
+    "pinCommitUnchanged": true
+  }
+}

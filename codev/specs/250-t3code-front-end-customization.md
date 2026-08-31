@@ -303,6 +303,22 @@ client instead.
       therefore reported as `NO_UPSTREAM_MOVEMENT` and passes**, distinct from the tool failing
       or reading the wrong ref, which do not. Criterion 9 is satisfied by the procedure running
       and reporting one of those three, never by an unexplained zero.
+
+      **AMENDED 2026-08-31, at the architect's direction. The wording above stands, and this is
+      how it is executed.** "Rebases onto a later upstream commit named in `pin.json`" must NOT
+      be read as an instruction to advance `upstreamBase` — the drill runs on a **throwaway
+      clone** and **`pin.json` is unchanged**.
+
+      Why: the moment `pin.json` names a new base, `verify-upstream` expects the preserved clone
+      to BE there, and every spec 146 and spec 236 result tied to `082e6ea52186` stops being
+      re-runnable. Advancing the base is a decision taken when there is a REASON — a security
+      fix, a feature we need — never as a phase deliverable. `/Users/chris/dev/t3code` stays
+      read-only: a `git fetch` is fine, because remote-tracking refs move while HEAD and the
+      working tree do not; a checkout is not.
+
+      **The criterion is met by the procedure completing and reporting**, not by adopting a new
+      base. `tools/t3-fork/rebase-drill.mjs` re-reads both checkouts afterwards and discards its
+      own result if either moved.
 - [ ] 10. An approved gate cannot be re-displayed by a later write, proved by clearing a gate and
       then delivering a write carrying a lower revision.
 - [ ] 11. Hierarchy integrity. Each of these is **refused by the server at write time** — not

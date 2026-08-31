@@ -131,6 +131,21 @@ The added half is `apps/server/src/codev/`, `apps/web/src/codev/`,
 `AgentAwarenessRelay.test.ts`, two `serverRuntimeStartup` tests), which conflict as readily as
 source and are the half easiest to forget when estimating the drill.
 
+**Measured on 2026-08-31 by `tools/t3-fork/rebase-drill.mjs`** against upstream `9b2d04317c68`,
+104 commits past our base: **3 of the 35 modified files conflict.** The risk column below is the
+prediction; the drill is the measurement, and where they disagree the drill wins:
+
+| File | Predicted | Measured |
+|---|---|---|
+| `packages/contracts/src/orchestration.ts` | **High** | **auto-merged clean** — and upstream touched it twice in exactly the two unions we extend (`subscribeThread`, `dispatchCommand`) |
+| `apps/server/src/server.test.ts` | Low ("mostly one-hunk additions") | **conflicts**, and it is where the sequential rebase stops, at commit 6 of 42 |
+| `apps/web/src/components/Sidebar.tsx`, `Sidebar.logic.ts` | Medium | **conflicts** |
+| the pinned contract closure | — | **zero conflicts**, so the vendored contract is regenerable from the rebased tree |
+
+The prediction was wrong in the direction that matters least (a High that came out clean) and right
+about the sidebar. What it under-rated was the upstream TEST — which is the half this table already
+warned is easiest to forget, now demonstrated rather than asserted.
+
 | Where | Files | What we change | Conflict risk |
 |---|---|---|---|
 | `packages/contracts/` | `orchestration.ts`, `orchestration.test.ts`, `auth.ts`, `rpc.ts` | `role`, `parentThreadId`, `codevGate`, `gateRevision`, the `codev.gateWrite` method and its scope | **High.** `orchestration.ts` is the file upstream changes most, and every one of our fields sits in structs it edits. |
