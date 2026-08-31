@@ -1,7 +1,7 @@
 From 3a1780bbf66f212f55cb3378e5e5a5ad891e4f7e Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 18:00:02 -0600
-Subject: [PATCH 06/26] [Spec 250][Phase: phase_4] feat: gate block with a
+Subject: [PATCH 06/27] [Spec 250][Phase: phase_4] feat: gate block with a
  server-allocated revision
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

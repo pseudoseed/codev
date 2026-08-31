@@ -1308,3 +1308,26 @@ to a text assertion because the DOM keeps the whole string, so `toContainText("b
 pane. One fixture builder is long now; reverting the fix clips that pane's prefix by 22px.
 
 26 e2e green. Pin at `aeebd7f2b9c2`, 26 patches, both evidence files re-collected.
+
+
+**3-way review (2 lanes): Claude APPROVE/HIGH, opencode COMMENT/HIGH.** Stricter is binding; all
+seven points acted on. The important one: **the grid had no in-app entry point** — the route existed,
+nothing linked to it, and my own e2e `page.goto`'d the path, which proves a route renders and says
+nothing about whether a user can reach it. Sidebar has a Builders link now (gated on
+`hasCodevHierarchy`) and the e2e clicks it.
+
+Second real defect: **the width was measured two ways** — `getBoundingClientRect` (border box) on
+mount vs `contentRect` (padding removed) from the observer, then `contentWidth` subtracting padding
+again. Named viewports still landed on 3 and 4 columns, which is what made it dangerous. Padding
+moved to an inner wrapper.
+
+Also: orphans now tile (phase 7's reasoning, missed a phase later); `data-codev-architect-placement`
+no longer says "strip" on a page with no architect; the header counts architects in the
+multi-architect case; `--codev-pane-body` is actually consumed; one grouping pass instead of two.
+
+**The sidebar is 256px, not the 232 my comments claimed.** Conclusions unchanged (1184 → 3 columns,
+1664 → 4), but the unit tests used invented numbers. Now measured — and 1440 with the sidebar
+COLLAPSED fits four columns, so the architect gets a tile there. That is the rule working.
+
+Rebuttals at `codev/projects/250-t3code-is-the-front-end-privat/250-phase_9-iter1-rebuttals.md`.
+Pin at `8d4b878f3137`, 27 patches. 26 e2e green, fork web 2938.

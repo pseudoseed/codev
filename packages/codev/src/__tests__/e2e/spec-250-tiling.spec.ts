@@ -78,7 +78,38 @@ async function openGrid(page: Page): Promise<void> {
     page.getByText("Enter a pairing token to start a session"),
     "the browser did not pair; every measurement below would be of the pairing form",
   ).toHaveCount(0, { timeout: 30_000 });
-  await page.goto(`${live.webUrl}/codev-builders`, { waitUntil: "domcontentloaded" });
+  /*
+   * Through the sidebar link, not by typing the URL.
+   *
+   * Review finding: the route existed and nothing linked to it. A test that
+   * `goto`s the path proves the route renders and says nothing about whether a
+   * user can find it — which is how the grid shipped unreachable.
+   */
+  const link = page.getByTestId("sidebar-codev-builders-link");
+  const toggle = page.getByRole("button", { name: /toggle (main )?sidebar/i }).first();
+  let openedSidebar = false;
+  try {
+    await link.waitFor({ state: "visible", timeout: 5_000 });
+  } catch {
+    // At 390 the sidebar is off-canvas, so the way in is behind the toggle —
+    // which is still a way in, and the assertion is that one exists.
+    if ((await toggle.count()) > 0) {
+      await toggle.click();
+      openedSidebar = true;
+    }
+    await link.waitFor({ state: "visible", timeout: 20_000 });
+  }
+  // t3code's provider-update toast lands over the sidebar at 390 and intercepts
+  // the click. Dismissed the way a user dismisses it, rather than forced.
+  const dismissals = page.getByRole("button", { name: /dismiss notification/i });
+  for (let index = await dismissals.count(); index > 0; index -= 1) {
+    await dismissals.first().click();
+  }
+  await link.click();
+  // On a phone the drawer stays open over the page it just navigated to, so
+  // close it again — which is what a user does, and what puts the grid on
+  // screen to be measured.
+  if (openedSidebar) await toggle.click();
   await expect(page.getByTestId("codev-builder-pane").first()).toBeVisible({ timeout: 30_000 });
 }
 

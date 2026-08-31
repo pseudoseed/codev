@@ -1,7 +1,7 @@
 From 6e8bdec207d6b1f531df581657b747ffc8f5c826 Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Sun, 30 Aug 2026 18:26:46 -0600
-Subject: [PATCH 08/26] [Spec 250][Phase: phase_4] test: hold up the two claims
+Subject: [PATCH 08/27] [Spec 250][Phase: phase_4] test: hold up the two claims
  the deviation rests on
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
