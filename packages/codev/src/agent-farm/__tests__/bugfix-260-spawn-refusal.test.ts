@@ -258,6 +258,32 @@ describe('a session refusal fails the spawn (issue #260)', () => {
     pool.stopAll();
   });
 
+  /**
+   * An engine with no subscriptions has no channel a refusal could arrive on, so the
+   * window measures nothing and must not be paid. The option's own contract already
+   * says such an engine's turns never settle; charging 2s per create to re-learn that
+   * on every unit test would be a cost with no answer attached.
+   */
+  it('an engine with no subscriptions does not pay the window', async () => {
+    dir = workspace();
+    const engine = createPorchThreadEngine({
+      dispatcher: { async call() { return {}; } },
+      journal: new DispatchJournal(join(dir, 'commands.jsonl')),
+      tracker: new TurnTracker(),
+      projectId: 'p1',
+      workspaceRoot: dir,
+      defaultHarness: 'codex',
+      defaultModel: 'gpt-5.6-luna',
+      refusalGraceMs: 30_000,
+    });
+
+    const began = Date.now();
+    const created = await engine.create({ ...spawn, worktreePath: join(dir, 'wt') });
+
+    expect(Date.now() - began).toBeLessThan(2_000);
+    expect(engine.get(created)?.builderId).toBe('bugfix-260');
+  });
+
   it('the production bound is short enough to separate a refusal from a slow start', () => {
     expect(SESSION_REFUSAL_GRACE_MS).toBeLessThanOrEqual(2_000);
   });

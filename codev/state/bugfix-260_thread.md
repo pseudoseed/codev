@@ -100,3 +100,29 @@ Raised with the architect rather than routed around. Instruction: treat as envir
 document in the PR body, reference #278, proceed. Two other builders hit it today. The file in
 the fork checkout is the LAN server the iPad uses and stays until Chris clears it — not to be
 deleted or committed.
+
+## PR (phase 3)
+
+PR **#285**. CMAP on it: Claude APPROVE, Codex REQUEST_CHANGES, opencode/Grok APPROVE.
+
+Codex's blocking finding and Claude's first non-blocking one are the same thing: `create` with
+a prompt on an engine with **no** `subscriptions` waited the full 2s window for a refusal that
+can never arrive, because nothing feeds `TurnTracker.observe` there. Three existing tests paid
+it. Guarded with `if (options.subscriptions)` and pinned with an eighth test. I had found and
+fixed this in the working tree while the lanes were running; Codex noticed it was not in PR
+HEAD, which is a fair catch on the PR as submitted.
+
+Claude's other two are recorded rather than fixed, in the review's *What This Does NOT Do*:
+a refused spawn now leaves a worktree with no builder row for `afx cleanup` to key on, and
+`TurnDisplacedError` comes through the same promise and is reported as a spawn failure.
+
+Codex also called the `codev/reviews/` artifact unnecessary for BUGFIX. Kept: this repo carries
+one per bugfix (`bugfix-274-…`, `bugfix-214-…`, `bugfix-481-…`).
+
+### Tooling note
+
+`consult -m <lane> --protocol bugfix --type pr` from inside this builder worktree did **not**
+auto-detect the project — it printed `Multiple projects found:` followed by every project in the
+workspace, produced no review, and **exited 0**. Adding `--issue 260` fixed it. The exit code is
+the part worth reporting: a lane that could not run reported success, which is "I could not tell"
+spelled exactly like "no".

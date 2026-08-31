@@ -60,6 +60,13 @@ ever written. What did need cleaning is engine-local: `create` drops its own `th
 by `attach`'s early return — which would hand a caller a thread that can never run, with a
 stream still open for it.
 
+**The window is skipped when there are no subscriptions.** `subscriptions` is optional, and an
+engine without one has no channel a refusal could arrive on — `running` can neither resolve nor
+reject, so the window would be two seconds spent to learn nothing, on every create. The
+option's own contract already says such an engine's turns never settle; the guard keeps that
+promise rather than charging for it. Found while the CMAP lanes were running and independently
+raised as blocking by Codex and non-blocking by Claude.
+
 The original error is rethrown unchanged, so it keeps its name, the server's sentence, and
 its "This is a refusal, not a timeout" line.
 
@@ -146,8 +153,27 @@ comment now says this out loud instead of claiming no caller acts on a refusal.
 **The refused thread is left on the server.** Deleting it is not this fix's business, and its
 events are the evidence for the sentence the operator is about to read.
 
-**The worktree is left behind.** A failed spawn leaves its worktree today for every other
-failure reason too; this changes nothing there.
+**The worktree is left behind, and now with no builder row to key on.** A failed spawn left its
+worktree before this change too, but it left a row beside it. Throwing from `create` means
+there is no row, so `afx cleanup <id>` has nothing to find: the worktree is removed by hand
+(`git worktree remove .builders/<id>`) or left for the retry, which reuses it. Raised by the
+Claude lane; recorded rather than fixed, because inventing a row for an agent that cannot run
+is the bug this change removes.
+
+**`TurnDisplacedError` fails the spawn too.** It rejects the same promise, so it comes through
+`refusalWindow` and is reported as a spawn failure. It means something different — a second
+turn replaced this waiter — and its message says so. Within `create`'s own window, on a thread
+created moments earlier, nothing else can start a turn on it; the case is unreachable rather
+than handled. Both errors mean "this turn will never be reported to you", which is the thing
+`create` must not swallow, so neither is filtered out. Raised by the Claude lane.
+
+## CMAP (3-way review of PR #285)
+
+| Lane | Verdict | Notes |
+|---|---|---|
+| Claude | APPROVE | Three non-blocking notes: the subscription-less window, `TurnDisplacedError` reported as a refusal, and the worktree left with no row for `afx cleanup` to key on. All three are addressed or recorded above. |
+| Codex | REQUEST_CHANGES | The subscription-less 2s window — the same finding, blocking. Fixed and pushed. Also called the `codev/reviews/` artifact unnecessary for BUGFIX; kept, because this repo carries one per bugfix (`bugfix-274-…`, `bugfix-214-…`, `bugfix-481-…`). |
+| opencode (Grok) | APPROVE | — |
 
 ## Lessons
 

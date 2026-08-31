@@ -288,8 +288,17 @@ export function createPorchThreadEngine(options: PorchThreadEngineOptions): Thre
          * that should fail loudly and immediately. Bounded rather than awaited: see
          * `SESSION_REFUSAL_GRACE_MS`.
          */
+        //
+        // ONLY WHEN A REFUSAL CAN ACTUALLY ARRIVE. With no subscription nothing
+        // feeds `TurnTracker.observe`, so `running` can neither resolve nor reject
+        // and the window would be a pause that cannot change the answer — two
+        // seconds spent to learn nothing, on every create. `subscriptions` absent
+        // already means "no turn this engine starts will ever settle" (see the
+        // option's own doc); this keeps that promise rather than charging for it.
         try {
-          await refusalWindow(started.running, options.refusalGraceMs ?? SESSION_REFUSAL_GRACE_MS);
+          if (options.subscriptions) {
+            await refusalWindow(started.running, options.refusalGraceMs ?? SESSION_REFUSAL_GRACE_MS);
+          }
         } catch (error) {
           /*
            * The engine forgets the thread, and this is what "what should a refusal do
