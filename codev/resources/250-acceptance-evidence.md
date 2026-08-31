@@ -140,7 +140,7 @@ stated reason, not as passed and not left open.
 
 | Tree | Command | Result |
 |---|---|---|
-| Codev | `npm test -- --exclude='**/e2e/**'` | **7377 passed, 57 skipped**; 2 timeouts on the first run, both diagnosed below |
+| Codev | `npm test -- --exclude='**/e2e/**'` | **7387 + 180 passed, 57 skipped, 0 failed**, exit 0, 191s. An earlier run of the same command reported 7377 and two timeouts, both diagnosed below; the count grew by the phase 11 review-response tests |
 | Codev, e2e | `npx playwright test --config playwright.spec250.config.ts` at fork head `3786b840e1a4` | **32 passed** in 2.3m, across all 4 spec-250 spec files |
 | Fork, web | `apps/web && npx vp test run` | **2984 passed** |
 | Fork, server | `apps/server && npx vp test run` (whole server suite) | **2873 passed, 8 skipped, 1 failed** — the `entrypoint.test.ts` symlink one |

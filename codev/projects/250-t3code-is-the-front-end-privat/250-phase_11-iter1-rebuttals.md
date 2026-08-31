@@ -68,6 +68,17 @@ of this measurement is a tautology that passes on every run regardless of what u
 test asserts a non-empty `moved` whenever `upstreamChurn.closureTouching > 0`, which fails on that
 tautology.
 
+### One more door into the same tautology, found while writing the above
+
+Neither lane raised this; it turned up re-reading my own fix. The hash is guarded on
+`closureConflicts.length === 0`, which is the right question **once a merge has happened**. A
+`git merge` that refuses to start at all — already up to date, a wedged index — leaves the worktree
+as the unmerged fork with no conflicts to notice, and the guard would wave it through into exactly
+the fork-against-itself comparison the ordering exists to avoid.
+
+`mergeProducedATree` (`merge.ok || conflictedList.length > 0`) is now the outer condition. No merged
+tree means no measurement, reported as `checked: false` carrying what git said.
+
 ## 2. The criterion 9 `shape-check` row describes the current pin. Fixed.
 
 `| shape-check | generate.mjs --check → artifacts are up to date |` was true of `3786b840e1a4` and

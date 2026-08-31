@@ -75,8 +75,8 @@
     },
     "detail": "every file the generator reads merged without conflict, so regenerating the contract from the rebased tree is not blocked by the rebase. What the regenerated contract would CHANGE is bounded by sourceHash.moved and settled by classify-churn --upstream-movement."
   },
-  "startedAt": "2026-08-31T11:18:45.040Z",
-  "finishedAt": "2026-08-31T11:18:51.422Z",
+  "startedAt": "2026-08-31T11:29:35.232Z",
+  "finishedAt": "2026-08-31T11:29:40.264Z",
   "contractRegeneration": {
     "attempted": false,
     "reason": "generate.mjs refuses any checkout whose HEAD is not pin.commit, and a rebased tree never satisfies that — its head is a commit that did not exist before the rebase. Regenerating from one means moving the pin, which is the adoption this drill exists in order not to perform (step 3 of tools/t3-codegen/REFRESH.md). contractClosure.sourceHash bounds the job instead. shape-check did not run."

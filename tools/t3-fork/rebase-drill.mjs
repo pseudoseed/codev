@@ -374,14 +374,28 @@ try {
      * Hashed HERE, off the merged worktree, BEFORE the abort. After the abort the
      * tree is the fork again and the comparison becomes the fork against itself —
      * a tautology that reports zero moved files on every run, forever.
+     *
+     * And only when the merge actually produced a merged tree. A `git merge` that
+     * refuses to start (already up to date, a wedged index) leaves the worktree
+     * as the fork with no conflicts to notice, which walks straight into that
+     * same tautology by a different door. `mergeProducedATree` is the guard: no
+     * merged tree means no measurement, said as `checked: false`.
      */
-    const mergedSourceHash = closureConflicts.length === 0
-      ? closureSourceHash(clone)
-      : {
+    const mergeProducedATree = merge.ok || conflictedList.length > 0;
+    const mergedSourceHash = !mergeProducedATree
+      ? {
         checked: false,
-        reason: `${closureConflicts.join(', ')} conflicted, so the merged tree holds no single `
-          + 'version of the generator\'s source to hash.',
-      };
+        reason: 'the probe merge neither completed nor conflicted, so the worktree is still the '
+          + `unmerged fork and hashing it would compare the fork to itself. git said: ${
+            merge.out.split('\n').slice(0, 3).join(' / ')}`,
+      }
+      : closureConflicts.length === 0
+        ? closureSourceHash(clone)
+        : {
+          checked: false,
+          reason: `${closureConflicts.join(', ')} conflicted, so the merged tree holds no single `
+            + 'version of the generator\'s source to hash.',
+        };
     tryRun(clone, 'merge', '--abort');
     result.wholeSurface = {
       method: 'three-way merge of the same two trees, aborted immediately',
