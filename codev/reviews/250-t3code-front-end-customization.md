@@ -1478,13 +1478,47 @@ carrying its reason rather than a pass. It is also why the evidence row says "32
 "the suite is green" — a run that exits 0 having executed nothing is the failure this phase is
 about, and it turned up one more time in the phase that fixed it.
 
+### The gap an amended criterion was hiding, and it was an hour to close
+
+**The architect asked the question that the whole phase had routed around.** The drill proved the
+rebase *measures*. It did not prove the contract still *regenerates* after one — and that is the
+claim that matters on the day a new base is adopted, which is the worst possible moment to find out
+it does not hold. Two iterations of review had passed over it, because every statement about it was
+true: the generator refuses a tree whose HEAD is not `pin.commit`, regenerating means moving the pin,
+the drill exists in order not to move the pin. All true, and it added up to a criterion that read
+"met" while the interesting half was deferred.
+
+The way out was not to loosen the guard. It was to satisfy it somewhere disposable. `git merge-tree
+--write-tree` and `commit-tree` give the merged tree an identity **inside the throwaway clone** —
+which matters because the sequential rebase stops at commit 6, so there is no rebased HEAD at all;
+the generator reads only the closure, and the closure merges clean. Then a **scratch codegen root**:
+`generate.mjs` resolves `pin.json`, its output directory and its staging area from its own file
+location, so a copy of the tool under a scratch directory reads a scratch pin naming that commit.
+The guard is met honestly — the artifacts really are reproducible from the commit they name.
+
+**The contract regenerates, and `schema.json`, `schema.ts` and `types.d.ts` all move.** So adopting
+this base changes the shapes Codev consumes, and that is now a measured fact with an artifact list
+rather than an open question deferred to the first real rebase.
+
+Three details that are the difference between this being evidence and being decoration:
+
+- **The comparison is against what is vendored in this repository**, never against what the scratch
+  run just wrote. The second is a tautology, and it is the third time in this phase that the
+  tautology was the thing to design against.
+- **A regenerated contract that differs is a result, not a failure.** Same argument as `conflicts`.
+  So the outcome vocabulary stayed three words and the finding went into `contractRegeneration` with
+  its artifact list. Widening the vocabulary would have re-created the defect iteration 1 found.
+- **The generator needs Node 22 and the drill runs under 20.** A wrong interpreter reports
+  `NO_INTERPRETER`, never "the contract does not regenerate" — the second is a claim about the fork
+  made from a fact about this machine, which is the "I could not tell" rule at its most literal.
+
 ### What can a human see or do now that they could not before
 
 Know what carrying this customization onto a newer t3code actually costs — three files, named —
 instead of guessing from a risk table; and re-run that measurement any time with one command,
 against a fork and an upstream clone that the measurement provably did not disturb. And read, from
-the same run, whether the contract that comes out the other side is the one already vendored: four
-closure files say it is not.
+the same run, what the contract that comes out the other side actually looks like: it regenerates,
+and three of its shape artifacts move.
 
 ## Flaky Tests
 

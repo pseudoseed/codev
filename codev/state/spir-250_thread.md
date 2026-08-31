@@ -1629,3 +1629,42 @@ defending against an input no caller produces is defending against a hypothetica
 **Restarted both lanes mid-review.** The first pair began reading `rebase-drill.mjs` while I was
 extracting `closureMeasurability` out of it. A review of a tree that moves underneath it is not a
 review, and five minutes is cheaper than a finding I could not trust either way.
+
+### The architect asked the question the whole phase had routed around
+
+**"Criterion 9 proves the rebase MEASURES, not that the contract still regenerates after one."**
+Correct, and I had written every sentence that made it sound settled: the generator refuses a tree
+whose HEAD is not `pin.commit`, regenerating means moving the pin, the drill exists in order not to
+move the pin. All true. Together they added up to a criterion reading "met" with the interesting half
+deferred to the first real rebase — the worst moment to discover it does not work.
+
+Two review iterations passed over it. Both lanes accepted the reasoning, and so did I, because the
+reasoning is sound. **What none of us asked was whether the constraint had a way around it that was
+not "loosen the guard".** It did.
+
+`git merge-tree --write-tree` writes a merged tree as an object even with conflicts, and
+`commit-tree` gives it an identity — inside the throwaway clone. That matters more than it sounds:
+the sequential rebase stops at commit 6, so there is no rebased HEAD to point at, but the generator
+reads only the closure and the closure merges clean. Then the second piece: `generate.mjs` resolves
+`pin.json`, its output directory and its staging area **from its own file location**, so a copy of
+the tool under a scratch directory reads a scratch pin. The guard is satisfied rather than bypassed —
+the artifacts really are reproducible from the commit they name.
+
+**The contract regenerates. `schema.json`, `schema.ts` and `types.d.ts` all move.** Adopting this
+base changes the shapes we consume, and that is now a run with an artifact list.
+
+Three things I would have got wrong an iteration ago:
+
+- The comparison is against what is **vendored here**, never against what the scratch run just
+  wrote. That is the third time in this phase the tautology was the thing to design against, and the
+  first time I saw it before writing it.
+- A regenerated contract that differs is a **result**. Widening the outcome vocabulary to
+  `shape-check-failed` would have re-created exactly the defect iteration 1 found, so the finding
+  went into `contractRegeneration` with its list and `outcome` stayed three words.
+- The generator needs Node 22 and the drill runs under 20. A wrong interpreter reports
+  `NO_INTERPRETER`, never "the contract does not regenerate" — the second is a claim about the fork
+  made from a fact about this laptop.
+
+**Cost: about an hour, including a hand probe before writing any of it.** The probe is what made the
+decision cheap: fifteen minutes assembling the scratch root by hand told me the mechanism worked
+before I committed to a design.
