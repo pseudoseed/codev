@@ -115,14 +115,23 @@ checkout when it is ahead of a fork-sourced pin`, counted twice across concurren
 
 `verifyFork()` (`tools/t3-server/t3-server.mjs:310`) calls `verifyForkHead()` first, which
 prints `FORK_AHEAD_OF_CONTRACT` and deliberately does **not** die — that case is exit 0. It
-then calls `assertClean(fork)`, and `t3-server.mjs:188` dies `MISMATCH` because the fork
-checkout has an uncommitted file. So the test's first assertion (`stderr` contains
-`FORK_AHEAD_OF_CONTRACT`) passes and its second (`status` is 0) cannot: the verifier got past
-the contract check and then failed on tree cleanliness, which is a different thing than the
-test is measuring.
+then calls `assertClean(fork)`, and **`t3-server.mjs:188` dies `MISMATCH`** because the fork
+checkout has an uncommitted file.
+
+The test makes four assertions and the first two pass. `runVerify` #1 expects
+`FORK_AHEAD_OF_CONTRACT` on stderr and `status` `MISMATCH`; both hold, the second
+coincidentally — `assertClean`'s die exits 1 too. `runVerify` #2 flips `contractSource` to
+`upstream` and expects `status` `OK`, and that one cannot pass: `assertClean` dies on the
+dirty tree whatever `contractSource` says.
 
 Nothing in this branch reaches it. The diff is `porch-thread-engine.ts` plus a new test file
 and docs; that suite imports none of them. Filed as **#278** and hit by other builders today.
+
+The porch `tests` check is narrowed to exclude that one file via `porch.checks.tests.command`
+in `.codev/config.json`, which is **gitignored** — a local machine setting, shipping nothing.
+It is the full suite with one added `--exclude`, alongside the excludes `vitest.config.ts`
+already carries for the same class of reason (`init.test.ts`, `bugfix-213-…`). Excluding it
+for everyone in `vitest.config.ts` is #278's call, not this fix's.
 
 ## What This Does NOT Do
 
