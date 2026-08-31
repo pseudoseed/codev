@@ -1092,6 +1092,155 @@ over 340x240 and the architect on a strip below it that expands on demand, seven
 columns at 1920 where that is not ragged, and on a phone pages of two rather than seven panes
 squeezed under the readable floor.
 
+## Phase 10 — Approval from t3code over the same-origin proxy
+
+### The guarantee is structural, and the test the plan first proposed would have passed vacuously
+
+The spec's Security section and the plan's first draft both said `connect-src 'self'` "stays
+closed". t3code sends `Content-Security-Policy` on `.svg` asset responses only
+(`apps/server/src/http.ts`), and `apps/web/index.html` carries no meta tag. **There is no
+page-level CSP and therefore no `connect-src` directive to keep closed.** A test asserting one
+would have been green against a header nobody sends — a check that cannot fail, on the security
+property of the phase.
+
+What actually holds is narrower and stronger: the page never *makes* a cross-origin request,
+because it has no absolute URL to make one with. `agentUrl` returns a path, and
+`pairing.test.ts` asserts that with `expect(() => new URL(url)).toThrow()`. The browser test
+then records **every request the page issues** while it pairs, reads workspace state and
+approves, and asserts each one is on t3code's origin — plus one assertion that it reached the
+proxy at all, without which the first would pass on a page that made no agent request.
+
+Adding a page-level CSP is deliberately not done. It changes how every t3code page loads, which
+is far wider than this spec's diff, to obtain a guarantee already held.
+
+### The target is configured, and a route-path allowlist would not have been enough
+
+The plan's own most consequential item, found in review round 1: the deliverable said the web app
+"holds the `codev-agent` origin", and a server proxy forwarding to a browser-named origin is an
+SSRF primitive. A path allowlist does not constrain the *host*.
+
+So the operator configures `T3CODE_CODEV_AGENT_ORIGINS` as `id=origin` entries and the browser
+selects by **id**. The origins never reach the page — `/api/codev/agent-targets` answers ids
+only, and the e2e asserts the agent's port does not appear in the body. A URL arriving where a
+path belongs gets its own refusal (`CODEV_AGENT_PATH_ABSOLUTE`) rather than falling off the end
+of the allowlist, because "this is not a path" and "this path is not carried" send a reader to
+two different places.
+
+Three unconfigured/misconfigured states get three signals, ported from `client-static.ts`'s
+lesson: `CODEV_AGENTS_UNCONFIGURED`, `CODEV_AGENTS_ALL_REJECTED`, and a usable list with the
+rejected entries reported beside it. An operator who typed a bad origin and one who configured
+nothing need opposite next actions.
+
+### An allowlist for headers, and the `Connection` subtraction on top of it
+
+`client-static.ts` builds its strip set from a fixed hop-by-hop list *plus the tokens the
+request's own `Connection` header names*, because that header names headers that are themselves
+hop-by-hop. This port inverts the default — an **allowlist** of what may travel, since this hop
+sees credentials and a denylist forwards everything nobody thought of — and still subtracts the
+`Connection` tokens, because an allowlist alone forwards a header a request declares
+connection-scoped, and here that header is the machine credential. Both mechanisms are exercised;
+removing the subtraction fails the test named for it.
+
+`authorization` and `cookie` are absent from the allowlist and that absence is a deliverable:
+t3code's own session gates USE of the proxy and is never handed to another server.
+
+### Two failure signals, and a redirect that is refused rather than passed on
+
+An unreachable host and one that accepted the connection and said nothing keep separate signals,
+driven against real sockets — a closed port and a server that accepts and never answers. A 3xx
+from the configured origin is refused (`CODEV_AGENT_REDIRECT_REFUSED`): forwarded to the page,
+the browser would follow it, cross-origin, with the request's credentials, which is the escape
+the configured-target rule closes one hop earlier.
+
+Three of `codev-agent`'s routes are deliberately not carried. The SSE stream, because this proxy
+buffers and a buffered stream is live on the wire and empty in the page. Both revocation routes,
+because `afx pair revoke` is the operator path and a browser that could revoke could deny a human
+their own gate.
+
+### Three defects the browser caught and the tests could not
+
+Every unit test in this phase was green through all three.
+
+**The page read the agent store once and froze.** Pairing succeeded, the credential reached
+browser storage, the poll ran and returned 200 — and the panel still said this browser holds no
+codev-agent credential. A hand-rolled subscription (a `useState` tick pushed from a module-level
+listener set) rendered the first snapshot and never followed the store again. `useSyncExternalStore`
+is the primitive for this shape, with a snapshot **replaced** rather than mutated so its identity
+is the change signal. This cost more time than anything else in the phase, and nothing but a
+browser could have found it: every function involved is individually correct.
+
+It also could not be debugged from inside the fork. `start-fork` refuses a dirty checkout — by
+design, and the right design — so instrumenting the component for a browser session is not
+available without committing. The fix came from replacing the mechanism rather than from
+observing it.
+
+**A gated pane dropped the phase it had just gained.** The gate replaced the phase line, which
+was right in phase 9 when there was no phase to show and wrong the moment `codev-agent`'s
+projection arrived. A reader who has found the pane that wants them still needs to know what it
+was doing. The gate leads in rose with its gavel; the phase follows.
+
+**`Send a message to start the conversation.` printed across `Waiting on you: <gate>`.** On a
+thread with no turns, t3code's empty-timeline placeholder is centred over the whole content column
+and lands on the gate panel. **Present since phase 8** — the phase 8 panel-only screenshot could
+not show it, and the full-page one did. Hidden through upstream's own `hideEmptyPlaceholder`
+rather than moved, because it is also wrong advice: a thread waiting on a human approval is not
+waiting for a message.
+
+That is the second time in this spec that a cropped screenshot passed something a full-page one
+would have caught, and the lesson is the screenshot's framing, not the reviewer's attention.
+
+### Pane content landed here, and the contract was not extended for it
+
+The architect's ruling, recorded in the plan because the phase's file list predates it. Phase 9's
+panes said "Phase not read here yet — published by codev-agent", which was true: `codev-agent`
+has published the porch phase and the last three messages workspace-scoped since phase 6, in ONE
+request for the whole grid, and no page could reach it. The proxy is the way in, so the panes read
+it here.
+
+The project id the approval needs comes from that same snapshot, which is why the two arrived
+together. A project id on the gate block would have been a second copy of a fact `codev-agent`
+already owns, and two copies can disagree.
+
+Every branch that still cannot show a phase names which one it is: not paired, the agent could not
+be reached, the agent answered and does not publish this thread, or it published no porch project.
+A blank line for all four would be a claim about the builder rather than about what reached the
+browser. The message log keeps its three states too — an agent predating the field HAS messages it
+is not sending, and that is not "no messages".
+
+### Testing the seam, twice, because one test cannot make both claims
+
+`spec-250-t3code-approval.e2e.test.ts` drives the REAL fork server's proxy in front of a real
+`agent-routes` host, over `fetch`, ending in a real `status.yaml` — criterion 4. Nothing is
+imported and no proxy function is called: the test reaches the route the only way a browser can,
+so a route registered nowhere fails it. The unit tests can prove `forwardableHeaders` strips a
+header; only this can prove anything is wired to `forwardableHeaders`.
+
+`spec-250-approval.spec.ts` makes the claim a `fetch` cannot: what a real page asks for.
+
+Both share `spec-250-agent-host.ts` rather than each building a host, so they cannot drift into
+testing two different services. It seeds identities AFTER start, because the order is a circle
+broken in one place: the fork server needs the agent's port in its environment at start, and the
+thread ids the identities carry do not exist until that server is running.
+
+### Falsifiability, and the one that is about configuration rather than code
+
+Reverting five mechanisms — the `Connection`-token subtraction, the header allowlist, the redirect
+refusal, the credentials-in-URL rule and the anchored route pattern — fails five unit tests.
+
+The e2e's check is different in kind and worth naming: pointing the configured allowlist at a dead
+port fails 4 of its 7 tests. That is what proves the ceremony travels the configured proxy and not
+some other path that happens to work — a shape the unit tests cannot express, because the thing
+under test is the wiring.
+
+### What can a human see or do now that they could not before
+
+Approve a porch gate from t3code, on a phone or an iPad, without a terminal: pair the browser once
+with a token from `afx pair issue`, spend a session token, and press Approve — and porch writes the
+approving session id, machine and timestamp into `status.yaml`, all three read back from the server
+rather than invented in the page. And on the Builders screen, see what each builder is actually
+doing — its porch phase, its plan phase and the last three messages its architect sent it — where
+three phases of panes had said only that the data existed somewhere else.
+
 ## Flaky Tests
 
 `packages/codev/src/terminal/__tests__/session-manager.test.ts > stderr tail logging (integration) >

@@ -110,6 +110,40 @@ Whether HEAD descends from a commit that is not there is not a question git can 
 a squash that drops the base leaves a fork that is clean at a commit nothing can be measured
 against, and without that check it verifies green.
 
+## The rebase surface: which UPSTREAM files this fork edits
+
+Phase 11 is the rebase drill, so this is the list it drills against. As of `e0476d49aec1`:
+**35 upstream files MODIFIED, 35 files ADDED.** Only the modified ones can conflict, and the split
+is measured rather than remembered — a count that drifts is worse than no count:
+
+```bash
+git diff --name-status "$upstreamBase"..HEAD -- . ':(exclude)docs/codev' \
+  | awk '$1=="M"{print $2}'      # the conflict surface
+git diff --name-status "$upstreamBase"..HEAD -- . ':(exclude)docs/codev' \
+  | awk '$1=="A"{print $2}'      # carried without conflict
+```
+
+The added half is `apps/server/src/codev/`, `apps/web/src/codev/`,
+`packages/shared/src/codevAgentProxy.ts`, `apps/web/src/routes/_chat.codev-builders.tsx` and
+`apps/server/scripts/apply-codev-guard.ts`. **Roughly half the modified files are upstream TESTS**
+(`decider.delete.test.ts`, `projector.test.ts`, `ProjectionSnapshotQuery.test.ts`,
+`commandInvariants.test.ts`, `server.test.ts`, `orchestration.test.ts`, `Sidebar.logic.test.ts`,
+`AgentAwarenessRelay.test.ts`, two `serverRuntimeStartup` tests), which conflict as readily as
+source and are the half easiest to forget when estimating the drill.
+
+| Where | Files | What we change | Conflict risk |
+|---|---|---|---|
+| `packages/contracts/` | `orchestration.ts`, `orchestration.test.ts`, `auth.ts`, `rpc.ts` | `role`, `parentThreadId`, `codevGate`, `gateRevision`, the `codev.gateWrite` method and its scope | **High.** `orchestration.ts` is the file upstream changes most, and every one of our fields sits in structs it edits. |
+| `apps/server/src/orchestration/` | `decider.ts`, `projector.ts`, `commandInvariants.ts`, `Errors.ts`, `Layers/OrchestrationEngine.ts`, `Layers/ProjectionPipeline.ts`, `Layers/ProjectionSnapshotQuery.ts`, `Services/OrchestrationEngine.ts` + 4 test files | hierarchy refusal at write time, the gate write, the refusal reason surviving the ws boundary, committed events returned | **Medium-high.** Eight source files across the command path. |
+| `apps/server/src/persistence/` | `Layers/ProjectionThreads.ts`, `Services/ProjectionThreads.ts`, `Layers/Sqlite.ts` | the two columns on both persistence paths; one `codevSchemaGuardStep` call in `setup`, after `runMigrations()` | **Low-medium.** The Sqlite hunk is one line. |
+| `apps/web/src/components/` | `Sidebar.tsx`, `Sidebar.logic.ts`, `Sidebar.logic.test.ts`, `ChatView.tsx` | the Workspace → Architect → Builders tree; `<GatePanel>` above the composer; one extra condition on `hideEmptyPlaceholder` | **Medium** for the sidebar, **low** for `ChatView` (two small hunks). |
+| server plumbing | `http.ts`, `server.ts`, `ws.ts`, `auth/RpcAuthorization.ts`, `serverRuntimeStartup.ts` (+ 2 tests), `server.test.ts`, `relay/AgentAwarenessRelay.test.ts`, `auth/CodevGateScope.test.ts` | `export` on `authenticateRawRouteWithScope`; three codev route layers merged into `makeRoutesLayer`; gate-writer provisioning; the `codev:gate-write` scope | **Low.** Mostly one-hunk additions. |
+| generated / manifest | `routeTree.gen.ts`, `packages/shared/package.json` | the `_chat/codev-builders` route (regenerated, not hand-edited); one `exports` entry for `./codevAgentProxy` | **Low.** `routeTree.gen.ts` regenerates. |
+
+**`apps/client` is untouched, and stays untouched.** It is the frozen fallback:
+`git diff <phase-boundary>..HEAD -- apps/client` is empty at every phase boundary from 7 onward,
+and that is checked rather than assumed.
+
 ## Do not "tidy" these on rebase
 
 Two things in this fork look like inconsistencies and are not. Both are cheap to "fix" and both
