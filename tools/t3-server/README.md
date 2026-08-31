@@ -141,8 +141,13 @@ Every run gets its own port and its own `T3_HARNESS_DIR`, because Phase 10 runs 
 — one per driver, plus a 24-hour gate — and they would otherwise share a data directory and a
 pairing token, which is one-time.
 
-Three things it refuses rather than guesses:
+Four things it refuses rather than guesses:
 
+- **An argument it would build a path from.** The label must be `[A-Za-z0-9._-]+`, the port an
+  integer in `1..65535`, the gate a non-negative integer; anything else exits `2`. The label
+  becomes a directory name *and* a deletion path — `rm -rf "${RUNS:?}/work-$LABEL"` — and
+  `${RUNS:?}` guards an empty `RUNS`, not what the label appends to it. A label carrying a path
+  separator resolved out of `.runtime-runs` and the `rm -rf` followed it (#242).
 - **A port it does not own.** `stop` can only stop a server its own `T3_HARNESS_DIR` describes,
   so a server left by another label — or one whose runtime directory was deleted, which orphans
   it beyond any `stop` — keeps the port. The new server then fails to bind and `ready` answers
@@ -152,6 +157,13 @@ Three things it refuses rather than guesses:
   one inherited from `PATH`.
 - **A start it could not complete.** Exit `3`, not `1`. A run that could not start a server has
   not failed a protocol.
+
+**It stops the server on every exit, not only the one that reaches the end.** A `trap` on `EXIT`,
+`INT` and `TERM` is armed immediately before `start`, and the runner is a background job the
+script `wait`s on — bash defers a trap until the current *foreground* command returns, so a
+foreground runner would hold the handler for the rest of the hour, or of the day. Without this an
+interrupted launcher left its server holding the port, and deleting `.runtime-<label>` afterwards
+orphaned it beyond any `stop` (#242). The exit status is still the runner's.
 
 **It writes a provider opt-in into the state directory it owns.** t3code ships some drivers OFF —
 `OpenCodeSettings.enabled` defaults to false at the pinned commit, deliberately: *"Off by default

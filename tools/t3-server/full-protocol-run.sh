@@ -31,6 +31,49 @@ if [ "$#" -ne 5 ]; then
 fi
 
 PORT=$1; HARNESS=$2; MODEL=$3; GATE=$4; LABEL=$5
+
+# VALIDATE BEFORE ANY PATH IS BUILT FROM THESE.
+#
+# `$LABEL` is interpolated into `T3_HARNESS_DIR`, into the run's output paths and
+# into `rm -rf "${RUNS:?}/work-$LABEL"`. `${RUNS:?}` guards an EMPTY `RUNS`; it
+# says nothing about what `$LABEL` appends to it. A label carrying a path
+# separator resolves wherever the `..` chain leads and the `rm -rf` follows it
+# out of `.runtime-runs` — verified by deleting a directory five levels above it.
+#
+# So the check is a whitelist, not a `..` blocklist. A bare `..` cannot escape
+# here (the `.runtime-`/`work-` prefixes absorb it, giving a literal `.runtime-..`),
+# which is exactly the kind of near-miss that makes a blocklist look sufficient
+# while `x/../..` walks straight past it.
+#
+# Nothing here is untrusted input — a developer types these arguments — so this is
+# a typo that costs a directory, not an attack. That is still the failure worth
+# refusing.
+case $LABEL in
+  '' | *[!A-Za-z0-9._-]* )
+    echo "BAD_LABEL: the label must be one or more of [A-Za-z0-9._-] and nothing else; got '$LABEL'." >&2
+    echo "  It becomes a directory name and a deletion path, so a separator in it deletes elsewhere." >&2
+    exit 2 ;;
+esac
+
+# `$PORT` reaches `lsof -iTCP:` and `T3_HARNESS_PORT`; `$GATE` reaches the runner
+# as `RUN_GATE_SECONDS`. Both are used as numbers by everything downstream, and a
+# non-numeric one is diagnosed far from here, in whichever tool first tries to
+# parse it.
+case $PORT in
+  '' | *[!0-9]* )
+    echo "BAD_PORT: the port must be an integer in 1..65535; got '$PORT'." >&2
+    exit 2 ;;
+esac
+if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+  echo "BAD_PORT: the port must be an integer in 1..65535; got '$PORT'." >&2
+  exit 2
+fi
+case $GATE in
+  '' | *[!0-9]* )
+    echo "BAD_GATE: the gate must be a non-negative integer number of seconds; got '$GATE'." >&2
+    exit 2 ;;
+esac
+
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$ROOT" || exit 3
 
@@ -73,6 +116,47 @@ elif ! command -v lsof >/dev/null 2>&1; then
   echo "  Proceeding; a bind failure below is the fallback signal." >&2
 fi
 
+# STOP THE SERVER ON EVERY EXIT, NOT ONLY THE ONE THAT REACHES THE END.
+#
+# Without this the single `stop` at the bottom is reachable only when the runner
+# returns. A Ctrl-C, a killed parent or a `pkill` during a run — which is an hour
+# for the 1h runs and a day for the gate — leaves the server up. It then holds the
+# port, and the next run's `ready` truthfully answers about the STRANGER rather
+# than about itself. Worse, `stop` can only stop a server its own T3_HARNESS_DIR
+# describes, so deleting `.runtime-<label>` afterwards orphans it beyond any
+# `stop` at all and it can only be killed by pid. This happened twice during #238.
+#
+# The flag is what keeps the trap honest: an EXIT before `start` must not report a
+# teardown that never happened, and the deliberate stops below must not fire twice.
+STOP_ON_EXIT=0
+RUNNER_PID=
+stop_server() {
+  # The runner first: it talks to the server, and a `pkill` aimed at this script
+  # alone does not reach it. It is also why the runner below is a BACKGROUND job
+  # this script `wait`s on — bash defers a trap until the current FOREGROUND
+  # command returns, so a foreground runner would hold the handler for the rest
+  # of the hour (or the day) and the teardown would arrive far too late to matter.
+  if [ -n "$RUNNER_PID" ]; then
+    kill "$RUNNER_PID" 2>/dev/null || true
+    RUNNER_PID=
+  fi
+  [ "$STOP_ON_EXIT" = 1 ] || return 0
+  STOP_ON_EXIT=0
+  node tools/t3-server/t3-server.mjs stop >/dev/null 2>&1 || true
+  return 0
+}
+# shellcheck disable=SC2329  # reached through the INT/TERM traps below.
+on_signal() {
+  stop_server
+  trap - EXIT INT TERM
+  echo "INTERRUPTED $LABEL on SIG$1: the server this run owned was stopped." >&2
+  exit "$2"
+}
+trap stop_server EXIT
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
+
+STOP_ON_EXIT=1
 if ! node tools/t3-server/t3-server.mjs start >"$RUNS/$LABEL.server.log" 2>&1; then
   echo "START_FAILED: could not check: the server did not start; see $RUNS/$LABEL.server.log" >&2
   exit 3
@@ -97,14 +181,14 @@ printf '{"providers":{"%s":{"enabled":true}}}\n' \
   "$(node -e 'const m={claude:"claudeAgent",codex:"codex",opencode:"opencode"};process.stdout.write(m[process.argv[1]]??process.argv[1])' "$HARNESS")" \
   > "$SETTINGS"
 if ! node tools/t3-server/t3-server.mjs restart >>"$RUNS/$LABEL.server.log" 2>&1; then
-  node tools/t3-server/t3-server.mjs stop >/dev/null 2>&1
+  stop_server
   echo "SETTINGS_NOT_APPLIED: could not check: the restart that loads $SETTINGS failed." >&2
   exit 3
 fi
 
 TOKEN=$(node tools/t3-server/t3-server.mjs ready 2>/dev/null | sed -n 's/.*"token": "\(.*\)".*/\1/p')
 if [ -z "$TOKEN" ]; then
-  node tools/t3-server/t3-server.mjs stop >/dev/null 2>&1
+  stop_server
   echo "NO_TOKEN: could not check: the server never printed a pairing token" >&2
   exit 3
 fi
@@ -120,9 +204,12 @@ RUN_OUT="$RUNS/$LABEL.json" \
 RUN_WORK="$RUNS/work-$LABEL" \
 RUN_TURN_TIMEOUT_MS="${RUN_TURN_TIMEOUT_MS:-600000}" \
   node packages/codev/src/agent-farm/__tests__/helpers/air-235-full-protocol.mjs \
-  >"$RUNS/$LABEL.run.log" 2>&1
+  >"$RUNS/$LABEL.run.log" 2>&1 &
+RUNNER_PID=$!
+wait "$RUNNER_PID"
 STATUS=$?
+RUNNER_PID=
 
-node tools/t3-server/t3-server.mjs stop >/dev/null 2>&1
+stop_server
 echo "DONE $LABEL status=$STATUS evidence=$RUNS/$LABEL.json"
 exit $STATUS
