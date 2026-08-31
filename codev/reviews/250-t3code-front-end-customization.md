@@ -586,6 +586,24 @@ one reading `pin.contractSource` from the file that ships, and one running the h
 which makes the real checkout genuinely ahead, with the same run repeated under `"upstream"` so the
 test cannot pass against a harness that simply exits 1 on every ahead-ness.
 
+### Two lanes, one finding, and the enumeration that let it through
+
+Both reviewers landed on the same line. `generated/schema.ts:2` still read `Source:
+<upstream repo> @ <fork commit>` — a commit that exists nowhere in the repository the line names.
+`ATTRIBUTION.md` and `types.d.ts` had been corrected; `schema.ts` had not, and it is the module
+that ships.
+
+The three headers were three separate emissions of one claim, the third written as a standalone
+string in a different part of `generate.mjs`. Fixing the third copy would have left the shape that
+produced the miss, so there is one `PROVENANCE` constant now and every emitter reads it.
+
+The sharper half of the finding is the test. The attribution case named two files by hand, so the
+artifact not on the list was the one that drifted — and the suggested remedy, extend the list to
+three, would have caught this instance and not the next. The test is derived from the directory
+instead: **every generated artifact naming the upstream repository must also name the fork and the
+base**, read from `readdirSync`, with an assertion that it found artifacts at all so it cannot pass
+vacuously. Verified by reverting the header and confirming only that test fails.
+
 ### What can a human see or do now that they could not before
 
 Nothing yet. This is infrastructure. What changed is that `porch-driver` and `codev-agent` can now

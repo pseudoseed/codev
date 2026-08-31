@@ -1033,3 +1033,17 @@ the generator's module map, and the evidence field rename.
 **What can a human see or do now that they could not before? Nothing yet.** Still infrastructure.
 What changed is that a `codev.gate-set` frame arriving on the stream now shape-checks instead of
 being rejected as unrecognized. Phase 7 is the first that renders.
+
+### Iteration 1 review: one finding, both lanes
+
+claude REQUEST_CHANGES, opencode COMMENT, same line. `generated/schema.ts:2` still attributed a
+fork-only commit to `pingdotgg/t3code`. I had corrected `ATTRIBUTION.md` and `types.d.ts` and
+missed the third header, which was a standalone string elsewhere in the generator — and it is the
+module that actually ships.
+
+Fixed one level up: one `PROVENANCE` constant, every emitter reads it. The more useful half of the
+finding was the test, which named two files by hand, so the artifact not on the list was the one
+that drifted. Extending the list to three would have caught this instance and not the next. It now
+reads the directory: every generated artifact naming the upstream repo must also name the fork and
+the base, with a guard that it found artifacts at all. Reverting the header fails that test and
+nothing else.
