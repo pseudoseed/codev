@@ -1,7 +1,7 @@
 From fe10e0c0b07f480f48c2d2cf006cac64d6dac0bb Mon Sep 17 00:00:00 2001
 From: pseudo <aws@pseudoseed.com>
 Date: Mon, 31 Aug 2026 04:02:21 -0600
-Subject: [PATCH 31/33] [Spec 250][Phase: phase_10] fix: the empty-thread
+Subject: [PATCH 31/34] [Spec 250][Phase: phase_10] fix: the empty-thread
  placeholder printed across the gate panel
 
 On a thread with no turns yet, "Send a message to start the conversation." is

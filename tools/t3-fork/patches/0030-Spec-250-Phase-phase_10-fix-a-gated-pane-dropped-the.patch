@@ -1,7 +1,7 @@
 From 75150bfcf382444a7a1deaa2a72f24ed9d844e70 Mon Sep 17 00:00:00 2001
 From: pseudo <aws@pseudoseed.com>
 Date: Mon, 31 Aug 2026 03:59:37 -0600
-Subject: [PATCH 30/33] [Spec 250][Phase: phase_10] fix: a gated pane dropped
+Subject: [PATCH 30/34] [Spec 250][Phase: phase_10] fix: a gated pane dropped
  the phase it had just gained
 
 The gate replaced the phase line, which was right when there was no phase to

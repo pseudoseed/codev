@@ -27,7 +27,7 @@ and the one-line evidence pointer below.
 **Two repositories, and the paths below cross between them.** Anything under
 `packages/`, `tools/`, `codev/` is in **this** repository and travels with the PR. Anything under
 `apps/server/` or `apps/web/` — `schemaGuard.test.ts`, `threadHierarchy.test.ts`, `agentProxy.ts`,
-the `Sidebar` components — is in the **fork**, `pseudoseed/t3code@codev` at `3786b840e1a4`, and is
+the `Sidebar` components — is in the **fork**, `pseudoseed/t3code@codev` at `2f64a1b0ee2b`, and is
 not in this diff. That split was ruled at plan time: the product change is the fork's, and this PR
 is the harness that vendors and drives it. `apps/client` is the exception — it *is* here, and it is
 the frozen fallback. The `.spec.ts` Playwright files are here (`packages/codev/src/__tests__/e2e/`)
@@ -43,7 +43,7 @@ and run **against** the fork's app.
 - [x] **7.** A `role: null` thread created by t3code's own UI appears where it always did and nothing in the new tree claims it (Phase 7) — `spec-250-hierarchy.spec.ts:291`.
 - [x] **8.** An existing database opens against the customized server, added columns read as "not recorded", and a projection rebuilt over a pre-fork event log decodes every historical `ThreadCreatedPayload` (Phases 2, 3) — `apps/server/src/codev/schemaGuard.test.ts` and the fork's projector tests.
 - [x] **8b.** A migration interrupted partway leaves the database openable by the **pre-fork** server, tested by killing the server mid-migration (Phase 2) — `tools/t3-fork/criterion-8b.mjs`, evidence at `codev/research/250-criterion-8b-evidence.json`, `passed: true`.
-- [x] **9. Met under the plan's amended reading**, and the difference is stated rather than smoothed over (Phase 11). Run literally, the fork does **not** rebase cleanly: a sequential rebase stops at commit **6 of 42** on `apps/server/src/server.test.ts`, and the whole conflict surface is **3 files of the 35 we modify**. The contract **does** regenerate from the rebased tree, and `shape-check` against it **moves 3 artifacts** (`schema.json`, `schema.ts`, `types.d.ts`) — the cost of adopting that base, measured rather than predicted. `verify` holds on both identities; upstream churn is 104 commits, 5 touching the pinned closure. All four clauses are tabulated against what was run in "What the criterion 9 wording asks for and what was run".
+- [x] **9. Met under the plan's amended reading**, and the difference is stated rather than smoothed over (Phase 11). Run literally, the fork does **not** rebase cleanly: a sequential rebase stops at **commit 6** on `apps/server/src/server.test.ts`, and the whole conflict surface is **3 files of the 35 we modify**. (The total it is 6 of is generated, not typed: it rises with every fork commit, and it was written here as "42" until the review round's own fork commit made that 43.) The contract **does** regenerate from the rebased tree, and `shape-check` against it **moves 3 artifacts** (`schema.json`, `schema.ts`, `types.d.ts`) — the cost of adopting that base, measured rather than predicted. `verify` holds on both identities; upstream churn is 104 commits, 5 touching the pinned closure. All four clauses are tabulated against what was run in "What the criterion 9 wording asks for and what was run".
 - [x] **10.** An approved gate cannot be re-displayed by a later write carrying a lower revision (Phases 4, 6) — the revision high-water-mark tests, and the live delivery in phase 6.
 - [x] **11.** Hierarchy integrity refused by the server **at write time**, never rendered in a fallback (Phase 3) — `apps/server/src/codev/threadHierarchy.test.ts` plus live wire evidence at `codev/research/250-hierarchy-wire-evidence.json`, `passed: true`.
 
@@ -94,10 +94,11 @@ which authorises exactly that.
 ## Consultation Feedback
 
 Lanes: **Claude** and **opencode** on every implementation phase, plus **codex** on the plan
-round. The **Gemini/agy lane produced no output for this project** and is absent from every
+round and on the PR's second round — where it produced both of the project's last two blocking
+findings, in code two other lanes had just approved. The **Gemini/agy lane produced no output for this project** and is absent from every
 round rather than recorded as an approval. No `CONSULT_ERROR` was raised in any round.
 
-Across **22 rounds** — 20 on implementation phases, 1 on the plan, 1 on the PR. Full per-round responses are
+Across **23 rounds** — 20 on implementation phases, 1 on the plan, 2 on the PR. Full per-round responses are
 committed under
 `codev/projects/250-t3code-is-the-front-end-privat/` as `*-rebuttals.md`. The **45 raw lane outputs
 are `.txt` and gitignored** (`.gitignore:69`, `codev/projects/*/*.txt`) — they sit in the builder
@@ -105,7 +106,7 @@ worktree and do not travel with the PR, so the rebuttals are the durable record 
 below were transcribed from the raw files while they were still on disk. What follows is the
 disposition of each round.
 
-**Almost nothing was rebutted, and one rebuttal did not survive.** Across the 22 rounds, four
+**Almost nothing was rebutted, and one rebuttal did not survive.** Across the 23 rounds, four
 items were answered rather than changed — one brittleness note in phase 4, one deliberate deferral
 in phase 9, and the drill's regeneration in phase 11 (deferred twice with reasons, then closed
 after the last round). The fourth, the evidence collector's file mutation, was **rebutted in phase
@@ -246,15 +247,73 @@ verified to produce the same 130 changed files the PR reports.
 #### opencode
 - **Concern**: criterion 6 is UNMET; criterion 9 is met only under the plan's amended reading; #264 is filed and unfixed on the approval path. → **N/A** — all three are already stated in the review, the evidence document and the PR body in those words. Recorded as independent confirmation, not as findings.
 
+### Review Phase (Round 2 — codex REQUEST_CHANGES, and both blocking findings were real)
+
+The architect ran a third lane the first round did not have. **Two blocking findings, both
+accepted, both fixed in-phase.** Round 1's claude APPROVE and opencode COMMENT stand; neither lane
+had looked at the failure paths.
+
+#### Codex
+- **BLOCKING — pre-submit network failures escaped as rejected promises, on the approval path.** `send` in `approval.ts` did a bare `await fetchImpl(...)`, and **four of its five call sites had no `catch`**: opening the human session, issuing the capability, minting the nonce, and the synchronous fallback. Only the async submit was guarded. `GateApproval.tsx` had a `finally` and no `catch`, so a proxy disconnect during any of those four stopped the spinner and **said nothing at all** — no error, no unconfirmed state, no outcome. → **Addressed.**
+
+  This is the defect class the project spent 11 phases killing, on the highest-stakes surface it has: a human believes they approved, the builder never advances, and nothing says which happened. It survived 11 rounds of review because every lane read the *outcome vocabulary*, which is unusually careful, and nobody read what happens when `fetch` itself rejects. A rich taxonomy of answers is not the same as answering.
+
+  **The fix is a type, not a `try`.** `send` now returns `Sent` — `{reached: true} & Json | {reached: false, error}` — so a transport failure is a value. `reached: false` is not assignable to anything reading `.status`, so the compiler asks the question at all five call sites and a future one cannot inherit the bug by forgetting a `try`.
+
+  **And the outcomes are not the same, which is the part that matters.** A failure *before* the approval is submitted means nothing was ever asked for, so the gate provably did not move: `AGENT_UNREACHABLE_HUMAN_SESSION`, `AGENT_UNREACHABLE_CAPABILITY`, `AGENT_UNREACHABLE_NONCE`, each definite, none `unconfirmed`. A failure *on* a submit means nobody knows: both the async route and the synchronous fallback report `GATE_APPROVAL_UNCONFIRMED`. Flattening those into one "network error" would have been the same defect in a tidier coat — telling someone to check a gate that cannot have changed teaches them that `unconfirmed` is ordinary noise, which is exactly how the rare real one gets ignored. The session step additionally warns that its single-use token may have been spent even though the reply was lost.
+
+  `GateApproval.tsx` gains a `catch` as a backstop for defects rather than for the network, and it reports `unconfirmed` — an unexpected throw says nothing about whether the agent acted.
+
+  **Six tests, one per outcome, all verified capable of failing.** Restoring the throw in `send`: 6 failed, 19 passed — and they fail *by rejection*, which is the bug itself.
+
+- **BLOCKING — the upstream response was buffered with no limit.** `agentProxy.ts` pushed every chunk into an array with nothing watching the total. → **Addressed** with `MAX_PROXIED_RESPONSE_BYTES` (1 MiB), a new `oversized` outcome, and an upstream abort.
+
+  The same defect as the request-body bound found and fixed before review, on the return path — and the worse half. A request body comes from an authenticated caller; a response body comes from whatever the configured target is, so an operator misconfiguration or an agent that streams without end made the server buffer without end.
+
+  `oversized` is **its own kind**, not `unreachable` and not a truncated `answered`. Forwarding the first megabyte as though it were the whole reply is a partial answer reading as a complete one, on the route that decides whether a gate was approved; calling it `unreachable` sends an operator to check whether a plainly-running host is running.
+
+  **The first version of the fix had the bug it was fixing.** `destroy()` makes the stream emit `error` synchronously, and the `error` handler settles `unreachable` — so settling *after* the teardown reported a host that was answering as one that could not be reached. The truthful outcome lost a race to a vaguer one. `settle` is once-only, so claiming the outcome *before* tearing down is what makes it safe. Caught by the test, which is the only reason it is not in the merge.
+
+  The test drives an upstream that sends past the bound and **never ends the response**, so a proxy that merely stopped reading would hang. Removing the bound: it fails by timing out at 120s, which is precisely what an unbounded buffer does.
+
+**What the pin move cost, and it is a finding of its own.** Fixing these needed a fork commit, and
+a fork commit moves `pin.commit` — which invalidated **four** evidence runs at once. The collector
+refused with `STALE_RUN` rather than publishing numbers about a fork that is no longer this one, so
+`criterion-8b.mjs`, `spec-250-hierarchy.mjs`, `classify-churn --upstream-movement` and the rebase
+drill all had to be re-run before the evidence would regenerate. That refusal is the mechanism
+working: the alternative is an acceptance document describing a fork nobody is looking at. It also
+means "every fork commit obliges the refresh cycle" is a larger obligation than regeneration alone,
+which `REFRESH.md` now understates.
+
+The re-run moved one number that had been **hand-typed outside the generated block**: the drill
+carries 43 commits now, not 42, so the prose "stops at commit 6 of 42" was wrong the moment the fork
+moved. Both occurrences now name the stop point and point at the generated row for the total, rather
+than restating it. `REFRESH.md` step 8 is new for the same reason — it said to regenerate and commit,
+and said nothing about the four evidence runs, which is exactly how an acceptance document goes on
+describing a fork that no longer exists.
+
+The Playwright suite was re-run for the same reason: its results describe the fork head they ran
+against, and round 1 had already flagged that staleness once.
+
+- **N/A — criteria 6 and 9.** Codex is right that a runbook is not acceptance evidence. Both are the architect's rulings, both are disclosed as such in the PR body, the review and the evidence document, and neither is a change. Not chased.
+
 ## Lessons Learned
 
 ### What Went Well
 
-**The 3-way review found things no test could have.** Three of the project's most expensive
-defects were found by a lane and not by the suite: the engine deleting refusal discriminants one
-layer above where the tests looked (phases 3 and 4), `codev.gateWrite` vendoring as nothing at all
-(phase 5), and a vitest e2e reporting a pass on a run that never happened (phase 10). Each was
-green before the review.
+**The 3-way review found things no test could have.** The project's most expensive defects were
+found by a lane and not by the suite: the engine deleting refusal discriminants one layer above
+where the tests looked (phases 3 and 4), `codev.gateWrite` vendoring as nothing at all (phase 5), a
+vitest e2e reporting a pass on a run that never happened (phase 10), and — after two other lanes had
+approved the PR — the approval path having no answer at all for a dead network. Each was green
+before the review.
+
+**A lane that had not seen the code before found what eleven rounds had not.** Codex reviewed only
+the plan and then the finished PR. It produced the last two blocking findings of the project, in a
+file eleven rounds of Claude and opencode had read approvingly. The reason is legible in hindsight:
+those rounds were reading the *outcome vocabulary*, which is unusually careful, and a fresh reader
+asked the cruder question of what happens when `fetch` rejects. **Rotating in a lane that carries no
+history of the work is worth more at the end than a third opinion at the start.**
 
 **Evidence that regenerates cannot rot.** Every measurement in the acceptance document is produced
 by `collect-spec-250-evidence.mjs` and checked by a test. Two rounds of "this number was typed"
@@ -334,7 +393,9 @@ plan-level amendment recorded only in a review is invisible to anyone reading th
 - **Demotion, to respect the 10-lesson cap** (during the project) — "when stuck, get an outside model's perspective and build a minimal repro" moved to `lessons-learned.md`, with **the trigger itself kept hot**, folded into the consultation lesson. A threshold only works if it is always-on: a stuck agent does not go and read the cold file, which is the whole reason it was hot.
 - **Routed: cold** — `lessons-learned.md`, Critical: naming a hazard in a spec does not prevent it; only a test that can fail does — with the `classify-churn` account, and the general rule that a test written while two values are equal cannot tell you which one the code reads.
 - **Routed: cold** — `lessons-learned.md`, Testing: a test whose work grows with the repository looks flaky before it looks under-budgeted, and the two have opposite remedies; and harness/screenshot runs poisoning the suite that follows them (issue #263).
-- **Routed: cold** — `lessons-learned.md`, Testing, from the review round: a rebuttal is scoped to the tests its argument actually covers. The phase 11 rebuttal was sound for one test in a file of six and had been applied to all six, and applying it that widely also concealed a cross-file race nobody had looked for.
+- **Routed: cold** — `lessons-learned.md`, Testing, from review round 2: a careful vocabulary for reporting failure is not the same as reaching the code that reports it — grep for the transport call rather than the error type, and make a transport failure a value rather than a throw so the compiler asks at every call site.
+- **Routed: cold** — `lessons-learned.md`, 3-Way Reviews, from review round 2: a reviewer with no history of the work sees what the incumbents stopped seeing. Rotate a fresh lane in at the END of a long project, not only at the start.
+- **Routed: cold** — `lessons-learned.md`, Testing, from review round 1: a rebuttal is scoped to the tests its argument actually covers. The phase 11 rebuttal was sound for one test in a file of six and had been applied to all six, and applying it that widely also concealed a cross-file race nobody had looked for.
 
 ## Flaky Tests
 
@@ -383,6 +444,7 @@ gratuitous divergence on a fork that has to rebase.
 - **Issue #263** — a harness run poisons the next suite run. Filed, not fixed here.
 - **Issue #264** — a spurious "gate approved, run `porch next`" message reaches a builder from its own Playwright fixture. Filed, and the architect ruled it out of scope for this spec. It fired twice in this worktree; both times `porch status` showed no pending gate. **Any gate-approval message should be checked against `porch status` before acting on it.**
 - **Issue #265** — root `npm test` filters to `@cluesmith/codev`, so nothing local runs the frozen `apps/client` suite. That is how it stayed red from phase 5 to phase 11 without anyone noticing.
+- **Issue #269** — nothing automated runs spec 250's acceptance suites. The 40 e2e tests need a running fork server and sit behind a separate Playwright config; the vendored contract's source is a private repository, so `generate.mjs --check` and `verify` cannot run in a CI job that has only this repo. The argument that a private fork is maintainable is only true while somebody is checking, and nothing checks automatically. Same shape as #265.
 - **Issue #268** — porch records only *failing* consultation rounds in `status.yaml` `history`: 9 recorded against 20 that ran, with phases 7, 8 and 9 absent entirely because both lanes approved them on the first round. A phase reviewed cleanly reads exactly like a phase never reviewed.
 - **Issue #267** — `consult --type pr` cannot review a PR over GitHub's 20,000-line diff cap, and exits 0 when it refuses. Hit on this PR: `gh pr diff 266` returns HTTP 406 at 43,714 diff lines, both lanes correctly refused to review a 0-byte diff, and both returned exit 0 — so a caller checking the exit status sees a successful consultation with no output. Filed with a `pr-diff` fallback to `git diff <base>...<head>`, which has no cap and was verified to produce the same 130 changed files.
 - **Issue #251** — folding the two t3code subscriptions per watched thread. Pre-existing, unrelated to this spec, noted because phase 6 touched the neighbourhood.

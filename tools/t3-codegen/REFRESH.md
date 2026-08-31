@@ -149,7 +149,31 @@ It is not a false positive and it is not a formatting nit. Read the diff.
    repository — and not how the fork is built or rebased. `tools/t3-fork/FORK.md` says so
    there too.
 
-8. Commit the pin and the regenerated artifacts **together**. A pin without its artifacts, or
+8. **Re-run every evidence run that names a fork commit.** Moving `commit` invalidates all four at
+   once, and `collect-spec-250-evidence.mjs` refuses with `STALE_RUN` rather than publishing a
+   number about a fork nobody is looking at:
+
+   ```bash
+   node tools/t3-fork/criterion-8b.mjs --out codev/research/250-criterion-8b-evidence.json
+   node packages/t3-client/live/spec-250-hierarchy.mjs --out codev/research/250-hierarchy-wire-evidence.json
+   node tools/t3-codegen/classify-churn.mjs --upstream-movement --out codev/research/250-upstream-movement.json
+   node tools/t3-fork/rebase-drill.mjs --out codev/research/250-rebase-drill.json
+   node tools/t3-server/collect-spec-250-evidence.mjs      # then --check, which must exit 0
+   ```
+
+   **This step is the one that gets forgotten**, because a fork commit that touches no closure file
+   changes nothing in the generated contract except a sha — so regeneration looks like the whole
+   job, and the acceptance evidence quietly goes on describing the previous fork.
+
+   Three of these start a server. **`T3_HARNESS_PORT` is not optional in practice**: other sessions
+   leave servers on the default 3799 and on 3823, and the harness refuses to kill what it cannot
+   prove it owns. Check with `lsof -nP -iTCP:<port> -sTCP:LISTEN` — a `/dev/tcp` probe reports every
+   port free under zsh, which does not implement that redirection, so it is a check that cannot fail.
+
+   Also re-run the spec-250 Playwright suite, for the same reason: its results describe the fork head
+   they ran against, and criterion 1, 2, 3, 5, 5b and 7 rest on them.
+
+9. Commit the pin and the regenerated artifacts **together**. A pin without its artifacts, or
    artifacts without their pin, is worse than either alone — the drift test then compares against
    something nobody chose.
 

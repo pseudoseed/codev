@@ -19,7 +19,7 @@
     "Auto-merging packages/contracts/src/auth.ts",
     "Auto-merging packages/contracts/src/orchestration.ts",
     "Auto-merging packages/contracts/src/rpc.ts",
-    "Rebasing (1/42)\rRebasing (2/42)\rRebasing (3/42)\rRebasing (4/42)\rRebasing (5/42)\rRebasing (6/42)\rerror: could not apply 3a1780bbf... [Spec 250][Phase: phase_4] feat: gate block with a server-allocated revision",
+    "Rebasing (1/43)\rRebasing (2/43)\rRebasing (3/43)\rRebasing (4/43)\rRebasing (5/43)\rRebasing (6/43)\rerror: could not apply 3a1780bbf... [Spec 250][Phase: phase_4] feat: gate block with a server-allocated revision",
     "hint: Resolve all conflicts manually, mark them as resolved with",
     "hint: \"git add/rm <conflicted_files>\", then run \"git rebase --continue\".",
     "hint: You can instead skip this commit: run \"git rebase --skip\".",
@@ -53,7 +53,7 @@
     "sourceHash": {
       "checked": true,
       "algorithm": "sha256",
-      "comparedTo": "3786b840e1a4a26c062138889cd72bcaed2fbdc1",
+      "comparedTo": "2f64a1b0ee2b35cd858a8b601b4d425216e73ae5",
       "files": {
         "auth.ts": "89374198ca06cfc7d21e7080f291de79df34cdc3f9bd9453a1e68895388e16d4",
         "baseSchemas.ts": "0fea5d24348912260361716e01cf1c9ce1cd4d456a434471069a9215c4e8f1d7",
@@ -78,7 +78,7 @@
   "contractRegeneration": {
     "attempted": true,
     "source": {
-      "commit": "44af25111869361f8966640bbbbd22832bf90d97",
+      "commit": "704c037d98934892213590fe41801e62cc88cce6",
       "kind": "the three-way merge of the same two trees, written by git merge-tree. Conflicted paths carry markers; none of them is in the contract closure."
     },
     "method": "a scratch pin naming the merged commit, in a scratch copy of the codegen tool. The real pin.json was neither read nor written for this, and both real checkouts are untouched.",
@@ -104,8 +104,8 @@
     "hashMovedShapesDidNot": false,
     "detail": "the contract regenerates, and 3 shape artifacts would change: schema.json, schema.ts, types.d.ts. That is what adopting this base costs, measured rather than predicted."
   },
-  "startedAt": "2026-08-31T11:53:48.831Z",
-  "finishedAt": "2026-08-31T11:53:54.842Z",
+  "startedAt": "2026-08-31T12:47:23.529Z",
+  "finishedAt": "2026-08-31T12:47:29.073Z",
   "upstreamChurn": {
     "range": "082e6ea52186..9b2d04317c68",
     "commits": 104,
@@ -127,8 +127,8 @@
   "base": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
   "target": "9b2d04317c68233782e0630464ac86d77d0686f3",
   "targetRef": "origin/main",
-  "forkHead": "3786b840e1a4a26c062138889cd72bcaed2fbdc1",
-  "commitsCarried": 42,
+  "forkHead": "2f64a1b0ee2b35cd858a8b601b4d425216e73ae5",
+  "commitsCarried": 43,
   "scratch": null,
   "watermark": {
     "checked": true,
@@ -145,7 +145,7 @@
     "upstreamHead": "082e6ea521861fff37b90fcd789b5eaa5ef5d6a6",
     "upstreamStillAtBase": true,
     "upstreamClean": true,
-    "forkHead": "3786b840e1a4a26c062138889cd72bcaed2fbdc1",
+    "forkHead": "2f64a1b0ee2b35cd858a8b601b4d425216e73ae5",
     "forkUnmoved": true,
     "forkClean": true,
     "pinCommitUnchanged": true

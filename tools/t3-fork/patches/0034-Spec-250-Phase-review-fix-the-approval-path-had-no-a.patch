@@ -1,0 +1,698 @@
+From 2f64a1b0ee2b35cd858a8b601b4d425216e73ae5 Mon Sep 17 00:00:00 2001
+From: pseudo <cdodge@pseudoseed.com>
+Date: Mon, 31 Aug 2026 06:43:08 -0600
+Subject: [PATCH 34/34] [Spec 250][Phase: review] fix: the approval path had no
+ answer for a dead network, and the proxy had no bound on the way back
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two blocking findings from the codex lane's review of PR #266. Both real, both
+on the approval surface.
+
+## 1. Pre-submit transport failures escaped as rejected promises
+
+`send` did a bare `await fetchImpl(...)` and FOUR of its five call sites had no
+catch: opening the human session, issuing the capability, minting the nonce, and
+the synchronous fallback. Only the async submit was guarded. `GateApproval` had a
+`finally` and no `catch`, so a proxy disconnect during any of those four stopped
+the spinner and said NOTHING — no error, no unconfirmed state, no outcome at all.
+
+This is the defect class the last 11 phases were spent killing, on the
+highest-stakes surface in the product: the human believes they approved, the
+builder never advances, and nothing says which happened. It survived every round
+because reviewers read the outcome vocabulary, which is careful, and nobody asked
+what happens when `fetch` itself rejects. A rich taxonomy of answers is not the
+same as answering.
+
+The fix is a type rather than a `try`. `send` returns `Sent` —
+`({reached: true} & Json) | {reached: false, error}` — so a transport failure is a
+value. `reached: false` is not assignable to anything that reads `.status`, so
+the compiler asks the question at all five call sites and a sixth cannot inherit
+the bug by forgetting a `try`.
+
+The outcomes are deliberately NOT the same:
+
+- BEFORE a submit, nothing was ever asked for, so the gate provably did not move.
+  `AGENT_UNREACHABLE_HUMAN_SESSION`, `AGENT_UNREACHABLE_CAPABILITY`,
+  `AGENT_UNREACHABLE_NONCE` — definite, none of them `unconfirmed`. The session
+  step also warns its single-use token may have been spent even though the reply
+  was lost.
+- ON a submit, the request may have arrived and only the reply been lost.
+  `GATE_APPROVAL_UNCONFIRMED`, for both the async route and the synchronous
+  fallback, which approves before it answers.
+
+Flattening those into one "network error" would have been the same defect in a
+tidier coat: telling someone to check a gate that cannot have changed teaches
+them `unconfirmed` is ordinary noise, which is how the rare real one gets ignored.
+
+`GateApproval` gains a catch as a backstop for defects rather than for the
+network, reporting `unconfirmed` — an unexpected throw says nothing about whether
+the agent acted.
+
+Six tests, one per outcome. Restoring the throw: 6 failed, 19 passed, and they
+fail BY REJECTION, which is the bug itself.
+
+## 2. The upstream response was buffered with no limit
+
+Every chunk pushed into an array with nothing watching the total. Same defect as
+the request-body bound fixed in 24aeeebb3, on the return path, and the worse half:
+a request body comes from an authenticated caller, a response body comes from
+whatever the configured target is, so an operator misconfiguration or an agent
+that streams without end made this server buffer without end.
+
+`MAX_PROXIED_RESPONSE_BYTES` is 1 MiB and a separate number from the request
+bound, because they describe different traffic. Exceeding it settles a new
+`oversized` outcome and aborts the upstream — not merely stops reading, which
+leaves the target streaming into a connection nobody drains.
+
+`oversized` is its own kind, not `unreachable` and not a truncated `answered`.
+Forwarding the first megabyte as if it were the whole reply is a partial answer
+reading as a complete one, on the route that decides whether a gate was approved.
+
+THE FIRST VERSION OF THIS FIX HAD THE BUG IT WAS FIXING. `destroy()` makes the
+stream emit `error` synchronously and that handler settles `unreachable`, so
+settling after the teardown reported a host that was answering as one that could
+not be reached — the truthful outcome losing a race to a vaguer one. `settle` is
+once-only, so claiming the outcome BEFORE tearing down is what makes it safe.
+The test caught it.
+
+The test's upstream sends past the bound and never ends the response, so a proxy
+that only stopped reading would hang. Removing the bound: it fails by timing out
+at 120s, which is what an unbounded buffer does.
+
+Verified: agentProxy 30 passed, approval 25 passed, fork web suite 2990 passed,
+contracts + server + web typecheck clean.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ apps/server/src/codev/agentProxy.test.ts |  72 ++++++++++++
+ apps/server/src/codev/agentProxy.ts      |  78 +++++++++++-
+ apps/web/src/codev/GateApproval.tsx      |  26 ++++
+ apps/web/src/codev/approval.test.ts      | 144 +++++++++++++++++++++++
+ apps/web/src/codev/approval.ts           | 137 ++++++++++++++++++---
+ 5 files changed, 439 insertions(+), 18 deletions(-)
+
+diff --git a/apps/server/src/codev/agentProxy.test.ts b/apps/server/src/codev/agentProxy.test.ts
+index 3d97e5c91..d95994860 100644
+--- a/apps/server/src/codev/agentProxy.test.ts
++++ b/apps/server/src/codev/agentProxy.test.ts
+@@ -27,6 +27,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
+ import {
+   CODEV_AGENT_ORIGINS_ENV,
+   CODEV_AGENT_PROXY_PREFIX,
++  MAX_PROXIED_RESPONSE_BYTES,
+   forwardableHeaders,
+   isAbsoluteRequestPath,
+   matchProxiedAgentRoute,
+@@ -410,4 +411,75 @@ describe("codev agent proxy hop (spec 250, phase 10)", () => {
+     if (outcome.kind !== "silent") return;
+     expect(outcome.timeoutMs).toBe(150);
+   });
++
++  /**
++   * THE RETURN PATH'S BOUND, which the request path had and this did not.
++   *
++   * The response was buffered by pushing every chunk into an array with nothing
++   * looking at how much had arrived, so a misconfigured target or a `codev-agent`
++   * that streamed without end made this server buffer without end.
++   *
++   * The upstream here sends well past the bound and NEVER ENDS the response, so
++   * a proxy that only stopped reading would hang here rather than answering.
++   * That is the point: the assertion is that this resolves, and resolves to
++   * `oversized`.
++   */
++  it("refuses a response past the bound, and aborts the upstream rather than reading on", async () => {
++    let aborted = false;
++    const megabyte = Buffer.alloc(256 * 1024, 0x61);
++    const origin = await listen(
++      NodeHttp.createServer((request, response) => {
++        request.on("aborted", () => {
++          aborted = true;
++        });
++        response.writeHead(200, { "content-type": "application/json" });
++        // Never calls end(). A proxy that stops reading without destroying the
++        // socket leaves this writing into a connection nobody drains.
++        const push = (): void => {
++          if (response.writableEnded || response.destroyed) return;
++          if (response.write(megabyte)) setImmediate(push);
++          else response.once("drain", push);
++        };
++        push();
++      }),
++    );
++    const outcome = await proxyToAgent({
++      origin,
++      path: "/api/agent/v1/session",
++      method: "GET",
++      headers: {},
++      body: undefined,
++    });
++    expect(outcome.kind).toBe("oversized");
++    if (outcome.kind !== "oversized") return;
++    expect(outcome.limitBytes).toBe(MAX_PROXIED_RESPONSE_BYTES);
++    // The upstream is torn down, not merely ignored — otherwise the target keeps
++    // streaming and the resource is held under a different name.
++    await new Promise((settle) => setTimeout(settle, 50));
++    expect(aborted, "the upstream request must be aborted, not left streaming").toBe(true);
++  });
++
++  /**
++   * The bound must not fire on an ordinary answer, or every approval would be
++   * refused as oversized and the test above would pass for the wrong reason.
++   */
++  it("carries a response that sits just under the bound", async () => {
++    const body = "a".repeat(MAX_PROXIED_RESPONSE_BYTES - 1);
++    const origin = await listen(
++      NodeHttp.createServer((_request, response) => {
++        response.writeHead(200, { "content-type": "text/plain" });
++        response.end(body);
++      }),
++    );
++    const outcome = await proxyToAgent({
++      origin,
++      path: "/api/agent/v1/session",
++      method: "GET",
++      headers: {},
++      body: undefined,
++    });
++    expect(outcome.kind).toBe("answered");
++    if (outcome.kind !== "answered") return;
++    expect(outcome.body.byteLength).toBe(MAX_PROXIED_RESPONSE_BYTES - 1);
++  });
+ });
+diff --git a/apps/server/src/codev/agentProxy.ts b/apps/server/src/codev/agentProxy.ts
+index c13b2ef66..fd7a3aa0d 100644
+--- a/apps/server/src/codev/agentProxy.ts
++++ b/apps/server/src/codev/agentProxy.ts
+@@ -394,6 +394,26 @@ export const UPSTREAM_TIMEOUT_MS = 15_000;
+  */
+ export const MAX_PROXIED_BODY_BYTES = 64 * 1024;
+ 
++/**
++ * The largest upstream RESPONSE this proxy will buffer.
++ *
++ * The request bound above was found and closed before review; this is the same
++ * defect on the return path, and it is the worse half. A request body comes from
++ * an authenticated caller, so the cap bounds what a paired browser can make this
++ * server hold. A response body comes from whatever the configured target is, and
++ * the target is a URL in configuration — so an operator misconfiguration, or a
++ * `codev-agent` bug that streams without end, made this server buffer without
++ * end. Nothing in the loop it replaces ever looked at how much it had.
++ *
++ * A SEPARATE NUMBER FROM THE REQUEST BOUND, because they describe different
++ * things and tying them together would make one of the two wrong. Requests here
++ * are a few hundred bytes; responses carry an operation record with its phase and
++ * check names, and pane content. 1 MiB is still generous by orders of magnitude
++ * for both, and it is a bound rather than a validator: what a well-formed answer
++ * looks like is `codev-agent`'s question, not this hop's.
++ */
++export const MAX_PROXIED_RESPONSE_BYTES = 1024 * 1024;
++
+ export type ProxyOutcome =
+   | {
+       readonly kind: "answered";
+@@ -411,7 +431,18 @@ export type ProxyOutcome =
+    */
+   | { readonly kind: "redirect"; readonly status: number; readonly location: string | undefined }
+   | { readonly kind: "unreachable"; readonly detail: string }
+-  | { readonly kind: "silent"; readonly timeoutMs: number };
++  | { readonly kind: "silent"; readonly timeoutMs: number }
++  /**
++   * The upstream answered, and kept answering past the bound.
++   *
++   * ITS OWN KIND, not `unreachable` and certainly not a truncated `answered`.
++   * Passing on the first megabyte as if it were the whole reply is the failure
++   * this codebase spends its comments on: a partial answer that reads as a
++   * complete one, on a route whose replies decide whether a gate was approved.
++   * And calling it `unreachable` would send an operator to check whether a host
++   * that is plainly running is running.
++   */
++  | { readonly kind: "oversized"; readonly limitBytes: number };
+ 
+ /**
+  * One hop, buffered, with redirects unfollowed.
+@@ -467,7 +498,33 @@ export function proxyToAgent(input: {
+           return;
+         }
+         const chunks: Buffer[] = [];
+-        answer.on("data", (chunk: Buffer) => chunks.push(chunk));
++        let received = 0;
++        answer.on("data", (chunk: Buffer) => {
++          received += chunk.length;
++          if (received > MAX_PROXIED_RESPONSE_BYTES) {
++            /*
++             * SETTLE BEFORE TEARING DOWN, and the order is load-bearing rather
++             * than tidy. `destroy()` makes the stream emit `error` — SYNCHRONOUSLY
++             * here — and the `error` handler below settles `unreachable`. Written
++             * the other way round this reported a host that was plainly running
++             * and answering as one that could not be reached: the truthful outcome
++             * lost a race to a vaguer one, which is this codebase's own recurring
++             * defect. `settle` is once-only, so claiming the outcome first is what
++             * makes the teardown safe.
++             *
++             * THEN ABORT UPSTREAM, rather than merely stopping reading. Dropping
++             * the listener while the socket stays open leaves the target streaming
++             * into a connection nobody drains — the same resource held under a
++             * different name. `answer.destroy()` ends the response and
++             * `upstream.destroy()` ends the request that made it.
++             */
++            settle({ kind: "oversized", limitBytes: MAX_PROXIED_RESPONSE_BYTES });
++            answer.destroy();
++            upstream.destroy();
++            return;
++          }
++          chunks.push(chunk);
++        });
+         answer.on("end", () => {
+           const contentType = answer.headers["content-type"];
+           settle({
+@@ -710,6 +767,23 @@ const proxyHandler = (method: "GET" | "POST") =>
+         `${target.id} did not answer: ${outcome.detail}`,
+       );
+     }
++    if (outcome.kind === "oversized") {
++      /*
++       * 502 AND ITS OWN SIGNAL. The bytes that did arrive are discarded rather
++       * than forwarded: a prefix of a JSON body is not a smaller JSON body, and
++       * on this route the caller is deciding whether a gate was approved. 502
++       * because the fault is upstream's — this proxy did its job by refusing —
++       * and the message names the bound, so an operator reads "the target sent
++       * more than we carry" rather than "the proxy broke".
++       */
++      return refusal(
++        502,
++        "CODEV_AGENT_RESPONSE_TOO_LARGE",
++        `${target.id} sent more than the ${outcome.limitBytes}-byte response bound this proxy `
++          + "carries. The connection was aborted and nothing partial was passed on, so this says "
++          + "nothing about what the answer would have been.",
++      );
++    }
+ 
+     /*
+      * The upstream's status and body travel; its HEADERS do not, beyond the
+diff --git a/apps/web/src/codev/GateApproval.tsx b/apps/web/src/codev/GateApproval.tsx
+index 8147c1550..19de75270 100644
+--- a/apps/web/src/codev/GateApproval.tsx
++++ b/apps/web/src/codev/GateApproval.tsx
+@@ -124,6 +124,32 @@ export function GateApproval(props: {
+         setSession(null);
+       }
+       agent.refresh();
++    } catch (error) {
++      /*
++       * THE BACKSTOP, AND IT MUST NOT CLAIM TO KNOW ANYTHING.
++       *
++       * `approval.ts` now returns transport failures as values rather than
++       * throwing, so nothing routine reaches here. What reaches here is a defect
++       * — ours or the runtime's — and a defect tells us nothing about the gate.
++       *
++       * The version this replaces had a `finally` and no `catch`: the spinner
++       * stopped, no message appeared, and the panel looked exactly as it does
++       * before anyone presses anything. On the approval surface that is the worst
++       * of the available answers, because the human cannot tell it from "nothing
++       * happened" and the builder will not advance either way.
++       *
++       * Reported as UNCONFIRMED rather than as a failure for the same reason the
++       * submit path is: an exception after the request left this browser says
++       * nothing about whether the agent acted on it.
++       */
++      setOutcome({
++        ok: false,
++        unconfirmed: true,
++        signal: "GATE_APPROVAL_UNCONFIRMED",
++        message:
++          `approving ${gateName} stopped unexpectedly (${error instanceof Error ? error.message : String(error)}). `
++          + "Whether the agent received it is unknown — check the gate before approving again.",
++      });
+     } finally {
+       setBusy(false);
+       setProgress(null);
+diff --git a/apps/web/src/codev/approval.test.ts b/apps/web/src/codev/approval.test.ts
+index 04dba82c1..e67b1b95b 100644
+--- a/apps/web/src/codev/approval.test.ts
++++ b/apps/web/src/codev/approval.test.ts
+@@ -63,6 +63,33 @@ const CAPABILITY = {
+   "/approval-nonces": { status: 201, body: { nonce: "nonce-1" } },
+ } as const;
+ 
++/**
++ * A fetch that DIES on one path and answers normally on the rest.
++ *
++ * The defect these exist for: `send` used to `await fetchImpl(...)` bare, so a
++ * proxy disconnect rejected the promise and escaped `approveGate` entirely.
++ * `GateApproval` had a `finally` and no `catch`, so the button stopped spinning
++ * and said nothing — on the one surface where a human needs to know what
++ * happened.
++ *
++ * Every test below asserts a RESOLVED outcome. A rejection is the bug, so any of
++ * these failing by rejection rather than by a wrong `signal` is the regression
++ * itself.
++ */
++function fetchDyingOn(
++  deadPath: string,
++  replies: Readonly<Record<string, Reply>>,
++): typeof globalThis.fetch {
++  const healthy = fakeFetch(replies);
++  return (async (input: RequestInfo | URL, init?: RequestInit) => {
++    if (String(input).includes(deadPath)) {
++      // What `fetch` actually rejects with when the connection drops.
++      throw new TypeError("Failed to fetch");
++    }
++    return healthy(input, init);
++  }) as typeof globalThis.fetch;
++}
++
+ describe("openHumanSession (spec 250, phase 10)", () => {
+   it("spends a client-session token alongside the machine credential", async () => {
+     const seen: string[] = [];
+@@ -496,3 +523,120 @@ describe("approval state attribute (spec 250, phase 10)", () => {
+     ).toBe("unconfirmed");
+   });
+ });
++
++/**
++ * A DEAD NETWORK AT EVERY STEP, and the answer is not the same at every step.
++ *
++ * The steps BEFORE the approval is submitted — session, capability, nonce — are
++ * preparation. If one cannot reach the agent, nothing was ever asked for, so the
++ * gate provably did not move and saying `unconfirmed` would send a human to check
++ * a gate that cannot have changed. The steps that SUBMIT — the async route and the
++ * synchronous fallback — are the opposite: the request may have arrived and only
++ * the reply been lost, so nobody knows.
++ *
++ * Naming that difference is the whole fix. A single "network error" outcome would
++ * have been the same defect wearing a tidier coat.
++ */
++describe("approval transport failures (spec 250, review round)", () => {
++  it("opening a session reports a definite failure, and warns the token may be spent", async () => {
++    const result = await openHumanSession(
++      fetchDyingOn("/human-sessions", {
++        "/human-sessions": { status: 201, body: {} },
++      }),
++      pairing,
++      "tok-2",
++    );
++    expect(result.ok).toBe(false);
++    if (result.ok) return;
++    expect(result.signal).toBe("AGENT_UNREACHABLE_HUMAN_SESSION");
++    expect(result.message).toContain("Failed to fetch");
++    // The token is single-use and may have been spent before the reply was lost.
++    expect(result.message).toContain("single-use");
++  });
++
++  it("issuing the capability is NOT unconfirmed, because nothing was submitted", async () => {
++    const outcome = await approveGate(
++      fetchDyingOn("/approval-capabilities", { ...CAPABILITY }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(false);
++    if (outcome.ok) return;
++    expect(outcome.signal).toBe("AGENT_UNREACHABLE_CAPABILITY");
++    expect(outcome.unconfirmed).not.toBe(true);
++    expect(outcome.message).toContain("was not");
++  });
++
++  it("minting the nonce is NOT unconfirmed either, and names its own step", async () => {
++    const outcome = await approveGate(
++      fetchDyingOn("/approval-nonces", { ...CAPABILITY }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(false);
++    if (outcome.ok) return;
++    expect(outcome.signal).toBe("AGENT_UNREACHABLE_NONCE");
++    expect(outcome.unconfirmed).not.toBe(true);
++  });
++
++  /** The three pre-submit signals are distinct, or the human cannot tell which step died. */
++  it("gives the three pre-submit steps three different signals", async () => {
++    const signalFor = async (deadPath: string): Promise<string> => {
++      const outcome = await approveGate(
++        fetchDyingOn(deadPath, { ...CAPABILITY }),
++        pairing,
++        session,
++        gate,
++      );
++      return outcome.ok ? "OK" : outcome.signal;
++    };
++    const capability = await signalFor("/approval-capabilities");
++    const nonce = await signalFor("/approval-nonces");
++    const opened = await openHumanSession(
++      fetchDyingOn("/human-sessions", { "/human-sessions": { status: 201, body: {} } }),
++      pairing,
++      "tok-2",
++    );
++    const sessionSignal = opened.ok ? "OK" : opened.signal;
++    expect(new Set([capability, nonce, sessionSignal]).size).toBe(3);
++  });
++
++  it("the submitted approval IS unconfirmed, because the agent may have received it", async () => {
++    const outcome = await approveGate(
++      fetchDyingOn("/gates/approvals", { ...CAPABILITY }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(false);
++    if (outcome.ok) return;
++    expect(outcome.unconfirmed).toBe(true);
++    expect(outcome.signal).toBe("GATE_APPROVAL_UNCONFIRMED");
++  });
++
++  /**
++   * The synchronous fallback had NO guard at all — not even the try/catch the
++   * async submit carried. It approves the gate before it answers, so a connection
++   * that dies after the request left is the one case where reporting a definite
++   * failure would send a human to approve a gate that is already approved.
++   */
++  it("the synchronous fallback is unconfirmed, not a definite failure", async () => {
++    const outcome = await approveGate(
++      fetchDyingOn("/gates/approve", {
++        ...CAPABILITY,
++        // 501 drives the walk off the async route and onto the fallback.
++        "/gates/approvals": { status: 501, body: {} },
++        "/gates/approve": { status: 200, body: {} },
++      }),
++      pairing,
++      session,
++      gate,
++    );
++    expect(outcome.ok).toBe(false);
++    if (outcome.ok) return;
++    expect(outcome.unconfirmed).toBe(true);
++    expect(outcome.message).toContain("approves the gate before it answers");
++  });
++});
+diff --git a/apps/web/src/codev/approval.ts b/apps/web/src/codev/approval.ts
+index 0de6f7435..5012e1332 100644
+--- a/apps/web/src/codev/approval.ts
++++ b/apps/web/src/codev/approval.ts
+@@ -99,17 +99,48 @@ interface Json {
+   readonly body: Record<string, unknown>;
+ }
+ 
++/**
++ * A request that reached the agent, or one that did not.
++ *
++ * `send` USED TO THROW on a transport failure, and three of its five call sites
++ * did not catch. A proxy disconnect while opening the session, issuing the
++ * capability or minting the nonce therefore escaped `approveGate` as a rejected
++ * promise, and `GateApproval` had a `finally` and no `catch` — so the button
++ * stopped spinning and said nothing at all. On the approval surface, silence is
++ * the worst available answer: the human has no way to tell "it failed" from "it
++ * worked and the page lost the reply".
++ *
++ * Returning the failure as a VALUE rather than throwing is what makes that
++ * unrepeatable. `reached: false` is not assignable to anything that reads
++ * `.status`, so a call site cannot ignore a dead network by forgetting a
++ * `try` — the compiler asks the question at every one of the five.
++ *
++ * WHAT EACH CALL SITE DOES WITH IT IS NOT THE SAME, and flattening them would
++ * undo the point. A failure BEFORE the approval is submitted means the gate was
++ * definitely not approved, because nothing was ever asked for. A failure ON the
++ * submit means nobody knows. Those want opposite things from a human, so they
++ * get different signals.
++ */
++type Sent =
++  | ({ readonly reached: true } & Json)
++  | { readonly reached: false; readonly error: string };
++
+ async function send(
+   fetchImpl: typeof globalThis.fetch,
+   url: string,
+   headers: Record<string, string>,
+   body: unknown,
+-): Promise<Json> {
+-  const response = await fetchImpl(url, {
+-    method: "POST",
+-    headers: { "content-type": "application/json", accept: "application/json", ...headers },
+-    body: JSON.stringify(body),
+-  });
++): Promise<Sent> {
++  let response: Response;
++  try {
++    response = await fetchImpl(url, {
++      method: "POST",
++      headers: { "content-type": "application/json", accept: "application/json", ...headers },
++      body: JSON.stringify(body),
++    });
++  } catch (error) {
++    return { reached: false, error: describeTransportFailure(error) };
++  }
+   let parsed: unknown;
+   try {
+     parsed = await response.json();
+@@ -117,11 +148,44 @@ async function send(
+     parsed = {};
+   }
+   return {
++    reached: true,
+     status: response.status,
+     body: (parsed !== null && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>,
+   };
+ }
+ 
++/**
++ * A sentence about the network, from whatever the runtime threw.
++ *
++ * `fetch` rejects with a `TypeError` whose message is deliberately vague, and a
++ * non-Error can be thrown by anything. An empty string here would put "()" in
++ * front of a human, so there is a floor.
++ */
++function describeTransportFailure(error: unknown): string {
++  const message = error instanceof Error ? error.message : String(error);
++  return message.trim() === "" ? "the connection failed" : message;
++}
++
++/**
++ * The gate was NOT approved, and this is not an "I could not tell".
++ *
++ * Used only for the steps that run BEFORE an approval is submitted. Opening a
++ * session, issuing a capability and minting a nonce are preparation: if one of
++ * them cannot reach the agent, no approval was ever requested, so reporting
++ * `unconfirmed` would send a human to check a gate that provably did not move —
++ * and, worse, teach them that "unconfirmed" is the ordinary noise of a flaky
++ * network rather than the rare thing it is.
++ */
++function unreachable(signal: string, step: string, error: string): ApprovalOutcome {
++  return {
++    ok: false,
++    signal,
++    message:
++      `could not reach the agent to ${step} (${error}). Nothing was submitted, so the gate was not `
++      + "approved and there is nothing to check — fix the connection and approve again.",
++  };
++}
++
+ function text(body: Record<string, unknown>, key: string): string | undefined {
+   const value = body[key];
+   return typeof value === "string" ? value : undefined;
+@@ -174,6 +238,23 @@ export async function openHumanSession(
+     { ...machineHeaders(pairing), [PAIRING_TOKEN_HEADER]: pairingToken },
+     {},
+   );
++  if (!result.reached) {
++    /*
++     * THE TOKEN MAY OR MAY NOT BE SPENT, and this says so rather than guessing.
++     * A `client-session` token is single-use; if the request reached the agent
++     * and only the reply was lost, it is gone. Telling someone to "try again"
++     * with the same token would be wrong half the time, so the remedy named is
++     * the one that always works.
++     */
++    return {
++      ok: false,
++      signal: "AGENT_UNREACHABLE_HUMAN_SESSION",
++      message:
++        `could not reach the agent to open a session (${result.error}). No approval was submitted, `
++        + "so no gate moved. The session token is single-use and may have been spent even though "
++        + "the reply was lost — if approving again is refused, mint a new one.",
++    };
++  }
+   const presentation = text(result.body, "presentation");
+   const sessionId = text(result.body, "sessionId");
+   if (result.status !== 201 || presentation === undefined || sessionId === undefined) {
+@@ -214,6 +295,9 @@ export async function approveGate(
+   const issued = await send(fetchImpl, api(pairing, "/approval-capabilities"), authed, {
+     principalKind: "human-client",
+   });
++  if (!issued.reached) {
++    return unreachable("AGENT_UNREACHABLE_CAPABILITY", "issue an approval capability", issued.error);
++  }
+   const capability = text(issued.body, "presentation");
+   const capabilityId = text(issued.body, "capabilityId");
+   if (issued.status !== 201 || capability === undefined || capabilityId === undefined) {
+@@ -225,6 +309,9 @@ export async function approveGate(
+     gateName: gate.gateName,
+     capabilityId,
+   });
++  if (!minted.reached) {
++    return unreachable("AGENT_UNREACHABLE_NONCE", "mint an approval nonce", minted.error);
++  }
+   const nonce = text(minted.body, "nonce");
+   if (minted.status !== 201 || nonce === undefined) {
+     return refusal(minted, "the agent did not mint an approval nonce");
+@@ -241,25 +328,24 @@ export async function approveGate(
+    * A SUBMIT THAT NEVER COMPLETED IS NOT A REFUSAL. There is no way to know from
+    * here whether the server received it, and that is what `unconfirmed` is for.
+    */
+-  let submitted: Json;
+-  try {
+-    submitted = await send(
+-      fetchImpl,
+-      api(pairing, `/workspaces/${workspace}/gates/approvals`),
+-      authed,
+-      { projectId: gate.projectId, gateName: gate.gateName, capability, nonce },
+-    );
+-  } catch (error) {
++  const sent = await send(
++    fetchImpl,
++    api(pairing, `/workspaces/${workspace}/gates/approvals`),
++    authed,
++    { projectId: gate.projectId, gateName: gate.gateName, capability, nonce },
++  );
++  if (!sent.reached) {
+     return {
+       ok: false,
+       unconfirmed: true,
+       signal: "GATE_APPROVAL_UNCONFIRMED",
+       message:
+-        `the request to approve ${gate.gateName} did not complete (${(error as Error).message}), so `
++        `the request to approve ${gate.gateName} did not complete (${sent.error}), so `
+         + "whether the agent received it is unknown. It may already be running — check before "
+         + "approving again.",
+     };
+   }
++  const submitted: Json = sent;
+ 
+   /*
+    * NARROW ON THE SIGNAL, NOT ON THE STATUS. A host predating the async route
+@@ -280,6 +366,25 @@ export async function approveGate(
+     authed,
+     { projectId: gate.projectId, gateName: gate.gateName, capability, nonce },
+   );
++  if (!approved.reached) {
++    /*
++     * UNCONFIRMED, NOT UNREACHABLE, and the difference is the whole reason these
++     * are separate helpers. This route APPROVES — the server applies the gate and
++     * then writes a response. A connection that dies after the request left this
++     * browser may well have approved it, so the definite "nothing was submitted"
++     * that the capability and nonce steps get would be a false negative here, on
++     * the one route where a false negative sends a human to approve twice.
++     */
++    return {
++      ok: false,
++      unconfirmed: true,
++      signal: "GATE_APPROVAL_UNCONFIRMED",
++      message:
++        `the request to approve ${gate.gateName} did not complete (${approved.error}), and this `
++        + "route approves the gate before it answers, so whether it was approved is unknown. Check "
++        + "the gate rather than approving again.",
++    };
++  }
+   if (approved.status !== 200) {
+     return refusal(approved, "the gate was not approved");
+   }

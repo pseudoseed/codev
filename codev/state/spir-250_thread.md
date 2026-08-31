@@ -1795,3 +1795,105 @@ nothing about it is timing-sensitive, and calling it flaky would remove a real d
 hide an operator error. The rule that resolved it in one step is #263's: re-run a suspect suite
 alone before believing the failure. The corollary is new: **do not commit while a suite that reads
 git state is running.**
+
+---
+
+## Review round 2 — codex found two blocking defects two lanes had approved
+
+The architect ran a lane the first round did not have. Both findings real, both on the approval
+surface, both fixed in-phase.
+
+### The one that should not have survived eleven rounds
+
+`send` in `approval.ts` did a bare `await fetchImpl(...)`, and **four of its five call sites had no
+`catch`**. `GateApproval` had a `finally` and no `catch`. So a proxy disconnect while opening the
+session, issuing the capability, minting the nonce, or taking the synchronous fallback escaped as a
+rejected promise: the spinner stopped and **nothing** appeared. No error, no unconfirmed state, no
+outcome.
+
+This is the defect the whole project was about, on the surface where it costs most, and I wrote it.
+
+**Why it survived.** `approval.ts` has an unusually careful outcome vocabulary — four outcomes, a
+header explaining which two a shorter port drops, `unconfirmed` spelled apart from refusal in five
+places, and a refusal to invent `approvedAt` from the browser clock. Every reviewer, me included,
+read that and found it good. Nobody asked the cruder question one level down: what happens when
+`fetch` itself rejects? **A rich taxonomy of answers is not the same as answering.** The care spent
+on the vocabulary is exactly what made the gap invisible; it looked like a file that had thought
+about failure.
+
+**The fix is a type, not a `try`.** `send` returns `({reached:true} & Json) | {reached:false,
+error}`. `reached: false` is not assignable to anything reading `.status`, so the compiler asks at
+all five sites and a sixth cannot inherit the bug by forgetting a `try`. A `try` fixes today's
+call sites; a union fixes the next one too.
+
+**And the outcomes are deliberately not the same.** Pre-submit — session, capability, nonce — is a
+*definite* failure: nothing was submitted, so the gate provably did not move. Telling someone to go
+check a gate that cannot have changed is how `unconfirmed` becomes ordinary network noise, and then
+the rare real one gets ignored. On a submit, either route, nobody knows. Flattening the two into one
+"network error" would have been the same defect wearing a tidier coat.
+
+### The second one, and the first version of the fix had the bug it was fixing
+
+The upstream response was buffered with `chunks.push(chunk)` and nothing watching the total — the
+same defect as the request-body bound I found and fixed *before* review, on the return path. The
+worse half: a request body comes from an authenticated caller, a response body comes from whatever
+the configured target is.
+
+Then: `settle` after `destroy()` reported the wrong thing, because `destroy()` emits `error`
+synchronously and that handler settles `unreachable`. **The truthful outcome lost a race to a
+vaguer one** — a reachable, answering host reported as unreachable. Settling first is what makes it
+safe, and `settle` being once-only is why. Caught only because the test asserted `oversized`
+specifically rather than "not answered".
+
+### The harness port trap, which cost four attempts
+
+Moving `pin.commit` invalidates every evidence run that records a fork commit, and the collector
+refuses with `STALE_RUN` rather than publishing them — correct, and it means a fork commit obliges
+re-running `criterion-8b.mjs`, `spec-250-hierarchy.mjs` and the drill, not just regeneration.
+
+Re-running them hit **two long-dead sessions' servers**: one from Aug 30 on 3799 based in the MAIN
+workspace, one from Aug 28 on 3823 in a temp dir. The harness refuses to kill either —
+`REFUSING to kill pid(s) ... on port ...: not ours` — which is right, and `T3_HARNESS_PORT` is the
+way past it.
+
+**`(echo >/dev/tcp/127.0.0.1/$p)` reported every port free under zsh**, which does not implement
+that redirection. It is not a port check; it is a check that always says yes. `lsof -nP -iTCP:$p
+-sTCP:LISTEN` is the one that answers. Two of the four failed attempts were mine believing a probe
+that could not fail.
+
+### The e2e failure I caused, and it was the variable I had just learned to set
+
+The first e2e re-run at the new fork head came back **4 failed, 28 did not run** — the first test in
+each spec file timed out waiting for `sidebar-codev-builders-link`, which is phase 9's sidebar entry
+and nothing to do with the approval path or the proxy. Serial mode meant the other 28 never ran.
+
+Not a regression. **I passed `T3_HARNESS_PORT=3830` to Playwright**, which the documented invocation
+does not. The evidence runs need that variable, because other sessions hold 3799 and 3823; the
+Playwright fixture must NOT have it, because the Vite dev server on 5733 proxies to a fixed backend
+port and moving the fork server elsewhere leaves the page served but its backend dead. The page
+returned 200 with no threads in it, so every locator timed out on a working server that had nothing
+behind it.
+
+**A variable that fixes one tool can break the next one in the same shell.** I carried an export
+forward because it had just solved a problem, into a command whose documented form omits it. The
+recorded invocation in this file omits it for a reason, and the reason is now written down.
+
+### #264 fired a third time, and this run pinned the trigger
+
+Mid-run, a message arrived: `Gate pr approved — please run \`porch next\` to advance.`
+`porch status 250` at that moment: **`WAITING FOR HUMAN APPROVAL`, gate `pr`, unapproved.**
+
+A spec-250 Playwright run was in flight, started by me seconds earlier. The correlation holds across
+every occurrence in this worktree: the fixture drives the real approval ceremony against a real
+`codev-agent`, and the approval it performs reaches the builder looking exactly like a human ruling.
+
+**What makes this worse than a stray notification.** The message is indistinguishable from a real
+approval, it lands on the one gate whose entire purpose is that only a human passes it, and it
+instructs the recipient to take the action that consumes it. A builder that trusts it advances past
+a human gate on the strength of its own test suite.
+
+What stopped it was a line in `.builder-state.md` saying to check `porch status` before acting on
+any gate-approval message. **That is a habit, not a control** — it survives only as long as someone
+keeps writing it into the state file, and it would not survive a context refresh that dropped it.
+Added to #264, with the suggestion that a gate-approval message should not be actionable on its own:
+`porch status` is the authority, and the message could say so rather than instruct.

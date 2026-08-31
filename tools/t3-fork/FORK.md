@@ -138,7 +138,7 @@ prediction; the drill is the measurement, and where they disagree the drill wins
 | File | Predicted | Measured |
 |---|---|---|
 | `packages/contracts/src/orchestration.ts` | **High** | **auto-merged clean** — and upstream touched it twice in exactly the two unions we extend (`subscribeThread`, `dispatchCommand`) |
-| `apps/server/src/server.test.ts` | Low ("mostly one-hunk additions") | **conflicts**, and it is where the sequential rebase stops, at commit 6 of 42 |
+| `apps/server/src/server.test.ts` | Low ("mostly one-hunk additions") | **conflicts**, and it is where the sequential rebase stops, at commit 6 |
 | `apps/web/src/components/Sidebar.tsx`, `Sidebar.logic.ts` | Medium | **conflicts** |
 | the pinned contract closure | — | **zero conflicts**, so regeneration is not blocked, and **4 of the 9 closure files come out of the merge with different bytes** (`auth.ts`, `baseSchemas.ts`, `environment.ts`, `orchestration.ts`) |
 | the regenerated contract | — | **the generator runs to completion** against the merged tree, and `schema.json`, `schema.ts` and `types.d.ts` all move. That is the cost of adopting this base, run rather than predicted, in a throwaway that leaves `pin.json` alone |
@@ -280,6 +280,58 @@ vendored contract is what decides whether Codev depends on the customization.
 | 10 | `75150bfcf382` | A gated pane dropped the phase it had just gained: the gate replaced the phase line rather than leading it. |
 | 10 | `fe10e0c0b07f` | `Send a message to start the conversation.` printed across `Waiting on you: <gate>` on a thread with no turns. Present since phase 8; the panel-only screenshots did not show it. Hidden through upstream's own `hideEmptyPlaceholder`, because it is also wrong advice at a gate. |
 | 10 | `e0476d49aec1` | The pairing form, the approve control and the grid screenshotted at the three widths. |
+| 10 | `24aeeebb3` | The proxy buffered request bodies with no bound. `MAX_PROXIED_BODY_BYTES` at 64 KiB, with "too large" and "malformed" given different signals — a chunked body declares no length, so the cap on the read is what answers for it. |
+| 10 | `3786b840e` | 3-way review fixes: `UPSTREAM_TIMEOUT_MS` claimed more than an idle timeout gives, and `data-codev-approval-state` was coarser than its own words. |
+| review | `2f64a1b0e` | The codex lane's two blocking findings. `send` in `approval.ts` returns transport failure as a **value**, so all five call sites must answer for a dead network — three pre-submit steps report a definite `AGENT_UNREACHABLE_*` because nothing was submitted, and both submit routes report `unconfirmed` because the request may have arrived. `GateApproval` gains the `catch` its `finally` never had. And `MAX_PROXIED_RESPONSE_BYTES` bounds the **return** path, which `24aeeebb3` had left unbounded on the same file. |
+
+### Both bounds, and why the return path was the worse one
+
+`24aeeebb3` bounded the request body during phase 10. The **response** stayed unbounded until the
+codex lane's review of the PR, and it is the more exposed half of the same defect.
+
+A request body arrives from an authenticated, paired caller, so the cap bounds what a browser
+somebody let in can make this server hold. A response body arrives from whatever
+`CODEV_AGENT_ORIGINS` names — so an operator misconfiguration, or a `codev-agent` that streams
+without end, made the server buffer without end, and no credential was needed to arrange it.
+
+Two numbers rather than one, deliberately: 64 KiB for requests, which are a few hundred bytes of
+JSON, and 1 MiB for responses, which carry an operation record with its check names and pane
+content. Tying them together would make one of the two wrong the first time either kind of traffic
+changed.
+
+**`oversized` is its own outcome**, alongside `unreachable` and `silent`. Passing on the first
+megabyte as though it were the whole reply is a partial answer reading as a complete one, on the
+route that decides whether a gate was approved; and reporting it as `unreachable` sends an operator
+to check whether a host that is plainly running and answering is running.
+
+The first version settled *after* `destroy()`, and `destroy()` makes the stream emit `error`
+synchronously — so the `error` handler's `unreachable` won the race and the proxy reported a
+reachable host as unreachable. `settle` is once-only, which is exactly why the truthful outcome has
+to be claimed first and the teardown done second.
+
+### A careful outcome vocabulary is not the same as answering
+
+`approval.ts` documents four outcomes in its header, spells `unconfirmed` apart from refusal in
+five places, and refuses to invent `approvedAt` from the browser clock. Eleven rounds of review
+read all of that approvingly.
+
+None of it ran when `fetch` itself rejected. `send` did a bare `await fetchImpl(...)`, four of its
+five call sites had no `catch`, and `GateApproval` had a `finally` and no `catch` — so a proxy
+disconnect while opening the session, issuing the capability, minting the nonce, or taking the
+synchronous fallback stopped the spinner and produced **nothing**. No error, no unconfirmed state,
+no outcome. On the approval surface that is the worst answer available, because it is
+indistinguishable from having pressed nothing.
+
+The fix is a type rather than a `try`, so the next call site cannot inherit it: `send` returns
+`({reached: true} & Json) | {reached: false, error}`, and `reached: false` is not assignable to
+anything that reads `.status`.
+
+**The three pre-submit steps are NOT `unconfirmed`, and that distinction is the point.** Nothing
+was submitted, so the gate provably did not move; saying "check the gate" there would teach a human
+that `unconfirmed` is the ordinary noise of a flaky network, which is precisely how the rare real
+one gets ignored. The two submit routes — the async one, and the synchronous fallback that approves
+before it answers — are `unconfirmed`, because the request may have arrived and only the reply been
+lost.
 
 ### The proxy's upstream is the OPERATOR's, and the browser cannot name one
 

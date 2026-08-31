@@ -1,7 +1,7 @@
 From d2e675a7aa08703998b52d802e5e16d5cf43432e Mon Sep 17 00:00:00 2001
 From: pseudo <cdodge@pseudoseed.com>
 Date: Mon, 31 Aug 2026 02:05:56 -0600
-Subject: [PATCH 23/33] [Spec 250][Phase: phase_9] fix: pane text was 12px and
+Subject: [PATCH 23/34] [Spec 250][Phase: phase_9] fix: pane text was 12px and
  criterion 5 puts the floor at 13
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
