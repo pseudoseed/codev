@@ -16,52 +16,62 @@ like success, the step says so.
 
 These run on the Mac. Each ends in something to check, not just something to run.
 
-### 1. Put the WEB dev server on the tailnet, not on loopback
+### 1. Start the fork's stack, shared on the tailnet
 
-**`HOST`, not `T3CODE_HOST`.** Verified against `apps/web/vite.config.ts:30-31`: Vite reads
-`process.env.HOST` and falls back to `localhost`. `T3CODE_HOST` is the *backend's* bind address
-(port 3811) and should stay loopback — the iPad talks to Vite, and Vite proxies `/api` to the
-backend on the Mac.
+**One command, from the FORK ROOT.** t3code has a first-class tailnet mode and it is better than
+anything hand-rolled: `dev:share` starts the backend AND the web app, runs `tailscale serve` on the
+web port, and sets `T3CODE_DEV_ALLOWED_ORIGINS` for the backend itself
+(`scripts/dev-runner.ts:720-780`).
 
 ```bash
-export PATH=$HOME/.nvm/versions/node/v22.22.2/bin:$PATH
-cd /Users/chris/dev/t3code-codev/apps/web
-T3CODE_SINGLE_ORIGIN_DEV=1 \
-  T3CODE_PORT=3811 \
-  PORT=5733 \
-  HOST=0.0.0.0 \
-  T3CODE_CODEV_AGENT_ORIGINS="local=http://127.0.0.1:4100" \
-  npx vp dev
+cd /Users/chris/dev/t3code-codev
+T3CODE_CODEV_AGENT_ORIGINS="local=http://127.0.0.1:4100" pnpm dev:share
 ```
 
-Get the Mac's tailnet name with `tailscale status --json | jq -r .Self.DNSName` (drop the trailing
-dot).
+It prints the tailnet URL — `https://<mac>.<tailnet>.ts.net:5733`, **https**, because
+`tailscale serve` terminates TLS. That is the URL the iPad opens.
 
-**No allowlist entry is needed for a tailnet name.** `vite.config.ts:152` already carries
-`allowedHosts: [".ts.net", ...]` — tailnet DNS is controlled by tailscale, so it cannot be rebound.
-A LAN IP or an ngrok name would need `T3CODE_DEV_ALLOWED_HOSTS` (note **`_HOSTS`**;
-`T3CODE_DEV_ALLOWED_ORIGINS` is the backend's CORS list and is a different thing).
+**Do NOT use `tools/t3-server/t3-server.mjs start-fork` for this run.** That harness is for the
+tests: it starts on a throwaway data directory with empty data, which is exactly what makes the
+phase 7-10 assertions about order meaningful and exactly wrong here. Criterion 6 says a builder is
+driven to **completion**, so the run needs the real threads.
 
-**Check, from the Mac:** `curl -s -o /dev/null -w '%{http_code}\n' http://<mac>.<tailnet>.ts.net:5733`
-prints `200`. A `000` means it bound to loopback only, and the iPad will show a blank page with no
-error worth reading — which is why this is checked here rather than discovered there.
+`pnpm dev` uses the shared `~/.t3` here — the same home the installed T3 Code runs against —
+because the fork is a plain clone rather than a linked git worktree, and `resolveWorktreeT3Home`
+only diverts for linked worktrees (`packages/shared/src/devHome.ts:93-104`). Verified, not assumed:
+`git rev-parse --git-dir` in the fork prints `.git`, a directory. **If that ever becomes a linked
+worktree, this step needs `T3CODE_HOME` set explicitly or the iPad will show an empty app**, which
+looks like a broken tailnet rather than a different database.
 
-### 2. Confirm the server actually read the proxy's upstream
+**Check, from the Mac:** the printed URL answers.
 
-`T3CODE_CODEV_AGENT_ORIGINS` is in step 1's command because the backend reads it from its **own
-environment at start**. Setting it afterwards does nothing, and the symptom is an empty picker
-rather than an error.
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' https://<mac>.<tailnet>.ts.net:5733
+```
 
-Loopback (`127.0.0.1:4100`) is correct: the proxy hop is Mac-to-Mac. **The iPad never talks to
-`codev-agent`** — that is the whole point of the same-origin proxy.
+`200`. If `tailscale serve` could not bind, `dev:share` **warns and carries on serving locally** —
+by design, so a tailnet that is down does not stop the dev server. So a missing warning is part of
+the check: read the startup output, do not just look for a running process.
+
+Fallback if `--share` is unavailable: `HOST=0.0.0.0 pnpm dev` binds every interface, and Vite
+already allows `*.ts.net` hosts (`apps/web/vite.config.ts:152`). Plain http, and the backend then
+needs `T3CODE_DEV_ALLOWED_HOSTS` only for a LAN IP or an ngrok name — note **`_HOSTS`**;
+`T3CODE_DEV_ALLOWED_ORIGINS` is the backend's CORS list and is a different variable.
+
+### 2. Confirm the backend actually read the proxy's upstream
+
+`T3CODE_CODEV_AGENT_ORIGINS` is on step 1's command because **the backend reads it from its own
+environment at start**. Setting it in another shell, or after the server is up, does nothing — and
+the symptom is an empty picker on the pairing form, which reads as a broken feature rather than an
+unconfigured one.
+
+Loopback (`127.0.0.1:4100`) is right: the proxy hop is Mac-to-Mac. **The iPad never talks to
+`codev-agent`** — that is the whole point of the same-origin proxy, and it is what the phase 10
+Playwright suite asserts by recording every request the page issues.
 
 **Check:** with a t3code session in a desktop browser, open
-`http://<mac>.<tailnet>.ts.net:5733/api/codev/agent-targets`. It must answer
+`https://<mac>.<tailnet>.ts.net:5733/api/codev/agent-targets`. It must answer
 `{"targets":[{"id":"local"}], ...}`.
-
-If it answers `{"signal":"CODEV_AGENTS_UNCONFIGURED", ...}`, the variable was not in the server's
-environment. **That is the failure this check exists to catch** — the page's picker would be empty
-and would read as a broken feature rather than an unconfigured one.
 
 ### 3. Mint the two tokens the iPad will need
 
@@ -100,7 +110,7 @@ Safari. No app, no account, no cloud relay.
 
 | # | Do this | You should see | If not |
 |---|---|---|---|
-| 5 | Open `http://<mac>.<tailnet>.ts.net:5733` | t3code's pairing screen, "Enter a pairing token to start a session" | A blank page means step 1 bound to loopback. A timeout means the iPad is not on the tailnet — check `tailscale status` on the Mac lists the iPad |
+| 5 | Open `https://<mac>.<tailnet>.ts.net:5733` (the URL `dev:share` printed) | t3code's pairing screen, "Enter a pairing token to start a session" | A blank page means `dev:share` warned and served locally only — re-read step 1's output. A timeout means the iPad is not on the tailnet — check `tailscale status` on the Mac lists the iPad |
 | 6 | Paste the t3code pairing credential — `POST /api/auth/pairing-token` on the Mac with your bearer, or open the `/pair#token=<credential>` URL directly | The app loads with the sidebar | Landing back on the pairing form means the credential was already spent — mint another |
 | 7 | Tap the sidebar toggle if the sidebar is off-canvas | **The tree: workspace → architect → its builders**, indented, with `Architect` captions | A flat list means `hasCodevHierarchy` is false — the threads carry no `role`, so this is not an iPad problem |
 | 8 | Tap **Builders** in the sidebar | The grid, one pane per agent, each showing its porch phase and its last three messages | Panes reading "Phase needs a codev-agent credential" is expected here — you have not paired with the agent yet. That is step 9 |
