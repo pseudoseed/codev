@@ -1,7 +1,7 @@
 id: '272'
 title: the-sidebar-tree-needs-every-w
 protocol: pir
-phase: plan
+phase: implement
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -50,4 +50,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T16:47:04.075Z'
-updated_at: '2026-08-31T17:19:28.445Z'
+updated_at: '2026-08-31T17:21:03.441Z'
