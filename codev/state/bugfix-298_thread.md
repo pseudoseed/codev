@@ -121,3 +121,40 @@ Reverted `packedFiles()` to the live-tree walk and re-ran:
 ### Cost
 
 File went from ~62s to 10.9s for all 7 tests.
+
+## PR
+
+PR #300. CMAP: claude=APPROVE, opencode=APPROVE, codex=REQUEST_CHANGES (addressed).
+
+Gemini was not run. This workspace's `.codev/config.json` sets `porch.consultation.models` to
+`["claude", "opencode"]`; Codex was added as the third lane to meet the protocol's three-verdict
+requirement.
+
+### Codex, REQUEST_CHANGES — both points applied
+
+1. **Remove the review document.** Verified against the protocol rather than taken on trust:
+   `codev-skeleton/protocols/bugfix/protocol.md:3` reads "No spec, no plan, no artifact files:
+   the issue is the spec." `codev/reviews/bugfix-298-*.md` was removed. (Older `bugfix-214` and
+   `bugfix-274` review files exist in the repo, so the precedent is mixed, but the protocol text
+   is explicit.) Its substance moved into the PR body, which is where BUGFIX keeps the record.
+2. **Restructure the PR body** to Summary / Root Cause / Fix / Test Plan. Done.
+
+### Claude, APPROVE — two of three observations applied
+
+1. `trackedPaths()` threw a raw `execFileSync` error where the npm call beside it framed its own.
+   Now framed, naming the step and why git is needed.
+2. The old comment carried the #215/#216 timeout provenance and was deleted with it, leaving
+   `30_000` unexplained. Rationale restored, rewritten for the new cost model: the budget now
+   grows with the repo rather than with what happens to be on disk.
+3. Not applied: a catch-and-stub around the full-content `copyFileSync` to close a residual
+   ENOENT window if a concurrent suite mutated a *tracked* file. The reviewer withdrew it after
+   checking that no suite does. Independently confirmed here — all 19 `.test-*` scratch
+   directories are untracked and resolved from `process.cwd()`. A catch that silently stubs would
+   also hide a genuinely missing tracked file.
+
+### Correction carried into the PR body
+
+The root cause named `pir-832-migration.test.ts` as the concurrent writer. It is one of **19**
+distinct `.test-*` scratch directories, all created and removed under `packages/codev` from
+`process.cwd()`. Verified by grep, not taken from the review. That is why the failure was reliable
+rather than occasional.

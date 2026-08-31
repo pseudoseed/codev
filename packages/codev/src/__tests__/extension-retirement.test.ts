@@ -16,13 +16,22 @@ const RULE_FILES = new Set(['package.json', '.npmignore', '.gitignore']);
 
 /** Repo-relative paths of every file git tracks. `-z` so odd filenames survive the split. */
 function trackedPaths(): string[] {
-  return execFileSync('git', ['ls-files', '-z'], {
-    cwd: workspaceRoot,
-    encoding: 'utf8',
-    maxBuffer: 1 << 28,
-  })
-    .split('\0')
-    .filter(Boolean);
+  let raw: string;
+  try {
+    raw = execFileSync('git', ['ls-files', '-z'], {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+      maxBuffer: 1 << 28,
+    });
+  } catch (err) {
+    // Framed rather than raw, so a non-git checkout says which step failed and why it is needed.
+    throw new Error(
+      `Could not list the tracked files under ${workspaceRoot}: \`git ls-files\` failed. `
+      + `This test derives what the package ships from the repository, so it needs git. `
+      + `${(err as Error).message}`,
+    );
+  }
+  return raw.split('\0').filter(Boolean);
 }
 
 /**
@@ -130,6 +139,13 @@ describe('extension retirement', () => {
     expect(names).not.toContain('@cluesmith/codev-streamdeck');
   });
 
+  /**
+   * 30s, against a measured ~2s: ~1.7s of that is npm's own startup and walk of the fixture, and
+   * the rest is materialising 3,846 paths. Both grow with the repo, not with what is on disk, so
+   * the budget no longer has to absorb a built `dist/` — which is what pushed the old live-tree
+   * walk past its 10s default in #215 and then to 60s in #216. 15x the measured cost leaves room
+   * for ordinary growth and a cold runner while still failing a genuine hang.
+   */
   it('packs neither retired extension while retaining supported apps', () => {
     const files = packedFiles();
     expect(files).toContain('apps/web/package.json');
