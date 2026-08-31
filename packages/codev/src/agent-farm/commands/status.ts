@@ -221,7 +221,7 @@ function emitStatusJson(params: {
   // must still emit `"name": null` so the machine-readable contract is stable
   // for tooling — `JSON.stringify` would otherwise drop an `undefined` key.
   workspace: { path: string; name: string | null; active: boolean };
-  architects: Array<{ name: string }>;
+  architects: Array<{ name: string; threadId?: string | null }>;
   builders: Builder[];
   ownerFilter: string | undefined;
   // Issue #1227: null (not omitted) when Tower is down or the running Tower
@@ -245,7 +245,11 @@ function emitStatusJson(params: {
     orphans,
     ptyDrain,
     ownerFilter: ownerFilter ?? null,
-    architects: architects.map((a) => ({ name: a.name ?? 'main' })),
+    // Issue #271: `threadId` is nullable-not-optional, the same contract as
+    // `workspace.name` above — a PTY-backed architect emits `"threadId": null`
+    // rather than dropping the key, so tooling can tell the two backings apart
+    // instead of inferring one from a missing field.
+    architects: architects.map((a) => ({ name: a.name ?? 'main', threadId: a.threadId ?? null })),
     builders: visible.map((b) => ({
       id: b.id,
       name: b.name,
@@ -374,42 +378,64 @@ export async function status(options: StatusOptions = {}): Promise<void> {
       logger.kv('PTY drain', ptyDrain === 0 ? chalk.gray('0') : String(ptyDrain));
       renderOrphans(orphans, sized);
 
-      if (workspaceStatus.terminals.length > 0) {
-        // Spec 786 Phase 5: enumerate architects explicitly first, so users see
-        // ALL registered architects (not just one collapsed "Architect" row).
-        // Each architect entry's `architectName`, `pid`, and optional `port`
-        // come from the Tower API (per Spec 786 Phase 5's TowerWorkspaceStatus
-        // extension). Spec 1057: builders move to their own owner-aware section
-        // below; shells/dev remain in the general Terminals list.
-        const architectTerminals = workspaceStatus.terminals.filter(t => t.type === 'architect');
-        const otherTerminals = workspaceStatus.terminals.filter(
-          t => t.type !== 'architect' && t.type !== 'builder',
-        );
+      // Spec 786 Phase 5: enumerate architects explicitly first, so users see
+      // ALL registered architects (not just one collapsed "Architect" row).
+      // Each architect entry's `architectName`, `pid`, and optional `port`
+      // come from the Tower API (per Spec 786 Phase 5's TowerWorkspaceStatus
+      // extension). Spec 1057: builders move to their own owner-aware section
+      // below; shells/dev remain in the general Terminals list.
+      const architectTerminals = workspaceStatus.terminals.filter(t => t.type === 'architect');
+      const otherTerminals = workspaceStatus.terminals.filter(
+        t => t.type !== 'architect' && t.type !== 'builder',
+      );
 
-        if (architectTerminals.length > 0) {
-          logger.blank();
-          logger.info('Architects:');
-          for (const term of architectTerminals) {
-            const name = term.architectName || term.label;
-            const pid = term.pid ? `pid=${term.pid}` : 'pid=?';
-            const port = term.port ? ` port=${term.port}` : '';
-            // Spec 786 Phase 5: prefer `terminalId` (the actual PtySession id)
-            // over `id` (the Spec 761 tab identifier, e.g. `architect` or
-            // `architect:<name>`). Falls back to `id` for older Tower versions
-            // that haven't shipped the Phase 5 extension yet.
-            const termIdValue = term.terminalId ?? term.id;
-            const termId = ` terminal=${termIdValue}`;
-            logger.info(`  ${chalk.cyan(name)} (${pid}${port}${termId})`);
-          }
+      // Issue #271. A thread-backed architect has NO Tower terminal — that is
+      // what being thread-backed means — so a section built only from the
+      // terminal list could never show one. `afx workspace add-architect` wrote
+      // its row, `add-architect` printed its success line, and `afx status` then
+      // reported only the terminal-backed `main`: registered and invisible, which
+      // reads exactly like a command that did nothing.
+      //
+      // Sourced from state, the same place the row was written, and matched on
+      // NAME rather than on the absence of a terminalId: a name Tower already
+      // listed above must not print twice.
+      const shownNames = new Set(
+        architectTerminals.map(t => (t.architectName || t.label || '').toLowerCase()),
+      );
+      const threadArchitects = architects.filter(
+        (a) => a.threadId !== undefined && !shownNames.has((a.name ?? 'main').toLowerCase()),
+      );
+
+      if (architectTerminals.length > 0 || threadArchitects.length > 0) {
+        logger.blank();
+        logger.info('Architects:');
+        for (const term of architectTerminals) {
+          const name = term.architectName || term.label;
+          const pid = term.pid ? `pid=${term.pid}` : 'pid=?';
+          const port = term.port ? ` port=${term.port}` : '';
+          // Spec 786 Phase 5: prefer `terminalId` (the actual PtySession id)
+          // over `id` (the Spec 761 tab identifier, e.g. `architect` or
+          // `architect:<name>`). Falls back to `id` for older Tower versions
+          // that haven't shipped the Phase 5 extension yet.
+          const termIdValue = term.terminalId ?? term.id;
+          const termId = ` terminal=${termIdValue}`;
+          logger.info(`  ${chalk.cyan(name)} (${pid}${port}${termId})`);
         }
+        for (const arch of threadArchitects) {
+          // No pid and no port, and those are not printed as unknowns: a thread
+          // has neither, so `pid=?` would report a value that could not exist as
+          // one this command failed to read.
+          const model = arch.model ? ` model=${arch.model}` : '';
+          logger.info(`  ${chalk.cyan(arch.name ?? 'main')} (thread=${arch.threadId}${model})`);
+        }
+      }
 
-        if (otherTerminals.length > 0) {
-          logger.blank();
-          logger.info('Terminals:');
-          for (const term of otherTerminals) {
-            const typeColor = term.type === 'dev' ? chalk.green : chalk.gray;
-            logger.info(`  ${typeColor(term.type)} - ${term.label} (${term.active ? 'active' : 'stopped'})`);
-          }
+      if (otherTerminals.length > 0) {
+        logger.blank();
+        logger.info('Terminals:');
+        for (const term of otherTerminals) {
+          const typeColor = term.type === 'dev' ? chalk.green : chalk.gray;
+          logger.info(`  ${typeColor(term.type)} - ${term.label} (${term.active ? 'active' : 'stopped'})`);
         }
       }
 
