@@ -482,9 +482,23 @@ holding a new `codev:gate-write` scope.
 
 In `/Users/chris/dev/t3code-codev`:
 - `packages/contracts/src/orchestration.ts` — `CodevGate` (gate name, `requestedAt`, #128's
-  structured `question` and `choices`), nullable `codevGate` on the thread record, and a
-  **non-nullable** `gateRevision` defaulting to `0`. A `codev.gate.set` / `codev.gate.clear`
-  command pair.
+  structured `question` and `choices`), nullable `codevGate` on the thread record, and
+  `gateRevision`. A `codev.gate.set` / `codev.gate.clear` command pair.
+
+  **Amended during implementation, architect-approved.** `gateRevision` was specified as
+  *non-nullable on the wire*. That form cost **159 errors across upstream test fixtures** — not
+  five times the 32 that phase 2 rejected but a different category: 32 was a bill, 159 is a
+  permanent tax on every rebase, and the fork's whole value is that rebasing stays cheap. It is
+  therefore `Schema.optional(NonNegativeInt)` with a **decoding default of `0`**: optional on the
+  wire, always a number after decoding.
+
+  The invariant criterion 10 actually needs is *"the mark is always a number, and there is exactly
+  one spelling of no-gate-yet"*, and that is carried by the database plus normalize-on-read rather
+  than by the wire type: `codev_gate_revision INTEGER NOT NULL DEFAULT 0`, with every read path
+  using `?? 0`. Two tests hold it up, both verified to fail when the mechanism is removed:
+  the column is asserted to **reject a NULL** (against SQLite, on a real row — not by grepping the
+  DDL string), and a record decoded **with the field absent on the wire** is asserted to be a
+  number and not `undefined`, at the boundary `porch-driver` crosses.
 - `packages/contracts/src/auth.ts` — `AuthCodevGateWriteScope = "codev:gate-write"`.
 - `apps/server/src/auth/RpcAuthorization.ts` — map the **new RPC method** to the new scope.
 - `apps/server/src/persistence/Services/ProjectionThreads.ts`,
@@ -530,7 +544,13 @@ This repository:
       reset counter renders every later gate as *no gate pending*, a false negative exactly where
       a human is waiting.
 - [ ] Historical rows default to `0`, applied by the same guard rather than by a registered
-      migration — a `DEFAULT 0` on the added column, so no backfill pass is needed.
+      migration — a `DEFAULT 0` on the added column, so no backfill pass is needed. A backfill
+      would be a second write that can be interrupted.
+- [ ] **The `NOT NULL` is asserted against the database, not the DDL string**, and a record
+      decoded with `gateRevision` absent on the wire is asserted to be a number. Both are the
+      conditions attached to the optional-on-the-wire amendment above: with the mark optional on
+      the wire, "always a number" is carried entirely by these two, so both must be tests that
+      can fail rather than sentences.
 - [ ] **Gate writes travel a separate RPC method, because the existing authorization point cannot
       see command types.** Verified: `apps/server/src/auth/RpcAuthorization.ts:24` maps
       `ORCHESTRATION_WS_METHODS.dispatchCommand` as a whole to `AuthOrchestrationOperateScope`.
