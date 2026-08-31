@@ -59,18 +59,30 @@ esac
 # as `RUN_GATE_SECONDS`. Both are used as numbers by everything downstream, and a
 # non-numeric one is diagnosed far from here, in whichever tool first tries to
 # parse it.
+# THE SHAPE IS CHECKED BEFORE THE VALUE, BECAUSE `[` CANNOT CHECK THE SHAPE.
+#
+# `[ "$PORT" -lt 1 ]` on a 30-digit port prints "integer expression expected",
+# returns 2, and the `if` reads that as false — so the run CONTINUES, and the
+# refusal that eventually arrives is about something else entirely. A guard whose
+# failure mode is falling through is worse than no guard, because it reads as one.
+#
+# So the port is matched as at most five digits with no leading zero, and only
+# then compared. By that point `[` cannot overflow.
 case $PORT in
-  '' | *[!0-9]* )
-    echo "BAD_PORT: the port must be an integer in 1..65535; got '$PORT'." >&2
+  [1-9] | [1-9][0-9] | [1-9][0-9][0-9] | [1-9][0-9][0-9][0-9] | [1-9][0-9][0-9][0-9][0-9] ) ;;
+  * )
+    echo "BAD_PORT: the port must be an integer in 1..65535, written without a leading zero; got '$PORT'." >&2
     exit 2 ;;
 esac
-if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+if [ "$PORT" -gt 65535 ]; then
   echo "BAD_PORT: the port must be an integer in 1..65535; got '$PORT'." >&2
   exit 2
 fi
+# Nothing compares the gate numerically here, but it is bounded for the same
+# reason: 10 digits is 31 years, so a longer one is a typo rather than a run.
 case $GATE in
-  '' | *[!0-9]* )
-    echo "BAD_GATE: the gate must be a non-negative integer number of seconds; got '$GATE'." >&2
+  '' | *[!0-9]* | ??????????* )
+    echo "BAD_GATE: the gate must be a non-negative integer of at most 9 digits; got '$GATE'." >&2
     exit 2 ;;
 esac
 
@@ -138,6 +150,10 @@ stop_server() {
   # of the hour (or the day) and the teardown would arrive far too late to matter.
   if [ -n "$RUNNER_PID" ]; then
     kill "$RUNNER_PID" 2>/dev/null || true
+    # Reap it before stopping the server. Without this the teardown races the
+    # runner's last write and can leave a truncated `$LABEL.json` — an evidence
+    # file that exists and is wrong, which is worse than one that is absent.
+    wait "$RUNNER_PID" 2>/dev/null || true
     RUNNER_PID=
   fi
   [ "$STOP_ON_EXIT" = 1 ] || return 0
@@ -148,13 +164,16 @@ stop_server() {
 # shellcheck disable=SC2329  # reached through the INT/TERM traps below.
 on_signal() {
   stop_server
-  trap - EXIT INT TERM
+  trap - EXIT INT TERM HUP
   echo "INTERRUPTED $LABEL on SIG$1: the server this run owned was stopped." >&2
   exit "$2"
 }
 trap stop_server EXIT
 trap 'on_signal INT 130' INT
 trap 'on_signal TERM 143' TERM
+# HUP as well: the 24-hour gate outlives the terminal that started it, and a
+# closed terminal leaks the server exactly the way a Ctrl-C used to.
+trap 'on_signal HUP 129' HUP
 
 STOP_ON_EXIT=1
 if ! node tools/t3-server/t3-server.mjs start >"$RUNS/$LABEL.server.log" 2>&1; then

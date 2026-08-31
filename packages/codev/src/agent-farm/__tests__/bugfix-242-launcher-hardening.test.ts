@@ -152,6 +152,34 @@ describe('Issue #242 — the launcher validates its arguments', () => {
     expect(run(['38 03', 'claude', 'm', '60', 'ok']).stderr).toContain('BAD_PORT');
     expect(run(['3803', 'claude', 'm', 'abc', 'ok']).status).toBe(2);
     expect(run(['3803', 'claude', 'm', 'abc', 'ok']).stderr).toContain('BAD_GATE');
+    // The boundary itself, both sides.
+    expect(run(['65536', 'claude', 'm', '60', 'ok']).stderr).toContain('BAD_PORT');
+    expect(run(['65535', 'claude', 'm', '60', 'ok']).stderr).toContain('NO_INTERPRETER');
+  });
+
+  it('refuses a port too long for `[` to compare, rather than falling through it', () => {
+    /*
+     * `[ "$PORT" -lt 1 ]` on a 30-digit port prints "integer expression expected"
+     * and returns 2, which an `if` reads as false — so the FIRST version of this
+     * guard let such a port through and the run continued to a refusal about
+     * something else. A guard whose failure mode is falling through reads as a
+     * guard while being none, which is why the shape is now matched before the
+     * value is compared. Found by the codex review lane on PR #282.
+     */
+    const huge = run(['999999999999999999999999999999', 'claude', 'm', '60', 'ok']);
+    expect(huge.status, `stderr: ${huge.stderr}`).toBe(2);
+    expect(huge.stderr).toContain('BAD_PORT');
+    expect(huge.stderr, 'the guard fell through to a later, unrelated refusal')
+      .not.toContain('NO_INTERPRETER');
+    expect(huge.stderr, '`[` was reached with a value it cannot compare')
+      .not.toContain('integer expression expected');
+    // A leading zero is refused for the same reason: `[ 08 -gt … ]` reads it as octal.
+    expect(run(['03803', 'claude', 'm', '60', 'ok']).stderr).toContain('BAD_PORT');
+    // And the gate is length-bounded even though nothing here compares it.
+    const longGate = run(['3803', 'claude', 'm', '9999999999', 'ok']);
+    expect(longGate.status).toBe(2);
+    expect(longGate.stderr).toContain('BAD_GATE');
+    expect(run(['3803', 'claude', 'm', '999999999', 'ok']).stderr).toContain('NO_INTERPRETER');
   });
 });
 
@@ -183,6 +211,41 @@ describe('Issue #242 — the launcher stops the server it started, on every exit
       ).toBe(1);
       expect(code, 'a SIGTERM-ed run must not report the runner\'s status').toBe(143);
       expect(stderr).toContain('INTERRUPTED trap-check');
+    } finally {
+      child?.kill('SIGKILL');
+      rmSync(box.dir, { recursive: true, force: true });
+    }
+  }, 40_000);
+
+  it('tears the server down on SIGHUP, which the 24-hour gate outlives a terminal to meet', async () => {
+    /*
+     * The gate runs for a day. The terminal that started it does not, and a
+     * closed one delivers HUP — which the first version of this fix did not
+     * trap, so it leaked the server exactly the way a Ctrl-C used to. Raised by
+     * the claude review lane on PR #282.
+     */
+    const box = sandbox();
+    const port = await freePort();
+    let child: ReturnType<typeof spawn> | undefined;
+    try {
+      child = spawn('bash', [box.script, String(port), 'claude', 'model', '60', 'hup-check'], {
+        env: { ...process.env, PATH: `${box.binDir}:${process.env.PATH ?? ''}`, T3_NODE: '/usr/bin/true', STOP_LOG: box.stopLog },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr?.on('data', (chunk) => { stderr += String(chunk); });
+      const exited = new Promise<number | null>((resolve) => child!.on('exit', (code) => resolve(code)));
+      const reached = await waitFor(() =>
+        existsSync(box.stopLog) && readFileSync(box.stopLog, 'utf8').includes('RUNNER'));
+      expect(reached, `the launcher never reached the runner. stderr: ${stderr}`).toBe(true);
+
+      child.kill('SIGHUP');
+      const code = await exited;
+
+      const log = readFileSync(box.stopLog, 'utf8');
+      expect(stopsAfterRunner(log), `a hung-up run left its server up. stop log:\n${log}`).toBe(1);
+      expect(code).toBe(129);
+      expect(stderr).toContain('INTERRUPTED hup-check on SIGHUP');
     } finally {
       child?.kill('SIGKILL');
       rmSync(box.dir, { recursive: true, force: true });
