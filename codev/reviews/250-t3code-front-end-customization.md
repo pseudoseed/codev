@@ -339,6 +339,17 @@ this can happen. A `porch-driver` test that constructs its own transport would b
 
 Costume 3 is now closed by construction rather than by care: see below.
 
+**And then phase 4 produced costume five, one commit after writing this table.** The
+`codev:gate-write` credential module named its scopes, named its on-disk path, tested the write —
+and nothing in the server called any of it. Both review lanes found it. Its own tests were green and
+every one of them was meaningless for the only question that mattered.
+
+That is worth keeping rather than quietly fixing, because it says something the table alone does
+not: **knowing the pattern does not prevent it.** The table was written, committed, and the same
+defect went in beside it within the hour. What caught it was review, and what stops it recurring is
+the test that now asserts the *call site* — `serverRuntimeStartup.ts` imports the provisioner and
+runs it as a named phase — rather than asserting the module works.
+
 ### The same function, the third time
 
 `isRefusal` in `OrchestrationEngine` decides which errors reach a dispatcher intact. Phase 3 fixed

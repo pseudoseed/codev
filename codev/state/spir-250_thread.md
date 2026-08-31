@@ -885,3 +885,30 @@ by a compiler.
 One sentence: **a test that supplies the boundary itself cannot tell you the boundary exists.**
 Phase 6 crosses the ws/RPC seam, which is costume five if a `porch-driver` test constructs its own
 transport.
+
+### Phase 4, review round 2 — costume five, one commit after writing the table
+
+claude APPROVE, opencode REQUEST_CHANGES; same single substantive gap, treated as blocking because
+the plan says the credential is provisioned *at server start*.
+
+**The credential had no production caller.** `gateCredential.ts` named the scopes, named the path,
+tested the write — and nothing in the server ran any of it. That is **costume one from this phase's
+own review**, produced one commit after I wrote the four-costume table. Its own tests were green and
+all of them were meaningless for the only question that mattered.
+
+Knowing the pattern did not prevent it. Review caught it. What stops the recurrence is the test that
+asserts the **call site** — `serverRuntimeStartup.ts` imports the provisioner and runs it as a named
+phase — rather than asserting the module works. Verified to fail when the phase is removed.
+
+Provisioning is non-fatal (a server that cannot write the token still serves every other client) and
+idempotent by rotation rather than lookup (reusing a token would mean reading a bearer credential
+back off disk; a server that reads tokens is a larger target than one that only writes them).
+
+Second finding: the scope map **row** was asserted, the **enforcement** was not. A row nothing reads
+documents an intention. Now asserts `ws.ts` routes through `requiredScopeForRpcMethod` on both the
+effect and stream wrappers, and that an unmapped method throws rather than defaulting to permissive.
+
+Fork `0254c84e1241`. Typecheck green, server 2839 passed.
+
+Four regression tests in phase 4 verified by removing their mechanism: `isRefusal`, the projector's
+mark, the wire decoding default, the startup provisioning.
