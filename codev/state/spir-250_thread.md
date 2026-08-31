@@ -1174,3 +1174,16 @@ added to `packages/codev/package.json`; the `??` expression parenthesised. Rebut
 Pin finished at `7c7096d49de9`, 19 patches, both evidence files re-collected. Codev suite green
 (7370 + 180, 54 skipped, 0 failed) under node v20; fork web suite 2887 passed; 9 Playwright tests
 green against the live fork.
+
+**Appearance APPROVED by the architect**, both 1440 and 390 opened. Project heading, the
+`Architect` marker, and the neutral orphan shelf all accepted. Explicit ruling to carry forward:
+**builders get no positive marker** — an architect is labelled and an indented row under a rail
+beneath a labelled architect is unambiguous. Do not add a second pill.
+
+One non-blocking note, checked and **left alone**: the `(1)` on the unattributed heading. t3code has
+no shelf-header count treatment to adopt — Snoozed and Settled inline their counts in the label's own
+colour (`Snoozed (3)` in blue, `Settled (12)` in `text-muted-foreground/50`), and `ui/badge.tsx` is
+not used by any shelf header. The count already carries `text-secondary-label` against the label's
+`text-muted-foreground/50`, which is the only emphasis t3code's own tokens offer at that level
+without inventing a badge. The architect's rule was "use t3code's treatment if one exists, leave it
+if not, do not invent" — so it stays.
