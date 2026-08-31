@@ -1,7 +1,7 @@
 id: bugfix-298
 title: the-npm-pack-test-walks-the-li
 protocol: bugfix
-phase: investigate
+phase: fix
 plan_phases: []
 current_plan_phase: null
 gates:
@@ -11,4 +11,4 @@ iteration: 1
 build_complete: false
 history: []
 started_at: '2026-08-31T19:25:27.056Z'
-updated_at: '2026-08-31T19:25:27.057Z'
+updated_at: '2026-08-31T19:30:04.848Z'
