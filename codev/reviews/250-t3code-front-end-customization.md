@@ -3,8 +3,10 @@
 ## Summary
 
 t3code became Codev's front end through a private fork (`pseudoseed/t3code@codev`), across **11
-plan phases** landed as **106 `[Spec 250]` commits** on one branch — 167 commits in total, the
-remainder being porch bookkeeping — across 130 files and ~40.6k insertions.
+plan phases** landed as **106 `[Spec 250]` commits** on one branch, the remainder of its ~170 being
+porch bookkeeping, across ~131 files and ~40.6k insertions. The exact figures move with every
+commit to the branch, including the ones this review round added; `gh pr view 266 --json
+commits,changedFiles` is the live count, and this paragraph is not it.
 The fork gained a thread hierarchy (`parentThreadId` + `role`), a porch gate block with a
 server-allocated revision, nested Workspace > Architect > Builders rendering in t3code's own
 sidebar, a builder tile grid, and gate approval driven from t3code over a same-origin proxy.
