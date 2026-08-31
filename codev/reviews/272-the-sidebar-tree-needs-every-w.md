@@ -111,6 +111,16 @@ Nothing promoted to `lessons-critical.md`, for the same cap-and-displacement rea
   A second copy of that request would also be a second place for the transport rules to drift —
   which is how that call skipped `assertTransportSafe` once already.
 
+- **The fork's committed screenshots are now one case out of date, deliberately.**
+  `docs/codev/spec-250/phase-7/*.png` in the fork depict the tree before this change and do not
+  show the empty-workspace heading. Re-shooting them means another fork commit, which obliges the
+  whole `REFRESH.md` tail again — a second pin move, regeneration, patch re-export and four
+  evidence re-runs — for pictures. They still accurately depict what spec 250 delivered. The
+  current render is in this branch at
+  `packages/codev/test-results/spec-250-screenshots/phase-7/` (untracked), and
+  `spec-250-hierarchy.spec.ts` asserts the heading's presence, position and `data-codev-project-empty`
+  attribute, so the behaviour is pinned by a test rather than by an image.
+
 ## How to Test Locally
 
 - **View diff**: VSCode sidebar → right-click builder `pir-272` → **Review Diff**
