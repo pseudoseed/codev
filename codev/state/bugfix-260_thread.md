@@ -180,3 +180,27 @@ it there. CI green on #285 is therefore real and says nothing about the local ch
 
 CMAP position accepted by the architect: the subscriptions-window fix was Codex's blocking item,
 and declining to delete the review artifact stands.
+
+## The post-merge "1 failed" was a vitest version artifact
+
+The post-merge `src/agent-farm` run reported `220 passed | 1 failed`. Chased rather than
+assumed. Cause: I ran `npx vitest --root packages/codev` from the **worktree root**, and npx
+resolved its own cached **vitest 4.1.11** instead of the workspace's pinned **4.1.4** — the log
+header says `RUN v4.1.11`, while every clean run says `v4.1.4`.
+
+Re-run with `packages/codev/node_modules/.bin/vitest`: **221 files passed, 1 skipped; 4301 tests
+passed, 40 skipped, 0 failed.** Nothing was wrong with the merge or with this change.
+
+The lesson is the run command, not the test: `npx` inside a pnpm workspace is not the same
+binary as the one the suite is pinned to, and a version skew reports as a test failure with no
+sign that the runner changed underneath.
+
+## Final state at the gate
+
+- PR **#285**, head `65f2a0233`. GitHub CI **9/9 green** on that exact sha, Unit Tests included.
+- `src/agent-farm` locally: 4301 passed, 0 failed, under the pinned runner.
+- `pnpm --filter @cluesmith/codev build`: clean.
+- CMAP: Claude APPROVE, opencode APPROVE, Codex REQUEST_CHANGES with its one substantive item
+  fixed and the remainder a documented disagreement about protocol convention.
+- The `pr` gate is requested and held by the architect on a workspace-wide criterion 8b failure
+  unrelated to this PR.
